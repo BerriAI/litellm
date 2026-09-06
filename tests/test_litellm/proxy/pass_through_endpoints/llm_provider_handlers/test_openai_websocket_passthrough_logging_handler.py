@@ -237,3 +237,33 @@ def test_a_responses_turn_without_readable_usage_is_not_billed():
 
     assert handled["result"] is None
     assert handled["kwargs"] == {"model": RESPONSES_MODEL, "custom_llm_provider": "openai"}
+
+
+def test_the_price_of_a_multi_model_connection_reaches_the_spend_row():
+    """
+    The logging layer prices whatever result it is handed, and one result can
+    only name one model, so a connection that ran two models has to carry the
+    price it already worked out or the cheaper model pays for both turns.
+    """
+    handled = _handle(
+        [
+            _responses_completed(RESPONSES_MODEL, input_tokens=13, output_tokens=5),
+            _responses_completed(REASONING_MODEL, input_tokens=20, output_tokens=7),
+        ],
+        url_route="/openai_passthrough/v1/responses",
+    )
+
+    logged_cost = litellm.response_cost_calculator(
+        response_object=handled["result"],
+        model=handled["kwargs"]["model"],
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    )
+
+    session_prices = litellm.model_cost[RESPONSES_MODEL]
+    priced_on_the_session_model = (
+        33 * session_prices["input_cost_per_token"] + 12 * session_prices["output_cost_per_token"]
+    )
+    assert logged_cost == pytest.approx(handled["kwargs"]["response_cost"])
+    assert logged_cost > priced_on_the_session_model

@@ -23,6 +23,7 @@ _SESSION_CREATED: Final = "session.created"
 _REALTIME_RESPONSE_DONE: Final = "response.done"
 _RESPONSES_COMPLETED: Final = "response.completed"
 _MODEL_NAMING_EVENTS: Final = frozenset({_SESSION_CREATED, _REALTIME_RESPONSE_DONE, _RESPONSES_COMPLETED})
+_RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
 
 
 class _NamedModel(BaseModel):
@@ -148,6 +149,21 @@ def _responses_cost(usage: Usage, model: str) -> float:
         return 0.0
 
 
+def _priced_result(model: str, billing: _Billing, start_time: datetime) -> ModelResponse:
+    result: Final = ModelResponse(
+        id=f"openai-websocket-{start_time.timestamp()}",
+        object="chat.completion",
+        created=int(start_time.timestamp()),
+        model=model,
+        usage=billing.usage,
+    )
+    hidden: Final = {  # mutable-ok: response_cost_calculator writes optional_params into this dict
+        "additional_headers": MappingProxyType({_RESPONSE_COST_HEADER: billing.cost})
+    }
+    result._hidden_params = hidden  # pyright: ignore[reportPrivateUsage]  # the one settled-cost channel
+    return result
+
+
 class OpenAIWebsocketPassthroughLoggingHandler:
     def openai_websocket_passthrough_handler(
         self,
@@ -181,13 +197,7 @@ class OpenAIWebsocketPassthroughLoggingHandler:
 
         logging_obj.model_call_details.update(MappingProxyType({"response_cost": billing.cost}))
         priced: Final[PassThroughEndpointLoggingTypedDict] = {
-            "result": ModelResponse(
-                id=f"openai-websocket-{start_time.timestamp()}",
-                object="chat.completion",
-                created=int(start_time.timestamp()),
-                model=model,
-                usage=billing.usage,
-            ),
+            "result": _priced_result(model, billing, start_time),
             "kwargs": {
                 **kwargs,
                 "model": model,
