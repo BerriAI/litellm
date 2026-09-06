@@ -99,7 +99,12 @@ class TestOCIStreamingToolCalls:
         assert result.choices[0].delta.tool_calls[0]["function"]["name"] == ""
 
     def test_stream_chunk_with_all_missing_fields(self):
-        """All optional fields missing — all default gracefully."""
+        """All optional fields missing — all default gracefully.
+
+        A delta carrying neither an id nor a function name is an argument
+        fragment of a call that was already opened, so it carries no id of its
+        own and the consumer merges it onto the open call by index.
+        """
         chunk_data = {
             "index": 0,
             "finishReason": None,
@@ -119,7 +124,7 @@ class TestOCIStreamingToolCalls:
 
         assert isinstance(result, ModelResponseStream)
         assert result.choices[0].delta.tool_calls is not None
-        assert result.choices[0].delta.tool_calls[0]["id"].startswith("call_")
+        assert result.choices[0].delta.tool_calls[0]["id"] is None
         assert result.choices[0].delta.tool_calls[0]["function"]["name"] == ""
         assert result.choices[0].delta.tool_calls[0]["function"]["arguments"] == ""
 

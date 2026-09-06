@@ -8,6 +8,7 @@ parsing, and streaming chunk parsing for models served with
 
 import datetime
 import hashlib
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -240,25 +241,29 @@ def adapt_tool_definition_to_oci_standard(tools: list[dict], vendor: OCIVendors)
     return new_tools
 
 
-def _normalize_oci_finish_reason(raw: str | None) -> str | None:
-    """Map an OCI-specific finish reason to its OpenAI-standard equivalent.
+_OCI_FINISH_REASONS: Final = MappingProxyType(
+    {
+        "COMPLETE": "stop",
+        "MAX_TOKENS": "length",
+        "TOOL_CALL": "tool_calls",
+        "TOOL_CALLS": "tool_calls",
+    }
+)
 
-    OCI emits ``COMPLETE`` / ``MAX_TOKENS`` / ``TOOL_CALL(S)`` plus a long tail
-    of error/cancel reasons (``ERROR``, ``ERROR_TOXIC``, ``ERROR_LIMIT``,
-    ``USER_CANCEL``, ``CONTENT_FILTERED``, ``CANCELLED``, ...). The OpenAI
-    spec only defines ``stop`` / ``length`` / ``tool_calls`` / ... — anything
-    else is collapsed to ``"stop"`` so downstream consumers switching on
-    ``finish_reason`` keep working. A ``None`` input passes through unchanged.
+_OPENAI_FINISH_REASONS: Final = frozenset({"stop", "length", "tool_calls", "content_filter", "function_call"})
+
+_OCI_RAN_TO_COMPLETION_REASONS: Final = frozenset({"COMPLETE", "stop"})
+
+
+def _normalize_oci_finish_reason(raw: str | None, *, has_tool_calls: bool = False) -> str | None:
+    """Cohere speaks ``COMPLETE`` / ``MAX_TOKENS`` / ``TOOL_CALL(S)`` plus a tail of error and
+    cancel reasons while GENERIC already speaks OpenAI, and only a turn that ran to completion
+    may be upgraded to ``tool_calls``, so an aborted one never invites a client to run the call.
     """
     if raw is None:
         return None
-    if raw == "COMPLETE":
-        return "stop"
-    if raw == "MAX_TOKENS":
-        return "length"
-    if raw in ("TOOL_CALL", "TOOL_CALLS"):
-        return "tool_calls"
-    return "stop"
+    normalized: Final = _OCI_FINISH_REASONS.get(raw, raw if raw in _OPENAI_FINISH_REASONS else "stop")
+    return "tool_calls" if has_tool_calls and raw in _OCI_RAN_TO_COMPLETION_REASONS else normalized
 
 
 def _synthesize_oci_tool_call_id(position: int, name: str, arguments: str) -> str:
@@ -341,7 +346,10 @@ def handle_generic_response(
         if response_message.toolCalls:
             message.tool_calls = adapt_tools_to_openai_standard(response_message.toolCalls)
 
-    model_response.choices[0].finish_reason = _normalize_oci_finish_reason(response_choice.finishReason)
+    model_response.choices[0].finish_reason = _normalize_oci_finish_reason(
+        response_choice.finishReason,
+        has_tool_calls=bool(message.tool_calls),
+    )
 
     oci_usage: Final = completion_response.chatResponse.usage
     reasoning_tokens: int | None = None
@@ -408,7 +416,7 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
     if typed_chunk.message and typed_chunk.message.toolCalls:
         tool_calls = [
             {
-                "id": tc.id or _synthesize_oci_tool_call_id(i, tc.name, tc.arguments),
+                "id": tc.id or (_synthesize_oci_tool_call_id(i, tc.name, tc.arguments) if tc.name else None),
                 "type": "function",
                 "function": {
                     "name": tc.name,
@@ -418,7 +426,10 @@ def handle_generic_stream_chunk(dict_chunk: dict) -> ModelResponseStream:
             for i, tc in enumerate(typed_chunk.message.toolCalls)
         ]
 
-    finish_reason: Final[str | None] = _normalize_oci_finish_reason(typed_chunk.finishReason)
+    finish_reason: Final[str | None] = _normalize_oci_finish_reason(
+        typed_chunk.finishReason,
+        has_tool_calls=bool(tool_calls),
+    )
 
     return ModelResponseStream(
         choices=[

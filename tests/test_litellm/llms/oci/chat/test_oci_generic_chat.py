@@ -2,12 +2,14 @@
 Unit tests for litellm/llms/oci/chat/generic.py — error paths and stream handling.
 """
 
+import json
+
 import pytest
 from unittest.mock import MagicMock
 
 import httpx
 
-from litellm import ModelResponse
+from litellm import ModelResponse, stream_chunk_builder
 from litellm.llms.oci.chat.generic import (
     adapt_messages_to_generic_oci_standard,
     adapt_messages_to_generic_oci_standard_content_message,
@@ -462,3 +464,140 @@ class TestGpt5MaxCompletionTokens:
         dumped = payload.model_dump(exclude_none=True)
         assert dumped["maxCompletionTokens"] == 64
         assert "maxTokens" not in dumped
+
+
+# ---------------------------------------------------------------------------
+# finish_reason fidelity — replays what OCI GENERIC actually sends
+# ---------------------------------------------------------------------------
+
+
+class TestGenericFinishReasonFidelity:
+    """``_TOOL_CALL_WIRE`` was captured against ``oci/meta.llama-3.3-70b-instruct`` in
+    ``us-chicago-1``, where a GENERIC tool-calling turn ends with ``"finishReason": "tool_calls"``
+    and a max-token cut-off with ``"finishReason": "length"``, both already lowercase.
+    """
+
+    _TOOL_CALL_WIRE = [
+        {
+            "index": 0,
+            "message": {
+                "role": "ASSISTANT",
+                "toolCalls": [
+                    {"type": "FUNCTION", "id": "chatcmpl-tool-a8c3005a5731db5e", "name": "get_weather"}
+                ],
+            },
+            "pad": "aaaaaaaaa",
+        },
+        {
+            "index": 0,
+            "message": {"role": "ASSISTANT", "toolCalls": [{"type": "FUNCTION", "arguments": '{"city": "'}]},
+            "pad": "aaa",
+        },
+        {
+            "index": 0,
+            "message": {"role": "ASSISTANT", "toolCalls": [{"type": "FUNCTION", "arguments": 'Paris"}'}]},
+            "pad": "aaaa",
+        },
+        {
+            "message": {"role": "ASSISTANT", "toolCalls": [{"type": "FUNCTION", "arguments": ""}]},
+            "finishReason": "tool_calls",
+            "pad": "aaaa",
+        },
+    ]
+
+    @staticmethod
+    def _drain(events):
+        wrapper = OCIStreamWrapper(
+            completion_stream=MagicMock(), model="meta.llama-3.3-70b-instruct", logging_obj=MagicMock()
+        )
+        return [wrapper.chunk_creator(f"data: {json.dumps(event)}") for event in events]
+
+    def test_tool_calling_stream_ends_with_tool_calls(self):
+        chunks = self._drain(self._TOOL_CALL_WIRE)
+        assert [chunk.choices[0].finish_reason for chunk in chunks] == [None, None, None, "tool_calls"]
+
+    def test_truncated_stream_ends_with_length(self):
+        chunks = self._drain(
+            [
+                {
+                    "message": {"role": "ASSISTANT", "content": [{"type": "TEXT", "text": " conditions"}]},
+                    "finishReason": "length",
+                }
+            ]
+        )
+        assert chunks[0].choices[0].finish_reason == "length"
+
+    def test_argument_fragments_carry_no_id_of_their_own(self):
+        chunks = self._drain(self._TOOL_CALL_WIRE)
+        emitted_ids = [call["id"] for chunk in chunks for call in (chunk.choices[0].delta.tool_calls or [])]
+        assert emitted_ids == ["chatcmpl-tool-a8c3005a5731db5e", None, None, None]
+
+    def test_assembled_tool_call_keeps_the_id_oci_issued(self):
+        assembled = stream_chunk_builder(self._drain(self._TOOL_CALL_WIRE), messages=[])
+
+        choice = assembled.choices[0]
+        assert choice.finish_reason == "tool_calls"
+        assert len(choice.message.tool_calls) == 1
+        assert choice.message.tool_calls[0].id == "chatcmpl-tool-a8c3005a5731db5e"
+        assert choice.message.tool_calls[0].function.arguments == '{"city": "Paris"}'
+
+    def test_non_streaming_tool_call_response_ends_with_tool_calls(self):
+        body = {
+            "modelId": "meta.llama-3.3-70b-instruct",
+            "modelVersion": "1.0.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "timeCreated": "2026-09-06T09:00:39.841Z",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "toolCalls": [
+                                {
+                                    "type": "FUNCTION",
+                                    "id": "chatcmpl-tool-a6e053a520f1cfe9",
+                                    "name": "get_weather",
+                                    "arguments": '{"city": "Paris"}',
+                                }
+                            ],
+                        },
+                        "finishReason": "tool_calls",
+                    }
+                ],
+                "usage": {"completionTokens": 23, "promptTokens": 238, "totalTokens": 261},
+            },
+        }
+        result = handle_generic_response(
+            body, "meta.llama-3.3-70b-instruct", ModelResponse(), httpx.Response(status_code=200, json=body)
+        )
+
+        assert result.choices[0].finish_reason == "tool_calls"
+        assert result.choices[0].message.tool_calls[0].id == "chatcmpl-tool-a6e053a520f1cfe9"
+
+    def test_non_streaming_truncated_response_ends_with_length(self):
+        body = {
+            "modelId": "meta.llama-3.3-70b-instruct",
+            "modelVersion": "1.0.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "timeCreated": "2026-09-06T09:00:40.889Z",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": [{"type": "TEXT", "text": "I'm a large language model, I don't"}],
+                            "toolCalls": [],
+                        },
+                        "finishReason": "length",
+                    }
+                ],
+                "usage": {"completionTokens": 20, "promptTokens": 42, "totalTokens": 62},
+            },
+        }
+        result = handle_generic_response(
+            body, "meta.llama-3.3-70b-instruct", ModelResponse(), httpx.Response(status_code=200, json=body)
+        )
+
+        assert result.choices[0].finish_reason == "length"

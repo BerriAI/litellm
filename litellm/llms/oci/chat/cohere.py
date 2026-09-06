@@ -235,7 +235,10 @@ def handle_cohere_response(
     model_response.created = int(datetime.datetime.now().timestamp())
 
     response_text: Final = cohere_response.chatResponse.text
-    finish_reason: Final = _normalize_oci_finish_reason(cohere_response.chatResponse.finishReason)
+    finish_reason: Final = _normalize_oci_finish_reason(
+        cohere_response.chatResponse.finishReason,
+        has_tool_calls=bool(cohere_response.chatResponse.toolCalls),
+    )
 
     tool_calls: list[dict[str, object]] | None = None
     if cohere_response.chatResponse.toolCalls:
@@ -361,7 +364,10 @@ def handle_cohere_stream_chunk(
             for i, tc in enumerate(cohere_tool_calls)
         ]
 
-    finish_reason: Final = _normalize_oci_finish_reason(typed_chunk.finishReason)
+    finish_reason: Final = _normalize_oci_finish_reason(
+        typed_chunk.finishReason,
+        has_tool_calls=bool(typed_chunk.toolCalls) or prior_tool_calls_emitted,
+    )
 
     return ModelResponseStream(
         choices=[
