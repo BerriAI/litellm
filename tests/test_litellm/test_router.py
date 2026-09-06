@@ -958,22 +958,6 @@ async def test_arouter_aretrieve_batch():
         assert mock_aretrieve_batch.call_args.kwargs["api_base"] == "my-custom-base"
 
 
-# ---------------------------------------------------------------------------
-# Batch retrieval has to attribute its tokens to a model group.
-#
-# Batch token usage is accounted on the *retrieve* call, not on create: a
-# provider only reports token counts once the job finishes, so the usage is read
-# off the completed batch's output file during retrieve logging, and that is the
-# spend log row the tokens land on. A batch is retrieved by id, so the request
-# carries no model and the router fans the lookup out across its deployments -
-# the group of the deployment that answered is the only one there is to stamp.
-# Leaving it unset files every batch's tokens under an empty model_group, which
-# is what /global/activity/model groups the spend logs by.
-#
-# The provider is faked at the HTTP boundary, so the retrieve call and the usage
-# accounting that reads the output file both run for real.
-# ---------------------------------------------------------------------------
-
 _BATCH_GROUP = "gemini-batch-group"
 _BATCH_DEPLOYMENT_MODEL = "openai/gpt-4o-mini"
 _BATCH_API_BASE = "http://localhost:4001/v1"
