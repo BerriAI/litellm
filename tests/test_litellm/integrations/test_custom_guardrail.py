@@ -1826,6 +1826,45 @@ class TestGuardrailInterventionClassification:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_status"] == "guardrail_intervened"
 
+    def test_content_policy_violation_proxy_exception_is_intervention(self):
+        """Aim signals a policy verdict with a ProxyException carrying OpenAI's content-policy code."""
+        from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
+
+        exc = AimGuardrail._rejection("blocked by policy", openai_code="content_policy_violation")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    def test_proxy_exception_without_content_policy_code_is_not_intervention(self):
+        """Aim reuses the same factory to refuse a response it could not anonymize, which is a failure."""
+        from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
+
+        exc = AimGuardrail._rejection("anonymize action returned malformed redacted messages")
+        assert CustomGuardrail._is_guardrail_intervention(exc) is False
+
+    @pytest.mark.asyncio
+    async def test_example_guardrail_block_logged_as_intervened(self):
+        """The in-tree example guardrail is the pattern custom guardrails are copied from."""
+        from litellm.exceptions import GuardrailRaisedException
+        from litellm.proxy.guardrails.guardrail_hooks.custom_guardrail import myCustomGuardrail
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        guardrail = myCustomGuardrail(guardrail_name="example-custom")
+        request_data: dict = {
+            "metadata": {},
+            "messages": [{"role": "user", "content": "tell me about litellm"}],
+        }
+
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await guardrail.async_moderation_hook(
+                data=request_data,
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+
+        assert exc_info.value.blocked_content is True
+        assert str(exc_info.value) == "Guardrail failed words - `litellm` detected"
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"
+
 
 class _ApplyStyleGuardrail(CustomGuardrail):
     """Overrides only apply_guardrail, like openai_moderation; async_pre_call_hook stays the CustomLogger no-op."""

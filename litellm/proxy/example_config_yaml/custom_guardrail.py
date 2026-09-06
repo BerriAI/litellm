@@ -3,6 +3,7 @@ from typing import Dict, Final, Optional, Union
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import CallTypesLiteral
@@ -99,7 +100,12 @@ class myCustomGuardrail(CustomGuardrail):
                 _content = message.get("content")
                 if isinstance(_content, str):
                     if "litellm" in _content.lower():
-                        raise ValueError("Guardrail failed words - `litellm` detected")
+                        raise GuardrailRaisedException(
+                            guardrail_name=self.guardrail_name,
+                            message="Guardrail failed words - `litellm` detected",
+                            should_wrap_with_default_message=False,
+                            blocked_content=True,
+                        )
 
     async def async_post_call_success_hook(
         self,
@@ -124,4 +130,9 @@ class myCustomGuardrail(CustomGuardrail):
                         and isinstance(choice.message.content, str)
                         and "coffee" in choice.message.content
                     ):
-                        raise ValueError("Guardrail failed Coffee Detected")
+                        raise GuardrailRaisedException(
+                            guardrail_name=self.guardrail_name,
+                            message="Guardrail failed Coffee Detected",
+                            should_wrap_with_default_message=False,
+                            blocked_content=True,
+                        )
