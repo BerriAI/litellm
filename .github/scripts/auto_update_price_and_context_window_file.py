@@ -85,21 +85,29 @@ def transform_openrouter_data(data):
 def transform_vercel_ai_gateway_data(data):
     transformed = {}
     for row in data:
-        obj = {
-            "max_tokens": row["context_window"],
-            "input_cost_per_token": float(row["pricing"]["input"]),
-            "output_cost_per_token": float(row["pricing"]["output"]),
-            'max_output_tokens': row['max_tokens'],
-            'max_input_tokens': row["context_window"],
-        }
+        obj = {}
+
+        context_window = row.get("context_window")
+        if context_window is not None:
+            obj["max_tokens"] = context_window
+            obj["max_input_tokens"] = context_window
+
+        max_output_tokens = row.get("max_tokens")
+        if max_output_tokens is not None:
+            obj["max_output_tokens"] = max_output_tokens
+
+        pricing = row.get("pricing") or {}
+        if pricing.get("input") is not None:
+            obj["input_cost_per_token"] = float(pricing["input"])
+        if pricing.get("output") is not None:
+            obj["output_cost_per_token"] = float(pricing["output"])
 
         # Handle cache pricing if available
-        if "pricing" in row:
-            if "input_cache_read" in row["pricing"] and row["pricing"]["input_cache_read"] is not None:
-                obj['cache_read_input_token_cost'] = float(f"{float(row['pricing']['input_cache_read']):e}")
-            
-            if "input_cache_write" in row["pricing"] and row["pricing"]["input_cache_write"] is not None:
-                obj['cache_creation_input_token_cost'] = float(f"{float(row['pricing']['input_cache_write']):e}")
+        if pricing.get("input_cache_read") is not None:
+            obj['cache_read_input_token_cost'] = float(f"{float(pricing['input_cache_read']):e}")
+
+        if pricing.get("input_cache_write") is not None:
+            obj['cache_creation_input_token_cost'] = float(f"{float(pricing['input_cache_write']):e}")
 
         mode = "embedding" if "embedding" in row["id"].lower() else "chat"
         
