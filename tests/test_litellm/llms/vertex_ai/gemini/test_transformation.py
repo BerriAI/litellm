@@ -338,3 +338,56 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+
+
+def test__transform_request_body_google_maps_retrieval_config_is_sent():
+    """
+    googleMaps latitude/longitude are extracted into optional_params["toolConfig"]["retrievalConfig"]
+    by VertexGeminiConfig._map_function. That toolConfig must reach the request body, otherwise
+    Google grounds without a location.
+    """
+    optional_params = {}
+    tools = VertexGeminiConfig()._map_function(
+        value=[{"googleMaps": {"latitude": 37.7749, "longitude": -122.4194}}],
+        optional_params=optional_params,
+    )
+    optional_params["tools"] = tools
+
+    rb: RequestBody = transformation._transform_request_body(
+        messages=[{"role": "user", "content": "coffee near me"}],
+        model="gemini-3-flash-preview",
+        optional_params=optional_params,
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    assert rb["tools"] == [{"googleMaps": {}}]
+    assert rb["toolConfig"] == {"retrievalConfig": {"latLng": {"latitude": 37.7749, "longitude": -122.4194}}}
+
+
+def test__transform_request_body_tool_config_merges_with_tool_choice():
+    """
+    A googleMaps retrievalConfig and a function-calling tool_choice both live under toolConfig;
+    neither should clobber the other.
+    """
+    optional_params = {
+        "toolConfig": {"retrievalConfig": {"latLng": {"latitude": 1.0, "longitude": 2.0}}},
+        "tool_choice": {"functionCallingConfig": {"mode": "AUTO"}},
+        "include_server_side_tool_invocations": True,
+    }
+
+    rb: RequestBody = transformation._transform_request_body(
+        messages=[{"role": "user", "content": "hi"}],
+        model="gemini-3-flash-preview",
+        optional_params=optional_params,
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    assert rb["toolConfig"] == {
+        "retrievalConfig": {"latLng": {"latitude": 1.0, "longitude": 2.0}},
+        "functionCallingConfig": {"mode": "AUTO"},
+        "includeServerSideToolInvocations": True,
+    }

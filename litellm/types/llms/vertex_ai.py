@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
+    ReadOnly,
     Required,
     TypedDict,
 )
@@ -278,9 +279,20 @@ class Tools(TypedDict, total=False):
     retrieval: Retrieval
 
 
+class LatLng(TypedDict):
+    latitude: ReadOnly[float]
+    longitude: ReadOnly[float]
+
+
+class RetrievalConfig(TypedDict, total=False):
+    latLng: ReadOnly[LatLng]
+    languageCode: ReadOnly[str]
+
+
 class ToolConfig(TypedDict, total=False):
     functionCallingConfig: FunctionCallingConfig
     includeServerSideToolInvocations: bool
+    retrievalConfig: ReadOnly[RetrievalConfig]
 
 
 class TTL(TypedDict, total=False):

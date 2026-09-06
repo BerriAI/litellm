@@ -1191,6 +1191,7 @@ def _transform_request_body(
             )
         tools: Final[Tools | None] = optional_params.pop("tools", None)
         tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
+        tool_config: Final[ToolConfig | None] = optional_params.pop("toolConfig", None)
         include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
@@ -1223,8 +1224,15 @@ def _transform_request_body(
                 data["system_instruction"] = system_instructions
             if tools is not None:
                 data["tools"] = tools
-            if tool_choice is not None:
-                data["toolConfig"] = tool_choice
+            merged_tool_config: Final[ToolConfig | None] = (
+                {**tool_config, **tool_choice}
+                if tool_config is not None and tool_choice is not None
+                else tool_config
+                if tool_config is not None
+                else tool_choice
+            )
+            if merged_tool_config is not None:
+                data["toolConfig"] = merged_tool_config
             if include_server_side_tool_invocations:
                 if "toolConfig" not in data:
                     data["toolConfig"] = {}
