@@ -571,6 +571,9 @@ def _fix_enum_empty_strings(schema, depth=0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
 
+    if not isinstance(schema, dict):
+        return
+
     if "enum" in schema and isinstance(schema["enum"], list):
         schema["enum"] = [None if value == "" else value for value in schema["enum"]]
 
@@ -583,6 +586,12 @@ def _fix_enum_empty_strings(schema, depth=0):
     items: Final = schema.get("items", None)
     if items is not None:
         _fix_enum_empty_strings(items, depth=depth + 1)
+
+    anyof = schema.get("anyOf", None)
+    if anyof is not None and isinstance(anyof, list):
+        for item in anyof:
+            if isinstance(item, dict):
+                _fix_enum_empty_strings(item, depth=depth + 1)
 
 
 def _fix_enum_types(schema, depth=0):
