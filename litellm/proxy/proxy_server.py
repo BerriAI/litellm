@@ -12471,6 +12471,56 @@ def _get_provider_token_counter(
     return None, None, None
 
 
+def _deployment_wants_strict_count(deployment: Mapping[str, Any]) -> bool:
+    """Whether one configured deployment asks for exact token counts."""
+    info: Final = deployment.get("model_info")
+    if info is None:
+        return False
+    return bool(info.get("strict_token_count", False))
+
+
+def _is_strict_token_count_model(
+    llm_router: Router | None,
+    model_name: str | None,
+    model_info: ModelMapInfo | None,
+) -> bool:
+    """Whether this model requires an exact token count.
+
+    Prefers the selected deployment's `model_info`, then falls back to the
+    router's configuration for the requested model. The fallback matters
+    because deployment selection can fail for reasons unrelated to the
+    policy, and a strict model must not quietly return an estimate then.
+
+    Note the precedence when a model group is configured inconsistently: a
+    deployment carrying `strict_token_count: false` does **not** short-circuit
+    to permissive. It falls through to the router check, so the group is
+    strict if any of its deployments asks for it. The caller cannot choose
+    which deployment serves them, so an ambiguous configuration is read the
+    safe way. Set the flag on every deployment in a group to avoid relying on
+    this.
+    """
+    if model_info is not None and bool(model_info.get("strict_token_count", False)):
+        return True
+
+    if llm_router is None or model_name is None:
+        return False
+
+    # Strict if any configured deployment for this model asks for it: the
+    # caller cannot choose which deployment serves them, so the safe reading
+    # of a mixed configuration is the strict one.
+    try:
+        deployments: Final = llm_router.get_model_list(model_name=model_name)
+        if deployments is None:
+            return False
+        return any(_deployment_wants_strict_count(d) for d in deployments)
+    except (KeyError, AttributeError, TypeError, ValueError):
+        verbose_proxy_logger.debug(
+            "litellm.proxy.proxy_server._is_strict_token_count_model(): could not list deployments for %s",
+            model_name,
+        )
+        return False
+
+
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
@@ -12481,8 +12531,13 @@ async def _try_provider_token_count(
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
+    strict_token_count: bool = False,
 ) -> Optional["TokenCountResponse"]:
-    """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
+    """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting.
+
+    When `strict_token_count` is True, a failed provider count raises instead of
+    falling through to a local estimate.
+    """
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
         return None
     try:
@@ -12505,7 +12560,7 @@ async def _try_provider_token_count(
             code=status_code,
         )
     if result is not None and result.error is True:
-        if litellm.disable_token_counter is True:
+        if strict_token_count is True:
             raise ProxyException(
                 message=result.error_message or "Token counting failed",
                 type="token_counting_error",
@@ -12583,6 +12638,23 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
         litellm_model_name or request.model
     )  # use litellm model name, if it's not avalable then fallback to request.model
 
+    #########################################################
+    # Strict token counting.
+    #
+    # `litellm.disable_token_counter` turns a failed provider count into an
+    # error instead of a local estimate, but it applies proxy-wide.
+    # `strict_token_count` in a model's `model_info` opts a single model into
+    # that same behaviour, so a deployment can require an exact count for one
+    # model without giving up the local estimate for every other model.
+    #########################################################
+    # Resolved from the router's configuration rather than the selected
+    # deployment, so the policy still holds when deployment selection fails
+    # (every deployment cooling down, rate limited, ...). Failing open there
+    # would hand back the estimate the flag exists to refuse.
+    strict_token_count: Final = litellm.disable_token_counter is True or _is_strict_token_count_model(
+        llm_router=llm_router, model_name=request.model, model_info=model_info
+    )
+
     # Try provider-specific token counting first - only for non-direct requests (from provider endpoints)
     provider_counter: BaseTokenCounter | None = None
     custom_llm_provider: str | None = None
@@ -12603,12 +12675,13 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             request_model=request.model,
             tools=tools,
             system=system,
+            strict_token_count=strict_token_count,
         )
         if result is not None:
             return result
 
-    # Check if token counter is disabled before fallback
-    if litellm.disable_token_counter is True:
+    # Check if strict token counting is required before falling back to an estimate
+    if strict_token_count is True:
         raise ProxyException(
             message="Token counting is disabled and no provider API result available",
             type="token_counting_disabled",
