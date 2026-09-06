@@ -9504,6 +9504,18 @@
               "description": "Name of the guardrail in guardrails.ai",
               "title": "Guard Name"
             },
+            "inspect_embeddings": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.",
+              "title": "Inspect Embeddings"
+            },
             "keyword_redaction_tag": {
               "anyOf": [
                 {
@@ -11655,6 +11667,18 @@
               "default": true,
               "description": "Include scanner category summaries in responses (sets `plr_scanners` header).",
               "title": "Include Scanners"
+            },
+            "inspect_embeddings": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.",
+              "title": "Inspect Embeddings"
             },
             "is_detector_server": {
               "anyOf": [
