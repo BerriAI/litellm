@@ -359,6 +359,113 @@ class TestMistralReasoningSupport:
         assert result.get("temperature") == 0.7
         assert "_add_reasoning_prompt" not in result
 
+    def test_is_mistral_reasoning_model(self):
+        """Test model detection covers documented reasoning models and rejects others."""
+        mistral_config = MistralConfig()
+
+        # Reasoning-capable models
+        assert mistral_config._is_mistral_reasoning_model("magistral-medium-latest") is True
+        assert mistral_config._is_mistral_reasoning_model("mistral/MAGISTRAL-SMALL-2506") is True
+        assert mistral_config._is_mistral_reasoning_model("mistral-medium-3-5") is True
+        assert mistral_config._is_mistral_reasoning_model("mistral/Mistral-Medium-3-5") is True
+        assert mistral_config._is_mistral_reasoning_model("mistral-small-latest") is True
+
+        # Edge and non-reasoning models
+        assert mistral_config._is_mistral_reasoning_model("") is False
+        assert mistral_config._is_mistral_reasoning_model("mistral-large-latest") is False
+
+    def test_get_supported_openai_params_medium_3_5_and_small_latest(self):
+        """Test that mistral-medium-3-5 and mistral-small-latest support reasoning params.
+
+        Regression for https://github.com/BerriAI/litellm/issues/36407.
+        """
+        mistral_config = MistralConfig()
+
+        for model in [
+            "mistral/mistral-medium-3-5",
+            "mistral-medium-3-5",
+            "mistral/mistral-small-latest",
+            "mistral-small-latest",
+        ]:
+            supported_params = mistral_config.get_supported_openai_params(model)
+            assert "reasoning_effort" in supported_params, f"Failed for model: {model}"
+            assert "thinking" in supported_params, f"Failed for model: {model}"
+
+    def test_get_supported_openai_params_legacy_models_excluded(self):
+        """Test that legacy / non-reasoning models do not gain reasoning params."""
+        mistral_config = MistralConfig()
+
+        for model in [
+            "mistral/mistral-large-latest",
+            "open-mistral-7b",
+            "mistral/mistral-7b-instruct",
+        ]:
+            supported_params = mistral_config.get_supported_openai_params(model)
+            assert "reasoning_effort" not in supported_params, f"Failed for model: {model}"
+            assert "thinking" not in supported_params, f"Failed for model: {model}"
+
+    def test_map_openai_params_reasoning_effort_medium_3_5_and_small_latest(self):
+        """Test that reasoning_effort maps for newly enabled reasoning models."""
+        mistral_config = MistralConfig()
+
+        for model in ["mistral/mistral-medium-3-5", "mistral/mistral-small-latest"]:
+            optional_params = {}
+            result = mistral_config.map_openai_params(
+                non_default_params={"reasoning_effort": "low"},
+                optional_params=optional_params,
+                model=model,
+                drop_params=False,
+            )
+            assert result.get("_add_reasoning_prompt") is True, f"Failed for model: {model}"
+
+    def test_transform_request_medium_3_5_adds_reasoning_prompt(self):
+        """Test transform_request adds the system prompt for mistral-medium-3-5."""
+        mistral_config = MistralConfig()
+
+        messages = [{"role": "user", "content": "What is 15 * 7?"}]
+        optional_params = {"_add_reasoning_prompt": True}
+
+        result = mistral_config.transform_request(
+            model="mistral/mistral-medium-3-5",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        assert len(result["messages"]) == 2
+        assert result["messages"][0]["role"] == "system"
+        assert "<think>" in result["messages"][0]["content"]
+        assert result["messages"][1]["role"] == "user"
+
+        # Internal flag must never reach the provider payload
+        assert "_add_reasoning_prompt" not in result
+
+    def test_transform_request_non_reasoning_model_strips_internal_flag(self):
+        """Regression: a stray internal flag must be stripped, not sent to Mistral.
+
+        Mistral's API rejects unknown fields (422 extra_forbidden), so an internal
+        key like _add_reasoning_prompt reaching the payload breaks the request.
+        """
+        mistral_config = MistralConfig()
+
+        messages = [{"role": "user", "content": "What is 15 * 7?"}]
+        optional_params = {"_add_reasoning_prompt": True}
+
+        result = mistral_config.transform_request(
+            model="mistral/mistral-large-latest",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # No system prompt injected for non-reasoning models...
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["role"] == "user"
+        # ...and the internal flag must not leak into the provider payload
+        assert "_add_reasoning_prompt" not in result
+
 
 def test_mistral_streaming_chunk_preserves_thinking_blocks():
     """Ensure streaming chunks keep magistral reasoning content."""
