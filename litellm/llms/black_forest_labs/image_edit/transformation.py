@@ -9,6 +9,7 @@ API Reference: https://docs.bfl.ai/
 
 import base64
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -16,7 +17,7 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.url_utils import safe_get
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -35,6 +36,22 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_BFL_REQUEST_PARAMS: Final = (
+    "seed",
+    "output_format",
+    "safety_tolerance",
+    "prompt_upsampling",
+    "aspect_ratio",
+    "steps",
+    "guidance",
+    "grow_mask",
+    "top",
+    "bottom",
+    "left",
+    "right",
+)
 
 
 class BlackForestLabsImageEditConfig(BaseImageEditConfig):
@@ -85,34 +102,10 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         BFL-specific params are passed through directly.
         """
         optional_params: Final[dict[str, object]] = {}
-
-        # Pass through BFL-specific params
-        bfl_params: Final = [
-            "seed",
-            "output_format",
-            "safety_tolerance",
-            "prompt_upsampling",
-            # Kontext-specific
-            "aspect_ratio",
-            # Fill/Inpaint-specific
-            "steps",
-            "guidance",
-            "grow_mask",
-            # Expand-specific
-            "top",
-            "bottom",
-            "left",
-            "right",
-        ]
-
-        # Convert TypedDict to regular dict for access
-        params_dict: Final = dict(image_edit_optional_params)
-
-        for param in bfl_params:
-            if param in params_dict:
-                value = params_dict[param]
-                if value is not None:
-                    optional_params[param] = value
+        params: Final[Mapping[str, object]] = image_edit_optional_params
+        for param in _BFL_REQUEST_PARAMS:
+            if (value := params.get(param)) is not None:
+                optional_params[param] = value
 
         # Set default output format
         if "output_format" not in optional_params:
@@ -251,23 +244,8 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             "input_image": b64_image,
         }
 
-        # Add optional params (only BFL-recognized parameters)
-        bfl_request_params: Final = [
-            "seed",
-            "output_format",
-            "safety_tolerance",
-            "prompt_upsampling",
-            "aspect_ratio",
-            "steps",
-            "guidance",
-            "grow_mask",
-            "top",
-            "bottom",
-            "left",
-            "right",
-        ]
         for key, value in image_edit_optional_request_params.items():
-            if key in bfl_request_params and value is not None:
+            if key in _BFL_REQUEST_PARAMS and value is not None:
                 request_body[key] = value
 
         # Handle mask if provided (for inpainting)
@@ -277,7 +255,39 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
             request_body["mask"] = base64.b64encode(mask_bytes).decode("utf-8")
 
         # BFL uses JSON, not multipart - return empty files
-        return request_body, []
+        return request_body, ()
+
+    async def async_transform_image_edit_request(
+        self,
+        model: str,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, str],
+    ) -> tuple[dict, RequestFiles]:
+        downloaded_image: Final = await self._fetch_remote_image(image)
+        downloaded_mask: Final = await self._fetch_remote_image(image_edit_optional_request_params.get("mask"))
+        return self.transform_image_edit_request(
+            model=model,
+            prompt=prompt,
+            image=image if downloaded_image is None else downloaded_image,
+            image_edit_optional_request_params=(
+                dict(image_edit_optional_request_params)
+                if downloaded_mask is None
+                else {**image_edit_optional_request_params, "mask": downloaded_mask}
+            ),
+            litellm_params=litellm_params,
+            headers=dict(headers),
+        )
+
+    async def _fetch_remote_image(self, image: object) -> bytes | None:
+        candidate: Final = image[0] if isinstance(image, list) and image else image
+        if not isinstance(candidate, str) or not candidate.startswith(("http://", "https://")):
+            return None
+        response: Final = await async_safe_get(litellm.module_level_aclient, candidate, timeout=60.0)
+        response.raise_for_status()
+        return response.content
 
     def transform_image_edit_response(
         self,
