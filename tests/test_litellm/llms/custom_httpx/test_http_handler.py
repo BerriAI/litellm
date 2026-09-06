@@ -5,6 +5,7 @@ import os
 import pathlib
 import ssl
 import threading
+import time
 import weakref
 from unittest.mock import MagicMock, patch
 
@@ -620,6 +621,112 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
         assert req.headers.get("User-Agent") == "Claude Code"
     finally:
         await handler.close()
+
+
+def test_decodable_accept_encoding_drops_zstd_and_keeps_the_rest():
+    from litellm.llms.custom_httpx.http_handler import decodable_accept_encoding
+
+    assert decodable_accept_encoding("gzip, deflate, br, zstd") == "gzip, deflate, br"
+    assert decodable_accept_encoding("zstd") == "identity"
+    assert decodable_accept_encoding("gzip") == "gzip"
+
+
+@pytest.mark.parametrize("disable_default_headers", [False, True])
+def test_sync_client_asks_only_for_encodings_httpx_can_stream(disable_default_headers):
+    from litellm.llms.custom_httpx.http_handler import DECODABLE_ACCEPT_ENCODING
+
+    assert "zstd" not in DECODABLE_ACCEPT_ENCODING
+    assert "gzip" in DECODABLE_ACCEPT_ENCODING
+
+    handler = HTTPHandler(disable_default_headers=disable_default_headers)
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("Accept-Encoding") == DECODABLE_ACCEPT_ENCODING
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_client_asks_only_for_encodings_httpx_can_stream():
+    from litellm.llms.custom_httpx.http_handler import DECODABLE_ACCEPT_ENCODING
+
+    handler = AsyncHTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("Accept-Encoding") == DECODABLE_ACCEPT_ENCODING
+    finally:
+        await handler.close()
+
+
+@pytest.fixture
+def frame_per_event_sse_upstream():
+    """SSE upstream that compresses each event into its own zstd frame when the client offers zstd."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
+
+    zstandard = pytest.importorskip("zstandard")
+
+    events = (b'data: {"seq": 1}\n\n', b'data: {"seq": 2}\n\n')
+
+    class FramePerEventHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            compress = "zstd" in (self.headers.get("Accept-Encoding") or "")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            if compress:
+                self.send_header("Content-Encoding", "zstd")
+            self.end_headers()
+            for event in events:
+                body = zstandard.ZstdCompressor().compress(event) if compress else event
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(body), body))
+                self.wfile.flush()
+                time.sleep(0.1)
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+
+        def log_message(self, format, *args):
+            pass
+
+    class ThreadedServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+    server = ThreadedServer(("127.0.0.1", 0), FramePerEventHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}/v1/chat/completions", b"".join(events)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_streamed_events_survive_an_upstream_that_frames_each_event(frame_per_event_sse_upstream):
+    url, expected_body = frame_per_event_sse_upstream
+
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get(url)
+    finally:
+        await handler.close()
+
+    assert response.content == expected_body
+
+
+def test_sync_streamed_events_survive_an_upstream_that_frames_each_event(frame_per_event_sse_upstream):
+    url, expected_body = frame_per_event_sse_upstream
+
+    handler = HTTPHandler()
+    try:
+        response = handler.get(url)
+    finally:
+        handler.close()
+
+    assert response.content == expected_body
 
 
 def test_get_httpx_client_applies_float_timeout_without_mocking_handler():

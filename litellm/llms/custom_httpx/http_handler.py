@@ -16,6 +16,7 @@ import certifi
 import httpx
 from aiohttp import ClientSession, DummyCookieJar, TCPConnector
 from httpx import USE_CLIENT_DEFAULT, AsyncHTTPTransport, HTTPTransport
+from httpx._client import ACCEPT_ENCODING as HTTPX_ACCEPT_ENCODING
 from httpx._types import CertTypes, RequestFiles
 from httpx._utils import get_environment_proxies
 
@@ -131,7 +132,33 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.so
     return factory
 
 
-def get_default_headers() -> dict:
+_ZSTD_CONTENT_ENCODING: Final = "zstd"
+
+
+def decodable_accept_encoding(advertised: str) -> str:
+    """
+    Narrow an `Accept-Encoding` value to the encodings that survive chunked reads.
+
+    httpx builds one zstd decompressor per response and reuses it for every chunk, so a
+    body whose chunks are separate zstd frames (one per event, as streaming providers
+    send) dies on the second frame with `cannot use a decompressobj multiple times`.
+    httpx offers zstd whenever the optional `zstandard` package is importable, which any
+    install carrying langchain, langsmith or `httpx[zstd]` does, so litellm drops it.
+    """
+    supported: Final = tuple(
+        encoding
+        for encoding in (part.strip() for part in advertised.split(","))
+        if encoding and encoding != _ZSTD_CONTENT_ENCODING
+    )
+    return ", ".join(supported) or "identity"
+
+
+DECODABLE_ACCEPT_ENCODING: Final = decodable_accept_encoding(HTTPX_ACCEPT_ENCODING)
+
+_ACCEPT_ENCODING_HEADER: Final[Mapping[str, str]] = MappingProxyType({"Accept-Encoding": DECODABLE_ACCEPT_ENCODING})
+
+
+def get_default_headers() -> dict[str, str]:
     """
     Get default headers for HTTP requests.
 
@@ -139,10 +166,8 @@ def get_default_headers() -> dict:
     - Override: set `LITELLM_USER_AGENT` to fully override the header value.
     """
     user_agent: Final = os.environ.get("LITELLM_USER_AGENT")
-    if user_agent is not None:
-        return {"User-Agent": user_agent}
 
-    return {"User-Agent": f"litellm/{version}"}
+    return {**_ACCEPT_ENCODING_HEADER, "User-Agent": user_agent if user_agent is not None else f"litellm/{version}"}
 
 
 # Initialize headers (User-Agent)
@@ -620,7 +645,6 @@ class AsyncHTTPHandler:
             shared_session=shared_session,
         )
 
-        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers()
 
         return httpx.AsyncClient(
@@ -1252,8 +1276,9 @@ class HTTPHandler:
         # /path/to/client.pem
         cert: Final = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
-        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
-        default_headers: Final = get_default_headers() if not self.disable_default_headers else None
+        default_headers: Final = (
+            dict(_ACCEPT_ENCODING_HEADER) if self.disable_default_headers else get_default_headers()
+        )
 
         # Create a client with a connection pool
         return httpx.Client(
