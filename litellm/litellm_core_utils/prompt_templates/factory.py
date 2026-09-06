@@ -783,7 +783,12 @@ def convert_generic_image_chunk_to_openai_image_obj(
     return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
 
 
+_CHARSET_AWARE_MEDIA_TYPE: Final = "text/plain"
+
+
 def _media_type_with_original_parameters(format_override: str, original_media_type: str) -> str:
+    if format_override.strip() != _CHARSET_AWARE_MEDIA_TYPE:
+        return format_override
     base_type, separator, parameters = original_media_type.partition(";")
     if not separator or base_type.strip() != format_override.strip():
         return format_override
@@ -1525,15 +1530,17 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
 _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES: Final = {"application/pdf", "text/plain"}
 
 
-def _is_anthropic_document_data_uri(url: str, format_override: str | None = None) -> bool:
+def _anthropic_media_type_for_data_uri(url: str, format_override: str | None) -> str | None:
     if not url.startswith("data:"):
-        return False
-    if format_override:
-        return format_override in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
+        return None
+    if format_override and select_anthropic_content_block_type_for_file(format_override) != "container_upload":
+        return format_override
     match: Final = re.match(r"data:([^;,]+)", url)
-    if not match:
-        return False
-    return match.group(1) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
+    return match.group(1) if match else None
+
+
+def _is_anthropic_document_data_uri(url: str, format_override: str | None = None) -> bool:
+    return _anthropic_media_type_for_data_uri(url, format_override) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
 
 
 def _anthropic_text_document_source(image_chunk: GenericImageParsingChunk) -> AnthropicContentParamSourceText | None:
@@ -1542,11 +1549,17 @@ def _anthropic_text_document_source(image_chunk: GenericImageParsingChunk) -> An
         return None
     content_type_header: Final = Message()
     content_type_header["content-type"] = image_chunk["media_type"]
-    return AnthropicContentParamSourceText(
-        type="text",
-        media_type="text/plain",
-        data=base64.b64decode(image_chunk["data"]).decode(content_type_header.get_content_charset("utf-8")),
-    )
+    charset: Final = content_type_header.get_content_charset("utf-8")
+    try:
+        text: Final = base64.b64decode(image_chunk["data"]).decode(charset)
+    except (LookupError, UnicodeDecodeError) as decode_error:
+        raise litellm.BadRequestError(
+            message=f"Text attachment could not be read as {charset!r}: {decode_error}. "
+            "Send it as utf-8, or name its encoding in the data URI (data:text/plain;charset=...).",
+            model=None,
+            llm_provider="anthropic",
+        ) from decode_error
+    return AnthropicContentParamSourceText(type="text", media_type="text/plain", data=text)
 
 
 def _anthropic_document_block_from_data_uri(
@@ -1554,9 +1567,10 @@ def _anthropic_document_block_from_data_uri(
     original_content_element: dict | AllMessageValues,
     format_override: str | None = None,
 ) -> AnthropicMessagesDocumentParam:
+    document_media_type: Final = format_override if format_override in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES else None
     synth_file_message: Final[ChatCompletionFileObject] = {
         "type": "file",
-        "file": {"file_data": url, "format": format_override} if format_override else {"file_data": url},
+        "file": {"file_data": url, "format": document_media_type} if document_media_type else {"file_data": url},
     }
     document_block: Final = anthropic_process_openai_file_message(synth_file_message)
     return cast(

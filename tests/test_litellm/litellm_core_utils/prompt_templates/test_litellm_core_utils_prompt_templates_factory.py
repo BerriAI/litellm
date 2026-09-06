@@ -4122,3 +4122,94 @@ def test_anthropic_messages_pt_native_tool_use_input_survives_guardrail_redactio
     result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
 
     assert result[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+def test_anthropic_messages_pt_keeps_a_pdf_a_document_when_the_format_is_generic():
+    """
+    A browser reports `application/octet-stream` for any file it cannot identify, so
+    that `format` says nothing about the bytes. Letting it override the data URI's own
+    `application/pdf` routes a real PDF into an image block Anthropic rejects.
+    """
+    messages = [
+        {"role": "user", "content": "fetch the invoice"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "fetch_invoice", "input": {}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _PDF_DATA_URI, "format": "application/octet-stream"},
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[2]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": _PDF_DATA_URI.split(",", 1)[1],
+                    },
+                }
+            ],
+        }
+    ]
+
+
+def test_anthropic_messages_pt_drops_data_uri_parameters_the_format_replaces():
+    """
+    A data URI built from a file picker carries the file name in its media type, which
+    Anthropic's media_type enum rejects. Naming the type in `format` is how a caller
+    cleans that up, so only the charset of a text attachment may survive it.
+    """
+    png_data_uri: Final = "data:image/png;name=diagram.png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": png_data_uri, "format": "image/png"}}],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": png_data_uri.split(",", 1)[1]},
+        }
+    ]
+
+
+def test_anthropic_messages_pt_rejects_a_text_attachment_it_cannot_decode():
+    """
+    A text file a browser turned into a data URI names no charset, so bytes that are
+    not utf-8 cannot be read. The caller has to get a client error naming the problem,
+    never a decode failure carrying the whole attachment back in its message.
+    """
+    undeclared_latin1: Final = "data:text/plain;base64," + base64.b64encode(
+        "the secret code word is caf\xe9".encode("iso-8859-1") * 200
+    ).decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": undeclared_latin1, "format": "text/plain"}}],
+        }
+    ]
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert "utf-8" in str(raised.value)
+    assert undeclared_latin1.split(",", 1)[1] not in str(raised.value)

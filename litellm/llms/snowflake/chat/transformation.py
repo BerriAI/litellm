@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 import httpx
 from typing_extensions import ReadOnly
 
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
@@ -219,7 +220,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             conversation: Final = anthropic_messages_pt(
                 messages=conversation_messages, model=model, llm_provider="snowflake", force_base64=True
             )
-        except (ValueError, LookupError) as e:
+        except (ValueError, LookupError, BadRequestError) as e:
             raise SnowflakeException(status_code=400, message=str(e)) from e
         return (system or None), conversation
 
