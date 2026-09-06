@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import os
 import re
 
 
@@ -3166,6 +3167,104 @@ async def test_update_database_writes_no_ordinary_spend_row_with_spend_logs_disa
 
     prisma.db.litellm_spendlogs.create_many.assert_not_called()
     assert prisma.spend_log_transactions == []
+    assert db_writer._batch_database_updates.await_count == 1
+
+
+_BATCH_CLAIM_FIELDS = {"request_id", "call_type", "status", "spend", "startTime", "endTime"}
+
+
+def _logged_batch_cost_payload() -> dict:
+    return {
+        **_batch_cost_payload(),
+        "api_key": "0e5b0e9e5f",
+        "model": "gpt-5.6-luna",
+        "user": "test-user",
+        "metadata": '{"batch_models": ["gpt-5.6-luna"]}',
+        "requester_ip_address": "127.0.0.1",
+        "proxy_server_request": '{"headers": {"user-agent": "litellm-batch-cost-check"}}',
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("disable_spend_logs", "logs_the_request"),
+    [(False, True), (True, False)],
+    ids=["spend_logs_on", "spend_logs_off"],
+)
+async def test_update_database_claims_a_batch_without_logging_the_request_that_polled_it(
+    disable_spend_logs: bool, logs_the_request: bool
+):
+    """
+    disable_spend_logs has to keep meaning that no request gets logged, and the batch's cost
+    row is the one row it cannot drop, so with logging off that row carries only what tells
+    the retrieves apart: no metadata, no requester IP, no key, model, or token counts.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_prisma(1, None)
+    payload = _logged_batch_cost_payload()
+
+    assert await _update_database_with(db_writer, prisma, payload, disable_spend_logs) is True
+
+    claimed = prisma.db.litellm_spendlogs.create_many.await_args.kwargs["data"][0]
+    assert set(claimed) == (set(payload) if logs_the_request else _BATCH_CLAIM_FIELDS)
+    assert claimed["spend"] == 0.25
+    assert db_writer._batch_database_updates.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("spend_logs_url", "forwarded"),
+    [("http://spend-logs.internal", True), (None, False)],
+    ids=["an_external_writer_takes_the_rows", "rows_are_written_to_this_db"],
+)
+async def test_update_database_sends_a_claimed_batch_cost_row_on_to_an_external_spend_log_writer(
+    monkeypatch, spend_logs_url: str | None, forwarded: bool
+):
+    """
+    SPEND_LOGS_URL makes the flush post spend logs to that writer instead of inserting them,
+    and the claim writes straight to this table, so the batch's row reaches the writer only
+    by being queued as well. Queueing it with no writer configured would insert it twice.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_prisma(1, None)
+    if spend_logs_url is None:
+        monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
+    else:
+        monkeypatch.setenv("SPEND_LOGS_URL", spend_logs_url)
+
+    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is True
+
+    queued = [row["request_id"] for row in prisma.spend_log_transactions]
+    assert queued == (["batch_abc_batch_cost"] if forwarded else [])
+
+
+@pytest.mark.asyncio
+async def test_update_database_forwards_no_batch_cost_row_a_later_retrieve_had_already_claimed(monkeypatch):
+    """The retrieve that lost the claim charges nothing, so it must not post a row either."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    existing = SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25)
+    prisma = _spend_logs_prisma(0, existing)
+    monkeypatch.setenv("SPEND_LOGS_URL", "http://spend-logs.internal")
+
+    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is False
+
+    assert prisma.spend_log_transactions == []
+
+
+@pytest.mark.asyncio
+async def test_update_database_queues_only_the_claim_for_a_batch_it_could_not_write_with_logs_disabled():
+    """A refused claim is retried through the queue, so what it queues has to stay unlogged too."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_prisma(0, None)
+    prisma.db.litellm_spendlogs.create_many = AsyncMock(side_effect=RuntimeError("db unreachable"))
+
+    assert await _update_database_with(db_writer, prisma, _logged_batch_cost_payload(), True) is True
+
+    assert [set(row) for row in prisma.spend_log_transactions] == [_BATCH_CLAIM_FIELDS]
     assert db_writer._batch_database_updates.await_count == 1
 
 
