@@ -249,6 +249,75 @@ async def test_openai_websocket_connects_model_restricted_keys(key_models):
 
 
 @pytest.mark.asyncio
+async def test_openai_websocket_refuses_a_url_model_the_key_lacks():
+    """The URL ``?model=`` names the model the whole session runs on, and the SDK's
+    subsequent frames name no model, so the gate has to close a handshake that asks
+    for a model the key cannot use before the relay ever opens."""
+    websocket = _FakeWebSocket("/openai/v1/realtime", "model=gpt-realtime-2.1")
+    user_api_key_dict = UserAPIKeyAuth(models=["gpt-5.4-mini"], token="hashed-fake", user_id="user-fake")
+    refusing_gate: Final = _FakeFrameModelGate(refusal="key cannot access model gpt-realtime-2.1")
+
+    with patch(GET_CREDENTIALS, return_value="sk-provider"):
+        await openai_websocket_proxy_route(
+            websocket=websocket,
+            endpoint="v1/realtime",
+            user_api_key_dict=user_api_key_dict,
+            general_settings=ENABLED,
+            relay=_FakeRelay(),
+            frame_model_gate=refusing_gate,
+        )
+
+    assert refusing_gate.checked == ["gpt-realtime-2.1"]
+    assert websocket.error_message() == "key cannot access model gpt-realtime-2.1"
+    assert websocket.closed == (1008, "key cannot access model gpt-realtime-2.1")
+
+
+@pytest.mark.asyncio
+async def test_openai_websocket_allows_a_url_model_the_key_owns():
+    websocket = _FakeWebSocket("/openai/v1/realtime", "model=gpt-realtime-2.1")
+    user_api_key_dict = UserAPIKeyAuth(models=["gpt-realtime-2.1"], token="hashed-fake", user_id="user-fake")
+    allowing_gate: Final = _FakeFrameModelGate(refusal=None)
+
+    with patch(GET_CREDENTIALS, return_value="sk-provider"):
+        served_relay: Final = _FakeRelay()
+        await openai_websocket_proxy_route(
+            websocket=websocket,
+            endpoint="v1/realtime",
+            user_api_key_dict=user_api_key_dict,
+            general_settings=ENABLED,
+            relay=served_relay,
+            frame_model_gate=allowing_gate,
+        )
+
+    assert allowing_gate.checked == ["gpt-realtime-2.1"]
+    assert websocket.closed is None
+    assert len(served_relay.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_websocket_handshake_gate_is_skipped_without_a_url_model():
+    """A URL without ``?model=`` runs no handshake gate. Later frames still go through the frame gate."""
+    websocket = _FakeWebSocket("/openai/v1/responses", "")
+    user_api_key_dict = UserAPIKeyAuth(models=["gpt-5.4-mini"], token="hashed-fake", user_id="user-fake")
+    refusing_gate: Final = _FakeFrameModelGate(refusal="never checked at handshake")
+
+    with patch(GET_CREDENTIALS, return_value="sk-provider"):
+        served_relay: Final = _FakeRelay()
+        await openai_websocket_proxy_route(
+            websocket=websocket,
+            endpoint="v1/responses",
+            user_api_key_dict=user_api_key_dict,
+            general_settings=ENABLED,
+            relay=served_relay,
+            frame_model_gate=refusing_gate,
+        )
+
+    assert refusing_gate.checked == []
+    assert websocket.closed is None
+    assert len(served_relay.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_proxy_frame_model_gate_allows_a_model_the_key_owns():
     gate: Final = _proxy_frame_model_gate()
     token: Final = UserAPIKeyAuth(models=["gpt-realtime-2.1", "gpt-5.4-mini"])

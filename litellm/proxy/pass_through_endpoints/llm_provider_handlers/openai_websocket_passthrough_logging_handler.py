@@ -22,10 +22,12 @@ OPENAI_WEBSOCKET_PROVIDER: Final = LlmProviders.OPENAI.value
 _SESSION_CREATED: Final = "session.created"
 _RESPONSE_CREATED: Final = "response.created"
 _REALTIME_RESPONSE_DONE: Final = "response.done"
+_REALTIME_TRANSCRIPTION_COMPLETED: Final = "conversation.item.input_audio_transcription.completed"
 _RESPONSES_COMPLETED: Final = "response.completed"
 _MODEL_NAMING_EVENTS: Final = frozenset(
     {_SESSION_CREATED, _RESPONSE_CREATED, _REALTIME_RESPONSE_DONE, _RESPONSES_COMPLETED}
 )
+_REALTIME_BILLING_EVENTS: Final = frozenset({_REALTIME_RESPONSE_DONE, _REALTIME_TRANSCRIPTION_COMPLETED})
 _RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
 
 
@@ -94,7 +96,7 @@ def observed_websocket_model(messages: WebsocketMessages) -> str | None:
 
 
 def _realtime_billing(messages: WebsocketMessages, model: str, logging_obj: LiteLLMLoggingObj) -> _Billing | None:
-    if not any(event.get("type") == _REALTIME_RESPONSE_DONE for event in messages):
+    if not any(event.get("type") in _REALTIME_BILLING_EVENTS for event in messages):
         return None
     results: Final = cast(  # cast-ok: the realtime cost helpers read raw provider frames through their TypedDict view
         OpenAIRealtimeStreamList, tuple(event for event in messages if "type" in event)

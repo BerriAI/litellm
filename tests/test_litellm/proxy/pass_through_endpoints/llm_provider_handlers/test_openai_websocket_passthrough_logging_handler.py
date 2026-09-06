@@ -271,6 +271,53 @@ def test_the_price_of_a_multi_model_connection_reaches_the_spend_row():
     assert handled["kwargs"]["model"] == RESPONSES_MODEL
 
 
+TRANSCRIPTION_MODEL: Final = "gpt-4o-mini-transcribe"
+
+
+def _transcription_session_created(model: str) -> dict:
+    return {
+        "type": "session.created",
+        "session": {
+            "id": "sess_lit7014_transcribe",
+            "model": model,
+            "input_audio_transcription": {"model": model},
+        },
+    }
+
+
+def _transcription_completed(input_tokens: int) -> dict:
+    return {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "usage": {
+            "type": "tokens",
+            "input_tokens": input_tokens,
+            "input_token_details": {"text_tokens": 0, "audio_tokens": input_tokens},
+        },
+    }
+
+
+def test_transcription_only_session_is_priced_from_its_transcription_events():
+    """A realtime transcription session sends no ``response.done`` frame; the price
+    lives on ``conversation.item.input_audio_transcription.completed`` and the shared
+    realtime cost helper already knows how to bill it, so the session cannot be logged
+    at zero when only those events arrived."""
+    logging_obj = _logging_obj()
+
+    handled = _handle(
+        [
+            _transcription_session_created(TRANSCRIPTION_MODEL),
+            _transcription_completed(input_tokens=80),
+            _transcription_completed(input_tokens=40),
+        ],
+        logging_obj=logging_obj,
+    )
+
+    assert handled["result"] is not None
+    assert handled["kwargs"]["model"] == TRANSCRIPTION_MODEL
+    assert handled["kwargs"]["response_cost"] > 0
+    assert logging_obj.model_call_details["response_cost"] == handled["kwargs"]["response_cost"]
+
+
 def test_a_turn_the_caller_walked_out_of_still_names_the_model_it_ran():
     """
     A client that closes before response.completed leaves no usage behind to

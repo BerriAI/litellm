@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
+from urllib.parse import parse_qs
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket
@@ -64,6 +65,7 @@ from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtua
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     WebsocketFrameModelGate,
+    _truncated_close_reason,
     create_pass_through_route,
     create_websocket_passthrough_route,
     websocket_passthrough_request,
@@ -2490,6 +2492,18 @@ async def openai_websocket_proxy_route(
     custom_headers: Final = {  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
         "Authorization": f"Bearer {openai_api_key}"
     }
+
+    url_model: Final = parse_qs(query_string).get("model", (None,))[0]
+    handshake_refusal: Final = await frame_model_gate(url_model, user_api_key_dict) if url_model else None
+    if handshake_refusal is not None:
+        await websocket.accept(subprotocol=negotiated_subprotocol)
+        handshake_error_frame: Final[_OpenAIWebsocketErrorFrame] = {
+            "type": "error",
+            "error": {"type": "invalid_request_error", "message": handshake_refusal},
+        }
+        await websocket.send_text(json.dumps(handshake_error_frame))
+        await websocket.close(code=1008, reason=_truncated_close_reason(handshake_refusal))
+        return
 
     await websocket.accept(subprotocol=negotiated_subprotocol)
 
