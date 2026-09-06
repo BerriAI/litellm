@@ -108,10 +108,10 @@ def _reset_rust_flag():
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
     rust_messages.set_rust_messages(
-        decline=lambda model, custom_llm_provider, **features: (
+        decline=lambda model, custom_llm_provider, *, context: (
             "unsupported feature"
-            if any(features.get(key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
-            or features.get("request_format") == "native"
+            if any(getattr(context.capabilities, key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
+            or context.capabilities.request_format == "native"
             else None
         )
     )
@@ -285,7 +285,7 @@ def test_public_messages_invalid_response_does_not_fallback(monkeypatch, respons
     python = PythonMessages()
     monkeypatch.setattr(module, "base_llm_http_handler", python)
     litellm.rust(True)
-    rust_messages.set_rust_messages(messages=lambda request, *, context, callback_adapter=None: response)
+    rust_messages.set_rust_messages(messages=lambda request, *, options, context: response)
     with pytest.raises(ValidationError):
         litellm.anthropic.messages.create(
             model="anthropic/test-model",

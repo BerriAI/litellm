@@ -13,6 +13,7 @@ from litellm.rust_bridge.bindings import (
     native_exception_types,
 )
 from litellm.rust_bridge.protocols import NativeModule, RustRouteDecline
+from litellm.rust_bridge.request import NativeRequestCapabilities, NativeRequestContext
 
 BindingT = TypeVar("BindingT")
 SelectedT = TypeVar("SelectedT")
@@ -518,13 +519,18 @@ def assess_route(
     has_custom_client: bool = False,
     request_format: str | None = None,
 ) -> PythonFallback | None:
-    return binding.assess(
-        check=lambda decline: decline(
-            model,
-            provider,
+    context: Final = NativeRequestContext(
+        capabilities=NativeRequestCapabilities(
             stream=stream,
             has_agentic_hook=has_agentic_hook,
             has_custom_client=has_custom_client,
             request_format=request_format,
+        )
+    )
+    return binding.assess(
+        check=lambda decline: decline(
+            model,
+            provider,
+            context=context,
         ),
     )

@@ -1,5 +1,5 @@
 use crate::request_context::LiteLlmRequestContext;
-use crate::request_options::{BedrockOptions, RequestOptions};
+use crate::request_options::{AnthropicOptions, BedrockOptions, RequestOptions};
 use serde_json::{Map, Value, json};
 
 use crate::error::Error;
@@ -518,6 +518,7 @@ fn decline_reason(
         provider,
         messages,
         &params,
+        &RequestOptions::default(),
         &LiteLlmRequestContext::default(),
     )
 }
@@ -888,37 +889,52 @@ mod round_trip {
 fn preflight_and_execution_share_provider_metadata_eligibility() {
     let messages = json!([{"role": "user", "content": "hi"}]);
     let cases = [
-        ("anthropic", json!({"user_id": "u-123"}), vec![], true),
-        ("anthropic", json!({"user_id": null}), vec![], false),
-        ("anthropic", json!({"trace_id": "t-1"}), vec![], false),
         (
             "anthropic",
-            json!({}),
-            vec!["user_api_key_team_id".into()],
-            false,
+            RequestOptions {
+                custom_llm_provider: Some("anthropic".into()),
+                anthropic: Some(AnthropicOptions {
+                    user_id: Some("u-123".into()),
+                }),
+                ..Default::default()
+            },
+            true,
         ),
-        #[cfg(feature = "bedrock-auth")]
-        ("bedrock", json!({"user_id": "u-123"}), vec![], false),
         #[cfg(feature = "bedrock-auth")]
         (
             "bedrock",
-            json!({}),
-            vec!["user_api_key_team_id".into()],
+            RequestOptions {
+                custom_llm_provider: Some("bedrock".into()),
+                bedrock: Some(BedrockOptions {
+                    request_metadata_fields: vec!["user_api_key_team_id".into()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
             true,
         ),
+        (
+            "anthropic",
+            RequestOptions {
+                custom_llm_provider: Some("anthropic".into()),
+                bedrock: Some(BedrockOptions {
+                    request_metadata_fields: vec!["user_api_key_team_id".into()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            false,
+        ),
     ];
-    for (provider, metadata, request_metadata_fields, expected_decline) in cases {
-        let context = LiteLlmRequestContext {
-            metadata: metadata.as_object().cloned(),
-            request_metadata_fields,
-            ..Default::default()
-        };
+    for (provider, options, expected_decline) in cases {
+        let context = LiteLlmRequestContext::default();
         let params = Map::new();
         let preflight = super::chat_completions_decline_reason(
             "claude-sonnet-4-5",
             Some(provider),
             messages.clone(),
             &params,
+            &options,
             &context,
         );
         let execution = resolve_request(
@@ -926,11 +942,8 @@ fn preflight_and_execution_share_provider_metadata_eligibility() {
                 model: "claude-sonnet-4-5",
                 messages: messages.clone(),
                 optional_params: params,
-                options: RequestOptions {
-                    custom_llm_provider: Some(provider.into()),
-                    ..Default::default()
-                },
             },
+            options,
             &context,
         );
         assert_eq!(
@@ -940,22 +953,4 @@ fn preflight_and_execution_share_provider_metadata_eligibility() {
         );
         assert_eq!(execution.is_err(), expected_decline, "{provider} execution");
     }
-}
-
-#[test]
-fn anthropic_preflight_preserves_litellm_metadata_scope() {
-    let context = LiteLlmRequestContext {
-        litellm_metadata: json!({"user_id": "u-123"}).as_object().cloned(),
-        ..Default::default()
-    };
-    assert_eq!(
-        super::chat_completions_decline_reason(
-            "claude-sonnet-4-5",
-            Some("anthropic"),
-            json!([{"role": "user", "content": "hi"}]),
-            &Map::new(),
-            &context,
-        ),
-        None,
-    );
 }

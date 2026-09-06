@@ -219,16 +219,17 @@ class _TranscriptionOperation:
             NativeTranscriptionRequest(
                 model=self.model,
                 audio=audio,
-                optional_params=provider_request_params(self.optional_params),
-                options=NativeRequestOptions(
-                    api_key=key,
-                    api_base=base,
-                    custom_llm_provider=self.provider,
-                    extra_headers=self.headers,
-                    timeout_seconds=timeout_to_seconds(self.timeout),
-                    provider_connection=provider_connection_params(self.optional_params),
-                ),
-            )
+                optional_params=self.optional_params,
+            ),
+            options=NativeRequestOptions(
+                api_key=key,
+                api_base=base,
+                custom_llm_provider=self.provider,
+                extra_headers=self.headers,
+                timeout_seconds=timeout_to_seconds(self.timeout),
+                bedrock=bedrock_options(self.optional_params),
+            ),
+            context=NativeRequestContext(),
         )
 
     def fallback(self) -> TranscriptionResult:

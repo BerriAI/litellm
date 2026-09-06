@@ -265,16 +265,17 @@ class _MessagesOperation:
             NativeMessagesRequest(
                 model=self.model,
                 body=request_body,
-                options=NativeRequestOptions(
-                    api_key=self.api_key,
-                    api_base=base,
-                    custom_llm_provider=self.provider,
-                    extra_headers=headers,
-                    timeout_seconds=timeout_to_seconds(
-                        BaseLLMHTTPHandler.resolve_anthropic_messages_timeout(self.params, False, self.provider)
-                    ),
+            ),
+            options=NativeRequestOptions(
+                api_key=self.api_key,
+                api_base=base,
+                custom_llm_provider=self.provider,
+                extra_headers=headers,
+                timeout_seconds=timeout_to_seconds(
+                    BaseLLMHTTPHandler.resolve_anthropic_messages_timeout(self.params, False, self.provider)
                 ),
-            )
+            ),
+            context=NativeRequestContext(),
         )
 
     def fallback(self) -> MessagesResult:

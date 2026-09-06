@@ -10,6 +10,17 @@ from litellm.rust_bridge.runtime import Handled
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 
 
+@pytest.fixture(autouse=True)
+def reset_rust_transcription() -> None:
+    rust_bridge.configure_rust_transcription(
+        transcription=None,
+        atranscription=None,
+        decline=lambda model, custom_llm_provider, *, context: None,
+    )
+    yield
+    rust_bridge.configure_rust_transcription(transcription=None, atranscription=None, decline=None)
+
+
 class SyncBridge:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []

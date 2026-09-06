@@ -41,10 +41,7 @@ impl ResponsesWebSocketConnection {
         _context: &LiteLlmRequestContext,
     ) -> Result<Self, Error> {
         if !litellm_core::responses::websocket::native_websocket_supported(
-            options
-                .custom_llm_provider
-                .as_deref()
-                .unwrap_or("openai"),
+            options.custom_llm_provider.as_deref().unwrap_or("openai"),
         ) {
             return Err(Error::Unsupported("unsupported native WebSocket provider"));
         }

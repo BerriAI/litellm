@@ -1,4 +1,3 @@
-use crate::request_context::LiteLlmRequestContext;
 use serde_json::{Map, Value, json};
 
 use crate::chat_completions::conversation::{Conversation, TurnRole, build_conversation};
@@ -177,7 +176,6 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &self,
         messages: &[ChatMessage],
         optional_params: &Map<String, Value>,
-        context: &LiteLlmRequestContext,
     ) -> Option<Unsupported> {
         unsupported_param(
             self.supported_openai_params(),
@@ -185,10 +183,6 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
             optional_params,
         )
         .or_else(|| messages.iter().find_map(unsupported_message))
-        .or_else(|| {
-            (!context.request_metadata_fields.is_empty())
-                .then_some(Unsupported("LiteLLM request metadata forwarding"))
-        })
         // Python's Converse translation drops blank text blocks instead of
         // substituting the placeholder the shared conversation builder
         // applies, so decline blank text rather than diverge.

@@ -16,7 +16,7 @@ use super::types::{
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
-) -> Result<(String, &'static dyn ChatCompletionsProviderConfig), Error> {
+) -> Result<(String, &'a str, &'static dyn ChatCompletionsProviderConfig), Error> {
     let provider_info = get_custom_llm_provider(model, custom_llm_provider)
         .or_else(|| {
             custom_llm_provider.map(|provider| CustomLlmProvider {
@@ -31,7 +31,11 @@ pub(super) fn resolve_provider_config<'a>(
         })?;
     let config = chat_completions_provider_config(provider_info.custom_llm_provider)
         .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
-    Ok((provider_info.model.to_string(), config))
+    Ok((
+        provider_info.model.to_string(),
+        provider_info.custom_llm_provider,
+        config,
+    ))
 }
 
 pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error> {
@@ -44,7 +48,7 @@ pub(super) fn resolve_request(
     options: RequestOptions,
     context: &LiteLlmRequestContext,
 ) -> Result<ResolvedChatCompletionsRequest, Error> {
-    let (model, config) =
+    let (model, provider, config) =
         resolve_provider_config(request.model, options.custom_llm_provider.as_deref())
             .map_err(|_| Error::Declined("provider is not on the rust chat completions path"))?;
     let messages =
@@ -52,7 +56,14 @@ pub(super) fn resolve_request(
     if messages.is_empty() {
         return Err(Error::Declined("empty message list"));
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params, context) {
+    if let Some(reason) = super::unsupported_reason(
+        provider,
+        config,
+        &messages,
+        &request.optional_params,
+        &options,
+        context,
+    ) {
         return Err(Error::Declined(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {

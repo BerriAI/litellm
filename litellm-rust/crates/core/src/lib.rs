@@ -3,6 +3,7 @@ pub mod caching;
 pub mod call_lifecycle;
 pub mod chat_completions;
 pub mod constants;
+pub mod eligibility;
 pub mod error;
 pub mod http_utils;
 pub mod messages;
