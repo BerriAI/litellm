@@ -39,6 +39,7 @@ from litellm.router import (
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
 )
+from litellm.router_strategy import simple_shuffle
 from litellm.types.router import DeploymentTypedDict
 
 
@@ -13421,6 +13422,53 @@ async def test_router_retry_policy_400_keeps_upstream_error_when_tags_narrow_the
     assert "No deployments available" not in str(raised.value)
     assert tagged.call_count == 3
     assert untagged.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_router_retry_policy_400_never_returns_to_a_deployment_that_already_refused(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(simple_shuffle.random, "choice", lambda deployments: deployments[0])
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("first-refuser", "first-refuser", litellm_params={"weight": 1}),
+            _retry_skip_deployment("second-refuser", "second-refuser", litellm_params={"weight": 0}),
+            _retry_skip_deployment("accepting", "accepting", litellm_params={"weight": 0}),
+        ],
+        num_retries=3,
+        retry_policy={"BadRequestErrorRetries": 3},
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        first = respx_mock.post("https://first-refuser.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        second = respx_mock.post("https://second-refuser.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        accepting = respx_mock.post("https://accepting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-lit-7036",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-5.6",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "hi back"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                },
+            )
+        )
+        response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert first.call_count == 1
+    assert second.call_count == 1
+    assert accepting.call_count == 1
+    assert response.choices[0].message.content == "hi back"
 
 
 def _make_failure_logging_obj():
