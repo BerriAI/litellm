@@ -63,7 +63,7 @@ class OpenAIImageVariationsHandler:
             init_client_params: Final = {
                 "api_key": api_key,
                 "base_url": api_base,
-                "http_client": litellm.client_session,
+                "http_client": litellm.aclient_session,
                 "default_headers": accept_encoding_header(),
                 "timeout": timeout,
                 "max_retries": max_retries,
@@ -181,7 +181,7 @@ class OpenAIImageVariationsHandler:
             init_client_params: Final = {
                 "api_key": api_key,
                 "base_url": api_base,
-                "http_client": litellm.aclient_session,
+                "http_client": litellm.client_session,
                 "default_headers": accept_encoding_header(),
                 "timeout": timeout,
                 "max_retries": max_retries,
