@@ -11273,6 +11273,12 @@
               ],
               "description": "Threshold configuration for Lakera guardrail categories"
             },
+            "ccr_retrieval": {
+              "default": true,
+              "description": "Inject the Headroom retrieval tool for hashes declared by the compression service.",
+              "title": "Ccr Retrieval",
+              "type": "boolean"
+            },
             "checks": {
               "anyOf": [
                 {

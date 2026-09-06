@@ -30499,6 +30499,12 @@ export interface components {
             categories?: components["schemas"]["ContentFilterCategoryConfig"][] | null;
             /** @description Threshold configuration for Lakera guardrail categories */
             category_thresholds?: components["schemas"]["LakeraCategoryThresholds"] | null;
+            /**
+             * Ccr Retrieval
+             * @description Inject the Headroom retrieval tool for hashes declared by the compression service.
+             * @default true
+             */
+            ccr_retrieval: boolean;
             /** @description Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier. */
             checks?: components["schemas"]["BedrockChecksConfigModel"] | null;
             /**
