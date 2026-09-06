@@ -1481,11 +1481,19 @@ async def _persist_dcr_client_registration(
         )
         updated_row: Final = await update_mcp_server(
             prisma_client=prisma_client,
-            data=UpdateMCPServerRequest(
-                server_id=mcp_server.server_id,
-                credentials=credentials,
-                oauth2_flow="authorization_code",
-                **({"token_url": mcp_server.token_url} if mcp_server.token_url else {}),
+            data=(
+                UpdateMCPServerRequest(
+                    server_id=mcp_server.server_id,
+                    credentials=credentials,
+                    oauth2_flow="authorization_code",
+                    token_url=mcp_server.token_url,
+                )
+                if mcp_server.token_url
+                else UpdateMCPServerRequest(
+                    server_id=mcp_server.server_id,
+                    credentials=credentials,
+                    oauth2_flow="authorization_code",
+                )
             ),
             touched_by="mcp_oauth_dcr",
         )
@@ -2367,7 +2375,7 @@ async def _build_oauth_protected_resource_response(
     if mcp_server is None or mcp_server.auth_type != MCPAuth.oauth2_token_exchange:
         _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
 
-    if explicitly_named and mcp_server is not None and mcp_server.is_gateway_managed_oauth2:
+    if explicitly_named and mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
             "authorization_servers": [f"{request_base_url}/mcp"],
             "resource": resource_url,
