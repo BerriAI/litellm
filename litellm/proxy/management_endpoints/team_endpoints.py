@@ -18,7 +18,18 @@ from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, NoReturn, Protocol, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Final,
+    Literal,
+    NamedTuple,
+    NoReturn,
+    Protocol,
+    TypeAlias,
+    TypeVar,
+    cast,
+)
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -113,6 +124,12 @@ from litellm.proxy.management_endpoints.organization_endpoints import (
 )
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
+)
+from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    raise_for_team_admin_edit_verdict,
+    resolve_team_admin_editable_fields,
+    team_admin_edit_verdict,
 )
 from litellm.proxy.management_helpers.access_group_team_sync import (
     TEAM_ADVISORY_LOCK_SQL,
@@ -428,33 +445,43 @@ async def _refresh_cached_team(
     )
 
 
-async def _verify_team_access(
-    team_obj: LiteLLM_TeamTable,
-    user_api_key_dict: UserAPIKeyAuth,
-) -> None:
-    """
-    Verify the caller is authorized to manage the given team.
+TeamAccessRole: TypeAlias = Literal["proxy_admin", "org_admin", "team_admin"]
 
-    Access is granted if:
-    - Caller is a proxy admin, OR
-    - Caller is an org admin for the team's organization, OR
-    - Caller is a team admin of this team
 
-    Raises HTTPException(403) otherwise.
-    """
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
-        return
-
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return
-
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-        return
-
+def _raise_team_access_denied() -> NoReturn:
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="You do not have access to this team",
     )
+
+
+async def _resolve_team_access(
+    team_obj: LiteLLM_TeamTable,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> TeamAccessRole | None:
+    """Strongest role the caller holds over ``team_obj``, or None when they hold none.
+
+    Org admin outranks team admin so a caller holding both keeps unrestricted edits.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return "proxy_admin"
+
+    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return "org_admin"
+
+    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        return "team_admin"
+
+    return None
+
+
+async def _verify_team_access(
+    team_obj: LiteLLM_TeamTable,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Raise 403 unless the caller is a proxy admin, an org admin for the team's org, or a team admin."""
+    if await _resolve_team_access(team_obj=team_obj, user_api_key_dict=user_api_key_dict) is None:
+        _raise_team_access_denied()
 
 
 class TeamMemberBudgetHandler:
@@ -1983,6 +2010,7 @@ async def update_team(
     try:
         from litellm.proxy.management_helpers.audit_logs import is_audit_logging_enabled
         from litellm.proxy.proxy_server import (
+            general_settings,
             litellm_proxy_admin_name,
             llm_router,
             prisma_client,
@@ -2029,16 +2057,29 @@ async def update_team(
         )
 
         if existing_team_row is None:
+            # Non-proxy-admins get the same 403 as an access denial so /team/update
+            # cannot be used to probe which team ids exist
+            if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+                _raise_team_access_denied()
             raise HTTPException(
                 status_code=404,
                 detail={"error": f"Team not found, passed team_id={data.team_id}"},
             )
 
-        # Verify caller has access to manage this team
-        await _verify_team_access(
-            team_obj=LiteLLM_TeamTable.model_validate(existing_team_row.model_dump()),
-            user_api_key_dict=user_api_key_dict,
-        )
+        existing_team: Final = LiteLLM_TeamTable.model_validate(existing_team_row.model_dump())
+        access_role: Final = await _resolve_team_access(team_obj=existing_team, user_api_key_dict=user_api_key_dict)
+        if access_role is None:
+            _raise_team_access_denied()
+        if access_role == "team_admin":
+            raise_for_team_admin_edit_verdict(
+                team_admin_edit_verdict(
+                    data=data,
+                    existing=existing_team,
+                    permitted=resolve_team_admin_editable_fields(
+                        general_settings, SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+                    ),
+                )
+            )
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
         enforce_output_token_estimates_are_admin_only(

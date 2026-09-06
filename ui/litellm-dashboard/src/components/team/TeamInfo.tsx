@@ -1,6 +1,7 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useQueryClient } from "@tanstack/react-query";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
@@ -48,6 +49,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useFieldArray } from "react-hook-form";
 import { z } from "zod/v4";
 import GuardrailsSelect from "./GuardrailsSelect";
+import {
+  resolveTeamEditAccess,
+  TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION,
+  TEAM_ADMIN_EDITING_DISABLED_TITLE,
+} from "./teamAdminEditAccess";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
 import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
@@ -561,6 +567,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const canEditTeamEstimates = isProxyAdminRole(userRole);
   const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
   const { data: userOrganizations = [] } = useOrganizations();
+  const { data: uiSettingsData } = useUISettings();
   const { data: teamMetadataSchemaFields = [], isLoading: isTeamMetadataSchemaLoading } = useTeamMetadataSchema();
   const queryClient = useQueryClient();
 
@@ -604,6 +611,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   );
 
   const canEditTeam = is_team_admin || is_proxy_admin || is_org_admin || isOrgAdminForTeam || isTeamAdminFromTeamData;
+  const editsAsTeamAdmin =
+    canEditTeam && !is_proxy_admin && !isProxyAdminRole(userRole) && !is_org_admin && !isOrgAdminForTeam;
+  const teamEditAccess = useMemo(
+    () => resolveTeamEditAccess(editsAsTeamAdmin, uiSettingsData?.values),
+    [editsAsTeamAdmin, uiSettingsData],
+  );
   const visibleTabs = useMemo(() => getTeamInfoVisibleTabs(canEditTeam), [canEditTeam]);
   const defaultTabKey = useMemo(() => getTeamInfoDefaultTab(editTeam, canEditTeam), [editTeam, canEditTeam]);
   const { onTabChange, hasVisited } = useVisitedTabs(defaultTabKey);
@@ -620,6 +633,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     setTeamMemberSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setIsEditing(true);
+  };
+
+  const openSettingsEditor = (modelAliases: Record<string, string>) => {
+    if (teamEditAccess.kind === "team_admin_disabled") {
+      toast.error(TEAM_ADMIN_EDITING_DISABLED_TITLE, { description: TEAM_ADMIN_EDITING_DISABLED_DESCRIPTION });
+      return;
+    }
+    setTeamModelAliases(modelAliases);
+    startEditing();
   };
 
   const applyKillSwitchToGuardrails = (checked: boolean) => {
@@ -1307,10 +1329,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             {canEditTeam && !isEditing && (
               <Button
                 variant="outline"
-                onClick={() => {
-                  setTeamModelAliases(info.litellm_model_table?.model_aliases ?? {});
-                  startEditing();
-                }}
+                onClick={() => openSettingsEditor(info.litellm_model_table?.model_aliases ?? {})}
               >
                 <Pencil />
                 Edit Settings

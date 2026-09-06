@@ -68,6 +68,10 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeamMetadataSchema", () => ({
   useTeamMetadataSchema: vi.fn(() => ({ data: [], isLoading: false })),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: vi.fn(),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
 }));
@@ -227,6 +231,7 @@ import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 
 const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
 const mockUseKeys = vi.mocked(useKeys);
@@ -236,6 +241,7 @@ const mockUseCurrentUser = vi.mocked(useCurrentUser);
 const mockUseMCPServers = vi.mocked(useMCPServers);
 const mockUseMCPToolsets = vi.mocked(useMCPToolsets);
 const mockUseAccessGroups = vi.mocked(useAccessGroups);
+const mockUseUISettings = vi.mocked(useUISettings);
 
 const createMockTeamData = (overrides = {}) => ({
   team_id: "123",
@@ -303,6 +309,10 @@ const seedDefaultMocks = () => {
     ],
     isLoading: false,
     isError: false,
+  } as any);
+  mockUseUISettings.mockReturnValue({
+    data: { values: { team_admin_editable_team_fields: [] } },
+    isLoading: false,
   } as any);
   mockUseKeys.mockReturnValue({
     data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 },
@@ -1767,6 +1777,61 @@ describe("TeamInfoView", () => {
           }),
         );
       });
+    });
+  });
+
+  describe("team admin edit access", () => {
+    const teamAdminProps = { ...defaultProps, is_proxy_admin: false, is_team_admin: true };
+
+    beforeEach(() => {
+      authState.userRole = "Internal User";
+    });
+
+    it("tells a team admin to ask a proxy admin when no team field is enabled for them", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(toast.error).toHaveBeenCalledWith("Team admins cannot edit team settings on this proxy", {
+        description: "Ask a proxy admin to enable fields under Settings > UI > Team admin editable fields.",
+      });
+      expect(screen.queryByLabelText("Team Name")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    it("opens the form for a team admin once a proxy admin has enabled a field", async () => {
+      mockUseUISettings.mockReturnValue({
+        data: { values: { team_admin_editable_team_fields: ["tpm_limit"] } },
+        isLoading: false,
+      } as any);
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+      renderWithProviders(<TeamInfoView {...teamAdminProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Team Name")).toBeInTheDocument();
+      expect(toast.error).not.toHaveBeenCalled();
+    });
+
+    it("never gates a proxy admin on the team admin field list", async () => {
+      authState.userRole = "Admin";
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      await user.click(await screen.findByRole("tab", { name: "Settings" }));
+      await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+
+      expect(await screen.findByLabelText("Team Name")).toBeInTheDocument();
+      expect(toast.error).not.toHaveBeenCalled();
     });
   });
 });

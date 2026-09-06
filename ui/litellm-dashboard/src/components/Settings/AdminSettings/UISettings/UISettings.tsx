@@ -9,7 +9,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import {
+  parseSupportedTeamAdminEditableFields,
+  parseTeamAdminEditableFields,
+} from "@/components/team/teamAdminEditAccess";
 import PageVisibilitySettings from "./PageVisibilitySettings";
+import TeamAdminEditableFieldsSettings from "./TeamAdminEditableFieldsSettings";
 
 interface SettingRowProps {
   ariaLabel: string;
@@ -65,6 +70,7 @@ export default function UISettings() {
   const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
+  const teamAdminEditableFieldsProperty = schema?.properties?.team_admin_editable_team_fields;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -103,6 +109,17 @@ export default function UISettings() {
     updateSettings(settings, {
       onSuccess: () => {
         toast.success("Page visibility settings updated successfully");
+      },
+      onError: (error) => {
+        toast.fromError(error);
+      },
+    });
+  };
+
+  const handleUpdateTeamAdminEditableFields = (settings: { team_admin_editable_team_fields: string[] }) => {
+    updateSettings(settings, {
+      onSuccess: () => {
+        toast.success("Team admin editable fields updated successfully");
       },
       onError: (error) => {
         toast.fromError(error);
@@ -438,6 +455,15 @@ export default function UISettings() {
               enabledPagesPropertyDescription={enabledPagesProperty?.description}
               isUpdating={isUpdating}
               onUpdate={handleUpdatePageVisibility}
+            />
+
+            <Separator />
+            <TeamAdminEditableFieldsSettings
+              editableFields={parseTeamAdminEditableFields(values)}
+              supportedFields={parseSupportedTeamAdminEditableFields(schema)}
+              description={teamAdminEditableFieldsProperty?.description}
+              isUpdating={isUpdating}
+              onUpdate={handleUpdateTeamAdminEditableFields}
             />
           </div>
         )}
