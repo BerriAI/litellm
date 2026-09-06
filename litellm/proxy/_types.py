@@ -698,6 +698,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/logs",
         "/spend/logs/v2",
         "/spend/logs/ui",
+        "/spend/logs/ui/{request_id}",
         "/spend/logs/session/ui",
         "/key/spend/report",
         "/user/spend/report",
@@ -918,10 +919,10 @@ class LiteLLMRoutes(enum.Enum):
             # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
             "/customer/list",
             "/customer/info",
-            # UI Logs page detail drawer (single + session) and the filter facets.
-            # The list endpoint `/spend/logs/ui` is covered via
+            # UI Logs page session-detail drawer and the filter facets. The
+            # list and single-log detail endpoints (`/spend/logs/ui`,
+            # `/spend/logs/ui/{request_id}`) are covered via
             # spend_tracking_routes below.
-            "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
             "/management/v1/spend_logs/end_users",
             "/management/v1/spend_logs/users",
