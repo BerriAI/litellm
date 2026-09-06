@@ -65,9 +65,11 @@ def test_ensure_trace_bridge_rebuilds_when_stale(
         return True, ""
 
     monkeypatch.setattr(native_build, "_native_module_path", lambda: native)
+    monkeypatch.setattr(native_build, "_probe_trace_bridge_error", lambda: None)
     monkeypatch.setattr(native_build, "_rebuild", fake_rebuild)
     monkeypatch.setattr(native_build, "_drop_imported_bridge", lambda: None)
-    monkeypatch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=object()))
+    trace: Final = SimpleNamespace(start_capture=lambda: 1, finish_capture=lambda capture_id: ())
+    monkeypatch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=trace))
 
     assert native_build.ensure_trace_bridge(tmp_path) is None
     assert state.rebuilt is True
@@ -80,6 +82,7 @@ def test_ensure_trace_bridge_reports_failed_rebuild(tmp_path: Final, monkeypatch
     source.write_text("fn main() {}\n")
 
     monkeypatch.setattr(native_build, "_native_module_path", lambda: None)
+    monkeypatch.setattr(native_build, "_probe_trace_bridge_error", lambda: "bridge missing")
     monkeypatch.setattr(native_build, "_rebuild", lambda repo_root: (False, "boom"))
 
     message: Final = native_build.ensure_trace_bridge(tmp_path)
@@ -89,7 +92,7 @@ def test_ensure_trace_bridge_reports_failed_rebuild(tmp_path: Final, monkeypatch
     assert "boom" in message
 
 
-def test_ensure_trace_bridge_flags_missing_trace_feature_without_rebuild(
+def test_ensure_trace_bridge_rebuilds_for_missing_trace_feature(
     tmp_path: Final, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     native: Final = tmp_path / "_native.abi3.so"
@@ -106,11 +109,22 @@ def test_ensure_trace_bridge_flags_missing_trace_feature_without_rebuild(
         return True, ""
 
     monkeypatch.setattr(native_build, "_native_module_path", lambda: native)
+    monkeypatch.setattr(native_build, "_probe_trace_bridge_error", lambda: "missing trace feature")
     monkeypatch.setattr(native_build, "_rebuild", fake_rebuild)
-    monkeypatch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=None))
+    trace: Final = SimpleNamespace(start_capture=lambda: 1, finish_capture=lambda capture_id: ())
+    monkeypatch.setattr(
+        native_build,
+        "get_native_bridge",
+        lambda: SimpleNamespace(_trace=trace if state.rebuilt else None),
+    )
 
     message: Final = native_build.ensure_trace_bridge(tmp_path)
 
-    assert message is not None
-    assert "_trace" in message
-    assert state.rebuilt is False
+    assert message is None
+    assert state.rebuilt is True
+
+
+def test_trace_bridge_flags_missing_public_capture_controls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(_trace=object()))
+
+    assert native_build.trace_bridge_error() == "native Rust trace bridge does not expose public route capture controls"

@@ -24,6 +24,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
         messages::register_trace(&trace)?;
         chat_completions::register_trace(&trace)?;
         gateway_messages::register_trace(&trace)?;
+        crate::function_trace::register(&trace)?;
         module.add_submodule(&trace)?;
     }
     Ok(())

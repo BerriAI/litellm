@@ -39,6 +39,23 @@ ASYNC_MAPPINGS: Final = (
     ),
 )
 
+PUBLIC_RUST_WRAPPER_MAPPINGS: Final = (
+    mapping(span="public_sdk_entrypoint", python_frame=r"ocr/main\.py:\d+ a?ocr$"),
+    mapping(span="rust_bridge_dispatch", python_frame=r"ocr/main\.py:\d+ _run_rust_a?ocr$"),
+)
+
+PUBLIC_SYNC_MAPPINGS: Final = (
+    *SYNC_MAPPINGS,
+    mapping(rust_span="public_sdk_entrypoint"),
+    mapping(rust_span="rust_bridge_dispatch"),
+)
+
+PUBLIC_ASYNC_MAPPINGS: Final = (
+    *ASYNC_MAPPINGS,
+    mapping(rust_span="public_sdk_entrypoint"),
+    mapping(rust_span="rust_bridge_dispatch"),
+)
+
 AZURE_COMMON_MAPPINGS: Final = (
     *COMMON_MAPPINGS[:7],
     mapping(
@@ -301,39 +318,48 @@ TRACE_SUITE: Final = TraceSuite(
     route=SPEC,
     scenarios=(
         TraceScenario(
-            name="mistral",
+            name="pipeline-mistral",
             fixture=_mistral_fixture,
             mappings=COMMON_MAPPINGS,
             sync_mappings=SYNC_MAPPINGS,
             async_mappings=ASYNC_MAPPINGS,
         ),
         TraceScenario(
-            name="azure-ai",
+            name="pipeline-azure-ai",
             fixture=_azure_fixture,
             mappings=AZURE_COMMON_MAPPINGS,
             sync_mappings=AZURE_SYNC_MAPPINGS,
             async_mappings=AZURE_ASYNC_MAPPINGS,
         ),
         TraceScenario(
-            name="azure-document-intelligence",
+            name="pipeline-azure-document-intelligence",
             fixture=_azure_document_intelligence_fixture,
             mappings=DOCUMENT_INTELLIGENCE_COMMON_MAPPINGS,
             sync_mappings=DOCUMENT_INTELLIGENCE_SYNC_MAPPINGS,
             async_mappings=DOCUMENT_INTELLIGENCE_ASYNC_MAPPINGS,
         ),
         TraceScenario(
-            name="vertex-ai",
+            name="pipeline-vertex-ai",
             fixture=_vertex_fixture,
             mappings=VERTEX_COMMON_MAPPINGS,
             sync_mappings=VERTEX_SYNC_MAPPINGS,
             async_mappings=VERTEX_ASYNC_MAPPINGS,
         ),
         TraceScenario(
-            name="vertex-deepseek",
+            name="pipeline-vertex-deepseek",
             fixture=_vertex_deepseek_fixture,
             mappings=DEEPSEEK_COMMON_MAPPINGS,
             sync_mappings=DEEPSEEK_SYNC_MAPPINGS,
             async_mappings=DEEPSEEK_ASYNC_MAPPINGS,
+        ),
+        TraceScenario(
+            name="public-sdk-mistral",
+            fixture=_mistral_fixture,
+            mappings=COMMON_MAPPINGS,
+            sync_mappings=PUBLIC_SYNC_MAPPINGS,
+            async_mappings=PUBLIC_ASYNC_MAPPINGS,
+            boundary="public_sdk",
+            rust_wrapper_mappings=PUBLIC_RUST_WRAPPER_MAPPINGS,
         ),
     ),
 )

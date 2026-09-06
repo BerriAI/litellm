@@ -31,6 +31,8 @@ macro_rules! bridge_route {
                 $($required_name,)*
                 $($optional_name),*
             })?;
+            #[cfg(feature = "trace-parity")]
+            let future = $crate::function_trace::capture_active(future);
             $crate::execution::run_sync(py, future, $map_error)
         }
 
@@ -46,6 +48,8 @@ macro_rules! bridge_route {
                 $($required_name,)*
                 $($optional_name),*
             })?;
+            #[cfg(feature = "trace-parity")]
+            let future = $crate::function_trace::capture_active(future);
             $crate::execution::run_async(py, future, $map_error)
         }
 
@@ -486,15 +490,63 @@ asyncio.run(exercise())
             let code = CString::new(
                 r#"
 result = routes.echo("traced")
-assert result == {
-    "response": "traced",
-    "trace": [{"function": "execute_echo", "depth": 0}],
-}
+assert result["response"] == "traced"
+assert [event["function"] for event in result["trace"]] == ["execute_echo"]
+assert result["trace"][0]["id"] == 0
+assert result["trace"][0]["parent_id"] is None
 "#,
             )
             .expect("Python source should not contain null bytes");
             py.run(&code, Some(&locals), Some(&locals))
                 .expect("diagnostic route should return its response and trace");
+        });
+    }
+
+    #[cfg(feature = "trace-parity")]
+    #[test]
+    fn production_routes_capture_sync_and_async_execution() {
+        Python::initialize();
+        Python::attach(|py| {
+            let routes = PyModule::new(py, "synthetic").expect("module should be created");
+            synthetic::register(&routes).expect("routes should register");
+            let trace = PyModule::new(py, "trace").expect("trace module should be created");
+            crate::function_trace::register(&trace).expect("trace controls should register");
+            let locals = PyDict::new(py);
+            locals
+                .set_item("routes", &routes)
+                .expect("routes should enter Python locals");
+            locals
+                .set_item("trace", &trace)
+                .expect("trace should enter Python locals");
+            let code = CString::new(
+                r#"
+import asyncio
+
+empty_capture = trace.start_capture()
+try:
+    trace.finish_capture(empty_capture)
+except RuntimeError as error:
+    assert "did not observe a production bridge route" in str(error)
+else:
+    raise AssertionError("empty capture succeeded")
+
+sync_capture = trace.start_capture()
+assert routes.echo("sync") == "sync"
+sync_trace = trace.finish_capture(sync_capture)
+assert [event["function"] for event in sync_trace] == ["execute_echo"]
+
+async def exercise():
+    async_capture = trace.start_capture()
+    assert await routes.aecho("async") == "async"
+    async_trace = trace.finish_capture(async_capture)
+    assert [event["function"] for event in async_trace] == ["execute_echo"]
+
+asyncio.run(exercise())
+"#,
+            )
+            .expect("Python source should not contain null bytes");
+            py.run(&code, Some(&locals), Some(&locals))
+                .expect("production routes should join active capture sessions");
         });
     }
 

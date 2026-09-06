@@ -149,6 +149,8 @@ mod tests {
                         "chat_completions",
                         "achat_completions",
                         "gateway_messages",
+                        "start_capture",
+                        "finish_capture",
                     ]
                 );
             }

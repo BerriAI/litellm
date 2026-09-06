@@ -41,6 +41,13 @@ def validate_trace_suite(suite: TraceSuite, harness_case: HarnessCase) -> str | 
     )
     if invalid_modes:
         return f"scenarios must use non-empty, unique sync/async modes: {', '.join(invalid_modes)}"
+    invalid_public: Final = tuple(
+        scenario.name
+        for scenario in suite.scenarios
+        if scenario.boundary == "public_sdk" and not scenario.rust_wrapper_mappings
+    )
+    if invalid_public:
+        return f"public SDK scenarios require Rust wrapper mappings: {', '.join(invalid_public)}"
     surface: Final = harness_case.surface
     if surface == "sdk" and not isinstance(suite.route, RouteSpec):
         return "must use RouteSpec for the sdk surface"

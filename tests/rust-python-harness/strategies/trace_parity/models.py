@@ -9,6 +9,7 @@ from ...shared.reporting.models import SdkFunction
 from ...shared.tracing.steps import Engine, TraceContract, TraceMapping
 
 TraceMode = Literal["sync", "async"]
+TraceBoundary = Literal["pipeline", "public_sdk"]
 TraceFailureSource = Literal["python", "rust", "harness"]
 
 
@@ -43,6 +44,8 @@ class TraceScenario:
     contract: TraceContract = TraceContract()
     sync_mappings: tuple[TraceMapping, ...] | None = None
     async_mappings: tuple[TraceMapping, ...] | None = None
+    boundary: TraceBoundary = "pipeline"
+    rust_wrapper_mappings: tuple[TraceMapping, ...] = ()
 
     def mappings_for(self, mode: TraceMode) -> tuple[TraceMapping, ...]:
         selected: Final = self.async_mappings if mode == "async" else self.sync_mappings
