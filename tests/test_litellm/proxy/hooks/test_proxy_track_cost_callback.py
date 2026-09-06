@@ -379,7 +379,13 @@ async def test_track_cost_callback_releases_budget_reservation_when_spend_tracki
 
 
 @pytest.mark.asyncio
-async def test_track_cost_callback_releases_budget_reservation_when_response_cost_missing():
+async def test_track_cost_callback_settles_budget_reservation_when_response_cost_missing():
+    """A successful unpriced model call must not be refunded to $0.
+
+    Settling at the admission estimate converts the hold into budget spend
+    without inventing a spend-log row. Health checks still release, covered
+    separately.
+    """
     logger = _ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
     user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
@@ -401,13 +407,21 @@ async def test_track_cost_callback_releases_budget_reservation_when_response_cos
     }
 
     with (
-        patch(
+        patch(  # test-quality-ok: callback reads proxy_logging_obj from the module; no injection seam
             "litellm.proxy.proxy_server.proxy_logging_obj",
         ) as mock_proxy_logging,
-        patch(
+        patch(  # test-quality-ok: assert the hold is settled, not refunded through release_budget_reservation
             "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
             new_callable=AsyncMock,
         ) as mock_release_budget_reservation,
+        patch(  # test-quality-ok: settle is a proxy-internal reservation call, not an HTTP boundary
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_reconcile_budget_reservation,
+        patch(  # test-quality-ok: unpriced settle must not write a spend-log row
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
     ):
         mock_proxy_logging.failed_tracking_alert = AsyncMock()
 
@@ -418,9 +432,175 @@ async def test_track_cost_callback_releases_budget_reservation_when_response_cos
             end_time=datetime.now(),
         )
 
+        mock_release_budget_reservation.assert_not_awaited()
+        mock_reconcile_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+            actual_cost=0.5,
+        )
+        mock_update_database.assert_not_called()
+        mock_proxy_logging.failed_tracking_alert.assert_called()
+        # The hold is converted, not dropped: later traffic still sees the reserved cost.
+        assert budget_reservation["reserved_cost"] == 0.5
+        assert budget_reservation.get("finalized") is not True
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_settles_async_stream_when_response_cost_missing():
+    """Async streams record completion on async_complete_streaming_response."""
+    logger = _ProxyDBLogger()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
+
+    kwargs = {
+        "model": "gpt-4",
+        "call_type": "acompletion",
+        "stream": True,
+        "async_complete_streaming_response": {"usage": {"total_tokens": 10}},
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_auth": user_api_key_auth,
+            },
+        },
+        "standard_logging_object": {
+            "response_cost": None,
+            "response_cost_failure_debug_info": "missing custom price",
+            "request_tags": None,
+        },
+    }
+
+    with (
+        patch(  # test-quality-ok: callback reads proxy_logging_obj from the module; no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: async-complete streams must settle, not release
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_release_budget_reservation,
+        patch(  # test-quality-ok: settle is a proxy-internal reservation call, not an HTTP boundary
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_reconcile_budget_reservation,
+        patch(  # test-quality-ok: unpriced settle must not write a spend-log row
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        mock_release_budget_reservation.assert_not_awaited()
+        mock_reconcile_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+            actual_cost=0.5,
+        )
+        mock_update_database.assert_not_called()
+        mock_proxy_logging.failed_tracking_alert.assert_called()
+        assert budget_reservation["reserved_cost"] == 0.5
+        assert budget_reservation.get("finalized") is not True
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_invalidates_reservation_when_settle_fails():
+    """A failed settle must not leave the hold pinning later traffic until TTL."""
+    logger = _ProxyDBLogger()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
+
+    kwargs = {
+        "model": "gpt-4",
+        "call_type": "acompletion",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_auth": user_api_key_auth,
+            },
+        },
+        "standard_logging_object": {
+            "response_cost": None,
+            "response_cost_failure_debug_info": "missing custom price",
+            "request_tags": None,
+        },
+        "stream": False,
+    }
+
+    with (
+        patch(  # test-quality-ok: callback reads proxy_logging_obj from the module; no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj",
+        ) as mock_proxy_logging,
+        patch(  # test-quality-ok: a failed settle must not refund through release_budget_reservation
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_release_budget_reservation,
+        patch(  # test-quality-ok: force reconcile to fail so the invalidate path can be observed
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("redis down"),
+        ),
+        patch(  # test-quality-ok: invalidate is the only way to unpin counters after settle fails
+            "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+            new_callable=AsyncMock,
+        ) as mock_invalidate_budget_reservation_counters,
+        patch(  # test-quality-ok: failed settle must not write a spend-log row
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+    ):
+        mock_proxy_logging.failed_tracking_alert = AsyncMock()
+
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+        mock_release_budget_reservation.assert_not_awaited()
+        mock_invalidate_budget_reservation_counters.assert_awaited_once()
+        settled = mock_invalidate_budget_reservation_counters.await_args.kwargs["budget_reservation"]
+        assert settled["reserved_cost"] == 0.5
+        assert settled["finalized"] is True
+        mock_update_database.assert_not_called()
+        mock_proxy_logging.failed_tracking_alert.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_track_cost_callback_releases_budget_reservation_for_non_model_calls():
+    logger = _ProxyDBLogger()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+    user_api_key_auth = UserAPIKeyAuth(budget_reservation=budget_reservation)
+
+    kwargs = {
+        "call_type": "health",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key_auth": user_api_key_auth,
+            },
+        },
+        "stream": False,
+    }
+
+    with patch(  # test-quality-ok: health checks have no cost row; release is the observable contract
+        "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+        new_callable=AsyncMock,
+    ) as mock_release_budget_reservation:
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
         mock_release_budget_reservation.assert_awaited_once_with(
             budget_reservation=budget_reservation,
         )
+        # Health checks refund the hold; they must not stamp it settled.
+        assert budget_reservation.get("finalized") is not True
+        assert budget_reservation["reserved_cost"] == 0.5
 
 
 def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
