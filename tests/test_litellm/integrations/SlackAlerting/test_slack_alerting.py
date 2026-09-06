@@ -238,6 +238,87 @@ class TestSlackAlerting(unittest.TestCase):
         self.assertEqual(parsed_data["provider_region_id"], "vertex_aius-east1")
 
 
+def _user_budget_call_info(*, spend: float, token: str | None = None) -> CallInfo:
+    return CallInfo(
+        spend=spend,
+        max_budget=100.0,
+        token=token,
+        user_id="user-1",
+        event_group=Litellm_EntityType.USER,
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_budget_warning_reaches_slack_budget_alerts_route():
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        alert_types=["budget_alerts"],
+        internal_usage_cache=DualCache(),
+    )
+    slack_alerting.send_alert = AsyncMock()
+
+    await slack_alerting.budget_alerts(
+        type="user_budget",
+        user_info=_user_budget_call_info(spend=85.0),
+    )
+
+    slack_alerting.send_alert.assert_awaited_once()
+    alert_call: Final = slack_alerting.send_alert.await_args
+    assert alert_call.kwargs["alert_type"] == AlertType.budget_alerts
+    assert alert_call.kwargs["user_info"].event == "threshold_crossed"
+    assert "15% Threshold Crossed" in alert_call.kwargs["message"]
+
+
+@pytest.mark.asyncio
+async def test_user_budget_warning_is_deduplicated():
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        alert_types=["budget_alerts"],
+        internal_usage_cache=DualCache(),
+    )
+    slack_alerting.send_alert = AsyncMock()
+
+    await slack_alerting.budget_alerts(
+        type="user_budget",
+        user_info=_user_budget_call_info(spend=85.0),
+    )
+    await slack_alerting.budget_alerts(
+        type="user_budget",
+        user_info=_user_budget_call_info(spend=90.0),
+    )
+
+    slack_alerting.send_alert.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_user_budget_final_event_follows_prior_warning_without_exposing_token():
+    slack_alerting: Final = SlackAlerting(
+        alerting=["slack"],
+        alert_types=["budget_alerts"],
+        internal_usage_cache=DualCache(),
+    )
+    slack_alerting.send_alert = AsyncMock()
+    secret_token: Final = "secret-key-token"
+
+    await slack_alerting.budget_alerts(
+        type="user_budget",
+        user_info=_user_budget_call_info(spend=85.0, token=secret_token),
+    )
+    await slack_alerting.budget_alerts(
+        type="user_budget",
+        user_info=_user_budget_call_info(spend=100.0),
+    )
+
+    assert slack_alerting.send_alert.await_count == 2
+    warning_call: Final = slack_alerting.send_alert.await_args_list[0]
+    assert secret_token not in warning_call.kwargs["message"]
+    final_call: Final = slack_alerting.send_alert.await_args
+    assert final_call.kwargs["user_info"].event == "budget_crossed"
+    assert final_call.kwargs["user_info"].user_id == "user-1"
+    assert final_call.kwargs["user_info"].spend == 100.0
+    assert final_call.kwargs["user_info"].max_budget == 100.0
+
+
 _REPORT_SENT_KEY: Final = SlackAlertingCacheKeys.report_sent_key.value
 _DAILY_REPORT_FREQUENCY: Final = 900
 

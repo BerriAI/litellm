@@ -1,7 +1,8 @@
 import asyncio
 import json
+from collections import deque
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 if TYPE_CHECKING:
@@ -54,6 +55,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
+    EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE,
     END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
@@ -5336,6 +5338,59 @@ async def test_common_checks_budget_gather_raises_highest_priority_scope():
         assert "End User=eu1" in str(end_user_over.value)
 
 
+def _user_budget_logging() -> MagicMock:
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    return proxy_logging_obj
+
+
+@pytest.mark.parametrize("spend", [39.0, 0.0])
+@pytest.mark.asyncio
+async def test_user_max_budget_alert_check_does_not_alert_below_threshold(spend: float):
+    from litellm.proxy.auth.auth_checks import _user_max_budget_alert_check
+
+    proxy_logging_obj = _user_budget_logging()
+
+    _user_max_budget_alert_check(
+        user_id="user-1",
+        proxy_logging_obj=proxy_logging_obj,
+        spend=spend,
+        max_budget=50.0,
+    )
+    await asyncio.sleep(0)
+
+    proxy_logging_obj.budget_alerts.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "spend",
+    [50.0 * EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE, 45.0],
+)
+@pytest.mark.asyncio
+async def test_user_max_budget_alert_check_schedules_alert_at_or_above_threshold(spend: float):
+    from litellm.proxy.auth.auth_checks import _user_max_budget_alert_check
+
+    proxy_logging_obj = _user_budget_logging()
+
+    _user_max_budget_alert_check(
+        user_id="user-1",
+        proxy_logging_obj=proxy_logging_obj,
+        spend=spend,
+        max_budget=50.0,
+    )
+    await asyncio.sleep(0)
+
+    proxy_logging_obj.budget_alerts.assert_awaited_once_with(
+        type="user_budget",
+        user_info=CallInfo(
+            spend=spend,
+            max_budget=50.0,
+            user_id="user-1",
+            event_group=Litellm_EntityType.USER,
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_common_checks_personal_user_budget_blocks_in_gather():
     """The personal-key user budget scope is enforced inside the gather.
@@ -5350,8 +5405,11 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
 
     user = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=100.0)
     token = UserAPIKeyAuth(token="k1", user_id="u1")
+    proxy_logging_obj = _user_budget_logging()
+    spend_reads: Final = deque[str]()
 
     async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
+        spend_reads.append(counter_key)
         return 999.0 if counter_key == "spend:user:u1" else 0.0
 
     with (
@@ -5368,11 +5426,23 @@ async def test_common_checks_personal_user_budget_blocks_in_gather():
                 general_settings={},
                 route="/chat/completions",
                 llm_router=None,
-                proxy_logging_obj=MagicMock(),
+                proxy_logging_obj=proxy_logging_obj,
                 valid_token=token,
                 request=MagicMock(spec=Request),
             )
+        await asyncio.sleep(0)
+
     assert "User=u1" in str(over.value)
+    assert spend_reads.count("spend:user:u1") == 1
+    proxy_logging_obj.budget_alerts.assert_awaited_once_with(
+        type="user_budget",
+        user_info=CallInfo(
+            spend=999.0,
+            max_budget=100.0,
+            user_id="u1",
+            event_group=Litellm_EntityType.USER,
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -5391,6 +5461,7 @@ async def test_common_checks_personal_user_budget_skipped_for_team_key():
     user = LiteLLM_UserTable(user_id="u1", spend=0.0, max_budget=100.0)
     team = LiteLLM_TeamTable(team_id="t1", spend=0.0, max_budget=1000.0)
     token = UserAPIKeyAuth(token="k1", user_id="u1", team_id="t1")
+    proxy_logging_obj = _user_budget_logging()
 
     async def _spend_by_counter(counter_key, fallback_spend, max_budget=None, **kwargs):
         return 999.0 if counter_key == "spend:user:u1" else 0.0
@@ -5412,11 +5483,12 @@ async def test_common_checks_personal_user_budget_skipped_for_team_key():
             general_settings={},
             route="/chat/completions",
             llm_router=None,
-            proxy_logging_obj=MagicMock(),
+            proxy_logging_obj=proxy_logging_obj,
             valid_token=token,
             request=MagicMock(spec=Request),
         )
     assert result is True
+    proxy_logging_obj.budget_alerts.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -5456,7 +5528,7 @@ async def test_common_checks_personal_user_budget_enforced_on_team_key_when_flag
                 general_settings={"apply_user_budget_to_team_keys": True},
                 route="/chat/completions",
                 llm_router=None,
-                proxy_logging_obj=MagicMock(),
+                proxy_logging_obj=MagicMock(budget_alerts=AsyncMock()),
                 valid_token=token,
                 request=MagicMock(spec=Request),
             )
@@ -5490,7 +5562,7 @@ async def test_common_checks_personal_user_budget_still_enforced_on_personal_key
                 general_settings={"apply_user_budget_to_team_keys": True},
                 route="/chat/completions",
                 llm_router=None,
-                proxy_logging_obj=MagicMock(),
+                proxy_logging_obj=MagicMock(budget_alerts=AsyncMock()),
                 valid_token=token,
                 request=MagicMock(spec=Request),
             )
