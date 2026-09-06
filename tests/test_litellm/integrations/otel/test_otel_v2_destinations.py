@@ -28,6 +28,7 @@ from litellm.integrations.otel.model.config import (
     is_otel_v2_enabled,
 )
 from litellm.integrations.otel.model.destination import OtelDestination
+from litellm.integrations.otel.plumbing import providers as otel_providers
 from litellm.integrations.otel.plumbing.context import (
     destination_backends,
     request_destinations,
@@ -351,6 +352,31 @@ class TestRoutingMode:
 
         assert operator_sink_keys(config) == frozenset({self.OPERATOR_SINK})
 
+    def test_operator_sink_keys_spans_every_config_it_is_handed(self):
+        first = OpenTelemetryV2Config(
+            exporters=(
+                ExporterSpec(
+                    kind="otlp_http",
+                    endpoint=self.OPERATOR_SINK[0],
+                    headers="authorization=Basic op",
+                ),
+            )
+        )
+        second = OpenTelemetryV2Config(
+            exporters=(
+                ExporterSpec(
+                    kind="otlp_http",
+                    endpoint="https://otlp.arize.com/v1/traces",
+                    headers="space_id=s,api_key=k",
+                ),
+            )
+        )
+
+        assert operator_sink_keys(first, second) == {
+            self.OPERATOR_SINK,
+            _sink_key("https://otlp.arize.com/v1/traces", {"space_id": "s", "api_key": "k"}),
+        }
+
     def test_a_team_pointing_at_a_credential_less_operator_exporter_still_gets_its_spans(self, monkeypatch):
         """Under additive the fan-out skips a destination the operator already writes
         to. An exporter the provider never built writes nothing, so skipping it would
@@ -570,6 +596,50 @@ class TestFanOut:
         assert operator_db.attributes["error"] == unreachable
         assert operator_db.status.description == unreachable
         assert [event.name for event in operator_db.events] == ["exception"]
+
+    @pytest.mark.parametrize("failure_status", ["guardrail_failed_to_respond", "failure"])
+    def test_a_guardrails_failure_text_does_not_ride_along_to_the_tenant(self, failure_status):
+        dest_exporter, operator_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator_exporter))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter))
+        )
+        tracer = get_tracer(provider, "litellm")
+        unreachable = "Cannot connect to host guardrail.internal.example:9000"
+        verdict = '{"action": "block", "categories": ["pii"]}'
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                with tracer.start_as_current_span("execute_guardrail pii") as down:
+                    down.set_attributes(
+                        {
+                            "litellm.guardrail.name": "pii",
+                            "litellm.guardrail.status": failure_status,
+                            "litellm.guardrail.response": unreachable,
+                        }
+                    )
+                with tracer.start_as_current_span("execute_guardrail toxicity") as up:
+                    up.set_attributes(
+                        {
+                            "litellm.guardrail.name": "toxicity",
+                            "litellm.guardrail.status": "guardrail_intervened",
+                            "litellm.guardrail.response": verdict,
+                        }
+                    )
+
+        in_fresh_context(run)
+
+        tenant = {s.name: s for s in dest_exporter.get_finished_spans()}
+        operator = {s.name: s for s in operator_exporter.get_finished_spans()}
+        assert dict(tenant["execute_guardrail pii"].attributes) == {
+            "litellm.guardrail.name": "pii",
+            "litellm.guardrail.status": failure_status,
+        }
+        assert "guardrail.internal.example" not in tenant["execute_guardrail pii"].to_json()
+        assert tenant["execute_guardrail toxicity"].attributes["litellm.guardrail.response"] == verdict
+        assert operator["execute_guardrail pii"].attributes["litellm.guardrail.response"] == unreachable
 
     def test_the_callers_key_in_the_query_string_does_not_ride_along_to_the_tenant(self):
         """A Google AI Studio style request authenticates with ``?key=<virtual key>``,
@@ -924,6 +994,52 @@ class TestProviderWiring:
 
         assert kinds(published).count("TenantFanOutSpanProcessor") == 1
         assert "TenantFanOutSpanProcessor" not in kinds(other)
+
+    @pytest.mark.parametrize("canonical", ["langfuse_otel", "arize"])
+    def test_publishing_tells_the_fan_out_about_every_v2_loggers_account(self, monkeypatch, canonical):
+        monkeypatch.setenv("LITELLM_OTEL_TENANT_DESTINATION_MODE", "additive")
+        shared = InMemorySpanExporter()
+        monkeypatch.setattr(otel_providers, "_destination_processor", lambda _d: SimpleSpanProcessor(shared))
+        accounts = {
+            "langfuse_otel": (
+                "https://cloud.langfuse.com/api/public/otel/v1/traces",
+                "authorization=Basic op",
+            ),
+            "arize": (
+                "https://otlp.arize.com/v1/traces",
+                "space_id=space-op,api_key=key-op",
+            ),
+        }
+        loggers = {
+            name: OpenTelemetryV2(
+                config=OpenTelemetryV2Config(
+                    exporters=(ExporterSpec(kind="otlp_http", endpoint=endpoint, headers=headers),)
+                ),
+                callback_name=name,
+                tracer_provider=TracerProvider(),
+            )
+            for name, (endpoint, headers) in accounts.items()
+        }
+        other = "arize" if canonical == "langfuse_otel" else "langfuse_otel"
+        published = publish_global_otel_v2_provider(
+            [loggers[other]],
+            lambda _p: None,
+            registered=loggers[canonical],
+        )
+
+        def destination(name, headers):
+            return OtelDestination(endpoint=accounts[name][0], headers=headers, callback_name=name)
+
+        def run(destinations):
+            set_request_destinations(destinations)
+            emit(published.tracer_provider)
+
+        in_fresh_context(run, (destination(canonical, dict(pair.split("=") for pair in accounts[canonical][1].split(","))),))
+        in_fresh_context(run, (destination(other, dict(pair.split("=") for pair in accounts[other][1].split(","))),))
+        assert shared.get_finished_spans() == (), "an account the operator already writes to was written twice"
+
+        in_fresh_context(run, (destination(other, {"authorization": "Basic team"}),))
+        assert [s.name for s in shared.get_finished_spans()] == ["chat gpt-4"]
 
     def test_publishing_twice_does_not_double_export(self):
         config = OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.ARIZE_AX)])

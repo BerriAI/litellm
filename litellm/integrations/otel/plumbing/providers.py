@@ -356,6 +356,10 @@ _DATASTORE_ENDPOINT_KEYS: Final = frozenset({Server.ADDRESS, Server.PORT, DB.NAM
 # the proxy's own work, whose error text names the operator's infrastructure.
 _TENANT_OWNED_KEYS: Final = frozenset({GenAI.OPERATION_NAME, MCP.METHOD_NAME, LiteLLM.GUARDRAIL_NAME})
 _PROXY_ERROR_TEXT_KEYS: Final = frozenset({Error.MESSAGE, Error.MESSAGE_LEGACY})
+# A guardrail that never answered carries the exception it raised as its response,
+# which names the operator's guardrail endpoint. The second spelling is the legacy
+# status the request-level logger still maps.
+_GUARDRAIL_UNREACHABLE_STATUSES: Final = frozenset({"guardrail_failed_to_respond", "failure"})
 # Attribute prefixes the FastAPI instrumentor uses for headers the operator opted to
 # capture (``OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_*``). The request
 # side carries the caller's bearer token verbatim.
@@ -402,10 +406,16 @@ def _is_tenant_owned_span(attributes: Mapping[str, AttributeValue]) -> bool:
     return any(key in attributes for key in _TENANT_OWNED_KEYS)
 
 
-def _tenant_visible(key: str, database: bool, owned: bool) -> bool:
+def _guardrail_unreachable(attributes: Mapping[str, AttributeValue]) -> bool:
+    return attributes.get(LiteLLM.GUARDRAIL_STATUS) in _GUARDRAIL_UNREACHABLE_STATUSES
+
+
+def _tenant_visible(key: str, database: bool, owned: bool, unreachable_guardrail: bool) -> bool:
     if key.startswith(_CAPTURED_HEADER_PREFIXES) or key in (LiteLLMError.STACK_TRACE, _URL_QUERY_KEY):
         return False
     if database and key in _DATASTORE_ENDPOINT_KEYS:
+        return False
+    if unreachable_guardrail and key == LiteLLM.GUARDRAIL_RESPONSE:
         return False
     return owned or key not in _PROXY_ERROR_TEXT_KEYS
 
@@ -440,18 +450,24 @@ def _for_destination(span: ReadableSpan, destination: "OtelDestination") -> Read
     the proxy's own work (the request root, auth, the database), and its error text,
     its events and its status description come off, since a Prisma failure there
     spells out the operator's Postgres endpoint. A database span loses that endpoint
-    too. Stack traces walk the operator's install and come off every span, as do the
-    headers the operator captures on the server span, whose request side holds the
-    caller's bearer token, and the query string of the request URL, which can hold
-    the same key. The span itself stays, so the tenant still gets the whole trace
-    tree.
+    too, and a guardrail that failed to respond loses its response text, which is the
+    exception it raised and names the operator's guardrail endpoint. Stack traces walk
+    the operator's install and come off every span, as do the headers the operator
+    captures on the server span, whose request side holds the caller's bearer token,
+    and the query string of the request URL, which can hold the same key. The span
+    itself stays, so the tenant still gets the whole trace tree.
     """
     extra: Final = destination.resource_attributes
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     database: Final = _is_database_span(attributes)
     owned: Final = _is_tenant_owned_span(attributes)
+    unreachable: Final = _guardrail_unreachable(attributes)
     kept: Final = MappingProxyType(
-        {key: _without_query(key, value) for key, value in attributes.items() if _tenant_visible(key, database, owned)}
+        {
+            key: _without_query(key, value)
+            for key, value in attributes.items()
+            if _tenant_visible(key, database, owned, unreachable)
+        }
     )
     recorded: Final = span.events
     events: Final = tuple(_without_stack_trace(event) for event in recorded) if owned else ()
@@ -1039,19 +1055,21 @@ def build_tracer_provider(
 _FAN_OUT_ATTACH_LOCK: Final = threading.Lock()
 
 
-def attach_tenant_fan_out(provider: TracerProvider, config: OpenTelemetryV2Config | None = None) -> None:
+def attach_tenant_fan_out(provider: TracerProvider, *configs: OpenTelemetryV2Config) -> None:
     """Give ``provider`` the fan-out that delivers spans to key/team destinations.
 
     Called on the one provider published as the OTel global, and idempotent so a
     second publish (a test, a re-initialized proxy) cannot double-export. Concurrent
     first calls (requests racing to anchor before any publish) serialize on one lock
-    so exactly one fan-out lands. ``config`` names the operator's own exporters so an
-    additive destination pointing at one of them is delivered once rather than twice.
+    so exactly one fan-out lands. ``configs`` name the operator's own exporters, one
+    config per v2 logger since each keeps its own provider and still writes its
+    account, so an additive destination pointing at any of them is delivered once
+    rather than twice.
     """
     with _FAN_OUT_ATTACH_LOCK:
         if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):
             return
-        provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_keys(config)))
+        provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_keys(*configs)))
 
 
 def deliverable_destinations(
@@ -1076,18 +1094,18 @@ def deliverable_destinations(
     return fan_out.deliverable(destinations) if fan_out is not None else ()
 
 
-def operator_sink_keys(config: OpenTelemetryV2Config | None) -> frozenset[_SinkKey]:
+def operator_sink_keys(*configs: OpenTelemetryV2Config) -> frozenset[_SinkKey]:
     """The accounts the operator's own exporters write to, in destination terms.
 
-    An exporter with no endpoint of its own resolves one from the environment at
-    export time, so it has no comparable identity and is left out, and so is one
-    that never reaches the wire: a console kind ignores the endpoint, and a
-    header-gated spec with no credentials is skipped when the provider is built.
+    Every v2 logger's config counts, since each logger exports through its own
+    provider. An exporter with no endpoint of its own resolves one from the
+    environment at export time, so it has no comparable identity and is left out,
+    and so is one that never reaches the wire: a console kind ignores the endpoint,
+    and a header-gated spec with no credentials is skipped when the provider is built.
     """
-    if config is None:
-        return frozenset()
     return frozenset(
         key
+        for config in configs
         for spec in config.exporters
         if _exports_to_the_wire(spec) and (key := _sink_key(spec.endpoint, parse_headers(spec.headers))) is not None
     )

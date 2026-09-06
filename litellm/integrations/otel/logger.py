@@ -885,10 +885,20 @@ def publish_global_otel_v2_provider(
     """
     global _published_v2_provider
     logger: Final = select_global_otel_v2_logger(in_memory_loggers, registered=registered)
-    attach_tenant_fan_out(logger.tracer_provider, logger.config)
+    attach_tenant_fan_out(logger.tracer_provider, *_v2_configs(in_memory_loggers, logger))
     set_global_provider(logger.tracer_provider)
     _published_v2_provider = logger.tracer_provider  # rebind-ok: startup records the one provider carrying the fan-out
     return logger
+
+
+def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") -> tuple[OpenTelemetryV2Config, ...]:
+    """Every v2 logger's config, the published logger's first.
+
+    Each preset keeps its own provider and exporters, so the accounts the operator
+    writes to are spread over all of them, not held by the published logger alone.
+    """
+    others: Final = tuple(cb.config for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2) and cb is not logger)
+    return (logger.config, *others)
 
 
 def _registered_v2_logger() -> "OpenTelemetryV2 | None":
