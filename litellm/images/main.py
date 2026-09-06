@@ -34,6 +34,7 @@ from openai.types.audio.transcription_create_params import FileTypes
 # BFL handlers
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
+from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -668,10 +669,13 @@ def image_variation(
     api_base = provider_config.get_api_base(litellm_params.get("api_base", None))
 
     if image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.OPENAI:
-        if api_key is None:
-            raise ValueError("API key is required for OpenAI image variations")
         if api_base is None:
             raise ValueError("API base is required for OpenAI image variations")
+        if api_key is None and (
+            resolve_openai_workload_identity_config(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
+            is None
+        ):
+            raise ValueError("API key is required for OpenAI image variations")
 
         response = openai_image_variations.image_variations(
             model_response=model_response,

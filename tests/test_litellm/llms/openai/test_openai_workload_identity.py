@@ -182,6 +182,25 @@ class TestTokenExchange:
         assert first == second == "exchanged-bearer-token"
         assert route.call_count == 1
 
+    @respx.mock
+    def test_more_identities_than_the_old_cache_ceiling_stay_cached(
+        self, wif_env: OpenAIWorkloadIdentityConfig
+    ) -> None:
+        route: Final = mock_token_exchange()
+        identities: Final = tuple(
+            OpenAIWorkloadIdentityConfig(
+                identity_provider_id=wif_env.identity_provider_id,
+                service_account_id=f"user-{index}",
+                token_file=wif_env.token_file,
+            )
+            for index in range(24)
+        )
+        for identity in identities:
+            assert get_workload_identity_bearer_token(identity) == "exchanged-bearer-token"
+        for identity in identities:
+            assert get_workload_identity_bearer_token(identity) == "exchanged-bearer-token"
+        assert route.call_count == len(identities)
+
     def test_old_sdk_raises_upgrade_error(
         self, wif_env: OpenAIWorkloadIdentityConfig, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -917,6 +936,7 @@ class TestClientsideBaseOverride:
 
 
 IMAGES_URL: Final = "https://api.openai.com/v1/images/generations"
+IMAGE_VARIATIONS_URL: Final = "https://api.openai.com/v1/images/variations"
 SPEECH_URL: Final = "https://api.openai.com/v1/audio/speech"
 TRANSCRIPTIONS_URL: Final = "https://api.openai.com/v1/audio/transcriptions"
 MODERATIONS_URL: Final = "https://api.openai.com/v1/moderations"
@@ -1067,6 +1087,31 @@ class TestDeploymentNonChatSurfaces:
 
         assert response.data[0].b64_json == "aGk="
         assert bearer_of(route) == "Bearer aimage-bearer"
+
+    @respx.mock
+    def test_image_variation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("variation-bearer")
+        route: Final = respx.post(IMAGE_VARIATIONS_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+
+        response: Final = litellm.image_variation(
+            model="openai/dall-e-2", image=b"png-bytes", custom_llm_provider="openai", **deployment_wif
+        )
+
+        assert response.data[0].b64_json == "aGk="
+        assert bearer_of(route) == "Bearer variation-bearer"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_async_image_variation_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        mock_token_exchange("avariation-bearer")
+        route: Final = respx.post(IMAGE_VARIATIONS_URL).mock(return_value=httpx.Response(200, json=IMAGE_BODY))
+
+        response: Final = await litellm.aimage_variation(
+            model="openai/dall-e-2", image=b"png-bytes", custom_llm_provider="openai", **deployment_wif
+        )
+
+        assert response.data[0].b64_json == "aGk="
+        assert bearer_of(route) == "Bearer avariation-bearer"
 
     @respx.mock
     def test_speech_kwargs_carry_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
