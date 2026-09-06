@@ -383,9 +383,10 @@ def cost_per_token(
     _cache_read_tokens: float = 0
     _cache_creation_tokens: float = 0
     _is_anthropic_style = False
+    _pt_details: PromptTokensDetailsWrapper | None = None
 
     if usage_object is not None:
-        _pt_details: Final[PromptTokensDetailsWrapper | None] = getattr(usage_object, "prompt_tokens_details", None)
+        _pt_details = getattr(usage_object, "prompt_tokens_details", None)
         if _pt_details is not None:
             _cache_read_tokens = float(getattr(_pt_details, "cached_tokens", 0) or 0)
             # OpenAI-compatible providers report cache-write tokens under
@@ -413,8 +414,10 @@ def cost_per_token(
 
     # Anthropic reports prompt_tokens as input_tokens (excluding cache tokens).
     # Adjust so the helper's "prompt_tokens includes cache tokens" invariant holds.
+    # When prompt_tokens_details is present (from provider usage transformations),
+    # prompt_tokens already includes cache tokens, so re-inflation is skipped.
     _normalized_prompt_tokens = float(prompt_tokens)
-    if _is_anthropic_style:
+    if _is_anthropic_style and _pt_details is None:
         _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
 
     response_cost: Final = _cost_per_token_custom_pricing_helper(

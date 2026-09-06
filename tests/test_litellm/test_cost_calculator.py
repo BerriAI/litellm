@@ -3432,6 +3432,115 @@ def test_custom_pricing_applies_cache_creation_input_cost_via_cache_write_tokens
     assert completion_cost == pytest.approx(expected_completion)
 
 
+def test_custom_pricing_anthropic_cache_tokens_not_double_counted():
+    """
+    Anthropic-style responses report cache tokens in cache_read_input_tokens and
+    cache_creation_input_tokens. AnthropicConfig.calculate_usage() already folds
+    these into prompt_tokens when building the Usage object. Custom pricing
+    must not re-add them onto prompt_tokens (which would bill them twice:
+    once as regular input tokens and once at the cached rate).
+    """
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    n_cached = 100_000
+    n_fresh = 10
+    n_completion = 50
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": n_fresh,
+            "output_tokens": n_completion,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": n_cached,
+        },
+        reasoning_content=None,
+    )
+
+    response = ModelResponse(
+        id="test-anthropic-cached",
+        created=1234567890,
+        model="claude-sonnet-4-5",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    input_rate = 1e-06
+    output_rate = 5e-06
+    cache_read_rate = 1e-07
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        custom_cost_per_token={
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+            "cache_read_input_token_cost": cache_read_rate,
+        },
+    )
+
+    expected = n_fresh * input_rate + n_cached * cache_read_rate + n_completion * output_rate
+    assert cost == pytest.approx(expected)
+
+
+def test_custom_pricing_anthropic_cache_creation_not_double_counted():
+    """
+    Verify custom pricing with Anthropic cache creation tokens does not double-count
+    cache_creation_input_tokens.
+    """
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    n_fresh = 20
+    n_creation = 25_000
+    n_read = 50_000
+    n_completion = 100
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": n_fresh,
+            "output_tokens": n_completion,
+            "cache_creation_input_tokens": n_creation,
+            "cache_read_input_tokens": n_read,
+        },
+        reasoning_content=None,
+    )
+
+    response = ModelResponse(
+        id="test-anthropic-creation",
+        created=1234567890,
+        model="claude-sonnet-4-5",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    input_rate = 3e-06
+    output_rate = 15e-06
+    cache_read_rate = 3e-07
+    cache_creation_rate = 3.75e-06
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="claude-sonnet-4-5",
+        custom_llm_provider="anthropic",
+        custom_cost_per_token={
+            "input_cost_per_token": input_rate,
+            "output_cost_per_token": output_rate,
+            "cache_read_input_token_cost": cache_read_rate,
+            "cache_creation_input_token_cost": cache_creation_rate,
+        },
+    )
+
+    expected = (
+        n_fresh * input_rate
+        + n_creation * cache_creation_rate
+        + n_read * cache_read_rate
+        + n_completion * output_rate
+    )
+    assert cost == pytest.approx(expected)
+
+
 # ---------------------------------------------------------------------------
 # Bug 2 — db_spend_update_writer cache token extraction helpers.
 # ---------------------------------------------------------------------------
@@ -3525,12 +3634,16 @@ def test_custom_pricing_anthropic_style_cache_tokens_not_double_counted():
     include cache tokens, so cost_per_token must adjust before invoking it —
     otherwise regular_prompt_tokens goes negative and clamps to 0.
     """
-    usage = Usage(
-        prompt_tokens=2000,
-        completion_tokens=100,
-        total_tokens=2100,
-        cache_read_input_tokens=1500,
-        cache_creation_input_tokens=300,
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    usage = AnthropicConfig().calculate_usage(
+        usage_object={
+            "input_tokens": 2000,
+            "output_tokens": 100,
+            "cache_creation_input_tokens": 300,
+            "cache_read_input_tokens": 1500,
+        },
+        reasoning_content=None,
     )
 
     response = ModelResponse(
