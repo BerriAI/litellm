@@ -622,17 +622,9 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
         await handler.close()
 
 
-def test_decodable_accept_encoding_drops_zstd_and_keeps_the_rest():
-    from litellm.llms.custom_httpx.http_handler import decodable_accept_encoding
-
-    assert decodable_accept_encoding("gzip, deflate, br, zstd") == "gzip, deflate, br"
-    assert decodable_accept_encoding("zstd") == "identity"
-    assert decodable_accept_encoding("gzip") == "gzip"
-
-
 @pytest.mark.parametrize("disable_default_headers", [False, True])
 def test_sync_client_asks_only_for_encodings_httpx_can_stream(disable_default_headers):
-    from litellm.llms.custom_httpx.http_handler import DECODABLE_ACCEPT_ENCODING
+    from litellm.llms.custom_httpx.accept_encoding import DECODABLE_ACCEPT_ENCODING
 
     assert "zstd" not in DECODABLE_ACCEPT_ENCODING
     assert "gzip" in DECODABLE_ACCEPT_ENCODING
@@ -647,7 +639,7 @@ def test_sync_client_asks_only_for_encodings_httpx_can_stream(disable_default_he
 
 @pytest.mark.asyncio
 async def test_async_client_asks_only_for_encodings_httpx_can_stream():
-    from litellm.llms.custom_httpx.http_handler import DECODABLE_ACCEPT_ENCODING
+    from litellm.llms.custom_httpx.accept_encoding import DECODABLE_ACCEPT_ENCODING
 
     handler = AsyncHTTPHandler()
     try:

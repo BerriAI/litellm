@@ -3,6 +3,8 @@ from typing import Final
 
 import httpx
 
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
+
 try:
     from litellm._version import version
 except Exception:
@@ -17,10 +19,8 @@ def get_default_headers() -> dict:
     - Override: set `LITELLM_USER_AGENT` to fully override the header value.
     """
     user_agent: Final = os.environ.get("LITELLM_USER_AGENT")
-    if user_agent is not None:
-        return {"User-Agent": user_agent}
 
-    return {"User-Agent": f"litellm/{version}"}
+    return {**accept_encoding_header(), "User-Agent": user_agent if user_agent is not None else f"litellm/{version}"}
 
 
 class HTTPHandler:

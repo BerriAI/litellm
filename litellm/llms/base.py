@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Union
 import httpx
 
 import litellm
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -56,7 +57,7 @@ class BaseLLM:
         if litellm.client_session:
             _client_session = litellm.client_session
         else:
-            _client_session = httpx.Client()
+            _client_session = httpx.Client(headers=accept_encoding_header())
 
         return _client_session
 
@@ -64,7 +65,7 @@ class BaseLLM:
         if litellm.aclient_session:
             _aclient_session = litellm.aclient_session
         else:
-            _aclient_session = httpx.AsyncClient()
+            _aclient_session = httpx.AsyncClient(headers=accept_encoding_header())
 
         return _aclient_session
 

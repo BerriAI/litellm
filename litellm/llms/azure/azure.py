@@ -19,6 +19,7 @@ from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRI
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -1476,7 +1477,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         input: list | None = None,
         prompt: str | None = None,
     ) -> dict:
-        client_session: Final = litellm.client_session or httpx.Client()
+        client_session: Final = litellm.client_session or httpx.Client(headers=accept_encoding_header())
         if api_base is not None and "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
             if not api_base.endswith("/"):

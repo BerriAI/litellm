@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -131,48 +132,6 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.so
     return factory
 
 
-_ZSTD_CONTENT_ENCODING: Final = "zstd"
-
-_ALWAYS_DECODABLE_ACCEPT_ENCODING: Final = "gzip, deflate"
-
-
-def httpx_accept_encoding() -> str:
-    """
-    Read the `Accept-Encoding` httpx would send, which is private to httpx and tracks which
-    optional decoder packages are installed. A release that renames it leaves litellm asking
-    for the two encodings httpx can always decode instead of failing to import.
-    """
-    try:
-        from httpx._client import ACCEPT_ENCODING
-    except ImportError:
-        return _ALWAYS_DECODABLE_ACCEPT_ENCODING
-
-    return ACCEPT_ENCODING
-
-
-def decodable_accept_encoding(advertised: str) -> str:
-    """
-    Narrow an `Accept-Encoding` value to the encodings that survive chunked reads.
-
-    httpx builds one zstd decompressor per response and reuses it for every chunk, so a
-    body whose chunks are separate zstd frames (one per event, as streaming providers
-    send) dies on the second frame with `cannot use a decompressobj multiple times`.
-    httpx offers zstd whenever the optional `zstandard` package is importable, which any
-    install carrying langchain, langsmith or `httpx[zstd]` does, so litellm drops it.
-    """
-    supported: Final = tuple(
-        encoding
-        for encoding in (part.strip() for part in advertised.split(","))
-        if encoding and encoding != _ZSTD_CONTENT_ENCODING
-    )
-    return ", ".join(supported) or "identity"
-
-
-DECODABLE_ACCEPT_ENCODING: Final = decodable_accept_encoding(httpx_accept_encoding())
-
-_ACCEPT_ENCODING_HEADER: Final[Mapping[str, str]] = MappingProxyType({"Accept-Encoding": DECODABLE_ACCEPT_ENCODING})
-
-
 def get_default_headers() -> dict[str, str]:
     """
     Get default headers for HTTP requests.
@@ -182,7 +141,7 @@ def get_default_headers() -> dict[str, str]:
     """
     user_agent: Final = os.environ.get("LITELLM_USER_AGENT")
 
-    return {**_ACCEPT_ENCODING_HEADER, "User-Agent": user_agent if user_agent is not None else f"litellm/{version}"}
+    return {**accept_encoding_header(), "User-Agent": user_agent if user_agent is not None else f"litellm/{version}"}
 
 
 # Initialize headers (User-Agent)
@@ -1291,9 +1250,7 @@ class HTTPHandler:
         # /path/to/client.pem
         cert: Final = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
-        default_headers: Final = (
-            dict(_ACCEPT_ENCODING_HEADER) if self.disable_default_headers else get_default_headers()
-        )
+        default_headers: Final = accept_encoding_header() if self.disable_default_headers else get_default_headers()
 
         # Create a client with a connection pool
         return httpx.Client(

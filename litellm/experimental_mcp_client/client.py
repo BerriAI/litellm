@@ -10,6 +10,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from functools import partial
 from importlib import metadata
+from types import MappingProxyType
 from typing import Any, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
@@ -68,6 +69,7 @@ from pydantic import AnyUrl
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -601,8 +603,11 @@ class MCPClient:
             fallback_auth: Final = self._resolved_auth if self._resolved_auth is not None else self._aws_auth
             effective_auth: Final = auth if auth is not None else fallback_auth
             guard: Final = credential_redirect_hook(self.server_url, self._credential_slot)
+            request_headers: Final = (
+                MappingProxyType({**accept_encoding_header(), **headers}) if headers else accept_encoding_header()
+            )
             return httpx.AsyncClient(
-                headers=headers,
+                headers=request_headers,
                 timeout=timeout,
                 auth=effective_auth,
                 verify=ssl_config,
