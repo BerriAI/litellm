@@ -51,10 +51,6 @@ MATRIX_DIRECTIVES: Final = frozenset({"include", "exclude"})
 LOCAL_CALL_PREFIX: Final = "./"
 
 
-class CheckRunNameCollision(Exception):
-    pass
-
-
 class Job(BaseModel):
     name: str | None = None
     uses: str | None = None
@@ -264,18 +260,16 @@ def workflow_sources() -> Mapping[str, str]:
     return {path.relative_to(REPO_ROOT).as_posix(): path.read_text() for path in sorted(WORKFLOWS_DIR.glob("*.y*ml"))}
 
 
-def main() -> None:
+def main() -> int:
     sources: Final = workflow_sources()
     found: Final = collisions(sources)
     if found:
-        raise CheckRunNameCollision("Check-run names are not unique:\n  - " + "\n  - ".join(found))
+        print("ERROR: Check-run names are not unique:\n  - " + "\n  - ".join(found), file=sys.stderr)
+        return 1
 
     print(f"Check-run names are unique across {len(sources)} workflows")
+    return 0
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except CheckRunNameCollision as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(main())
