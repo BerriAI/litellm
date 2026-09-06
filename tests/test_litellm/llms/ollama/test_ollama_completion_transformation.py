@@ -1,15 +1,80 @@
 import json
+import logging
 from litellm._uuid import uuid
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 
+from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _emit_ollama_default_template_warning,
+)
 from litellm.llms.ollama.completion.transformation import (
     OllamaConfig,
     OllamaTextCompletionResponseIterator,
 )
 from litellm.types.utils import Message, ModelResponse, ModelResponseStream
+
+
+CHAT_MESSAGES: Final = [
+    {"role": "system", "content": "Reply with only the category name."},
+    {"role": "user", "content": "how do I fix a segfault in my C code"},
+]
+
+
+class TestOllamaDefaultTemplateWarning:
+    """`ollama/` only substitutes its default '### System:' / '### User:' template when no
+    prompt template is registered for the model, so the warning about that substitution must
+    follow the same condition: a registered template is the documented way to opt out, and it
+    has to silence the warning too.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_warning_cache(self):
+        _emit_ollama_default_template_warning.cache_clear()
+
+    @staticmethod
+    def _transform(caplog, litellm_params: dict) -> dict:
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            return OllamaConfig().transform_request(
+                model="llama3.2:1b",
+                messages=CHAT_MESSAGES,
+                optional_params={},
+                litellm_params=litellm_params,
+                headers={},
+            )
+
+    @staticmethod
+    def _warnings(caplog) -> list:
+        return [record.message for record in caplog.records if "### System:" in record.message]
+
+    def test_default_template_warns(self, caplog):
+        data = self._transform(caplog, litellm_params={})
+
+        assert "### System:" in data["prompt"]
+        assert len(self._warnings(caplog)) == 1
+        assert "ollama_chat/llama3.2:1b" in self._warnings(caplog)[0]
+
+    def test_registered_prompt_template_is_silent(self, caplog):
+        custom_prompt_dict: Final = {
+            "llama3.2:1b": {
+                "roles": {
+                    "system": {"pre_message": "<|system|>\n", "post_message": "<|end|>\n"},
+                    "user": {"pre_message": "<|user|>\n", "post_message": "<|end|>\n"},
+                    "assistant": {"pre_message": "<|assistant|>\n", "post_message": "<|end|>\n"},
+                },
+                "initial_prompt_value": "",
+                "final_prompt_value": "",
+            }
+        }
+
+        data = self._transform(caplog, litellm_params={"custom_prompt_dict": custom_prompt_dict})
+
+        assert "### System:" not in data["prompt"]
+        assert "<|system|>" in data["prompt"]
+        assert self._warnings(caplog) == [], "a registered template opts out of the default, so there is nothing to warn about"
 
 
 class TestOllamaConfig:
