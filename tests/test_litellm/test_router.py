@@ -13116,6 +13116,7 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
         ({"DefaultRetries": 0}, 502, litellm.BadGatewayError, 1),
         ({"DefaultRetries": 0, "ServiceUnavailableErrorRetries": 1}, 503, litellm.ServiceUnavailableError, 2),
         ({"ServiceUnavailableErrorRetries": 0}, 502, litellm.BadGatewayError, 3),
+        ({"BadRequestErrorRetries": 2}, 400, litellm.BadRequestError, 3),
     ],
 )
 async def test_router_retry_policy_controls_upstream_attempt_count(
@@ -13150,6 +13151,87 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
             await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
     assert upstream.call_count == expected_upstream_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_policy,upstream_error",
+    [
+        (
+            {"BadRequestErrorRetries": 2},
+            {
+                "message": "This model's maximum context length is 16385 tokens",
+                "type": "invalid_request_error",
+                "code": "context_length_exceeded",
+            },
+        ),
+        (
+            {"ContentPolicyViolationErrorRetries": 2},
+            {
+                "message": "Your request was rejected as a result of our safety system",
+                "type": "invalid_request_error",
+                "code": "content_policy_violation",
+            },
+        ),
+    ],
+)
+async def test_router_retry_policy_400_retries_on_sibling_deployment(
+    monkeypatch: pytest.MonkeyPatch, retry_policy, upstream_error
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://rejecting.local/v1",
+                    "weight": 1,
+                },
+                "model_info": {"id": "rejecting"},
+            },
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://accepting.local/v1",
+                    "weight": 0,
+                },
+                "model_info": {"id": "accepting"},
+            },
+        ],
+        num_retries=2,
+        retry_policy=retry_policy,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        rejecting = respx_mock.post("https://rejecting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": upstream_error})
+        )
+        accepting = respx_mock.post("https://accepting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-lit-7036",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-5.6",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "hi back"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                },
+            )
+        )
+        response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert rejecting.call_count == 1
+    assert accepting.call_count == 1
+    assert response.choices[0].message.content == "hi back"
+    assert response._hidden_params["additional_headers"]["x-litellm-attempted-retries"] == 1
 
 
 def _make_failure_logging_obj():
