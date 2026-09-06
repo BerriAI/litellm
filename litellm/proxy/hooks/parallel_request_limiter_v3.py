@@ -1355,6 +1355,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             parent_otel_span=parent_otel_span,
             read_only=read_only,
         )
+        # Windowed RPM/TPM counters are incremented before the concurrency
+        # gauge. A request that never acquires a parallel slot must not keep
+        # those increments, otherwise rejected traffic burns RPM (#39309).
+        if (
+            not read_only
+            and gauge_response["overall_code"] == "OVER_LIMIT"
+            and keys_to_fetch
+        ):
+            await self._refund_windowed_increments(
+                keys_to_fetch=keys_to_fetch,
+                parent_otel_span=parent_otel_span,
+            )
         return RateLimitResponse(
             overall_code=gauge_response["overall_code"],
             statuses=[*windowed_response["statuses"], *gauge_response["statuses"]],
@@ -1864,6 +1876,50 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     verbose_proxy_logger.warning(
                         "Failed to refund %s on cross-descriptor rollback: %s", entry["counter_key"], e
                     )
+
+    async def _refund_windowed_increments(
+        self,
+        keys_to_fetch: list[str],
+        parent_otel_span: Span | None = None,
+    ) -> None:
+        """
+        Undo the +1 windowed request/token increments from this admission
+        attempt after max_parallel_requests rejects the call.
+        """
+        for i in range(0, len(keys_to_fetch), 2):
+            counter_key = keys_to_fetch[i + 1]
+            try:
+                current: CacheCounterValue | None = await self.internal_usage_cache.async_get_cache(
+                    key=counter_key,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
+                if current is None:
+                    continue
+                new_value = max(0, int(current) - 1)
+                await self.internal_usage_cache.async_set_cache(
+                    key=counter_key,
+                    value=new_value,
+                    ttl=self.window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
+                redis_cache = self.internal_usage_cache.dual_cache.redis_cache
+                if redis_cache is not None:
+                    try:
+                        await redis_cache.async_increment(key=counter_key, value=-1)
+                    except Exception as redis_err:  # noqa: BLE001
+                        verbose_proxy_logger.warning(
+                            "Failed to refund Redis windowed counter %s: %s",
+                            counter_key,
+                            redis_err,
+                        )
+            except Exception as e:  # noqa: BLE001
+                verbose_proxy_logger.warning(
+                    "Failed to refund windowed counter %s after parallel reject: %s",
+                    counter_key,
+                    e,
+                )
 
     def _build_atomic_response(
         self,
