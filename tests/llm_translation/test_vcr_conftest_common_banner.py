@@ -154,7 +154,7 @@ def test_banner_silent_when_below_high_water_and_no_failures(
 def test_banner_silent_when_vcr_disabled(
     monkeypatch, health_reset, patch_capacity_snapshot
 ):
-    monkeypatch.delenv("CASSETTE_REDIS_URL", raising=False)
+    monkeypatch.setenv("LITELLM_VCR_DISABLE", "1")
     _cache_health["save_failures"] = 5
     _cache_health["save_failure_last_error"] = "OutOfMemoryError: foo"
     patch_capacity_snapshot(
