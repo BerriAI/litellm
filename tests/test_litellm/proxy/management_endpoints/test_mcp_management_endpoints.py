@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     UpdateMCPServerRequest,
     UserAPIKeyAuth,
 )
+from litellm.repositories.config_repository import SettingsApplied
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -7121,3 +7122,80 @@ class TestImportMCPServers:
 
         assert [entry.name for entry in result.imported] == ["new-server"]
         mock_manager.reload_servers_from_database.assert_awaited_once()
+
+
+class _StoredLitellmSettings:
+    """Stands in for the persisted `litellm_settings` row the publish path
+    read-modify-writes under its advisory lock."""
+
+    def __init__(self, stored=None):
+        self.stored_litellm_settings = dict(stored or {})
+
+    async def update_litellm_settings(self, apply):
+        result = apply(dict(self.stored_litellm_settings))
+        if isinstance(result, SettingsApplied):
+            self.stored_litellm_settings = dict(result.settings)
+        return result
+
+
+class TestMakeMCPServersPublic:
+    """The MCP publish persists one `litellm_settings` key, so it must neither lose a
+    sibling AI Hub key nor leave the in-memory value stale."""
+
+    @pytest.mark.asyncio
+    async def test_publish_keeps_the_published_agents_and_model_groups(self, monkeypatch):
+        import litellm
+        from litellm.proxy._types import MakeMCPServersPublicRequest
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            make_mcp_servers_public,
+        )
+
+        proxy_config = _StoredLitellmSettings(
+            stored={"public_agent_groups": ["agent-1"], "public_model_groups": ["gpt-5.6"]}
+        )
+        manager = MagicMock()
+        manager.get_mcp_server_by_id = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", proxy_config)
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        )
+        monkeypatch.setattr(litellm, "public_mcp_servers", None)
+
+        result = await make_mcp_servers_public(
+            request=MakeMCPServersPublicRequest(mcp_server_ids=["mcp-1"]),
+            user_api_key_dict=generate_mock_user_api_key_auth(),
+        )
+
+        assert result["public_mcp_servers"] == ["mcp-1"]
+        assert litellm.public_mcp_servers == ["mcp-1"]
+        assert proxy_config.stored_litellm_settings == {
+            "public_agent_groups": ["agent-1"],
+            "public_model_groups": ["gpt-5.6"],
+            "public_mcp_servers": ["mcp-1"],
+        }
+
+    @pytest.mark.asyncio
+    async def test_unknown_server_is_rejected_before_anything_is_persisted(self, monkeypatch):
+        from litellm.proxy._types import MakeMCPServersPublicRequest
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            make_mcp_servers_public,
+        )
+
+        proxy_config = _StoredLitellmSettings(stored={"public_agent_groups": ["agent-1"]})
+        manager = MagicMock()
+        manager.get_mcp_server_by_id = MagicMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", proxy_config)
+        monkeypatch.setattr(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await make_mcp_servers_public(
+                request=MakeMCPServersPublicRequest(mcp_server_ids=["missing"]),
+                user_api_key_dict=generate_mock_user_api_key_auth(),
+            )
+
+        assert exc_info.value.status_code == 404
+        assert proxy_config.stored_litellm_settings == {"public_agent_groups": ["agent-1"]}

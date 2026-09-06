@@ -11,7 +11,12 @@ import copy
 import json
 import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, cast
+
+from pydantic import TypeAdapter
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -45,9 +50,92 @@ class _ConfigDb(Protocol):
     def litellm_config(self) -> _ConfigTable: ...
 
 
+class _ConfigTx(Protocol):
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
+
+    @property
+    def litellm_config(self) -> _ConfigTable: ...
+
+
+class _ConfigTxManager(Protocol):
+    async def __aenter__(self) -> _ConfigTx: ...
+
+    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+
+
 class _PrismaHandle(Protocol):
     @property
     def db(self) -> _ConfigDb: ...
+
+    def tx(self) -> _ConfigTxManager: ...
+
+
+LITELLM_SETTINGS_PARAM: Final = "litellm_settings"
+
+_CONFIG_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS NULL AS locked"
+
+_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+_STRING_LIST_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+@dataclass(frozen=True, slots=True)
+class SettingsApplied:
+    settings: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class SettingsRejected:
+    reason: str
+
+
+SettingsUpdate = SettingsApplied | SettingsRejected
+
+
+class SettingsTransform(Protocol):
+    def __call__(self, settings: Mapping[str, object], /) -> SettingsUpdate: ...
+
+
+_EMPTY_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def decode_settings(param_value: object) -> Mapping[str, object]:
+    decoded: Final[object] = json.loads(param_value) if isinstance(param_value, str) else param_value
+    if decoded is None:
+        return _EMPTY_SETTINGS
+    return _SETTINGS_ADAPTER.validate_python(decoded)
+
+
+def encode_settings(settings: Mapping[str, object]) -> str:
+    return json.dumps(dict(settings))
+
+
+def plain_settings(settings: Mapping[str, object]) -> dict[str, object]:
+    return {key: _plain_value(value) for key, value in settings.items()}
+
+
+def _plain_value(value: object) -> object:
+    if isinstance(value, tuple):
+        return list(_ITEMS_ADAPTER.validate_python(value))
+    return value
+
+
+async def _upsert_param(table: _ConfigTable, param_name: str, value_json: str) -> None:
+    await table.upsert(
+        where={"param_name": param_name},
+        data={
+            "create": {"param_name": param_name, "param_value": value_json},
+            "update": {"param_value": value_json},
+        },
+    )
+
+
+def public_hub_list(settings: Mapping[str, object], key: str, fallback: Sequence[str]) -> tuple[str, ...]:
+    stored: Final = settings.get(key)
+    if stored is None:
+        return tuple(fallback)
+    return _STRING_LIST_ADAPTER.validate_python(stored)
 
 
 class ConfigParam:
@@ -98,14 +186,26 @@ class ConfigRepository:
     async def set_param(self, param_name: str, param_value: object) -> ConfigParam:
         """Set a config parameter in the database."""
         value_json: Final = json.dumps(param_value) if not isinstance(param_value, str) else param_value
-        await self._config_table.upsert(
-            where={"param_name": param_name},
-            data={
-                "create": {"param_name": param_name, "param_value": value_json},
-                "update": {"param_value": value_json},
-            },
-        )
+        await _upsert_param(self._config_table, param_name, value_json)
         return ConfigParam(param_name=param_name, param_value=param_value)
+
+    async def update_litellm_settings(self, apply: SettingsTransform) -> SettingsUpdate:
+        """Serialize concurrent writers with an advisory lock rather than ``SELECT ... FOR UPDATE``,
+        since the row does not exist yet on a fresh database and so cannot be row-locked."""
+        async with self.prisma_client.tx() as tx:
+            await tx.query_raw(_CONFIG_ADVISORY_LOCK_SQL, LITELLM_SETTINGS_PARAM)
+
+            record: Final = await tx.litellm_config.find_unique(where={"param_name": LITELLM_SETTINGS_PARAM})
+            current: Final = decode_settings(record.param_value if record is not None else None)
+
+            result: Final = apply(current)
+            match result:
+                case SettingsRejected():
+                    return result
+                case SettingsApplied(settings=settings):
+                    await _upsert_param(tx.litellm_config, LITELLM_SETTINGS_PARAM, encode_settings(settings))
+                    return result
+        assert_never(result)
 
     async def delete_param(self, param_name: str) -> bool:
         """Delete a config parameter from the database."""
