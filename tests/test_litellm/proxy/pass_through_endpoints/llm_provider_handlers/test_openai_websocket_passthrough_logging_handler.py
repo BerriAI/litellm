@@ -243,7 +243,8 @@ def test_the_price_of_a_multi_model_connection_reaches_the_spend_row():
     """
     The logging layer prices whatever result it is handed, and one result can
     only name one model, so a connection that ran two models has to carry the
-    price it already worked out or the cheaper model pays for both turns.
+    price it already worked out or the cheaper model pays for both turns. The
+    row it lands in names the model the connection opened on.
     """
     handled = _handle(
         [
@@ -267,3 +268,23 @@ def test_the_price_of_a_multi_model_connection_reaches_the_spend_row():
     )
     assert logged_cost == pytest.approx(handled["kwargs"]["response_cost"])
     assert logged_cost > priced_on_the_session_model
+    assert handled["kwargs"]["model"] == RESPONSES_MODEL
+
+
+def test_a_turn_the_caller_walked_out_of_still_names_the_model_it_ran():
+    """
+    A client that closes before response.completed leaves no usage behind to
+    bill, but response.created already named the model, so the row says which
+    model answered instead of falling back to unknown.
+    """
+    logging_obj = _logging_obj()
+
+    handled = _handle(
+        [{"type": "response.created", "response": {"id": "resp_lit7014", "model": REASONING_MODEL}}],
+        logging_obj=logging_obj,
+        url_route="/openai_passthrough/v1/responses",
+    )
+
+    assert handled["result"] is None
+    assert handled["kwargs"] == {"model": REASONING_MODEL, "custom_llm_provider": "openai"}
+    assert logging_obj.model_call_details["model"] == REASONING_MODEL

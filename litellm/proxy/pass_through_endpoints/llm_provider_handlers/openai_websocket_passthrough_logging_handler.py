@@ -20,9 +20,12 @@ WebsocketMessages: TypeAlias = Sequence[Mapping[str, object]]
 OPENAI_WEBSOCKET_PROVIDER: Final = LlmProviders.OPENAI.value
 
 _SESSION_CREATED: Final = "session.created"
+_RESPONSE_CREATED: Final = "response.created"
 _REALTIME_RESPONSE_DONE: Final = "response.done"
 _RESPONSES_COMPLETED: Final = "response.completed"
-_MODEL_NAMING_EVENTS: Final = frozenset({_SESSION_CREATED, _REALTIME_RESPONSE_DONE, _RESPONSES_COMPLETED})
+_MODEL_NAMING_EVENTS: Final = frozenset(
+    {_SESSION_CREATED, _RESPONSE_CREATED, _REALTIME_RESPONSE_DONE, _RESPONSES_COMPLETED}
+)
 _RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
 
 
