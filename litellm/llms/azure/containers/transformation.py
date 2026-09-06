@@ -28,6 +28,7 @@ class AzureContainerConfig(OpenAIContainerConfig):
         self,
         headers: dict,
         api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
         return BaseAzureLLM._base_validate_azure_environment(
             headers=headers,

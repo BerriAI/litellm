@@ -13,17 +13,25 @@ import litellm
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.openai.common_utils import BaseOpenAILLM, OpenAIError
+from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
+from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.llms.openai.openai import OpenAIChatCompletion
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
+from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
+from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.llms.openai.workload_identity import (
     OpenAIWorkloadIdentityConfig,
     _workload_identity_auth,
     build_async_openai_client,
     build_openai_client,
     get_workload_identity_bearer_token,
+    resolve_openai_bearer_token,
     resolve_openai_workload_identity_config,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
 TOKEN_EXCHANGE_URL: Final = "https://auth.openai.com/oauth/token"
 CHAT_COMPLETIONS_URL: Final = "https://api.openai.com/v1/chat/completions"
@@ -394,9 +402,30 @@ class TestResolveConfigFromDeployment:
         )
         assert config == wif_env
 
-    def test_partial_litellm_params_without_env_disable(self, deployment_wif: dict[str, str]) -> None:
+    @pytest.mark.parametrize("missing_key", sorted(OPENAI_WIF_KWARGS_KEYS))
+    def test_partial_litellm_params_without_env_raise_naming_the_missing_field(
+        self, deployment_wif: dict[str, str], missing_key: str
+    ) -> None:
+        partial: Final = {key: value for key, value in deployment_wif.items() if key != missing_key}
+        with pytest.raises(OpenAIError) as error:
+            resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=partial)
+        assert error.value.status_code == 500
+        assert f"missing {missing_key}." in error.value.message
+        assert all(key not in error.value.message.split(".")[0] for key in partial)
+
+    def test_partial_litellm_params_never_fall_back_to_the_process_key(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
         partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
-        assert resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=partial) is None
+        with pytest.raises(OpenAIError, match="missing openai_identity_token_file"):
+            resolve_openai_workload_identity_config(api_key="sk-from-env", api_base=None, litellm_params=partial)
+
+    def test_partial_litellm_params_yield_to_the_deployments_own_key(self, deployment_wif: dict[str, str]) -> None:
+        partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
+        assert (
+            resolve_openai_workload_identity_config(api_key="sk-static", api_base=None, litellm_params=partial) is None
+        )
 
     def test_static_api_key_beats_litellm_params(self, deployment_wif: dict[str, str]) -> None:
         assert (
@@ -516,17 +545,49 @@ class TestDeploymentClientConstruction:
         caller_transport: Final = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(418)))
 
         federated: Final = build_openai_client(
-            api_key=None, api_base=None, litellm_params=deployment_wif, static_key_http_client=caller_transport
+            api_key=None,
+            api_base=None,
+            litellm_params=deployment_wif,
+            static_key_http_client_factory=lambda: caller_transport,
         )
         federated.models.list()
         static: Final = build_openai_client(
-            api_key="sk-static", api_base=None, litellm_params=None, static_key_http_client=caller_transport
+            api_key="sk-static",
+            api_base=None,
+            litellm_params=None,
+            static_key_http_client_factory=lambda: caller_transport,
         )
         with pytest.raises(APIStatusError) as static_error:
             static.models.list()
 
         assert models_route.calls.last.request.headers["Authorization"] == "Bearer process-transport-bearer"
         assert static_error.value.status_code == 418
+
+    def test_federated_builders_never_call_the_static_key_client_factory(self, deployment_wif: dict[str, str]) -> None:
+        def factory_that_must_stay_cold() -> httpx.Client | None:
+            raise AssertionError("static-key http client built on the federated path")
+
+        async def async_factory_that_must_stay_cold() -> httpx.AsyncClient | None:
+            raise AssertionError("static-key async http client built on the federated path")
+
+        assert isinstance(
+            build_openai_client(
+                api_key=None,
+                api_base=None,
+                litellm_params=deployment_wif,
+                static_key_http_client_factory=factory_that_must_stay_cold,
+            ),
+            OpenAI,
+        )
+        assert isinstance(
+            build_async_openai_client(
+                api_key=None,
+                api_base=None,
+                litellm_params=deployment_wif,
+                static_key_http_client_factory=async_factory_that_must_stay_cold,
+            ),
+            AsyncOpenAI,
+        )
 
     @respx.mock
     @pytest.mark.asyncio
@@ -642,6 +703,133 @@ class TestResponsesValidateEnvironmentFromDeployment:
             litellm_params=GenericLiteLLMParams(api_key="sk-responses", **deployment_wif),
         )
         assert headers["Authorization"] == "Bearer sk-responses"
+
+
+class TestResolveBearerToken:
+    @respx.mock
+    def test_keyless_deployment_mints_the_exchanged_bearer(self, deployment_wif: dict[str, str]) -> None:
+        exchange: Final = mock_token_exchange("resolved-bearer")
+        assert (
+            resolve_openai_bearer_token(api_key=None, api_base=None, litellm_params=deployment_wif) == "resolved-bearer"
+        )
+        assert exchange.call_count == 1
+
+    @respx.mock
+    def test_deployment_key_wins_without_an_exchange(self, deployment_wif: dict[str, str]) -> None:
+        exchange: Final = mock_token_exchange()
+        assert (
+            resolve_openai_bearer_token(api_key="sk-static", api_base=None, litellm_params=deployment_wif)
+            == "sk-static"
+        )
+        assert exchange.call_count == 0
+
+    @respx.mock
+    def test_deployment_identity_beats_the_process_wide_key(
+        self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        mock_token_exchange("outranking-bearer")
+        assert (
+            resolve_openai_bearer_token(api_key=None, api_base=None, litellm_params=deployment_wif)
+            == "outranking-bearer"
+        )
+
+    def test_process_wide_key_serves_deployments_without_identity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        assert (
+            resolve_openai_bearer_token(api_key=None, api_base=None, litellm_params={"model": "gpt-5.6"})
+            == "sk-from-env"
+        )
+
+    def test_nothing_configured_resolves_to_none(self, deployment_wif: dict[str, str]) -> None:
+        assert resolve_openai_bearer_token(api_key=None, api_base=None, litellm_params=None) is None
+
+
+HeadersFromParams = Callable[[GenericLiteLLMParams], dict]
+HTTP_HANDLER_VALIDATORS: Final[tuple[tuple[str, HeadersFromParams], ...]] = (
+    (
+        "image_edit",
+        lambda params: OpenAIImageEditConfig().validate_environment(
+            headers={},
+            model="gpt-image-2",
+            api_key=params.api_key,
+            litellm_params=dict(params),
+            api_base=params.api_base,
+        ),
+    ),
+    ("vector_stores", lambda params: OpenAIVectorStoreConfig().validate_environment(headers={}, litellm_params=params)),
+    (
+        "vector_store_files",
+        lambda params: OpenAIVectorStoreFilesConfig().validate_environment(headers={}, litellm_params=params),
+    ),
+    (
+        "videos",
+        lambda params: OpenAIVideoConfig().validate_environment(
+            headers={}, model="sora-2", api_key=params.api_key, litellm_params=params
+        ),
+    ),
+    (
+        "containers",
+        lambda params: OpenAIContainerConfig().validate_environment(
+            headers={}, api_key=params.api_key, litellm_params=params
+        ),
+    ),
+    ("evals", lambda params: OpenAIEvalsConfig().validate_environment(headers={}, litellm_params=params)),
+)
+
+
+@pytest.mark.parametrize(
+    ("surface", "headers_from"), HTTP_HANDLER_VALIDATORS, ids=[name for name, _ in HTTP_HANDLER_VALIDATORS]
+)
+class TestHttpHandlersHonorDeploymentIdentity:
+    @respx.mock
+    def test_keyless_deployment_mints_the_exchanged_bearer(
+        self, deployment_wif: dict[str, str], surface: str, headers_from: HeadersFromParams
+    ) -> None:
+        exchange: Final = mock_token_exchange(f"{surface}-bearer")
+        headers: Final = headers_from(GenericLiteLLMParams(**deployment_wif))
+        assert headers["Authorization"] == f"Bearer {surface}-bearer"
+        assert exchange.call_count == 1
+
+    @respx.mock
+    def test_deployment_key_wins_without_an_exchange(
+        self, deployment_wif: dict[str, str], surface: str, headers_from: HeadersFromParams
+    ) -> None:
+        exchange: Final = mock_token_exchange()
+        headers: Final = headers_from(GenericLiteLLMParams(api_key=f"sk-{surface}", **deployment_wif))
+        assert headers["Authorization"] == f"Bearer sk-{surface}"
+        assert exchange.call_count == 0
+
+    @respx.mock
+    def test_deployment_identity_beats_the_process_wide_key(
+        self,
+        deployment_wif: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        surface: str,
+        headers_from: HeadersFromParams,
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        mock_token_exchange(f"{surface}-outranks-env")
+        headers: Final = headers_from(GenericLiteLLMParams(**deployment_wif))
+        assert headers["Authorization"] == f"Bearer {surface}-outranks-env"
+
+    def test_process_wide_key_still_serves_deployments_without_identity(
+        self,
+        deployment_wif: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+        surface: str,
+        headers_from: HeadersFromParams,
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+        headers: Final = headers_from(GenericLiteLLMParams())
+        assert headers["Authorization"] == "Bearer sk-from-env"
+
+    def test_partial_deployment_identity_fails_loudly(
+        self, deployment_wif: dict[str, str], surface: str, headers_from: HeadersFromParams
+    ) -> None:
+        partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_service_account_id"}
+        with pytest.raises(OpenAIError, match="missing openai_service_account_id"):
+            headers_from(GenericLiteLLMParams(**partial))
 
 
 class TestDiscoverModels:

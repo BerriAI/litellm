@@ -22,6 +22,11 @@ if TYPE_CHECKING:
     from openai.auth import SubjectTokenProvider, WorkloadIdentity, WorkloadIdentityAuth
 
 OPENAI_WIF_CLIENT_ID: Final = "litellm"
+_IDENTITY_PARAM_ENV_NAMES: Final = (
+    ("openai_identity_provider_id", "OPENAI_IDENTITY_PROVIDER_ID"),
+    ("openai_service_account_id", "OPENAI_SERVICE_ACCOUNT_ID"),
+    ("openai_identity_token_file", "OPENAI_IDENTITY_TOKEN_FILE"),
+)
 _SDK_UPGRADE_MESSAGE: Final = (
     "OpenAI workload identity federation requires openai>=2.32.0. "
     "Upgrade the installed openai package to use OPENAI_IDENTITY_PROVIDER_ID / "
@@ -61,12 +66,12 @@ def resolve_openai_workload_identity_config(
     )
     if not _targets_openai_api(effective_api_base):
         return None
-    identity_provider_id: Final = _config_value(
-        litellm_params, "openai_identity_provider_id", "OPENAI_IDENTITY_PROVIDER_ID"
+    identity_provider_id, service_account_id, token_file = (
+        _config_value(litellm_params, param_key, env_name) for param_key, env_name in _IDENTITY_PARAM_ENV_NAMES
     )
-    service_account_id: Final = _config_value(litellm_params, "openai_service_account_id", "OPENAI_SERVICE_ACCOUNT_ID")
-    token_file: Final = _config_value(litellm_params, "openai_identity_token_file", "OPENAI_IDENTITY_TOKEN_FILE")
     if identity_provider_id is None or service_account_id is None or token_file is None:
+        if _carries_deployment_identity(litellm_params):
+            raise OpenAIError(status_code=500, message=_incomplete_identity_message(litellm_params))
         return None
     return OpenAIWorkloadIdentityConfig(
         identity_provider_id=identity_provider_id,
@@ -79,11 +84,42 @@ def get_workload_identity_bearer_token(config: OpenAIWorkloadIdentityConfig) -> 
     return _workload_identity_auth(config).get_token()
 
 
+def resolve_openai_bearer_token(
+    api_key: str | None,
+    api_base: str | None,
+    litellm_params: Mapping[str, object] | None,
+) -> str | None:
+    static_api_key: Final = api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
+    workload_identity_config: Final = resolve_openai_workload_identity_config(
+        api_key=static_api_key, api_base=api_base, litellm_params=litellm_params
+    )
+    if workload_identity_config is None:
+        return static_api_key
+    return get_workload_identity_bearer_token(workload_identity_config)
+
+
 def _deployment_identity_outranks(static_api_key: str, litellm_params: Mapping[str, object] | None) -> bool:
+    return _carries_deployment_identity(litellm_params) and static_api_key in _process_wide_static_keys()
+
+
+def _carries_deployment_identity(litellm_params: Mapping[str, object] | None) -> bool:
     if litellm_params is None:
         return False
-    carries_identity: Final = any(_param_str(litellm_params, key) is not None for key in OPENAI_WIF_KWARGS_KEYS)
-    return carries_identity and static_api_key in _process_wide_static_keys()
+    return any(_param_str(litellm_params, key) is not None for key in OPENAI_WIF_KWARGS_KEYS)
+
+
+def _incomplete_identity_message(litellm_params: Mapping[str, object] | None) -> str:
+    missing: Final = ", ".join(
+        param_key
+        for param_key, env_name in _IDENTITY_PARAM_ENV_NAMES
+        if _config_value(litellm_params, param_key, env_name) is None
+    )
+    return (
+        f"OpenAI workload identity federation on this deployment is missing {missing}. "
+        "Set openai_identity_provider_id, openai_service_account_id, and openai_identity_token_file "
+        "on the deployment, or the OPENAI_IDENTITY_PROVIDER_ID / OPENAI_SERVICE_ACCOUNT_ID / "
+        "OPENAI_IDENTITY_TOKEN_FILE env vars they fall back to."
+    )
 
 
 def _process_wide_static_keys() -> frozenset[str]:
@@ -108,7 +144,7 @@ def build_openai_client(
     max_retries: int | None = None,
     organization: str | None = None,
     litellm_params: Mapping[str, object] | None = None,
-    static_key_http_client: httpx.Client | None = None,
+    static_key_http_client_factory: Callable[[], httpx.Client | None] | None = None,
 ) -> OpenAI:
     workload_identity_config: Final = resolve_openai_workload_identity_config(
         api_key=api_key, api_base=api_base, litellm_params=litellm_params
@@ -121,7 +157,7 @@ def build_openai_client(
             timeout=timeout,
             max_retries=retries,
             organization=organization,
-            http_client=static_key_http_client,
+            http_client=None if static_key_http_client_factory is None else static_key_http_client_factory(),
         )
     cache_params: Final = _client_cache_params(
         is_async=False,
@@ -161,7 +197,7 @@ def build_async_openai_client(
     max_retries: int | None = None,
     organization: str | None = None,
     litellm_params: Mapping[str, object] | None = None,
-    static_key_http_client: httpx.AsyncClient | None = None,
+    static_key_http_client_factory: Callable[[], httpx.AsyncClient | None] | None = None,
 ) -> AsyncOpenAI:
     workload_identity_config: Final = resolve_openai_workload_identity_config(
         api_key=api_key, api_base=api_base, litellm_params=litellm_params
@@ -174,7 +210,7 @@ def build_async_openai_client(
             timeout=timeout,
             max_retries=retries,
             organization=organization,
-            http_client=static_key_http_client,
+            http_client=None if static_key_http_client_factory is None else static_key_http_client_factory(),
         )
     cache_params: Final = _client_cache_params(
         is_async=True,
