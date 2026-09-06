@@ -13,8 +13,9 @@ This invariant has to be enforced here because CI cannot enforce it on itself.
 
 A job publishes its `name:` when it sets one and its job id otherwise. Two shapes
 expand that further. A name carrying `${{ ... }}` publishes one check run per
-matrix combination it reads, so two shard lists that overlap collide even though
-their templates read differently. Each expression is evaluated per combination
+combination the matrix produces, with each `include` row's values held together
+rather than crossed with the other rows', so two shard lists that overlap collide
+even though their templates read differently. Each expression is evaluated per combination
 over the pieces a job name can hold: string literals, `matrix.<key>`, `format()`,
 `==` and `!=`, and the `<cond> && <a> || <b>` idiom, which is how the shards
 reach their real `<shard> / Run tests` names rather than staying opaque. A job
@@ -40,12 +41,13 @@ from pydantic import BaseModel, Field, ValidationError
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent.parent
 WORKFLOWS_DIR: Final = REPO_ROOT / ".github" / "workflows"
 EXPRESSION: Final = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
-MATRIX_KEY: Final = re.compile(r"matrix\.(?P<key>[\w-]+)")
 MATRIX_REF: Final = re.compile(r"^matrix\.(?P<key>[\w-]+)$")
 LITERAL: Final = re.compile(r"^'(?P<text>[^']*)'$")
 FORMAT_CALL: Final = re.compile(r"^format\((?P<args>.*)\)$", re.DOTALL)
 COMPARISON: Final = re.compile(r"^(?P<left>.+?)\s*(?P<operator>==|!=)\s*(?P<right>.+)$", re.DOTALL)
 NO_MATRIX: Final[Mapping[str, str]] = MappingProxyType({})
+SCALAR: Final = (str, int, float)
+MATRIX_DIRECTIVES: Final = frozenset({"include", "exclude"})
 LOCAL_CALL_PREFIX: Final = "./"
 
 
@@ -89,23 +91,52 @@ def publishes_check_runs(raw_on: object) -> bool:
     return events(raw_on) != frozenset({"workflow_call"})
 
 
-def matrix_values(job: Job, key: str) -> tuple[str, ...]:
+def listed_values(matrix: Mapping[str, object]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return tuple(
+        (str(key), tuple(str(value) for value in values if isinstance(value, SCALAR)))
+        for key, values in matrix.items()
+        if str(key) not in MATRIX_DIRECTIVES and isinstance(values, Sequence) and not isinstance(values, str)
+    )
+
+
+def include_rows(matrix: Mapping[str, object]) -> tuple[Mapping[str, str], ...]:
+    rows: Final = matrix.get("include")
+    if not isinstance(rows, Sequence) or isinstance(rows, str):
+        return ()
+    return tuple(
+        MappingProxyType({str(key): str(value) for key, value in row.items() if isinstance(value, SCALAR)})
+        for row in rows
+        if isinstance(row, Mapping)
+    )
+
+
+def extends(row: Mapping[str, str], combination: Mapping[str, str]) -> bool:
+    """GitHub folds an `include` row into a combination only where it overwrites no listed value."""
+    return all(combination[key] == value for key, value in row.items() if key in combination)
+
+
+def extended(combination: Mapping[str, str], rows: Sequence[Mapping[str, str]]) -> Mapping[str, str]:
+    additions: Final = {key: value for row in rows if extends(row, combination) for key, value in row.items()}
+    return MappingProxyType({**combination, **additions})
+
+
+def matrix_combinations(job: Job) -> tuple[Mapping[str, str], ...]:
+    """One mapping per job the matrix produces, each `include` row's values staying together."""
     matrix: Final = job.strategy.get("matrix")
     if not isinstance(matrix, Mapping):
         return ()
-    listed: Final = matrix.get(key)
-    rows: Final = matrix.get("include")
-    from_list: Final = (
-        tuple(str(value) for value in listed if isinstance(value, (str, int, float)))
-        if isinstance(listed, Sequence) and not isinstance(listed, str)
+    listed: Final = listed_values(matrix)
+    rows: Final = include_rows(matrix)
+    crossed: Final = (
+        tuple(
+            MappingProxyType(dict(zip((key for key, _ in listed), values)))
+            for values in itertools.product(*(values for _, values in listed))
+        )
+        if listed
         else ()
     )
-    from_rows: Final = (
-        tuple(str(row[key]) for row in rows if isinstance(row, Mapping) and isinstance(row.get(key), (str, int, float)))
-        if isinstance(rows, Sequence) and not isinstance(rows, str)
-        else ()
-    )
-    return tuple(dict.fromkeys(from_list + from_rows))
+    standalone: Final = tuple(row for row in rows if not any(extends(row, combination) for combination in crossed))
+    return (*(extended(combination, rows) for combination in crossed), *standalone)
 
 
 def scanned(state: tuple[int, bool], char: str) -> tuple[int, bool]:
@@ -178,16 +209,10 @@ def rendered(template: str, values: Mapping[str, str]) -> str:
 
 
 def expand(template: str, job: Job) -> tuple[str, ...]:
-    keys: Final = tuple(dict.fromkeys(ref.group("key") for ref in MATRIX_KEY.finditer(template)))
-    resolvable: Final = tuple((key, values) for key in keys if (values := matrix_values(job, key)))
-    if not resolvable:
+    combinations: Final = matrix_combinations(job)
+    if not combinations:
         return (rendered(template, NO_MATRIX),)
-    return tuple(
-        dict.fromkeys(
-            rendered(template, dict(zip((key for key, _ in resolvable), combination)))
-            for combination in itertools.product(*(values for _, values in resolvable))
-        )
-    )
+    return tuple(dict.fromkeys(rendered(template, values) for values in combinations))
 
 
 def callee_path(job: Job) -> str | None:

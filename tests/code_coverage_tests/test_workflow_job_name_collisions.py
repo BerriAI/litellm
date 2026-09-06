@@ -27,6 +27,33 @@ jobs:
 """
 
 
+CORRELATED_ROWS: Final = """on: pull_request
+jobs:
+  unit:
+    name: ${{ matrix.shard }} on ${{ matrix.test-path }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - shard: core-utils
+            test-path: tests/core
+          - shard: proxy
+            test-path: tests/proxy
+"""
+
+LISTED_PLUS_ROW: Final = """on: pull_request
+jobs:
+  unit:
+    name: ${{ matrix.python-version }} ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+        include:
+          - label: fast
+"""
+
+
 def test_every_workflow_in_the_repo_publishes_a_unique_check_run_name() -> None:
     assert collisions(workflow_sources()) == ()
 
@@ -258,6 +285,25 @@ def test_a_conditional_reusable_name_collides_with_a_plain_job_publishing_the_sa
 
     assert len(found) == 1
     assert "`core-utils / Run tests` is published by 2 jobs" in found[0]
+
+
+def test_a_name_reading_two_matrix_keys_publishes_only_the_pairs_each_include_row_holds() -> None:
+    names: Final = frozenset(name for name, _ in published({"unit.yml": CORRELATED_ROWS}))
+
+    assert names == frozenset({"core-utils on tests/core", "proxy on tests/proxy"})
+
+
+def test_a_name_reading_two_matrix_keys_never_publishes_a_pair_no_include_row_holds() -> None:
+    names: Final = frozenset(name for name, _ in published({"unit.yml": CORRELATED_ROWS}))
+
+    assert "core-utils on tests/proxy" not in names
+    assert "proxy on tests/core" not in names
+
+
+def test_an_include_row_carrying_no_listed_key_extends_every_listed_combination() -> None:
+    names: Final = frozenset(name for name, _ in published({"unit.yml": LISTED_PLUS_ROW}))
+
+    assert names == frozenset({"3.12 fast", "3.13 fast"})
 
 
 def test_every_workflow_in_the_repo_resolves_every_expression_in_its_job_names() -> None:
