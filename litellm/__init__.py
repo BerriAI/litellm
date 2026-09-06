@@ -492,6 +492,7 @@ disable_copilot_system_to_assistant: bool = False  # If false (default), convert
 public_mcp_servers: Optional[List[str]] = None
 public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
+public_skills_index: bool = False
 public_agent_groups: Optional[List[str]] = None
 agent_search_embedding_model: Optional[str] = None
 mcp_tool_search: Optional[Mapping[str, object]] = None

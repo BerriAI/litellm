@@ -5065,6 +5065,47 @@
             "anthropic_skills"
           ]
         }
+      },
+      "/v1/skills/{skill_id}/archive": {
+        "get": {
+          "description": "Stored skill upload, repacked so SKILL.md sits at the archive root.",
+          "operationId": "agent_skills_archive_v1_skills__skill_id__archive_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "skill_id",
+              "required": true,
+              "schema": {
+                "title": "Skill Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Agent Skills Archive",
+          "tags": [
+            "anthropic_skills"
+          ]
+        }
       }
     }
   },
