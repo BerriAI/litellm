@@ -1,4 +1,4 @@
-import { test, expect, type Browser, type Page as PlaywrightPage } from "@playwright/test";
+import { test, expect, type Browser, type BrowserContext, type Page as PlaywrightPage } from "@playwright/test";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
 import { CHAT_MODEL_A, MOCK_RESPONSE_TEXT, masterKey } from "../../helpers/traffic";
@@ -17,7 +17,7 @@ async function sessionKey(page: PlaywrightPage): Promise<string> {
   return payload.key!;
 }
 
-async function signIn(browser: Browser, email: string): Promise<PlaywrightPage> {
+async function signIn(browser: Browser, email: string): Promise<BrowserContext> {
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const page = await context.newPage();
   await page.goto("/ui/login");
@@ -26,7 +26,7 @@ async function signIn(browser: Browser, email: string): Promise<PlaywrightPage> 
   await page.getByRole("button", { name: "Login", exact: true }).click();
   await expect(page.locator("a", { hasText: "Virtual Keys" })).toBeVisible({ timeout: 30_000 });
   await dismissFeedbackPopup(page);
-  return page;
+  return context;
 }
 
 test.describe("Team Admin - Member permissions", () => {
@@ -36,7 +36,7 @@ test.describe("Team Admin - Member permissions", () => {
     browser,
     request,
   }) => {
-    const stamp = Date.now();
+    const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const adminId = `e2e-perm-admin-${stamp}`;
     const memberId = `e2e-perm-member-${stamp}`;
     const adminEmail = `${adminId}@test.local`;
@@ -56,27 +56,30 @@ test.describe("Team Admin - Member permissions", () => {
       expect(password.ok(), `POST /user/update for ${userId} (${password.status()})`).toBe(true);
     };
 
-    await createUser(adminId, adminEmail);
-    await createUser(memberId, memberEmail);
-
-    // /team/member_add refuses role="admin" without an enterprise license, so /team/new seeds both roles.
-    const teamRes = await request.post("/team/new", {
-      headers: auth(),
-      data: {
-        team_alias: teamAlias,
-        models: [CHAT_MODEL_A],
-        members_with_roles: [
-          { user_id: adminId, role: "admin" },
-          { user_id: memberId, role: "user" },
-        ],
-      },
-    });
-    expect(teamRes.ok(), `POST /team/new failed (${teamRes.status()}): ${await teamRes.text()}`).toBe(true);
-    const teamId = (await teamRes.json()).team_id as string;
-
+    let teamId = "";
     const createdKeys: string[] = [];
+    const contexts: BrowserContext[] = [];
     try {
-      const memberPage = await signIn(browser, memberEmail);
+      await createUser(adminId, adminEmail);
+      await createUser(memberId, memberEmail);
+
+      const teamRes = await request.post("/team/new", {
+        headers: auth(),
+        data: {
+          team_alias: teamAlias,
+          models: [CHAT_MODEL_A],
+          members_with_roles: [
+            { user_id: adminId, role: "admin" },
+            { user_id: memberId, role: "user" },
+          ],
+        },
+      });
+      expect(teamRes.ok(), `POST /team/new failed (${teamRes.status()}): ${await teamRes.text()}`).toBe(true);
+      teamId = (await teamRes.json()).team_id as string;
+
+      const memberContext = await signIn(browser, memberEmail);
+      contexts.push(memberContext);
+      const memberPage = memberContext.pages()[0];
       const memberSessionKey = await sessionKey(memberPage);
 
       const refused = await memberPage.request.post("/key/generate", {
@@ -86,7 +89,9 @@ test.describe("Team Admin - Member permissions", () => {
       expect(refused.status(), "a plain member cannot mint a team key before the grant").toBe(401);
       expect(await refused.text()).toContain("/key/generate");
 
-      const adminPage = await signIn(browser, adminEmail);
+      const adminContext = await signIn(browser, adminEmail);
+      contexts.push(adminContext);
+      const adminPage = adminContext.pages()[0];
       await navigateToPage(adminPage, Page.Teams);
       await clickTeamId(adminPage, teamId);
       await adminPage.getByRole("tab", { name: "Member Permissions" }).click();
@@ -157,10 +162,15 @@ test.describe("Team Admin - Member permissions", () => {
       expect(served.status(), "the delegated key is a real key the gateway serves").toBe(200);
       expect((await served.json()).choices?.[0]?.message?.content).toContain(MOCK_RESPONSE_TEXT);
     } finally {
+      for (const context of contexts) {
+        await context.close();
+      }
       for (const key of createdKeys) {
         await request.post("/key/delete", { headers: auth(), data: { keys: [key] } });
       }
-      await request.post("/team/delete", { headers: auth(), data: { team_ids: [teamId] } });
+      if (teamId) {
+        await request.post("/team/delete", { headers: auth(), data: { team_ids: [teamId] } });
+      }
       await request.post("/user/delete", { headers: auth(), data: { user_ids: [adminId, memberId] } });
     }
   });

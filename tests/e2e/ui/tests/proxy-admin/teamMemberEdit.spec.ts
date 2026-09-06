@@ -53,7 +53,7 @@ test.describe("Proxy Admin - Team member edit", () => {
   });
 
   test("Editing a member's role and per-member budget persists and survives a reload", async ({ page, request }) => {
-    const stamp = Date.now();
+    const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const memberId = `e2e-member-edit-${stamp}`;
     const teamAlias = `e2e-member-edit-team-${stamp}`;
 
@@ -64,7 +64,6 @@ test.describe("Proxy Admin - Team member edit", () => {
     });
     expect(created.ok(), `POST /user/new failed (${created.status()}): ${await created.text()}`).toBe(true);
 
-    // /team/member_update refuses role="admin" without an enterprise license, so the UI edit demotes.
     const teamRes = await request.post("/team/new", {
       headers: auth(),
       data: {

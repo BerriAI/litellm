@@ -40,7 +40,7 @@ test.describe("Proxy Admin - Team guardrail removal", () => {
   }) => {
     test.skip(!proxyIsPremium(), "proxy under test is unlicensed, so team guardrails are premium-gated");
 
-    const stamp = Date.now();
+    const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const guardrailName = `e2e-team-guardrail-${stamp}`;
     const bannedKeyword = `e2eteamban${stamp}`;
     const teamAlias = `e2e-guardrail-team-${stamp}`;
