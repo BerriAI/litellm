@@ -6,6 +6,7 @@ routes are unauthenticated and stay off until ``litellm_settings.public_skills_i
 is enabled, which publishes every stored skill to anyone who can reach the proxy.
 """
 
+import asyncio
 import re
 from collections.abc import Sequence
 from itertools import groupby
@@ -17,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.models.skills import LiteLLM_SkillsTable
 from litellm.proxy.discovery_endpoints.agent_skills_archive import SkillArchive, build_skill_archive
 from litellm.types.proxy.discovery_endpoints.agent_skills_endpoints import (
@@ -27,11 +29,26 @@ from litellm.types.proxy.discovery_endpoints.agent_skills_endpoints import (
 )
 
 MAX_INDEXED_SKILLS: Final = 1000
+MAX_CACHED_ARCHIVES: Final = 128
+MAX_CACHED_ARCHIVE_BYTES: Final = 512 * 1024
+ARCHIVE_CACHE_TTL_SECONDS: Final = 3600
+
+_ARCHIVE_CACHE: Final = InMemoryCache(
+    max_size_in_memory=MAX_CACHED_ARCHIVES,
+    default_ttl=ARCHIVE_CACHE_TTL_SECONDS,
+    max_size_per_item=MAX_CACHED_ARCHIVE_BYTES // 1024,
+)
 
 _NON_SLUG_PATTERN: Final = re.compile(r"[^a-z0-9]+")
 _FALLBACK_SKILL_NAME: Final = "skill"
 
 router: Final = APIRouter(tags=["public", "skills"])  # mutable-ok: fastapi types tags as list[str | Enum]
+
+
+class ZipArchiveResponse(Response):
+    """Response whose OpenAPI entry declares an application/zip download rather than JSON."""
+
+    media_type = "application/zip"
 
 
 def ensure_index_enabled() -> None:
@@ -72,11 +89,7 @@ async def agent_skills_index(
     """Agent Skills v0.2.0 discovery index over every skill stored on this proxy."""
     from litellm.proxy.utils import get_custom_url
 
-    installable: Final = tuple(
-        (skill, archive)
-        for skill, archive in ((skill, _archive_for(skill)) for skill in reversed(skills))
-        if archive is not None
-    )
+    installable: Final = await _installable(skills)
     names: Final = _deduplicated(tuple(_base_name(skill, archive) for skill, archive in installable))
 
     return AgentSkillsIndex(
@@ -99,34 +112,50 @@ async def agent_skills_index(
 @router.get(
     "/v1/skills/{skill_id}/archive",
     dependencies=(Depends(ensure_index_enabled),),
+    response_class=ZipArchiveResponse,
 )
 async def agent_skills_archive(
     skill_id: str,
     skill: LiteLLM_SkillsTable | None = Depends(stored_skill),
-) -> Response:
+) -> ZipArchiveResponse:
     """Stored skill upload, repacked so SKILL.md sits at the archive root."""
-    archive: Final = _archive_for(skill) if skill is not None else None
+    archive: Final = await _archive_for(skill) if skill is not None else None
     if archive is None:
         raise HTTPException(status_code=404, detail=f"No installable skill archive for: {skill_id}")
 
-    return Response(
+    return ZipArchiveResponse(
         content=archive.content,
-        media_type="application/zip",
         headers=MappingProxyType({"Content-Disposition": f'attachment; filename="{skill_id}.zip"'}),
     )
 
 
-def _archive_for(skill: LiteLLM_SkillsTable) -> SkillArchive | None:
+async def _installable(
+    skills: Sequence[LiteLLM_SkillsTable],
+) -> tuple[tuple[LiteLLM_SkillsTable, SkillArchive], ...]:
+    built: Final = tuple([(skill, await _archive_for(skill)) for skill in reversed(skills)])
+    return tuple((skill, archive) for skill, archive in built if archive is not None)
+
+
+async def _archive_for(skill: LiteLLM_SkillsTable) -> SkillArchive | None:
     if skill.file_content is None:
         return None
 
-    archive: Final = build_skill_archive(skill.file_content)
+    cache_key: Final = None if skill.updated_at is None else f"{skill.skill_id}:{skill.updated_at.isoformat()}"
+    cached: Final = None if cache_key is None else _ARCHIVE_CACHE.get_cache(cache_key)
+    if isinstance(cached, SkillArchive):
+        return cached
+
+    archive: Final = await asyncio.to_thread(build_skill_archive, skill.file_content)
     if archive is None:
         verbose_proxy_logger.warning(
             "Agent Skills index: skipping skill %s, its upload is not a zip holding SKILL.md at the root of a "
             "single top-level folder",
             skill.skill_id,
         )
+        return None
+
+    if cache_key is not None and len(archive.content) <= MAX_CACHED_ARCHIVE_BYTES:
+        _ARCHIVE_CACHE.set_cache(cache_key, archive)
     return archive
 
 

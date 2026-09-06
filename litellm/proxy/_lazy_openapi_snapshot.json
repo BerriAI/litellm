@@ -5084,8 +5084,10 @@
           "responses": {
             "200": {
               "content": {
-                "application/json": {
-                  "schema": {}
+                "application/zip": {
+                  "schema": {
+                    "type": "string"
+                  }
                 }
               },
               "description": "Successful Response"
