@@ -2086,12 +2086,42 @@ class TestReasoningFollowsModelSupport:
                 drop_params=False,
             )
         assert excinfo.value.status_code == 400
+        assert "reasoning.effort" in str(excinfo.value)
         assert "cost map" in str(excinfo.value)
 
-    def test_azure_deployments_keep_reasoning(self, local_model_cost_map):
+    @pytest.mark.parametrize("drop_params", [True, False])
+    @pytest.mark.parametrize(
+        "reasoning",
+        [{"summary": "auto"}, {"effort": None, "summary": "auto"}, {}],
+    )
+    def test_reasoning_without_an_effort_passes_through_on_non_reasoning_models(
+        self, local_model_cost_map, monkeypatch, drop_params, reasoning
+    ):
+        monkeypatch.setattr(litellm, "drop_params", drop_params)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": dict(reasoning)},
+            model="gpt-4o",
+            drop_params=drop_params,
+        )
+        assert mapped["reasoning"] == reasoning
+
+    def test_an_explicit_supports_reasoning_false_beats_the_bundled_floor(self, local_model_cost_map, monkeypatch):
+        overridden = {
+            name: ({**entry, "supports_reasoning": False} if name == "o3" else entry)
+            for name, entry in litellm.model_cost.items()
+        }
+        monkeypatch.setattr(litellm, "model_cost", overridden)
+        mapped = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "medium"}},
+            model="o3",
+            drop_params=True,
+        )
+        assert "reasoning" not in mapped
+
+    def test_azure_deployments_keep_reasoning_even_on_a_non_reasoning_model_name(self, local_model_cost_map):
         mapped = AzureOpenAIResponsesAPIConfig().map_openai_params(
             response_api_optional_params={"reasoning": {"effort": "medium"}},
-            model="my-o3-deployment",
+            model="gpt-4o",
             drop_params=True,
         )
         assert mapped["reasoning"] == {"effort": "medium"}
