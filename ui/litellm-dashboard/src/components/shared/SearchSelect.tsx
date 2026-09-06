@@ -74,7 +74,7 @@ export function SearchSelect({
         showClear={allowClear && value != null && value !== ""}
         className={`h-8 w-full text-sm ${className ?? ""}`}
       />
-      <ComboboxContent side="bottom" collisionAvoidance={{ side: "shift", align: "shift", fallbackAxisSide: "none" }}>
+      <ComboboxContent>
         <ComboboxEmpty>{emptyText}</ComboboxEmpty>
         <ComboboxList>
           {(item: SearchSelectOption) => (

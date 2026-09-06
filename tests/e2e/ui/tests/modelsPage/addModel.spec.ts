@@ -50,6 +50,36 @@ async function selectProvider(page: PlaywrightPage, providerName: string) {
 test.describe("Add Model", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
+  test("keeps the provider dropdown clear of its trigger at roomy and short viewports", async ({ page }) => {
+    for (const { viewport, expectedSide } of [
+      { viewport: { width: 1280, height: 1300 }, expectedSide: "bottom" },
+      { viewport: { width: 1000, height: 493 }, expectedSide: "top" },
+    ]) {
+      await page.setViewportSize(viewport);
+      await navigateToPage(page, Page.Models);
+      await page.getByRole("tab", { name: "Add Model" }).click();
+
+      const providerDropdown = page.getByRole("combobox", { name: "Provider", exact: true });
+      await providerDropdown.click();
+
+      const popup = page.locator('[data-slot="combobox-content"]');
+      await expect(popup).toBeVisible();
+      await expect
+        .poll(async () => {
+          const triggerBox = await providerDropdown.boundingBox();
+          const popupBox = await popup.boundingBox();
+          if (!triggerBox || !popupBox) return false;
+          const popupBottom = popupBox.y + popupBox.height;
+          const triggerBottom = triggerBox.y + triggerBox.height;
+          const clearsTrigger = expectedSide === "bottom" ? popupBox.y >= triggerBottom : popupBottom <= triggerBox.y;
+          return popupBox.y >= 0 && popupBottom <= viewport.height && clearsTrigger;
+        })
+        .toBe(true);
+
+      await page.keyboard.press("Escape");
+    }
+  });
+
   // Set by the UI-add test below. The deployed stack keeps its database, so a leak
   // pollutes every later Models table and readback.
   let uiAddedModelName = "";
