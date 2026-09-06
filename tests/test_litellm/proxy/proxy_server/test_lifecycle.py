@@ -17,17 +17,15 @@ Pins covered:
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from typing import List, Optional, Union
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final, Optional, Union
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-from fastapi import FastAPI
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -747,6 +745,73 @@ async def test_proxy_startup_event_invalid_missing_app_arg_raises():
         # no arguments — the decorator preserves the missing-arg TypeError.
         async with proxy_startup_event():  # type: ignore[call-arg]
             pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "db_value", "expected"),
+    (
+        (True, None, True),
+        (False, True, True),
+        (False, "true", True),
+        (False, False, False),
+        (False, None, False),
+    ),
+)
+async def test_resolve_store_model_in_db_uses_config_or_db(
+    monkeypatch: pytest.MonkeyPatch, configured: bool, db_value: object, expected: bool
+):
+    monkeypatch.setattr(ps, "get_secret_bool", lambda name, default: default)
+    db_record: Final = None if db_value is None else MagicMock(param_value={"store_model_in_db": db_value})
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_config.find_first = AsyncMock(return_value=db_record)
+
+    result: Final = await ProxyStartupEvent.resolve_store_model_in_db(
+        prisma_client=prisma_client, configured=configured
+    )
+
+    assert result is expected
+    assert prisma_client.db.litellm_config.find_first.await_count == (0 if configured else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("param_value", ("legacy", ["store_model_in_db"], 7))
+async def test_resolve_store_model_in_db_ignores_non_mapping_row(monkeypatch: pytest.MonkeyPatch, param_value: object):
+    monkeypatch.setattr(ps, "get_secret_bool", lambda name, default: default)
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_config.find_first = AsyncMock(return_value=MagicMock(param_value=param_value))
+
+    assert await ProxyStartupEvent.resolve_store_model_in_db(prisma_client=prisma_client, configured=False) is False
+
+
+@pytest.mark.asyncio
+async def test_startup_logging_applies_db_settings_before_callback_init(monkeypatch: pytest.MonkeyPatch):
+    events: Final = MagicMock()
+    proxy_config: Final = MagicMock()
+
+    async def apply_db_settings(prisma_client: object) -> None:
+        events.db_settings()
+
+    proxy_config.apply_safe_litellm_settings_overrides_from_db = apply_db_settings
+    proxy_logging: Final = MagicMock()
+    proxy_logging.startup_event.side_effect = lambda **kwargs: events.callback_init()
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=MagicMock(param_value={"store_model_in_db": True})
+    )
+    monkeypatch.setattr(ps, "cost_tracking", MagicMock())
+    monkeypatch.setattr(ps, "get_secret_bool", lambda name, default: default)
+
+    await ProxyStartupEvent._initialize_startup_logging(
+        llm_router=None,
+        proxy_logging_obj=proxy_logging,
+        redis_usage_cache=None,
+        prisma_client=prisma_client,
+        should_load_db_litellm_settings=True,
+        proxy_config_obj=proxy_config,
+    )
+
+    assert events.method_calls == [call.db_settings(), call.callback_init()]
 
 
 def test_otel_global_provider_published_after_callback_init():

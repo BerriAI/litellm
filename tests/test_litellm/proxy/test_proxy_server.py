@@ -10168,6 +10168,7 @@ def test_get_config_list_includes_anthropic_prompt_caching_fields(monkeypatch):
         assert fields["enable_anthropic_prompt_caching"]["field_tab"] == "prompt_caching"
         assert fields["anthropic_prompt_caching_ttl"]["field_tab"] == "prompt_caching"
         assert fields["budget_exceeded_throttle_percentage"]["field_tab"] is None
+        assert fields["prometheus_emit_input_sequence_length_label"]["field_type"] == "Boolean"
     finally:
         app.dependency_overrides.clear()
 

@@ -1754,6 +1754,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "anthropic_prompt_caching_ttl",
     "max_ui_session_budget",
     "budget_rollover",
+    "prometheus_emit_input_sequence_length_label",
     "mcp_tool_search",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]

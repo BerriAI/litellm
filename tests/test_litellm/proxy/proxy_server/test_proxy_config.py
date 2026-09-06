@@ -2912,6 +2912,27 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
     fake_router.update_settings.assert_called_once_with(routing_strategy="latency-based-routing")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("db_value", "expected"),
+    ((True, True), (False, False), ("true", True), ("false", False), ("invalid", False)),
+)
+async def test_apply_safe_litellm_settings_overrides_normalizes_input_sequence_length_flag(
+    monkeypatch: pytest.MonkeyPatch, db_value: object, expected: bool
+):
+    from litellm.proxy import proxy_server
+
+    config_record = SimpleNamespace(
+        param_value={"prometheus_emit_input_sequence_length_label": db_value}
+    )
+    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=config_record))
+    monkeypatch.setattr(litellm, "prometheus_emit_input_sequence_length_label", False)
+
+    await ProxyConfig().apply_safe_litellm_settings_overrides_from_db(prisma_client=MagicMock())
+
+    assert litellm.prometheus_emit_input_sequence_length_label is expected
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._add_general_settings_from_db_config
 # ---------------------------------------------------------------------------
