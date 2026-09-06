@@ -680,7 +680,7 @@ class RedisCache(BaseCache):
             # NON blocking - notify users Redis is throwing an exception
             print_verbose(f"litellm.caching.caching: set() - Got exception from REDIS : {e}")
 
-    def increment_cache(self, key, value: int, ttl: float | None = None, **kwargs) -> int:
+    def increment_cache(self, key, value: int, ttl: float | None = None, refresh_ttl: bool = False, **kwargs) -> int:
         _redis_client: Final = self.redis_client
         start_time = time.time()
         set_ttl: Final = self.get_ttl(ttl=ttl)
@@ -701,7 +701,7 @@ class RedisCache(BaseCache):
             if set_ttl is not None:
                 # check if key already has ttl, if not -> set ttl
                 start_time = time.time()
-                current_ttl: Final = _redis_client.ttl(key)
+                current_ttl: Final = -1 if refresh_ttl else _redis_client.ttl(key)
                 end_time = time.time()
                 _duration = end_time - start_time
                 self.service_logger_obj.service_success_hook(
