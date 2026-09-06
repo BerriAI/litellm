@@ -1,9 +1,19 @@
 import os
-from typing import Final
+import posixpath
+from collections.abc import Awaitable, Mapping
+from typing import Final, Protocol
 
 import yaml
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.common_utils.config_includes import resolve_includes
+
+_BUCKET_CONFIG_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+class BucketObjectFetcher(Protocol):
+    def __call__(self, object_key: str, /) -> Awaitable[Mapping[str, object] | None]: ...
 
 
 def get_file_contents_from_s3(bucket_name, object_key):
@@ -60,6 +70,60 @@ async def get_config_file_contents_from_gcs(bucket_name, object_key):
     except Exception as e:
         verbose_proxy_logger.error("Error retrieving file contents: %s", e)
         return None
+
+
+def resolve_include_object_key(config_object_key: str, include_entry: str) -> str:
+    """
+    Resolve one `include` entry to the object key it names, relative to the config object's prefix.
+
+    A leading "/" means the bucket root, mirroring how an absolute path on disk ignores the
+    directory the including config sits in.
+    """
+    if include_entry.startswith("/"):
+        return posixpath.normpath(include_entry).lstrip("/")
+    return posixpath.normpath(posixpath.join(posixpath.dirname(config_object_key), include_entry))
+
+
+async def resolve_bucket_includes(
+    *,
+    config: Mapping[str, object],
+    object_key: str,
+    fetch: BucketObjectFetcher,
+) -> dict[str, object]:
+    async def load(include_entry: str) -> Mapping[str, object]:
+        include_key: Final = resolve_include_object_key(object_key, include_entry)
+        included: Final = await fetch(include_key)
+        if included is None:
+            raise FileNotFoundError(f"Included config could not be read from bucket: {include_key}")
+        return included
+
+    return await resolve_includes(config=config, load=load)
+
+
+async def get_config_from_bucket(
+    *,
+    bucket_type: str | None,
+    bucket_name: str,
+    object_key: str,
+) -> dict[str, object] | None:
+    async def fetch(key: str) -> Mapping[str, object] | None:
+        raw: Final = (
+            await get_config_file_contents_from_gcs(bucket_name=bucket_name, object_key=key)
+            if bucket_type == "gcs"
+            else get_file_contents_from_s3(bucket_name=bucket_name, object_key=key)
+        )
+        if raw is None:
+            return None
+        try:
+            return _BUCKET_CONFIG_ADAPTER.validate_python(raw)
+        except ValidationError as e:
+            raise ValueError(f"Config object in bucket is not a YAML mapping: {key}") from e
+
+    config: Final = await fetch(object_key)
+    if config is None:
+        return None
+
+    return await resolve_bucket_includes(config=config, object_key=object_key, fetch=fetch)
 
 
 def download_python_file_from_s3(
