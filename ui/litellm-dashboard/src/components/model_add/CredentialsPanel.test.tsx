@@ -56,8 +56,8 @@ vi.mock("./CredentialModal", () => ({
   },
 }));
 
-vi.mock("@/app/(dashboard)/models-and-endpoints/panels/add-provider/AddProviderPanel", () => ({
-  default: function AddProviderPanelMock({ onClose }: { onClose: () => void }) {
+vi.mock("./add_credential_wizard/AddCredentialWizard", () => ({
+  default: function AddCredentialWizardMock({ onClose }: { onClose: () => void }) {
     return (
       <button data-testid="add-credential-wizard-close" onClick={onClose}>
         close wizard

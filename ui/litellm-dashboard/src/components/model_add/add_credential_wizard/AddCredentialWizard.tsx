@@ -94,11 +94,11 @@ const StepIndicator: React.FC<{ step: WizardStep; skipJwks: boolean }> = ({ step
   );
 };
 
-interface AddProviderPanelProps {
+interface AddCredentialWizardProps {
   onClose: () => void;
 }
 
-export default function AddProviderPanel({ onClose }: AddProviderPanelProps) {
+export default function AddCredentialWizard({ onClose }: AddCredentialWizardProps) {
   const { accessToken } = useAuthorized();
   const queryClient = useQueryClient();
   const { data: providerMetadata } = useProviderFields();

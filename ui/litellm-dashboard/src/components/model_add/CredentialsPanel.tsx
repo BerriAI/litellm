@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import AddProviderPanel from "@/app/(dashboard)/models-and-endpoints/panels/add-provider/AddProviderPanel";
+import AddCredentialWizard from "./add_credential_wizard/AddCredentialWizard";
 import { credentialDeleteCall, CredentialItem, credentialUpdateCall } from "@/components/networking";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -123,7 +123,7 @@ export default function CredentialsPanel() {
             <DialogHeader>
               <DialogTitle>Add Credential</DialogTitle>
             </DialogHeader>
-            <AddProviderPanel onClose={() => setIsAddWizardOpen(false)} />
+            <AddCredentialWizard onClose={() => setIsAddWizardOpen(false)} />
           </DialogContent>
         </Dialog>
       )}

@@ -101,11 +101,11 @@ const ReviewModelsStep: React.FC<ReviewModelsStepProps> = ({ rows, setRows, crea
 
         <div className="flex items-end gap-2">
           <div className="flex-1">
-            <label htmlFor="add-provider-manual-model" className="mb-1 block text-xs text-muted-foreground">
+            <label htmlFor="credential-wizard-manual-model" className="mb-1 block text-xs text-muted-foreground">
               Add a hidden model manually
             </label>
             <Input
-              id="add-provider-manual-model"
+              id="credential-wizard-manual-model"
               value={manualId}
               onChange={(e) => setManualId(e.target.value)}
               placeholder="upstream model id"

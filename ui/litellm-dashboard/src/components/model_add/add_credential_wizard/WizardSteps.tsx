@@ -47,9 +47,9 @@ export const ProviderStep: React.FC<ProviderStepProps> = ({
   <Card>
     <CardContent className="space-y-4">
       <Field>
-        <FieldLabel htmlFor="add-provider-provider">Provider</FieldLabel>
+        <FieldLabel htmlFor="credential-wizard-provider">Provider</FieldLabel>
         <SearchSelect
-          inputId="add-provider-provider"
+          inputId="credential-wizard-provider"
           options={providerOptions}
           placeholder="Select a provider"
           value={selectedProvider ?? ""}
@@ -57,9 +57,9 @@ export const ProviderStep: React.FC<ProviderStepProps> = ({
         />
       </Field>
       <Field>
-        <FieldLabel htmlFor="add-provider-credential-name">Credential name</FieldLabel>
+        <FieldLabel htmlFor="credential-wizard-credential-name">Credential name</FieldLabel>
         <Input
-          id="add-provider-credential-name"
+          id="credential-wizard-credential-name"
           value={credentialName}
           onChange={(e) => onCredentialNameChange(e.target.value)}
           placeholder="e.g. anthropic-prod"
@@ -120,15 +120,15 @@ export const JwksStep: React.FC<JwksStepProps> = ({
         )}
         {ANTHROPIC_FEDERATION_FIELDS.map((field) => (
           <Field key={field.key}>
-            <FieldLabel htmlFor={`add-provider-${field.key}`}>{field.label}</FieldLabel>
+            <FieldLabel htmlFor={`credential-wizard-${field.key}`}>{field.label}</FieldLabel>
             <Input
-              id={`add-provider-${field.key}`}
+              id={`credential-wizard-${field.key}`}
               value={federationIds[field.key]}
               aria-required={field.required || undefined}
-              aria-describedby={`add-provider-${field.key}-hint`}
+              aria-describedby={`credential-wizard-${field.key}-hint`}
               onChange={(e) => onFederationIdChange(field.key, e.target.value)}
             />
-            <FieldDescription id={`add-provider-${field.key}-hint`}>{field.hint}</FieldDescription>
+            <FieldDescription id={`credential-wizard-${field.key}-hint`}>{field.hint}</FieldDescription>
           </Field>
         ))}
         {missing.length > 0 && (

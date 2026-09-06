@@ -5,10 +5,10 @@ import {
   screen,
   waitFor,
   within,
-} from "../../../../../../tests/test-utils";
+} from "../../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import AddProviderPanel from "./AddProviderPanel";
+import AddCredentialWizard from "./AddCredentialWizard";
 
 const discoverProviderModelsCall = vi.fn();
 const credentialCreateCall = vi.fn();
@@ -129,7 +129,7 @@ const PROXY_ADMIN = { accessToken: "test-access-token" };
 const setup = async () => {
   const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
   const onClose = vi.fn();
-  renderWithProviders(<AddProviderPanel onClose={onClose} />);
+  renderWithProviders(<AddCredentialWizard onClose={onClose} />);
   await screen.findByLabelText("Provider");
   return { user, onClose };
 };
@@ -179,7 +179,7 @@ const expectNoFederationIdFields = () => {
   }
 };
 
-describe("AddProviderPanel", () => {
+describe("AddCredentialWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAuthorized.mockReturnValue(PROXY_ADMIN);
