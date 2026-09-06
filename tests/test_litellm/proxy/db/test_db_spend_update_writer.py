@@ -1,7 +1,6 @@
 import asyncio
 import copy
 import json
-import os
 import re
 
 
@@ -3210,48 +3209,6 @@ async def test_update_database_claims_a_batch_without_logging_the_request_that_p
     assert set(claimed) == (set(payload) if logs_the_request else _BATCH_CLAIM_FIELDS)
     assert claimed["spend"] == 0.25
     assert db_writer._batch_database_updates.await_count == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("spend_logs_url", "forwarded"),
-    [("http://spend-logs.internal", True), (None, False)],
-    ids=["an_external_writer_takes_the_rows", "rows_are_written_to_this_db"],
-)
-async def test_update_database_sends_a_claimed_batch_cost_row_on_to_an_external_spend_log_writer(
-    monkeypatch, spend_logs_url: str | None, forwarded: bool
-):
-    """
-    SPEND_LOGS_URL makes the flush post spend logs to that writer instead of inserting them,
-    and the claim writes straight to this table, so the batch's row reaches the writer only
-    by being queued as well. Queueing it with no writer configured would insert it twice.
-    """
-    db_writer = DBSpendUpdateWriter()
-    db_writer._batch_database_updates = AsyncMock()
-    prisma = _spend_logs_prisma(1, None)
-    if spend_logs_url is None:
-        monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
-    else:
-        monkeypatch.setenv("SPEND_LOGS_URL", spend_logs_url)
-
-    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is True
-
-    queued = [row["request_id"] for row in prisma.spend_log_transactions]
-    assert queued == (["batch_abc_batch_cost"] if forwarded else [])
-
-
-@pytest.mark.asyncio
-async def test_update_database_forwards_no_batch_cost_row_a_later_retrieve_had_already_claimed(monkeypatch):
-    """The retrieve that lost the claim charges nothing, so it must not post a row either."""
-    db_writer = DBSpendUpdateWriter()
-    db_writer._batch_database_updates = AsyncMock()
-    existing = SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25)
-    prisma = _spend_logs_prisma(0, existing)
-    monkeypatch.setenv("SPEND_LOGS_URL", "http://spend-logs.internal")
-
-    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is False
-
-    assert prisma.spend_log_transactions == []
 
 
 @pytest.mark.asyncio

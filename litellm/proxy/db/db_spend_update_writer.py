@@ -380,9 +380,6 @@ class DBSpendUpdateWriter:
                 skip_duplicates=True,
             )
             if claimed == 1:
-                await self._forward_batch_cost_row(
-                    row=row, prisma_client=prisma_client, disable_spend_logs=disable_spend_logs
-                )
                 return True
             existing: Final = await spend_logs.find_unique(
                 where={"request_id": request_id}  # mutable-ok: prisma where clause
@@ -404,18 +401,6 @@ class DBSpendUpdateWriter:
             verbose_proxy_logger.debug("Cost tracking skipped: spend row %s already charged this batch", request_id)
             return False
         return await self._take_over_uncharged_batch_cost_row(payload=payload, prisma_client=prisma_client, row=row)
-
-    async def _forward_batch_cost_row(
-        self, row: Mapping[str, object], prisma_client: "PrismaClient", disable_spend_logs: bool
-    ) -> None:
-        """Queue the claimed row for an external spend log writer, which the claim went around.
-
-        With ``SPEND_LOGS_URL`` set the queue posts every spend log to that writer instead of
-        inserting it, so a batch's cost row reaches it only by being queued here as well.
-        """
-        if disable_spend_logs is True or os.getenv("SPEND_LOGS_URL") is None:
-            return
-        await self._insert_spend_log_to_db(payload=prisma_client.jsonify_object(row), prisma_client=prisma_client)
 
     async def _take_over_uncharged_batch_cost_row(
         self, payload: SpendLogsPayload, prisma_client: "PrismaClient", row: Mapping[str, object]
