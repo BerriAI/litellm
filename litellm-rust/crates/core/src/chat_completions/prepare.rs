@@ -40,15 +40,15 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
 pub(super) fn resolve_request(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ResolvedChatCompletionsRequest<'_>, Error> {
-    let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)?;
-    let messages = parse_messages(request.messages)?;
+    let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)
+        .map_err(|_| Error::Declined("provider is not on the rust chat completions path"))?;
+    let messages =
+        parse_messages(request.messages).map_err(|_| Error::Declined("unreadable message list"))?;
     if messages.is_empty() {
-        return Err(Error::InvalidRequest(
-            "chat completions requires at least one message".to_string(),
-        ));
+        return Err(Error::Declined("empty message list"));
     }
     if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
-        return Err(Error::Unsupported(reason.0));
+        return Err(Error::Declined(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {
         model,
