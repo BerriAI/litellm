@@ -8,25 +8,23 @@ Routes to native Cortex REST API endpoints based on model:
 Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
-import copy
-import json
-import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 import httpx
 from typing_extensions import ReadOnly
 
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    anthropic_process_openai_file_message,
-    convert_to_anthropic_tool_result,
-    create_anthropic_image_param,
-    select_anthropic_content_block_type_for_file,
-)
+from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import normalize_cache_control_in_anthropic_payload
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk, ChatCompletionToolMessage
+from litellm.types.llms.anthropic import (
+    AnthopicMessagesAssistantMessageParam,
+    AnthropicMessagesUserMessageParam,
+    AnthropicSystemMessageContent,
+)
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
     Choices,
     GenericStreamingChunk,
@@ -37,7 +35,7 @@ from litellm.types.utils import (
 
 from ...base_llm.base_model_iterator import BaseModelResponseIterator
 from ...openai_like.chat.transformation import OpenAIGPTConfig
-from ..utils import SnowflakeBaseConfig
+from ..utils import SnowflakeBaseConfig, SnowflakeException
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -99,95 +97,6 @@ def _is_claude_model(model: str) -> bool:
     """Return True if model name (after stripping snowflake/ prefix) is a Claude model."""
     name: Final = model.lower().removeprefix("snowflake/")
     return any(name.startswith(p) for p in _CLAUDE_MODEL_PREFIXES)
-
-
-def _convert_image_url_to_anthropic(block: Mapping[str, object]) -> object:
-    """One OpenAI ``image_url`` block in the native shape Cortex accepts.
-
-    Cortex documents base64 sources only, so remote URLs are inlined the way every
-    other base64-only Anthropic dialect (Bedrock invoke, Vertex) inlines them, and
-    pdf/text data URIs become document blocks rather than malformed image blocks.
-    """
-    image_url: Final = block.get("image_url")
-    url: Final = image_url if isinstance(image_url, str) else _image_url_field(image_url, "url")
-    if not url:
-        return block
-
-    converted: Final = (
-        anthropic_process_openai_file_message({"type": "file", "file": {"file_data": url}})
-        if select_anthropic_content_block_type_for_file(_data_uri_media_type(url)) == "document"
-        else create_anthropic_image_param(
-            image_url if isinstance(image_url, dict) else url,  # mutable-ok: caller's JSON block
-            format=_image_url_field(image_url, "format"),
-            is_bedrock_invoke=True,
-        )
-    )
-    cache_control: Final = block.get("cache_control")
-    if cache_control is None:
-        return converted
-    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
-
-
-def _image_url_field(image_url: object, key: str) -> str | None:
-    value: Final = image_url.get(key) if isinstance(image_url, dict) else None
-    return value if isinstance(value, str) else None
-
-
-def _data_uri_media_type(url: str) -> str:
-    match: Final = re.match(r"data:([^;,]+)", url)
-    return match.group(1) if match else ""
-
-
-def _convert_image_url_blocks_to_anthropic(content: object) -> object:
-    if not isinstance(content, list):
-        return content
-    return [  # mutable-ok: JSON wire blocks
-        _convert_image_url_to_anthropic(block)
-        if isinstance(block, Mapping) and block.get("type") == "image_url"
-        else block
-        for block in content
-    ]
-
-
-def _convert_tool_result_to_anthropic(
-    content: object, tool_call_id: str, cache_control: object
-) -> Mapping[str, object]:
-    """The Anthropic ``tool_result`` block for one OpenAI tool message.
-
-    Delegating to the shared converter keeps image, document and per-block cache
-    breakpoints identical to every other Anthropic dialect; only the plain-string
-    and non-list shapes it does not model are handled here.
-    """
-    if not isinstance(content, list):
-        plain: Final[dict[str, object]] = {  # mutable-ok: JSON wire block
-            "type": "tool_result",
-            "tool_use_id": tool_call_id,
-            "content": content if isinstance(content, str) else json.dumps(content),
-        }
-        return {**plain, "cache_control": cache_control} if cache_control is not None else plain
-    converted: Final = convert_to_anthropic_tool_result(
-        ChatCompletionToolMessage(role="tool", tool_call_id=tool_call_id, content=content),
-        force_base64=True,
-    )
-    if cache_control is None:
-        return converted
-    return {**converted, "cache_control": cache_control}  # mutable-ok: JSON wire block
-
-
-def _signed_thinking_blocks(msg: object) -> list[dict[str, object]]:  # mutable-ok: JSON wire blocks
-    """The assistant turn's thinking blocks that can legally be echoed back.
-
-    Only signed blocks round-trip: Cortex rejects a thinking block whose signature is
-    missing, which is what an unsigned block from a non-thinking turn would produce.
-    """
-    blocks: Final = msg.get("thinking_blocks") if isinstance(msg, dict) else getattr(msg, "thinking_blocks", None)
-    if not isinstance(blocks, list):
-        return []  # mutable-ok: JSON wire blocks
-    return [  # mutable-ok: JSON wire blocks
-        dict(block)
-        for block in blocks
-        if isinstance(block, Mapping) and (block.get("signature") or block.get("type") == "redacted_thinking")
-    ]
 
 
 def _clean_input_schema(schema: object) -> object:  # mutable-ok: JSON schema copy
@@ -298,113 +207,22 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 )
         return anthropic_tools
 
-    def _extract_system_and_messages(  # mutable-ok: JSON wire messages
-        self, messages: list[AllMessageValues]
-    ) -> tuple[list[dict] | None, list[dict]]:
-        """
-        Split messages into system prompt and conversation turns for Anthropic format.
-
-        - system messages → collected and joined (preserves guardrail prompts)
-        - assistant messages with tool_calls → tool_use content blocks
-        - tool role messages → user role with tool_result content blocks
-        """
-        system_parts: Final[list[dict]] = []  # mutable-ok: JSON wire messages
-        conversation: Final[list[dict]] = []  # mutable-ok: JSON wire messages
-
-        for msg in messages:
-            if isinstance(msg, dict):
-                role = msg.get("role", "")
-                content: Any = msg.get("content", "")
-                msg_cache_control: object = msg.get("cache_control")
-            else:
-                role = getattr(msg, "role", "")
-                content = getattr(msg, "content", "")
-                msg_cache_control = getattr(msg, "cache_control", None)
-
-            if role == "system":
-                if isinstance(content, str) and content:
-                    system_parts.append({"type": "text", "text": content})  # mutable-ok: JSON wire system block
-                elif isinstance(content, list):
-                    system_parts.extend(
-                        {  # mutable-ok: JSON wire system block
-                            "type": "text",
-                            "text": block.get("text", ""),
-                            **(
-                                {"cache_control": block["cache_control"]} if "cache_control" in block else {}
-                            ),  # mutable-ok: JSON wire block
-                        }
-                        for block in content
-                        if isinstance(block, Mapping) and block.get("type") == "text"
-                    )
-            elif role == "assistant":
-                tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
-                thinking_blocks = _signed_thinking_blocks(msg)
-                if tool_calls:
-                    content_blocks: list[dict[str, object]] = list(thinking_blocks)  # mutable-ok: JSON wire blocks
-                    if content:
-                        content_blocks.append({"type": "text", "text": content})
-                    for tc in tool_calls:
-                        func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
-                        tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
-                        func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")
-                        func_args = (
-                            func.get("arguments", "{}") if isinstance(func, dict) else getattr(func, "arguments", "{}")
-                        )
-                        try:
-                            input_data = json.loads(func_args) if isinstance(func_args, str) else func_args
-                        except (json.JSONDecodeError, TypeError):
-                            input_data = {}
-                        content_blocks.append(
-                            {
-                                "type": "tool_use",
-                                "id": tc_id,
-                                "name": func_name,
-                                "input": input_data,
-                            }
-                        )
-                    conversation.append({"role": "assistant", "content": content_blocks})
-                elif thinking_blocks:
-                    thinking_content = (
-                        [
-                            *thinking_blocks,
-                            *copy.deepcopy(content),
-                        ]
-                        if isinstance(content, list)
-                        else [*thinking_blocks, *([{"type": "text", "text": content}] if content else [])]
-                    )  # rebind-ok: loop-local normalized content
-                    conversation.append({"role": "assistant", "content": thinking_content})
-                else:
-                    conversation.append({"role": "assistant", "content": content})
-            elif role == "tool":
-                tool_call_id_value = (
-                    msg.get("tool_call_id", "") if isinstance(msg, dict) else getattr(msg, "tool_call_id", "")
-                )
-                tool_call_id = (
-                    tool_call_id_value if isinstance(tool_call_id_value, str) else ""
-                )  # rebind-ok: normalized loop value
-                tool_result_block = _convert_tool_result_to_anthropic(content, tool_call_id, msg_cache_control)
-                if (
-                    conversation
-                    and conversation[-1]["role"] == "user"
-                    and isinstance(conversation[-1]["content"], list)
-                    and conversation[-1]["content"]
-                    and conversation[-1]["content"][0].get("type") == "tool_result"
-                ):
-                    conversation[-1]["content"].append(tool_result_block)
-                else:
-                    conversation.append(
-                        {"role": "user", "content": [tool_result_block]}  # mutable-ok: JSON wire message
-                    )  # mutable-ok: JSON wire message
-            else:
-                conversation.append(  # mutable-ok: JSON wire message
-                    {  # mutable-ok: JSON wire message
-                        "role": role,
-                        "content": _convert_image_url_blocks_to_anthropic(content),
-                    }  # mutable-ok: JSON wire message
-                )
-
-        system: Final[list[dict] | None] = system_parts if system_parts else None  # mutable-ok: JSON wire messages
-        return system, conversation
+    def _extract_system_and_messages(
+        self, model: str, messages: list[AllMessageValues]
+    ) -> tuple[
+        list[AnthropicSystemMessageContent] | None,
+        list[AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam],
+    ]:
+        """Cortex's /messages endpoint speaks Anthropic's dialect, so the shared translators own the shape."""
+        conversation_messages: Final = list(messages)
+        system: Final = AnthropicConfig().translate_system_message(messages=conversation_messages)
+        try:
+            conversation: Final = anthropic_messages_pt(
+                messages=conversation_messages, model=model, llm_provider="snowflake", force_base64=True
+            )
+        except (ValueError, LookupError, BadRequestError) as e:
+            raise SnowflakeException(status_code=400, message=str(e)) from e
+        return (system or None), conversation
 
     def transform_request(
         self,
@@ -479,7 +297,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
     ) -> dict:
         """Anthropic Messages format for /messages endpoint."""
         passthrough_system: Final = optional_params.pop("system", None)
-        extracted_system, conversation = self._extract_system_and_messages(messages)
+        extracted_system, conversation = self._extract_system_and_messages(model, messages)
         system: Final = passthrough_system if passthrough_system is not None else extracted_system
 
         if "tools" in optional_params:

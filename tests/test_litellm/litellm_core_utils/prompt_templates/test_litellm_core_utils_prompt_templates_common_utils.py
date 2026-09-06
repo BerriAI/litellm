@@ -1,6 +1,7 @@
 import functools
 import json
 import os
+from types import MappingProxyType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_format_from_file_id,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
+    parse_tool_call_arguments,
     split_concatenated_json_objects,
     update_messages_with_model_file_ids,
 )
@@ -1554,3 +1556,20 @@ class TestRequestContainsImageContent:
         for _ in range(50):
             nested = {"type": "tool_result", "content": [nested]}
         assert request_contains_image_content([{"role": "user", "content": [nested]}]) is False
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"already": "parsed"}, MappingProxyType({"already": "parsed"})],
+    ids=["dict", "mapping_proxy"],
+)
+def test_parse_tool_call_arguments_returns_already_parsed_mapping(arguments):
+    parsed = parse_tool_call_arguments(arguments, tool_name="dict_tool", context="test")
+
+    assert parsed == {"already": "parsed"}
+    assert json.loads(json.dumps(parsed)) == {"already": "parsed"}
+
+
+def test_parse_tool_call_arguments_rejects_unrepairable_json():
+    with pytest.raises(ValueError, match="broken_tool"):
+        parse_tool_call_arguments("not valid json{{{", tool_name="broken_tool", context="test")

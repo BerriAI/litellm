@@ -20,6 +20,7 @@ from litellm.llms.snowflake.chat.transformation import (
     SnowflakeConfig,
     _is_claude_model,
 )
+from litellm.llms.snowflake.utils import SnowflakeException
 from litellm.types.utils import ModelResponse
 
 
@@ -340,7 +341,7 @@ class TestAnthropicConfigRequest:
         )
         assert body["system"] == [{"type": "text", "text": "You are helpful."}]
         assert all(m["role"] != "system" for m in body["messages"])
-        assert body["messages"][0] == {"role": "user", "content": "Hello"}
+        assert body["messages"][0] == {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
 
     def test_model_prefix_stripped(self):
         body = self.cfg.transform_request(
@@ -633,7 +634,7 @@ class TestAnthropicMultiTurnToolMessages:
             headers={},
         )
         msgs = body["messages"]
-        assert msgs[0] == {"role": "user", "content": "What's the weather in Paris?"}
+        assert msgs[0] == {"role": "user", "content": [{"type": "text", "text": "What's the weather in Paris?"}]}
 
         assistant_msg = msgs[1]
         assert assistant_msg["role"] == "assistant"
@@ -643,13 +644,14 @@ class TestAnthropicMultiTurnToolMessages:
         assert assistant_msg["content"][0]["name"] == "get_weather"
         assert assistant_msg["content"][0]["input"] == {"city": "Paris"}
 
-        tool_result_msg = msgs[2]
-        assert tool_result_msg["role"] == "user"
-        assert tool_result_msg["content"][0]["type"] == "tool_result"
-        assert tool_result_msg["content"][0]["tool_use_id"] == "call_123"
-        assert tool_result_msg["content"][0]["content"] == "Sunny, 22°C"
-
-        assert msgs[3] == {"role": "user", "content": "Thanks!"}
+        assert msgs[2] == {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_123", "content": "Sunny, 22°C"},
+                {"type": "text", "text": "Thanks!"},
+            ],
+        }
+        assert len(msgs) == 3
 
     def test_assistant_with_text_and_tool_calls(self):
         messages = [
@@ -701,7 +703,7 @@ class TestAnthropicMultiTurnToolMessages:
         for msg in body["messages"]:
             assert msg["role"] != "tool"
 
-    def test_malformed_json_in_tool_arguments_handled_gracefully(self):
+    def test_malformed_json_in_tool_arguments_is_rejected_as_bad_request(self):
         messages = [
             {"role": "user", "content": "hi"},
             {
@@ -716,18 +718,15 @@ class TestAnthropicMultiTurnToolMessages:
                 ],
             },
         ]
-        body = self.cfg.transform_request(
-            model="snowflake/claude-sonnet-4-5",
-            messages=messages,
-            optional_params={},
-            litellm_params={},
-            headers={},
-        )
-        assistant_msg = body["messages"][1]
-        tool_use_block = assistant_msg["content"][0]
-        assert tool_use_block["type"] == "tool_use"
-        assert tool_use_block["name"] == "broken_tool"
-        assert tool_use_block["input"] == {}
+        with pytest.raises(SnowflakeException, match="broken_tool") as excinfo:
+            self.cfg.transform_request(
+                model="snowflake/claude-sonnet-4-5",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+        assert excinfo.value.status_code == 400
 
     def test_non_string_tool_arguments_pass_through(self):
         messages = [

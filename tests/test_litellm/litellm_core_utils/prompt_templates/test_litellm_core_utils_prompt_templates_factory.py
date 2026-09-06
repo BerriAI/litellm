@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
@@ -22,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
     make_valid_bedrock_tool_name,
     ollama_pt,
+    requires_inline_base64_media,
     sanitize_messages_for_tool_calling,
 )
 from litellm.types.llms.openai import ChatCompletionToolMessage
@@ -1737,6 +1739,19 @@ def test_convert_to_anthropic_tool_result_image_with_cache_control():
     assert result["content"][1]["source"]["media_type"] == "image/jpeg"
     assert "cache_control" in result["content"][1]
     assert result["content"][1]["cache_control"]["type"] == "ephemeral"
+
+
+def test_convert_to_anthropic_tool_result_serializes_mapping_content():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    result = convert_to_anthropic_tool_result(
+        {"role": "tool", "tool_call_id": "call_dict", "content": {"result_key": "result_value"}}
+    )
+
+    assert result["type"] == "tool_result"
+    assert json.loads(result["content"]) == {"result_key": "result_value"}
 
 
 def test_convert_to_anthropic_tool_result_image_without_cache_control():
@@ -3500,6 +3515,116 @@ def test_bedrock_converse_pdf_only_user_message_gets_text_block():
     assert _text_blocks(result[0]) == [BEDROCK_DOCUMENT_PLACEHOLDER_TEXT]
 
 
+@pytest.mark.parametrize(
+    ("model", "llm_provider"),
+    [
+        ("claude-sonnet-5", "anthropic"),
+        ("invoke/us.anthropic.claude-sonnet-5", "bedrock"),
+        ("claude-sonnet-5", "vertex_ai"),
+        ("claude-sonnet-5", "snowflake"),
+    ],
+)
+def test_anthropic_messages_pt_user_pdf_data_uri_becomes_document_block(model, llm_provider):
+    """
+    Regression for LIT-6778: an OpenAI client attaches a PDF as an image_url part
+    whose url is a pdf data URI. Every Anthropic-shaped API rejects
+    `{"type": "image", "media_type": "application/pdf"}`, so the user content must
+    carry a document block, with the block's cache breakpoint intact.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What word is in this document?"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _PDF_DATA_URI},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model=model, llm_provider=llm_provider)
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": _PDF_DATA_URI.split(",", 1)[1],
+        },
+        "cache_control": {"type": "ephemeral"},
+    }
+    assert all(block["type"] != "image" for block in result[0]["content"])
+
+
+_TEXT_B64 = base64.b64encode("the secret code word is MANGO\n".encode()).decode()
+_TEXT_DATA_URI = "data:text/plain;base64," + _TEXT_B64
+_TEXT_DATA_URI_WITH_CHARSET = "data:text/plain;charset=utf-8;base64," + _TEXT_B64
+_LATIN1_TEXT_DATA_URI = "data:text/plain;charset=iso-8859-1;base64," + base64.b64encode(
+    "the secret code word is MANGÓ\n".encode("latin-1")
+).decode()
+
+
+@pytest.mark.parametrize(
+    "block, expected_text",
+    [
+        ({"type": "image_url", "image_url": {"url": _TEXT_DATA_URI}}, "the secret code word is MANGO\n"),
+        ({"type": "file", "file": {"file_data": _TEXT_DATA_URI}}, "the secret code word is MANGO\n"),
+        ({"type": "image_url", "image_url": {"url": _TEXT_DATA_URI_WITH_CHARSET}}, "the secret code word is MANGO\n"),
+        ({"type": "file", "file": {"file_data": _TEXT_DATA_URI_WITH_CHARSET}}, "the secret code word is MANGO\n"),
+        ({"type": "file", "file": {"file_data": _LATIN1_TEXT_DATA_URI}}, "the secret code word is MANGÓ\n"),
+    ],
+    ids=["image_url", "file", "image_url_charset", "file_charset", "file_latin1"],
+)
+def test_anthropic_messages_pt_text_plain_data_uri_becomes_text_source_document(block, expected_text):
+    """
+    Anthropic's base64 document source only takes application/pdf; a text/plain
+    document has to travel as a `text` source carrying the decoded text, or the
+    API answers 400 on every Anthropic-shaped provider. The data URI may carry a
+    charset parameter, which must neither hide the text/plain type nor be ignored
+    when decoding the bytes.
+    """
+    messages = [{"role": "user", "content": [{"type": "text", "text": "What is the code word?"}, block]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": expected_text},
+    }
+
+
+def test_anthropic_messages_pt_user_png_data_uri_stays_an_image_block():
+    messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": _PNG_DATA_URI}}]}]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": _PNG_DATA_URI.split(",", 1)[1]},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "llm_provider", "expected"),
+    [
+        ("invoke/us.anthropic.claude-sonnet-5", "bedrock", True),
+        ("claude-sonnet-5", "vertex_ai", True),
+        ("claude-sonnet-5", "vertex_ai_beta", True),
+        ("claude-sonnet-5", "snowflake", False),
+        ("claude-sonnet-5", "anthropic", False),
+        ("us.anthropic.claude-sonnet-5", "bedrock", False),
+        ("claude-sonnet-5", None, False),
+    ],
+)
+def test_requires_inline_base64_media(model, llm_provider, expected):
+    assert requires_inline_base64_media(model, llm_provider) is expected
+
+
 def test_bedrock_converse_document_with_text_gets_no_extra_text_block():
     messages = [
         {
@@ -3713,3 +3838,378 @@ def test_convert_to_anthropic_tool_invoke_keeps_paired_server_tool_use():
         },
         server_result,
     ]
+
+
+def test_anthropic_messages_pt_keeps_assistant_tool_use_content_block():
+    """
+    A conversation replayed from an Anthropic-shaped client carries the tool call
+    as a `tool_use` block inside the assistant content list. Dropping it orphans
+    the `tool_result` that answers it, and the API rejects the whole request.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "let me look that up"},
+                {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "text", "text": "let me look that up"},
+        {"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "paris"}},
+    ]
+    assert result[2]["content"] == [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "sunny"}]
+
+
+def test_anthropic_messages_pt_does_not_duplicate_a_tool_use_present_in_both_shapes():
+    """
+    The same call can arrive as a `tool_use` block and as a `tool_calls` entry.
+    Both shapes sanitize the id the same way, so the deduplication has to compare
+    the sanitized ids, not the raw ones.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "get_weather", "input": {"city": "paris"}}
+            ],
+            "tool_calls": [
+                {
+                    "id": "functions.Bash:0",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "paris"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+
+
+def test_anthropic_messages_pt_sanitizes_a_native_tool_use_id_like_its_tool_result():
+    """
+    Anthropic only accepts tool ids matching ^[a-zA-Z0-9_-]+$, and the `tool_result`
+    side already sanitizes. A replayed `tool_use` block whose id came from another
+    client (`functions.Bash:0`) has to get the same treatment, or the two ids stop
+    matching and the request is rejected.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "get_weather", "input": {"city": "paris"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+    assert result[2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "sunny"}
+    ]
+
+
+def test_anthropic_messages_pt_normalizes_a_native_tool_use_block():
+    """
+    A block accumulated from a stream carries a streaming `index` key and can hold
+    the arguments as a JSON string. Anthropic rejects both, so the block is rebuilt
+    from its id, name, and parsed input, keeping any cache_control the caller set.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "index": 0,
+                    "id": "toolu_01",
+                    "name": "get_weather",
+                    "input": '{"city": "paris"}',
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {
+            "type": "tool_use",
+            "id": "toolu_01",
+            "name": "get_weather",
+            "input": {"city": "paris"},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("url", "format_override", "expected"),
+    [
+        (
+            _PDF_DATA_URI,
+            "image/png",
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": _PDF_DATA_URI.split(",", 1)[1],
+                },
+            },
+        ),
+        (
+            "data:image/png;base64,JVBERi0=",
+            "application/pdf",
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="}},
+        ),
+    ],
+    ids=["pdf_uri_declared_png", "png_uri_declared_pdf"],
+)
+def test_anthropic_messages_pt_honours_an_explicit_format_over_the_data_uri(url, format_override, expected):
+    """
+    `format` is how a caller corrects a media type the data URI got wrong, so the
+    routing between image and document blocks has to read it before the URI's own
+    declared type.
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": url, "format": format_override}}]}
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [expected]
+
+
+def test_anthropic_messages_pt_collapses_native_tool_use_blocks_sharing_an_id():
+    """
+    A replayed history can carry the same call twice, once with the raw id and once
+    with the sanitized one, and both land on the same `tool_use_id`. Anthropic 400s
+    a request whose tool ids repeat, so only the first block may survive.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather in paris"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "functions.Bash:0", "name": "get_weather", "input": {"city": "paris"}},
+                {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "london"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "functions.Bash:0", "content": "sunny"},
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [
+        {"type": "tool_use", "id": "functions_Bash_0", "name": "get_weather", "input": {"city": "paris"}}
+    ]
+
+
+def test_anthropic_messages_pt_tool_result_pdf_data_uri_becomes_a_document_block():
+    """
+    A tool can answer with a PDF it just fetched, which arrives as an `image_url`
+    entry inside the tool message's content list. Anthropic only accepts a PDF in a
+    document block, so the tool_result has to route it the same way user content does.
+    """
+    messages = [
+        {"role": "user", "content": "fetch the invoice"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "fetch_invoice", "input": {}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [{"type": "image_url", "image_url": {"url": _PDF_DATA_URI}}],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[2]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": _PDF_DATA_URI.split(",", 1)[1],
+                    },
+                }
+            ],
+        }
+    ]
+
+
+def test_anthropic_messages_pt_text_document_keeps_charset_named_by_the_data_uri():
+    """
+    `format` is meant to name the media type when the data URI is vague, so naming
+    the type the URI already declares must not throw away its `charset`. Decoding
+    latin-1 bytes as utf-8 raises before the request ever leaves litellm.
+    """
+    latin1_data_uri: Final = "data:text/plain;charset=iso-8859-1;base64," + base64.b64encode(
+        "café".encode("iso-8859-1")
+    ).decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": latin1_data_uri, "format": "text/plain"}}],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "café"}}
+    ]
+
+
+def test_anthropic_messages_pt_rejects_unparseable_native_tool_use_input():
+    """
+    The same broken arguments already fail the request when they arrive under
+    `tool_calls`, so a native `tool_use` block must not quietly send `{}` to the
+    model and get a confident answer built on arguments the caller never sent.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": "{not json"}],
+        },
+    ]
+
+    with pytest.raises(ValueError, match="get_weather"):
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+
+def test_anthropic_messages_pt_native_tool_use_input_survives_guardrail_redaction():
+    """
+    A guardrail replaces tool input with the redaction sentinel, which is not JSON.
+    Rejecting it would turn every redacted replay into a 400.
+    """
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": REDACTED_BY_LITELLM}],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
+
+
+def test_anthropic_messages_pt_keeps_a_pdf_a_document_when_the_format_is_generic():
+    """
+    A browser reports `application/octet-stream` for any file it cannot identify, so
+    that `format` says nothing about the bytes. Letting it override the data URI's own
+    `application/pdf` routes a real PDF into an image block Anthropic rejects.
+    """
+    messages = [
+        {"role": "user", "content": "fetch the invoice"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "fetch_invoice", "input": {}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": _PDF_DATA_URI, "format": "application/octet-stream"},
+                }
+            ],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[2]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_01",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": _PDF_DATA_URI.split(",", 1)[1],
+                    },
+                }
+            ],
+        }
+    ]
+
+
+def test_anthropic_messages_pt_drops_data_uri_parameters_the_format_replaces():
+    """
+    A data URI built from a file picker carries the file name in its media type, which
+    Anthropic's media_type enum rejects. Naming the type in `format` is how a caller
+    cleans that up, so only the charset of a text attachment may survive it.
+    """
+    png_data_uri: Final = "data:image/png;name=diagram.png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n").decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": png_data_uri, "format": "image/png"}}],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/png", "data": png_data_uri.split(",", 1)[1]},
+        }
+    ]
+
+
+def test_anthropic_messages_pt_rejects_a_text_attachment_it_cannot_decode():
+    """
+    A text file a browser turned into a data URI names no charset, so bytes that are
+    not utf-8 cannot be read. The caller has to get a client error naming the problem,
+    never a decode failure carrying the whole attachment back in its message.
+    """
+    undeclared_latin1: Final = "data:text/plain;base64," + base64.b64encode(
+        "the secret code word is caf\xe9".encode("iso-8859-1") * 200
+    ).decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": undeclared_latin1, "format": "text/plain"}}],
+        }
+    ]
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert "utf-8" in str(raised.value)
+    assert undeclared_latin1.split(",", 1)[1] not in str(raised.value)
