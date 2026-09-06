@@ -34,6 +34,7 @@ class SyncBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -53,6 +54,7 @@ class AsyncBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         return {"text": "async"}
 

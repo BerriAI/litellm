@@ -162,6 +162,8 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         super::errors::register(module)?;
+        litellm_python_interop::callback_runtime::register(module)?;
+        super::callback_bindings::register(module)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
         module.add_function(wrap_pyfunction!(

@@ -398,6 +398,7 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
     fake_module = types.ModuleType("litellm.rust_bridge._native")
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
+    fake_module.ready_endpoints = {"ocr": {"callbacks"}}  # type: ignore[attr-defined]
     monkeypatch.setattr(
         importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
