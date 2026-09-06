@@ -2,6 +2,7 @@ from typing import Final
 
 from check_workflow_job_name_collisions import (
     Unreadable,
+    blind_spots,
     callee_path,
     collisions,
     exit_code,
@@ -301,9 +302,9 @@ def test_a_matrix_list_supplies_values_the_same_way_include_rows_do() -> None:
     assert "`Analyze (go)` is published by 2 jobs" in found[0]
 
 
-def test_two_jobs_sharing_one_unresolvable_template_still_collide() -> None:
+def test_two_jobs_sharing_a_template_over_the_run_itself_still_collide() -> None:
     template: Final = (
-        "on: pull_request\njobs:\n  {job}:\n    name: ${{{{ matrix.shard }}}}\n    runs-on: ubuntu-latest\n"
+        "on: pull_request\njobs:\n  {job}:\n    name: ${{{{ github.event_name }}}}-build\n    runs-on: ubuntu-latest\n"
     )
     sources: Final = {
         "a.yml": template.format(job="one"),
@@ -314,6 +315,19 @@ def test_two_jobs_sharing_one_unresolvable_template_still_collide() -> None:
 
     assert len(found) == 1
     assert "is published by 2 jobs" in found[0]
+
+
+def test_two_jobs_sharing_a_template_that_reads_per_job_are_not_called_a_collision() -> None:
+    template: Final = (
+        "on: pull_request\njobs:\n  {job}:\n    name: ${{{{ matrix.shard }}}}\n    runs-on: ubuntu-latest\n"
+    )
+    sources: Final = {
+        "a.yml": template.format(job="one"),
+        "b.yml": template.format(job="two"),
+    }
+
+    assert collisions(sources) == ()
+    assert len(blind_spots(sources)) == 2
 
 
 def test_a_file_that_is_not_a_workflow_is_reported_rather_than_skipped() -> None:
@@ -437,13 +451,14 @@ def test_a_boolean_matrix_value_renders_the_way_github_writes_it() -> None:
     assert names == frozenset({"cache true", "cache false"})
 
 
-def test_a_format_call_its_arguments_cannot_fill_leaves_the_name_unresolved() -> None:
-    names: Final = frozenset(name for name, _ in published({"unit.yml": UNFILLABLE_FORMAT}))
+def test_a_format_call_its_arguments_cannot_fill_publishes_nothing_to_compare() -> None:
+    sources: Final = {"unit.yml": UNFILLABLE_FORMAT}
 
-    assert names == frozenset({"${{ format('{0} {1}', matrix.shard) }}"})
+    assert frozenset(name for name, _ in published(sources)) == frozenset()
+    assert "its name stays" in blind_spots(sources)[0]
 
 
-def test_a_call_to_a_workflow_outside_the_repo_publishes_no_name() -> None:
+def test_a_call_to_a_workflow_outside_the_repo_is_reported_rather_than_guessed() -> None:
     sources: Final = {
         "a.yml": "on: pull_request\njobs:\n  unit:\n    uses: BerriAI/other/.github/workflows/base.yml@main\n",
         "b.yml": "on: pull_request\njobs:\n  unit:\n    runs-on: ubuntu-latest\n",
@@ -451,6 +466,7 @@ def test_a_call_to_a_workflow_outside_the_repo_publishes_no_name() -> None:
 
     assert frozenset(name for name, _ in published(sources)) == frozenset({"unit"})
     assert collisions(sources) == ()
+    assert "outside this repository" in blind_spots(sources)[0]
 
 
 def test_a_chain_of_local_reusable_calls_publishes_every_level_of_the_chain() -> None:
@@ -498,3 +514,126 @@ def test_the_check_passes_when_every_file_reads_and_every_name_is_unique() -> No
     }
 
     assert exit_code(sources) == 0
+
+
+def test_two_callers_of_one_reusable_workflow_named_from_its_inputs_do_not_collide() -> None:
+    sources: Final = {
+        ".github/workflows/callee.yml": (
+            "on:\n  workflow_call:\njobs:\n  run:\n    name: ${{ inputs.suite }}\n    runs-on: ubuntu-latest\n"
+        ),
+        "caller.yml": (
+            "on: pull_request\njobs:\n"
+            "  alpha:\n    name: A\n    uses: ./.github/workflows/callee.yml\n    with:\n      suite: alpha\n"
+            "  beta:\n    name: A\n    uses: ./.github/workflows/callee.yml\n    with:\n      suite: beta\n"
+        ),
+    }
+
+    assert collisions(sources) == ()
+    assert len(blind_spots(sources)) == 2
+
+
+def test_a_matrix_that_is_itself_an_expression_never_collapses_onto_the_bare_job_id() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n  build:\n    strategy:\n"
+            "      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}\n    runs-on: ubuntu-latest\n"
+        ),
+        "b.yml": "on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert frozenset(name for name, _ in published(sources)) == frozenset({"build"})
+    assert collisions(sources) == ()
+    assert "the matrix itself comes from an expression" in blind_spots(sources)[0]
+
+
+def test_a_matrix_listing_objects_never_collapses_onto_the_bare_job_id() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n  build:\n    strategy:\n      matrix:\n        target:\n"
+            "          - os: ubuntu\n          - os: windows\n    runs-on: ubuntu-latest\n"
+        ),
+        "b.yml": "on: pull_request\njobs:\n  build:\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert frozenset(name for name, _ in published(sources)) == frozenset({"build"})
+    assert collisions(sources) == ()
+    assert "not plain scalars" in blind_spots(sources)[0]
+
+
+def test_a_call_to_a_workflow_file_the_checkout_does_not_hold_is_reported() -> None:
+    sources: Final = {"a.yml": "on: pull_request\njobs:\n  unit:\n    uses: ./.github/workflows/gone.yml\n"}
+
+    assert collisions(sources) == ()
+    assert "which this checkout does not hold" in blind_spots(sources)[0]
+
+
+def test_reusable_workflows_calling_each_other_in_a_loop_are_reported_not_followed() -> None:
+    sources: Final = {
+        ".github/workflows/a.yml": (
+            "on:\n  workflow_call:\njobs:\n  call:\n    name: A\n    uses: ./.github/workflows/b.yml\n"
+        ),
+        ".github/workflows/b.yml": (
+            "on:\n  workflow_call:\njobs:\n  call:\n    name: B\n    uses: ./.github/workflows/a.yml\n"
+        ),
+        "top.yml": "on: pull_request\njobs:\n  top:\n    name: Top\n    uses: ./.github/workflows/a.yml\n",
+    }
+
+    assert collisions(sources) == ()
+    assert any("loops back on itself" in spot for spot in blind_spots(sources))
+
+
+def test_a_caller_still_publishes_the_callee_jobs_it_can_read() -> None:
+    sources: Final = {
+        ".github/workflows/callee.yml": (
+            "on:\n  workflow_call:\njobs:\n"
+            "  lint:\n    name: Lint\n    runs-on: ubuntu-latest\n"
+            "  suite:\n    name: ${{ inputs.suite }}\n    runs-on: ubuntu-latest\n"
+        ),
+        "caller.yml": "on: pull_request\njobs:\n  call:\n    name: A\n    uses: ./.github/workflows/callee.yml\n",
+    }
+
+    assert frozenset(name for name, _ in published(sources)) == frozenset({"A / Lint"})
+    assert len(blind_spots(sources)) == 1
+
+
+def test_a_name_the_check_cannot_work_out_is_reported_without_failing_the_check() -> None:
+    sources: Final = {
+        "a.yml": "on: pull_request\njobs:\n  unit:\n    uses: BerriAI/other/.github/workflows/base.yml@main\n",
+    }
+
+    assert blind_spots(sources) != ()
+    assert exit_code(sources) == 0
+
+
+def test_a_caller_whose_own_name_is_unreadable_publishes_none_of_its_callee_names() -> None:
+    sources: Final = {
+        ".github/workflows/callee.yml": (
+            "on:\n  workflow_call:\njobs:\n  lint:\n    name: Lint\n    runs-on: ubuntu-latest\n"
+        ),
+        "caller.yml": (
+            "on: pull_request\njobs:\n  call:\n    name: ${{ matrix.suite }}\n"
+            "    uses: ./.github/workflows/callee.yml\n"
+        ),
+        "other.yml": "on: pull_request\njobs:\n  plain:\n    name: Lint\n    runs-on: ubuntu-latest\n",
+    }
+
+    assert frozenset(name for name, _ in published(sources)) == frozenset({"Lint"})
+    assert collisions(sources) == ()
+    assert "its name stays" in blind_spots(sources)[0]
+
+
+def test_an_include_row_naming_a_listed_key_extends_only_the_combinations_it_matches() -> None:
+    sources: Final = {
+        "unit.yml": (
+            "on: pull_request\njobs:\n  unit:\n"
+            "    name: ${{ matrix.python-version }} ${{ matrix.label }}\n"
+            "    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n"
+            '        python-version: ["3.12", "3.13"]\n'
+            "        include:\n"
+            '          - python-version: "3.12"\n'
+            "            label: fast\n"
+        )
+    }
+
+    assert frozenset(name for name, _ in published(sources)) == frozenset({"3.12 fast"})
+    assert len(blind_spots(sources)) == 1
