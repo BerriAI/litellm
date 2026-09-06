@@ -73,6 +73,9 @@ interface EndpointRowActionsProps {
 
 function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: EndpointRowActionsProps) {
   const endpointId = endpoint.id;
+  // The DB-backed CRUD API cannot manage config-file-defined endpoints.
+  const readOnly = endpoint.is_from_config === true;
+  const readOnlyHint = "Defined in config file — edit config.yaml to manage this endpoint";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -85,8 +88,9 @@ function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: Endpoi
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           data-testid="endpoint-action-edit"
-          disabled={!endpointId}
-          onClick={() => endpointId && onEndpointClick(endpointId)}
+          disabled={!endpointId || readOnly}
+          title={readOnly ? readOnlyHint : undefined}
+          onClick={() => endpointId && !readOnly && onEndpointClick(endpointId)}
         >
           <Pencil />
           Edit
@@ -95,8 +99,9 @@ function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: Endpoi
         <DropdownMenuItem
           variant="destructive"
           data-testid="endpoint-action-delete"
-          disabled={!endpointId}
-          onClick={() => endpointId && onDeleteClick(endpointId)}
+          disabled={!endpointId || readOnly}
+          title={readOnly ? readOnlyHint : undefined}
+          onClick={() => endpointId && !readOnly && onDeleteClick(endpointId)}
         >
           <Trash2 />
           Delete
@@ -186,6 +191,24 @@ export const getPassThroughEndpointsTableColumns = ({
     size: 180,
     enableSorting: false,
     cell: ({ row }) => <HeadersCell value={row.original.headers || {}} />,
+  },
+  {
+    id: "source",
+    meta: { title: "Source", skeleton: "badge" },
+    header: () => (
+      <HeaderWithTooltip
+        title="Source"
+        tooltip="Config file endpoints are read-only in the UI — manage them via config.yaml"
+      />
+    ),
+    size: 130,
+    enableSorting: false,
+    cell: ({ row }) =>
+      row.original.is_from_config ? (
+        <Badge variant="outline">Config file</Badge>
+      ) : (
+        <Badge variant="secondary">Database</Badge>
+      ),
   },
   {
     id: "actions",
