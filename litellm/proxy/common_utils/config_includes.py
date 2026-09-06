@@ -6,7 +6,7 @@ INCLUDE_KEY: Final = "include"
 
 
 class ConfigLoader(Protocol):
-    def __call__(self, include_entry: str, /) -> Awaitable[Mapping[str, object]]: ...
+    def __call__(self, include_entry: str, declared_in: str, /) -> Awaitable[tuple[str, Mapping[str, object]]]: ...
 
 
 def _merged_value(base_value: object, included_value: object) -> object:
@@ -44,25 +44,40 @@ def include_entries(config: Mapping[str, object]) -> tuple[str, ...]:
     return paths
 
 
-async def _resolve(config: Mapping[str, object], pending: tuple[str, ...], load: ConfigLoader) -> Mapping[str, object]:
+def _pending_from(config: Mapping[str, object], location: str) -> tuple[tuple[str, str], ...]:
+    return tuple((entry, location) for entry in include_entries(config))
+
+
+async def _resolve(
+    config: Mapping[str, object],
+    pending: tuple[tuple[str, str], ...],
+    loaded: frozenset[str],
+    load: ConfigLoader,
+) -> Mapping[str, object]:
     if not pending:
         return _without_include(config)
 
-    included: Final = await load(pending[0])
+    entry, declared_in = pending[0]
+    location, included = await load(entry, declared_in)
+    if location in loaded:
+        return await _resolve(config, pending[1:], loaded, load)
+
     return await _resolve(
         _merged(config, _without_include(included)),
-        (*pending[1:], *include_entries(included)),
+        (*pending[1:], *_pending_from(included, location)),
+        loaded | frozenset((location,)),
         load,
     )
 
 
-async def resolve_includes(config: Mapping[str, object], load: ConfigLoader) -> dict[str, object]:
+async def resolve_includes(config: Mapping[str, object], location: str, load: ConfigLoader) -> dict[str, object]:
     """
     Merge every config named by the `include` directive into the config that declares it.
 
-    List values are extended and every other value is overridden, an included config may declare
-    further includes, and `load` decides where an entry is read from, so the same merge applies to
-    configs on disk and to configs hosted in a bucket.
+    List values are extended and every other value is overridden, each entry is resolved relative to
+    the config that declares it, a config already pulled in is not merged a second time, and `load`
+    decides where an entry is read from, so the same merge applies to configs on disk and to configs
+    hosted in a bucket.
     """
-    merged: Final = await _resolve(config, include_entries(config), load)
+    merged: Final = await _resolve(config, _pending_from(config, location), frozenset((location,)), load)
     return dict(merged)  # mutable-ok: the proxy mutates the config it loads

@@ -1,4 +1,6 @@
+import asyncio
 import re
+import threading
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -158,6 +160,60 @@ class TestBucketConfigIncludes:
         assert merged == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
 
     @pytest.mark.asyncio
+    async def test_a_nested_include_resolves_against_the_object_that_declares_it(self):
+        """A nested `include` names a neighbour of the object declaring it, not of the root config."""
+        merged = await resolve_bucket_includes(
+            config={"include": ["shared/models.yaml"]},
+            object_key="configs/config.yaml",
+            fetch=self._bucket(
+                {
+                    "configs/shared/models.yaml": {
+                        "include": ["more_models.yaml"],
+                        "model_list": [{"model_name": "first"}],
+                    },
+                    "configs/shared/more_models.yaml": {"model_list": [{"model_name": "second"}]},
+                    "configs/more_models.yaml": {"model_list": [{"model_name": "wrong-prefix"}]},
+                }
+            ),
+        )
+
+        assert merged == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+    @pytest.mark.asyncio
+    async def test_an_object_pulled_in_twice_is_merged_once(self):
+        merged = await resolve_bucket_includes(
+            config={"include": ["a.yaml", "b.yaml"]},
+            object_key="configs/config.yaml",
+            fetch=self._bucket(
+                {
+                    "configs/a.yaml": {"include": ["shared.yaml"]},
+                    "configs/b.yaml": {"include": ["./shared.yaml"]},
+                    "configs/shared.yaml": {"model_list": [{"model_name": "shared"}]},
+                }
+            ),
+        )
+
+        assert merged == {"model_list": [{"model_name": "shared"}]}
+
+    @pytest.mark.asyncio
+    async def test_a_cycle_between_included_objects_terminates(self):
+        merged = await asyncio.wait_for(
+            resolve_bucket_includes(
+                config={"include": ["a.yaml"]},
+                object_key="configs/config.yaml",
+                fetch=self._bucket(
+                    {
+                        "configs/a.yaml": {"include": ["b.yaml"], "model_list": [{"model_name": "from-a"}]},
+                        "configs/b.yaml": {"include": ["a.yaml"], "model_list": [{"model_name": "from-b"}]},
+                    }
+                ),
+            ),
+            timeout=10,
+        )
+
+        assert merged == {"model_list": [{"model_name": "from-a"}, {"model_name": "from-b"}]}
+
+    @pytest.mark.asyncio
     async def test_list_values_are_extended_and_other_values_are_overridden(self):
         merged = await resolve_bucket_includes(
             config={
@@ -223,6 +279,23 @@ class TestBucketConfigIncludes:
         }
 
     @pytest.mark.asyncio
+    async def test_the_blocking_s3_read_runs_off_the_event_loop_thread(self, monkeypatch):
+        loop_thread = threading.current_thread()
+        read_threads = []
+
+        def record_thread(bucket_name, object_key):
+            read_threads.append(threading.current_thread())
+            return {"model_list": [{"model_name": "a-model"}]}
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_utils.load_config_utils.get_file_contents_from_s3", record_thread
+        )
+
+        await get_config_from_bucket(bucket_type="s3", bucket_name="litellm-configs", object_key="config.yaml")
+
+        assert read_threads and loop_thread not in read_threads
+
+    @pytest.mark.asyncio
     async def test_get_config_from_bucket_merges_includes_over_gcs(self, monkeypatch):
         objects = {
             "lit6982/config.yaml": {
@@ -232,11 +305,20 @@ class TestBucketConfigIncludes:
             "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
         }
 
-        async def fake_gcs(bucket_name, object_key):
-            return objects.get(object_key)
+        buckets = []
+
+        class FakeGCSBucket:
+            def __init__(self):
+                self.requested = []
+                buckets.append(self)
+
+            async def download_gcs_object(self, object_key):
+                self.requested.append(object_key)
+                return yaml.dump(objects[object_key]).encode("utf-8")
 
         monkeypatch.setattr(
-            "litellm.proxy.common_utils.load_config_utils.get_config_file_contents_from_gcs", fake_gcs
+            "litellm.proxy.common_utils.load_config_utils.gcs_config_bucket",
+            lambda bucket_name: FakeGCSBucket(),
         )
 
         config = await get_config_from_bucket(
@@ -247,6 +329,9 @@ class TestBucketConfigIncludes:
             "general_settings": {"master_key": "sk-1234"},
             "model_list": [{"model_name": "included-model"}],
         }
+        assert [bucket.requested for bucket in buckets] == [
+            ["lit6982/config.yaml", "lit6982/model_config.yaml"]
+        ]
 
     @pytest.mark.asyncio
     async def test_get_config_from_bucket_returns_none_when_the_root_object_is_missing(self, monkeypatch):
