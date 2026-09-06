@@ -16,6 +16,8 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import BaseModel
+
 from e2e_http import (
     AnthropicHeaders,
     AuthHeaders,
@@ -239,6 +241,88 @@ def servable_timeout_message(
     )
 
 
+type BodyPoller[R: BaseModel] = Callable[[], Result[R]]
+
+
+@dataclass(frozen=True, slots=True)
+class Converged[R: BaseModel]:
+    """The replica's read satisfied the predicate; `result` is that read."""
+
+    result: Result[R]
+
+
+@dataclass(frozen=True, slots=True)
+class NotConverged[R: BaseModel]:
+    """The deadline passed without a read satisfying the predicate; `last_result` is
+    the final read, so the caller can tell a stale body from a failed request."""
+
+    last_result: Result[R]
+
+
+type ConvergeOutcome[R: BaseModel] = Converged[R] | NotConverged[R]
+
+
+def await_converged[R: BaseModel](
+    poll: BodyPoller[R],
+    *,
+    converged: Callable[[Result[R]], bool],
+    timeout: float,
+    interval: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> ConvergeOutcome[R]:
+    """Poll until a read satisfies `converged` or `timeout` elapses. Sleeps only
+    min(interval, time left) between polls so the last poll lands on the deadline
+    instead of being skipped. Clock and sleep are injected."""
+    deadline: Final = now() + timeout
+    while True:
+        result = poll()
+        if converged(result):
+            return Converged(result=result)
+        remaining = deadline - now()
+        if remaining <= 0:
+            return NotConverged(last_result=result)
+        sleep(min(interval, remaining))
+
+
+def await_converged_everywhere[R: BaseModel](
+    pollers: Mapping[str, BodyPoller[R]],
+    *,
+    converged: Callable[[Result[R]], bool],
+    timeout: float,
+    interval: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> Mapping[str, ConvergeOutcome[R]]:
+    """`await_converged` against every replica in turn, each with the full budget, so a
+    replica that lags behind the one a write landed on is polled until it catches up
+    rather than failing on its first stale read."""
+    return MappingProxyType(
+        {
+            replica: await_converged(
+                poll, converged=converged, timeout=timeout, interval=interval, now=now, sleep=sleep
+            )
+            for replica, poll in pollers.items()
+        }
+    )
+
+
+def first_lagging_replica[R: BaseModel](
+    outcomes: Mapping[str, ConvergeOutcome[R]],
+) -> tuple[str, NotConverged[R]] | None:
+    return next(
+        ((replica, outcome) for replica, outcome in outcomes.items() if isinstance(outcome, NotConverged)),
+        None,
+    )
+
+
+def read_back_timeout_message[R: BaseModel](*, path: str, replica: str, timeout: float, last_result: Result[R]) -> str:
+    return (
+        f"GET {path} on {replica} never converged within {timeout}s of the write "
+        f"(control/data-plane propagation issue); last read: {last_result}"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ProxyClient:
     transport: Transport
@@ -289,6 +373,49 @@ class ProxyClient:
                 response_type=KeyInfoResponse,
             )
         ).info
+
+    def read_back_everywhere[R: BaseModel](
+        self,
+        path: str,
+        *,
+        params: BaseModel,
+        response_type: type[R],
+        converged: Callable[[Result[R]], bool],
+    ) -> Mapping[str, Result[R]]:
+        """GET `path` under the master key on every replica in PROXY_REPLICA_URLS (the
+        data-plane URL alone when the stack exports no per-gateway addresses), polling
+        each to poll_timeout until its read satisfies `converged`. Returns that read per
+        replica, or fails naming the first replica that never converged and its last
+        read. Behind a load balancer the single address proves one replica converged,
+        not all of them; only per-gateway addresses make this a fleet-wide proof."""
+        outcomes: Final = await_converged_everywhere(
+            {
+                url: self._body_poller(transport, path, params, response_type)
+                for url, transport in self.replicas.items()
+            },
+            converged=converged,
+            timeout=self.poll_timeout,
+            interval=self.poll_interval,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        lagging: Final = first_lagging_replica(outcomes)
+        if lagging is not None:
+            replica, outcome = lagging
+            raise AssertionError(
+                read_back_timeout_message(
+                    path=path, replica=replica, timeout=self.poll_timeout, last_result=outcome.last_result
+                )
+            )
+        return MappingProxyType(
+            {replica: outcome.result for replica, outcome in outcomes.items() if isinstance(outcome, Converged)}
+        )
+
+    @staticmethod
+    def _body_poller[R: BaseModel](
+        transport: Transport, path: str, params: BaseModel, response_type: type[R]
+    ) -> BodyPoller[R]:
+        return lambda: transport.get(path, headers=transport.master, params=params, response_type=response_type)
 
     def model_info(self) -> list[ModelInfoEntry]:
         """Every configured deployment with the price the proxy resolved for it
