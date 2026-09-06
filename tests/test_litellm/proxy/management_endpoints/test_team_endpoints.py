@@ -541,6 +541,18 @@ async def test_update_team_rejects_a_duration_that_never_advances(
     mock_find_unique.assert_not_awaited()
 
 
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_set_budget_reset_at_treats_a_blank_duration_as_unset(blank):
+    from litellm.proxy.management_endpoints.team_endpoints import _set_budget_reset_at
+
+    data = UpdateTeamRequest.model_construct(team_id="team-1", budget_duration=blank)
+    updated_kv = {"budget_duration": blank}
+
+    _set_budget_reset_at(data, updated_kv)
+
+    assert updated_kv["budget_reset_at"] is None
+
+
 @pytest.mark.asyncio
 async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
     """
@@ -13119,6 +13131,35 @@ async def test_new_team_explicit_null_budget_duration_beats_configured_default(
 
     await new_team(
         data=NewTeamRequest(team_alias="lifetime-budget-team", budget_duration=None),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    team_data = mock_team_create.call_args.kwargs["data"]
+    assert team_data.get("budget_duration") is None
+    assert team_data.get("budget_reset_at") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blank", ["", "   "])
+async def test_new_team_blank_budget_duration_is_lifetime_not_a_daily_reset(
+    mock_db_client, mock_admin_auth, monkeypatch, blank
+):
+    """A form-posted empty budget_duration used to stamp budget_reset_at at
+    next midnight. It must persist as unset, the same as an explicit null.
+    """
+    from fastapi import Request
+
+    import litellm
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setattr(litellm, "default_team_settings", None)
+    monkeypatch.setattr(litellm, "default_team_params", {"budget_duration": "30d"})
+    mock_team_create = _wire_new_team_prisma(mock_db_client)
+
+    await new_team(
+        data=NewTeamRequest(team_alias="blank-duration-team", budget_duration=blank),
         http_request=MagicMock(spec=Request),
         user_api_key_dict=mock_admin_auth,
     )

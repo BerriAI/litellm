@@ -1121,6 +1121,12 @@ from litellm.types.object_permission import (  # noqa: E402
 )
 
 
+def _blank_duration_as_unset(v: object) -> object:
+    if isinstance(v, str) and v.strip() == "":
+        return None
+    return v
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -1165,6 +1171,11 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
         if v == "":
             return None
         return v
+
+    @field_validator("budget_duration", mode="before")
+    @classmethod
+    def empty_budget_duration_is_unset(cls, v: object) -> object:
+        return _blank_duration_as_unset(v)
 
 
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
@@ -1985,6 +1996,11 @@ class NewTeamRequest(TeamBase):
             return None
         return v
 
+    @field_validator("budget_duration", "team_member_budget_duration", mode="before")
+    @classmethod
+    def empty_budget_duration_is_unset(cls, v: object) -> object:
+        return _blank_duration_as_unset(v)
+
 
 class GlobalEndUsersSpend(LiteLLMPydanticObjectBase):
     api_key: str | None = None
@@ -2047,6 +2063,11 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     access_group_ids: list[str] | None = None
     budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
+
+    @field_validator("budget_duration", "team_member_budget_duration", mode="before")
+    @classmethod
+    def empty_budget_duration_is_unset(cls, v: object) -> object:
+        return _blank_duration_as_unset(v)
 
 
 class PatchTeamRequest(UpdateTeamRequest):
