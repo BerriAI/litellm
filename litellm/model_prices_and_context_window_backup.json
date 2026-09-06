@@ -54733,7 +54733,10 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "global.openai.gpt-5.6-sol": {
         "input_cost_per_token": 4e-06,
@@ -54759,7 +54762,10 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "us.openai.gpt-5.6-terra": {
         "input_cost_per_token": 2.2e-06,
@@ -54785,7 +54791,10 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "global.openai.gpt-5.6-terra": {
         "input_cost_per_token": 2e-06,
@@ -54811,7 +54820,10 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "us.openai.gpt-5.6-luna": {
         "input_cost_per_token": 2.2e-07,
@@ -54837,7 +54849,10 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "global.openai.gpt-5.6-luna": {
         "input_cost_per_token": 2e-07,
@@ -54863,7 +54878,10 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supported_endpoints": [
+            "/v1/responses"
+        ]
     },
     "bedrock_mantle/openai.gpt-5.5": {
         "input_cost_per_token": 5.5e-06,
