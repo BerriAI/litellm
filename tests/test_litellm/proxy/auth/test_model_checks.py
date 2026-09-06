@@ -490,7 +490,10 @@ def test_get_known_models_from_wildcard_hosted_vllm_forwards_api_key():
         litellm.check_provider_endpoint = original_check_provider_endpoint  # test-quality-ok: restore test global
 
     assert result == ["hosted_vllm/qwen2.5"]
-    assert mock_get.call_args.kwargs["headers"] == {"x-api-key": "test-key"}
+    assert mock_get.call_args.kwargs["headers"] == {
+        "x-api-key": "test-key",
+        "Authorization": "Bearer test-key",
+    }
 
 
 def test_get_known_models_from_wildcard_unknown_provider_returns_empty():

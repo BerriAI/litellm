@@ -41,6 +41,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
     ) -> dict:
         if api_key is not None:
             headers["x-api-key"] = api_key
+            headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     @staticmethod
@@ -66,7 +67,10 @@ class VLLMModelInfo(BaseLLMModelInfo):
         response: Final = (
             litellm.module_level_client.get(
                 url=url,
-                headers={"x-api-key": api_key},  # mutable-ok: optional authentication header
+                headers={  # mutable-ok: optional authentication headers
+                    "x-api-key": api_key,
+                    "Authorization": f"Bearer {api_key}",
+                },
             )
             if api_key is not None
             else litellm.module_level_client.get(url=url)
