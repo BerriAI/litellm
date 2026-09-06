@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from typing import Final
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6723,6 +6724,18 @@ def test_forced_tool_choice_forwarded_on_converse_models_that_support_it(
     )
 
     assert result == {"any": {}}
+
+
+@pytest.mark.parametrize("model", ("anthropic.claude-opus-4-7", "us.anthropic.claude-opus-4-7"))
+def test_converse_accepts_anthropic_default_temperature(model: str) -> None:
+    result: Final = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="bedrock",
+        temperature=1,
+        drop_params=False,
+    )
+
+    assert result["temperature"] == 1
 
 
 def test_get_supported_openai_params_drops_sampling_params_for_gpt5_models():
