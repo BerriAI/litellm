@@ -27,7 +27,8 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
 from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
-from litellm.rust_bridge.dispatch import adispatch, dispatch
+from litellm.rust_bridge.dispatch import anative_first, native_first
+from litellm.rust_bridge.runtime import DispatchResult
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContentBlockStart,
@@ -369,15 +370,7 @@ class AnthropicChatCompletion(BaseLLM):
         if config is None:
             raise ValueError(f"Provider config not found for model: {model} and provider: {custom_llm_provider}")
 
-        def build_request() -> tuple[dict, dict]:  # mutable-ok: rewritten in place downstream
-            """Translate the request the Python way, returning `(headers, data)`.
-
-            The pair stays mutable because the streaming path rewrites it in
-            place (`data["stream"] = True`) before sending.
-
-            Shared by the normal path and by the Rust path's fallback, which
-            builds it only when the Rust call did not serve the request.
-            """
+        def prepare_python() -> tuple[dict[str, str], dict[str, object]]:  # mutable-ok: stream mutates data
             request_data: Final = config.transform_request(
                 model=model,
                 messages=messages,
@@ -385,11 +378,28 @@ class AnthropicChatCompletion(BaseLLM):
                 litellm_params=litellm_params,
                 headers=headers,
             )
-            return update_request_with_filtered_beta(
+            python_headers, data = update_request_with_filtered_beta(
                 headers=headers,
                 request_data=request_data,
                 provider=custom_llm_provider,
             )
+
+            ## LOGGING
+            # Reaching here with `serves_via_rust` set means the Rust attempt
+            # declined at call time, before the provider was called, and already
+            # logged this request. That is the same attempt continuing.
+            if not serves_via_rust:
+                logging_obj.pre_call(
+                    input=messages,
+                    api_key=api_key,
+                    additional_args={
+                        "complete_input_dict": data,
+                        "api_base": api_base,
+                        "headers": python_headers,
+                    },
+                )
+            print_verbose(f"_is_function_call: {_is_function_call}")
+            return python_headers, data
 
         # The Rust core owns the whole call for the subset it accepts, so ask
         # before transforming: whichever path runs emits pre_call exactly once.
@@ -407,114 +417,67 @@ class AnthropicChatCompletion(BaseLLM):
             litellm_params=litellm_params,
             stream=stream,
         )
+        rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
+            "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
+                "model": model,
+                "messages": messages,
+                **rust_optional_params,
+            },
+            "api_base": api_base,
+            "headers": headers,
+        }
         if serves_via_rust:
-            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
-                    "model": model,
-                    "messages": messages,
-                    **rust_optional_params,
-                },
-                "api_base": api_base,
-                "headers": headers,
-            }
             logging_obj.pre_call(input=messages, api_key=api_key, additional_args=rust_logging_args)
-            log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
-                logging_obj=logging_obj,
+        log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
+            logging_obj=logging_obj,
+            messages=messages,
+            api_key=api_key,
+            additional_args=rust_logging_args,
+        )
+
+        def native_completion() -> DispatchResult[ModelResponse]:
+            return rust_chat_completions_bridge.chat_completions(
+                model=model,
                 messages=messages,
+                optional_params=rust_optional_params,
+                model_response=model_response,
                 api_key=api_key,
-                additional_args=rust_logging_args,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=headers,
+                timeout=timeout,
+                on_response=log_rust_post_call,
+                eligible=serves_via_rust,
             )
-            if acompletion is True:
 
-                async def python_fallback() -> "ModelResponse | CustomStreamWrapper":
-                    # pre_call already fired for this request above. The Rust
-                    # path only declines before the provider is called, so this
-                    # is the same attempt continuing, not a second one.
-                    fallback_headers, fallback_data = build_request()
-                    return await self.acompletion_function(
-                        model=model,
-                        messages=messages,
-                        data=fallback_data,
-                        api_base=api_base,
-                        custom_prompt_dict=custom_prompt_dict,
-                        model_response=model_response,
-                        print_verbose=print_verbose,
-                        encoding=encoding,
-                        api_key=api_key,
-                        provider_config=config,
-                        logging_obj=logging_obj,
-                        optional_params=optional_params,
-                        stream=stream,
-                        _is_function_call=_is_function_call,
-                        litellm_params=litellm_params,
-                        logger_fn=logger_fn,
-                        headers=fallback_headers,
-                        client=client,
-                        json_mode=json_mode,
-                        timeout=timeout,
-                    )
-
-                return adispatch(
-                    native=lambda: rust_chat_completions_bridge.achat_completions(
-                        model=model,
-                        messages=messages,
-                        optional_params=rust_optional_params,
-                        model_response=model_response,
-                        api_key=api_key,
-                        api_base=api_base,
-                        custom_llm_provider=custom_llm_provider,
-                        extra_headers=headers,
-                        timeout=timeout,
-                        on_response=log_rust_post_call,
-                    ),
-                    python=python_fallback,
-                    route="chat_completions",
-                    errors=rust_chat_completions_bridge.error_handling(custom_llm_provider or "", model),
-                )
-            rust_response: Final = dispatch(
-                native=lambda: rust_chat_completions_bridge.chat_completions(
-                    model=model,
-                    messages=messages,
-                    optional_params=rust_optional_params,
-                    model_response=model_response,
-                    api_key=api_key,
-                    api_base=api_base,
-                    custom_llm_provider=custom_llm_provider,
-                    extra_headers=headers,
-                    timeout=timeout,
-                    on_response=log_rust_post_call,
-                ),
-                python=lambda: None,
-                route="chat_completions",
-                errors=rust_chat_completions_bridge.error_handling(custom_llm_provider or "", model),
-            )
-            if rust_response is not None:
-                return rust_response
-
-        headers, data = build_request()
-
-        ## LOGGING
-        # Reaching here with `serves_via_rust` set means the Rust attempt
-        # declined at call time, before the provider was called, and already
-        # logged this request. That is the same attempt continuing.
-        if not serves_via_rust:
-            logging_obj.pre_call(
-                input=messages,
+        async def native_acompletion() -> DispatchResult[ModelResponse]:
+            return await rust_chat_completions_bridge.achat_completions(
+                model=model,
+                messages=messages,
+                optional_params=rust_optional_params,
+                model_response=model_response,
                 api_key=api_key,
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": api_base,
-                    "headers": headers,
-                },
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=headers,
+                timeout=timeout,
+                on_response=log_rust_post_call,
+                eligible=serves_via_rust,
             )
-        print_verbose(f"_is_function_call: {_is_function_call}")
-        if acompletion is True:
+
+        @anative_first(
+            native=native_acompletion,
+            route="chat_completions",
+            errors=lambda: rust_chat_completions_bridge.error_handling(custom_llm_provider or "", model),
+        )
+        async def execute_async() -> ModelResponse | CustomStreamWrapper:
+            headers, data = prepare_python()
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)
                 print_verbose("makes async anthropic streaming POST request")
                 data["stream"] = stream
-                return self.acompletion_stream_function(
+                return await self.acompletion_stream_function(
                     model=model,
                     messages=messages,
                     data=data,
@@ -536,7 +499,7 @@ class AnthropicChatCompletion(BaseLLM):
                     client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
                 )
             else:
-                return self.acompletion_function(
+                return await self.acompletion_function(
                     model=model,
                     messages=messages,
                     data=data,
@@ -558,7 +521,14 @@ class AnthropicChatCompletion(BaseLLM):
                     json_mode=json_mode,
                     timeout=timeout,
                 )
-        else:
+
+        @native_first(
+            native=native_completion,
+            route="chat_completions",
+            errors=lambda: rust_chat_completions_bridge.error_handling(custom_llm_provider or "", model),
+        )
+        def execute_sync() -> ModelResponse | CustomStreamWrapper:
+            headers, data = prepare_python()
             ## COMPLETION CALL
             if (
                 stream is True
@@ -590,13 +560,12 @@ class AnthropicChatCompletion(BaseLLM):
                 )
 
             else:
-                if client is None or not isinstance(client, HTTPHandler):
-                    client = _get_httpx_client(params={"timeout": timeout})
-                else:
-                    client = client
+                python_client: Final = (
+                    client if isinstance(client, HTTPHandler) else _get_httpx_client(params={"timeout": timeout})
+                )
 
                 try:
-                    response: Final = client.post(
+                    response: Final = python_client.post(
                         api_base,
                         headers=headers,
                         data=json.dumps(data),
@@ -617,20 +586,21 @@ class AnthropicChatCompletion(BaseLLM):
                         status_code=status_code,
                         headers=error_headers,
                     )
+            return config.transform_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                request_data=data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                json_mode=json_mode,
+            )
 
-        return config.transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            request_data=data,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            encoding=encoding,
-            json_mode=json_mode,
-        )
+        return execute_async() if acompletion else execute_sync()
 
     def embedding(self):
         # logic for parsing in - calling - parsing out model embedding calls

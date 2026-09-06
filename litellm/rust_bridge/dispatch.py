@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final, TypeAlias, TypeVar
+from functools import wraps
+from typing import Final, ParamSpec, TypeAlias, TypeVar
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import APIError
@@ -12,6 +14,7 @@ from litellm.rust_bridge.runtime import DispatchResult, Handled, NativeFailed, N
 
 NativeT = TypeVar("NativeT")
 PythonT = TypeVar("PythonT")
+P = ParamSpec("P")
 
 
 class ErrorAction(Enum):
@@ -89,49 +92,95 @@ def _log_skip(route: str, skipped: NativeSkipped) -> None:
     verbose_logger.debug("Native %s skipped (%s): %s", route, skipped.reason.value, skipped.detail or "")
 
 
-def dispatch(
+def native_first(
     *,
-    native: Callable[[], DispatchResult[NativeT]],
-    python: Callable[[], PythonT],
+    native: Callable[P, DispatchResult[NativeT]],
     route: str,
-    errors: ErrorHandling,
-) -> NativeT | PythonT:
-    try:
-        attempted: Final = native()
-    except Exception as error:  # noqa: BLE001  # preserve declared handling of loading and adaptation failures
-        unexpected: Final = _handle_error(error, errors.unexpected, route, NativeSkipReason.FAILED)
-        _log_skip(route, unexpected)
-        return python()
-    result: Final = _resolve(attempted, errors, route)
-    match result:
-        case Handled(value):
-            return value
-        case NativeSkipped():
-            _log_skip(route, result)
-            return python()
+    errors: Callable[P, ErrorHandling],
+) -> Callable[[Callable[P, PythonT]], Callable[P, NativeT | PythonT]]:
+    def wrap(implementation: Callable[P, PythonT]) -> Callable[P, NativeT | PythonT]:
+        @wraps(implementation)
+        def run(
+            *args: P.args,
+            **kwargs: P.kwargs,  # kwargs-ok: ParamSpec preserves the wrapped signature
+        ) -> NativeT | PythonT:
+            rules: Final = errors(*args, **kwargs)
+            try:
+                attempted: Final = native(*args, **kwargs)
+            except Exception as error:  # noqa: BLE001  # preserve declared handling of loading and adaptation failures
+                skipped: Final = _handle_error(error, rules.unexpected, route, NativeSkipReason.FAILED)
+                _log_skip(route, skipped)
+            else:
+                result: Final = _resolve(attempted, rules, route)
+                if isinstance(result, Handled):
+                    return result.value
+                _log_skip(route, result)
+            return implementation(*args, **kwargs)
+
+        return run
+
+    return wrap
 
 
-async def adispatch(
+def anative_first(
     *,
-    native: Callable[[], Awaitable[DispatchResult[NativeT]]],
-    python: Callable[[], Awaitable[PythonT]],
+    native: Callable[P, Awaitable[DispatchResult[NativeT]]],
     route: str,
-    errors: ErrorHandling,
-) -> NativeT | PythonT:
-    try:
-        attempted: Final = await native()
-    except Exception as error:  # noqa: BLE001  # preserve declared handling of loading and adaptation failures
-        unexpected: Final = _handle_error(error, errors.unexpected, route, NativeSkipReason.FAILED)
-        _log_skip(route, unexpected)
-        return await python()
-    result: Final = _resolve(attempted, errors, route)
-    match result:
-        case Handled(value):
-            return value
-        case NativeSkipped():
-            _log_skip(route, result)
-            return await python()
+    errors: Callable[P, ErrorHandling],
+) -> Callable[[Callable[P, Awaitable[PythonT]]], Callable[P, Awaitable[NativeT | PythonT]]]:
+    def wrap(implementation: Callable[P, Awaitable[PythonT]]) -> Callable[P, Awaitable[NativeT | PythonT]]:
+        @wraps(implementation)
+        async def run(
+            *args: P.args,
+            **kwargs: P.kwargs,  # kwargs-ok: ParamSpec preserves the wrapped signature
+        ) -> NativeT | PythonT:
+            rules: Final = errors(*args, **kwargs)
+            try:
+                attempted: Final = await native(*args, **kwargs)
+            except Exception as error:  # noqa: BLE001  # preserve declared handling of loading and adaptation failures
+                skipped: Final = _handle_error(error, rules.unexpected, route, NativeSkipReason.FAILED)
+                _log_skip(route, skipped)
+            else:
+                result: Final = _resolve(attempted, rules, route)
+                if isinstance(result, Handled):
+                    return result.value
+                _log_skip(route, result)
+            return await implementation(*args, **kwargs)
+
+        return run
+
+    return wrap
 
 
-async def async_none() -> None:
-    return None
+def anative_context(
+    *,
+    native: Callable[P, Awaitable[DispatchResult[AbstractAsyncContextManager[NativeT]]]],
+    route: str,
+    errors: Callable[P, ErrorHandling],
+) -> Callable[
+    [Callable[P, AbstractAsyncContextManager[PythonT]]],
+    Callable[P, AbstractAsyncContextManager[NativeT | PythonT]],
+]:
+    def wrap(
+        implementation: Callable[P, AbstractAsyncContextManager[PythonT]],
+    ) -> Callable[P, AbstractAsyncContextManager[NativeT | PythonT]]:
+        @anative_first(native=native, route=route, errors=errors)
+        async def acquire(
+            *args: P.args,
+            **kwargs: P.kwargs,  # kwargs-ok: ParamSpec preserves the wrapped signature
+        ) -> AbstractAsyncContextManager[PythonT]:
+            return implementation(*args, **kwargs)
+
+        @wraps(implementation)
+        @asynccontextmanager
+        async def run(
+            *args: P.args,
+            **kwargs: P.kwargs,  # kwargs-ok: ParamSpec preserves the wrapped signature
+        ) -> AsyncGenerator[NativeT | PythonT, None]:
+            manager: Final = await acquire(*args, **kwargs)
+            async with manager as connection:
+                yield connection
+
+        return run
+
+    return wrap

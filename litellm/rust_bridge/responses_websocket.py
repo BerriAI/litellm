@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Final
 
 import httpx
@@ -13,7 +15,7 @@ from litellm.rust_bridge.protocols import (
     RustResponsesWebSocket,
     RustResponsesWebSocketConnection,
 )
-from litellm.rust_bridge.runtime import DispatchResult, aattempt
+from litellm.rust_bridge.runtime import DispatchResult, aattempt, adapt_result
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 _RESPONSES_WEBSOCKET: Final[NativeBinding[RustResponsesWebSocketConnection]] = NativeBinding(
@@ -32,7 +34,7 @@ def set_rust_responses_websocket(
             _RESPONSES_WEBSOCKET.override(connection)
 
 
-class _ConnectionAdapter:
+class ConnectionAdapter:
     def __init__(self, connection: RustResponsesWebSocket):
         self._connection: Final[RustResponsesWebSocket] = connection
 
@@ -54,7 +56,7 @@ async def connect(
     url: str,
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
-) -> DispatchResult[_ConnectionAdapter]:
+) -> DispatchResult[ConnectionAdapter]:
     return await aattempt(
         load=_RESPONSES_WEBSOCKET.load,
         enabled=rust_enabled(),
@@ -65,5 +67,23 @@ async def connect(
             headers=headers,
             timeout_seconds=timeout_seconds,
         ),
-        adapt=_ConnectionAdapter,
+        adapt=ConnectionAdapter,
     )
+
+
+@asynccontextmanager
+async def _connection_context(connection: ConnectionAdapter) -> AsyncGenerator[ConnectionAdapter, None]:
+    try:
+        yield connection
+    finally:
+        await connection.close()
+
+
+async def managed_connect(
+    *,
+    url: str,
+    headers: dict[str, str],
+    timeout: float | httpx.Timeout | None,
+) -> DispatchResult[AbstractAsyncContextManager[ConnectionAdapter]]:
+    result: Final = await connect(url=url, headers=headers, timeout=timeout)
+    return adapt_result(result, _connection_context)
