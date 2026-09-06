@@ -175,12 +175,10 @@ class LeastBusyLoggingHandler(CustomLogger):
             return
         key: Final = _request_count_key(*ref)
         redis_cache: Final = self.router_cache.redis_cache
+        in_memory_cache: Final = self.router_cache.in_memory_cache
         try:
-            local: Final = self.router_cache.increment_cache(
-                key, delta, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS
-            )
-            if local < 0:
-                self.router_cache.set_cache(key, 0, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
+            if in_memory_cache is not None:
+                in_memory_cache.increment_with_floor(key, delta, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
             if redis_cache is None:
                 return
             redis_cache.increment_with_floor(key, delta, IN_FLIGHT_COUNT_TTL_SECONDS)
@@ -193,12 +191,10 @@ class LeastBusyLoggingHandler(CustomLogger):
             return
         key: Final = _request_count_key(*ref)
         redis_cache: Final = self.router_cache.redis_cache
+        in_memory_cache: Final = self.router_cache.in_memory_cache
         try:
-            local: Final = await self.router_cache.async_increment_cache(
-                key, delta, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS
-            )
-            if local is not None and local < 0:
-                await self.router_cache.async_set_cache(key, 0, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
+            if in_memory_cache is not None:
+                in_memory_cache.increment_with_floor(key, delta, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
             if redis_cache is None:
                 return
             await redis_cache.async_increment_with_floor(key, delta, IN_FLIGHT_COUNT_TTL_SECONDS)

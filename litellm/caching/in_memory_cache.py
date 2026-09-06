@@ -230,6 +230,20 @@ class InMemoryCache(BaseCache):
             self.set_cache(key, value, **kwargs)
             return value
 
+    def increment_with_floor(self, key, value: float, **kwargs) -> float:
+        """Add ``value`` to ``key`` and clamp the result at zero, in one lock hold.
+
+        Doing the clamp with a follow-up ``set_cache`` after ``increment_cache`` returns
+        is not safe: a concurrent increment on the same key can land in the gap and be
+        overwritten by the corrective zero, dropping a live count. Clamping inside the
+        same critical section keeps that lost-update from happening.
+        """
+        with self._increment_lock:
+            init_value: Final = self.get_cache(key=key) or 0
+            new_value: Final = max(init_value + value, 0)
+            self.set_cache(key, new_value, **kwargs)
+            return new_value
+
     async def async_get_cache(self, key, **kwargs):
         return self.get_cache(key=key, **kwargs)
 

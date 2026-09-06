@@ -45,6 +45,33 @@ async def test_async_increment_delegates_to_locked_sync_path():
     assert cache.get_cache("counter") == 5
 
 
+def test_increment_with_floor_never_drops_a_concurrent_increment():
+    """A ``increment_cache`` followed by ``set_cache(0)`` used to leak: a concurrent
+    increment landing between the two writes would be erased by the corrective zero.
+    Clamping inside the same lock hold closes that gap, so N concurrent (+1)s starting
+    from a negative seed must produce ``N - 1`` and never less."""
+    cache = InMemoryCache()
+    cache.set_cache("counter", _SlowInt(-1))
+    thread_count = 8
+    barrier = threading.Barrier(thread_count)
+
+    def increment(_: int) -> float:
+        barrier.wait()
+        return cache.increment_with_floor("counter", 1)
+
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        tuple(executor.map(increment, range(thread_count)))
+
+    assert cache.get_cache("counter") == thread_count - 1
+
+
+def test_increment_with_floor_clamps_negatives_at_zero():
+    cache = InMemoryCache()
+    cache.set_cache("counter", 1)
+    assert cache.increment_with_floor("counter", -5) == 0
+    assert cache.get_cache("counter") == 0
+
+
 def test_in_memory_openai_obj_cache():
     from openai import OpenAI
 
