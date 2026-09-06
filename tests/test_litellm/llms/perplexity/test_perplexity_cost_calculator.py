@@ -8,6 +8,7 @@ search queries, and reasoning tokens.
 import json
 import math
 import os
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
@@ -21,6 +22,7 @@ from litellm.llms.perplexity.cost_calculator import (
 )
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
+    OffPeakPricing,
     Usage,
     PromptTokensDetailsWrapper,
 )
@@ -523,3 +525,94 @@ class TestPerplexityCostCalculator:
         )
 
         assert math.isclose(total_cost, 1000 * 1.4e-06 + 500 * 4.4e-06, rel_tol=1e-9)
+
+    OFF_PEAK_MODEL = "sonar-off-peak-test"
+    OFF_PEAK_WINDOW = "14:00-00:00"
+    INSIDE_WINDOW = datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc)
+    OUTSIDE_WINDOW = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
+
+    def _register_off_peak_model(self, off_peak_pricing: OffPeakPricing) -> None:
+        litellm.model_cost[f"perplexity/{self.OFF_PEAK_MODEL}"] = {
+            "litellm_provider": "perplexity",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1e-06,
+            "output_cost_per_reasoning_token": 3e-06,
+            "citation_cost_per_token": 2e-06,
+            "search_context_cost_per_query": {"search_context_size_low": 0.005},
+            "off_peak_pricing": off_peak_pricing,
+        }
+
+    def test_off_peak_window_swaps_in_the_off_peak_rates(self):
+        """
+        Regression (LIT-6874): a deployment configured with off_peak_pricing kept billing the
+        standard perplexity rates inside its window, while the same block on a deepseek
+        deployment billed the off-peak rates.
+        """
+        self._register_off_peak_model(
+            {"hours_utc": self.OFF_PEAK_WINDOW, "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.INSIDE_WINDOW
+        )
+
+        assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
+
+        peak_prompt_cost, peak_completion_cost = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
+
+        assert math.isclose(peak_prompt_cost, 1000 * 1e-06, rel_tol=1e-10)
+        assert math.isclose(peak_completion_cost, 200 * 1e-06, rel_tol=1e-10)
+
+    def test_off_peak_rates_leave_citation_search_and_reasoning_fees_alone(self):
+        """Inside the window only the plain input and output rates change: citation tokens, the
+        per-request search fee, and a dedicated reasoning rate keep billing as published."""
+        self._register_off_peak_model(
+            {"hours_utc": self.OFF_PEAK_WINDOW, "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=200,
+            total_tokens=1200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=50),
+        )
+        usage.citation_tokens = 100
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.INSIDE_WINDOW
+        )
+
+        assert math.isclose(prompt_cost, (1000 * 1e-07) + (100 * 2e-06), rel_tol=1e-10)
+        assert math.isclose(completion_cost, (150 * 2e-07) + (50 * 3e-06) + 0.005, rel_tol=1e-10)
+
+    def test_off_peak_defaults_to_the_current_time(self):
+        """The proxy's cost dispatch passes no clock, so an all-day window has to apply on the
+        default current time."""
+        self._register_off_peak_model(
+            {"hours_utc": "00:00-00:00", "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=self.OFF_PEAK_MODEL, usage=usage)
+
+        assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
+
+    def test_provider_stated_cost_still_wins_inside_an_off_peak_window(self):
+        """A response that carries Perplexity's own metered cost bills that cost whatever the
+        window says; the caller strips it when the deployment carries custom pricing."""
+        self._register_off_peak_model(
+            {"hours_utc": "00:00-00:00", "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+        usage.cost = {"total_cost": 0.00501}
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=self.OFF_PEAK_MODEL, usage=usage)
+
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.00501

@@ -21,7 +21,7 @@ class PrismaTableRepository(Generic[RowT_co]):
 
     table_name: str
 
-    def __init__(self, prisma_client: Any):
+    def __init__(self, prisma_client: object):
         self._prisma_client = prisma_client
 
     @property

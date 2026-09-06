@@ -61,6 +61,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_sse_stream_with_keepalive_pings,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
+from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
@@ -2004,6 +2005,12 @@ class ProxyBaseLLMRequestProcessing:
             trust_client_model_info=False,
         )
 
+        # An auto router with its own compression policy is authoritative for this
+        # request: suppress every other compression guardrail and arm whichever one
+        # the policy names for the model call, before those guardrails get a chance
+        # to run below.
+        await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
+
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
@@ -2520,6 +2527,11 @@ class ProxyBaseLLMRequestProcessing:
                     # This handles cases like websearch_interception agentic loop
                     # which returns a non-streaming dict even for streaming requests
                     if self._is_streaming_response(response):
+                        self._arm_detached_stream_failure_hook(
+                            logging_obj=logging_obj,
+                            user_api_key_dict=user_api_key_dict,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
                         selected_data_generator = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
                             response=response,
                             user_api_key_dict=user_api_key_dict,
@@ -2874,6 +2886,34 @@ class ProxyBaseLLMRequestProcessing:
                 custom_headers=dict(fastapi_response.headers),
             ),
         )
+
+    def _arm_detached_stream_failure_hook(
+        self,
+        logging_obj: LiteLLMLoggingObj,
+        user_api_key_dict: "UserAPIKeyAuth",
+        proxy_logging_obj: ProxyLogging,
+    ) -> None:
+        """Let a stream that fails after the client left still reach ``post_call_failure_hook``.
+
+        The client-facing generator reports a mid-stream failure itself, but once
+        the client disconnects that generator is gone and the detached upstream
+        drain is the only code that sees the provider error. It fires this closure
+        so the failed spend is still written and the budget reservation released;
+        a replacement error the hook raises has no client left to reach.
+        """
+        request_data: Final = self.data
+
+        async def _on_detached_stream_failure(exc: Exception) -> None:
+            try:
+                await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=exc,
+                    request_data=request_data,
+                )
+            except HTTPException:
+                return
+
+        logging_obj._on_detached_stream_failure = _on_detached_stream_failure
 
     def _is_streaming_response(self, response: Any) -> bool:
         """
