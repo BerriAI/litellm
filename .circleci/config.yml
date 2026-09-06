@@ -266,6 +266,71 @@ commands:
           key: v1-uv-cache-{{ checksum "uv.lock" }}
 
 jobs:
+  python_compatibility_unit_tests:
+    parameters:
+      python-version:
+        type: string
+      python-image:
+        type: string
+    docker:
+      - image: << parameters.python-image >>
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    resource_class: large
+    working_directory: ~/project
+    parallelism: 26
+    environment:
+      UV_PYTHON: << parameters.python-version >>
+    steps:
+      - checkout
+      - skip_if_unrelated_changes
+      - setup_google_dns
+      - restore_cache:
+          keys:
+            - v1-python-compat-uv-py<< parameters.python-version >>-{{ checksum "uv.lock" }}
+            - v1-python-compat-uv-py<< parameters.python-version >>-
+      - restore_cache:
+          keys:
+            - v1-python-compat-cargo-py<< parameters.python-version >>-{{ checksum "litellm-rust/Cargo.lock" }}
+            - v1-python-compat-cargo-py<< parameters.python-version >>-
+      - restore_cache:
+          keys:
+            - v1-python-compat-prisma-{{ checksum "uv.lock" }}
+      - install_uv
+      - install_rust
+      - run:
+          name: Install dependencies
+          command: |
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra mongodb
+            uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+          no_output_timeout: 15m
+      - save_cache:
+          key: v1-python-compat-uv-py<< parameters.python-version >>-{{ checksum "uv.lock" }}
+          paths:
+            - ~/.cache/uv
+      - save_cache:
+          key: v1-python-compat-cargo-py<< parameters.python-version >>-{{ checksum "litellm-rust/Cargo.lock" }}
+          paths:
+            - ~/.cargo/registry
+            - ~/.cargo/git
+            - litellm-rust/target
+      - run:
+          name: Generate Prisma client
+          command: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+          no_output_timeout: 5m
+      - save_cache:
+          key: v1-python-compat-prisma-{{ checksum "uv.lock" }}
+          paths:
+            - ~/.cache/prisma-python
+            - ~/.cache/prisma
+      - run:
+          name: Run compatibility shard
+          command: uv run --no-sync python .circleci/scripts/python_compatibility_shards.py
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
   # Add Windows testing job
   using_litellm_on_windows:
     executor:
@@ -2897,6 +2962,31 @@ workflows:
                 - main
                 - /litellm_.*/
       - base_sdk_install:
+          filters: *main_branches
+      - python_compatibility_unit_tests:
+          name: python-compatibility-3.10
+          python-version: "3.10"
+          python-image: cimg/python:3.10.21@sha256:fa3264a15a87b71cb80d296a99a347f569b9eca7f40697361acd503e3283e4d9
+          filters: *main_branches
+      - python_compatibility_unit_tests:
+          name: python-compatibility-3.11
+          python-version: "3.11"
+          python-image: cimg/python:3.11.16@sha256:4f89fccbefd45ebcb757320d53d2f2276dbc8bca5b12cf67926a6026574e59cd
+          filters: *main_branches
+      - python_compatibility_unit_tests:
+          name: python-compatibility-3.12
+          python-version: "3.12"
+          python-image: cimg/python:3.12.14@sha256:c141988bf6a4034f815c8cb36783d28e447ba4b28b7363201218c8e38c771203
+          filters: *main_branches
+      - python_compatibility_unit_tests:
+          name: python-compatibility-3.13
+          python-version: "3.13"
+          python-image: cimg/python:3.13.15@sha256:9b5c0f05f6756e54cc900acde24e610dac0cb545c361215e26ebef8f022e83d0
+          filters: *main_branches
+      - python_compatibility_unit_tests:
+          name: python-compatibility-3.14
+          python-version: "3.14"
+          python-image: cimg/python:3.14.7@sha256:ae116f87660f57bf3c77a21722ecb9b7de351eceeb09c3321aa9caa64af7de4a
           filters: *main_branches
       - local_testing_part1:
           filters: *main_branches
