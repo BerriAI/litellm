@@ -645,6 +645,7 @@ async def get_auto_router_benchmarks(
         str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date)")
     ] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
+    api_key: Annotated[str | None, Query(description="Filter to one virtual key token hash")] = None,
 ) -> AutoRouterBenchmarksResponse:
     """
     Benchmarks for the auto-router dashboard: session shape, savings against the configured
@@ -681,6 +682,7 @@ async def get_auto_router_benchmarks(
         AUTOROUTER_BENCHMARKS_SQL,
         start_day.isoformat(),
         (end_day + timedelta(days=1)).isoformat(),
+        api_key,
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
     groups: Final = (

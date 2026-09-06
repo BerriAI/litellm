@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/components/networking", () => ({ formatDate: vi.fn() }));
 vi.mock("@/lib/http/api", () => ({ $api: { useQuery: vi.fn() } }));
 
-import { benchmarksWindow } from "./useAutoRouterBenchmarks";
+import { $api } from "@/lib/http/api";
+
+import { benchmarksWindow, useAutoRouterBenchmarks } from "./useAutoRouterBenchmarks";
 
 const localDay =
   (offsetHours: number) =>
@@ -42,5 +44,32 @@ describe("benchmarksWindow", () => {
     const now = new Date("2026-08-21T19:00:00Z");
     expect(benchmarksWindow({ from: now }, now, pacific)).toEqual({});
     expect(benchmarksWindow({ to: now }, now, pacific)).toEqual({});
+  });
+});
+
+describe("useAutoRouterBenchmarks", () => {
+  const range = { from: new Date("2026-07-06T19:00:00Z"), to: new Date("2026-08-05T19:00:00Z") };
+
+  it("forwards the key hash as the endpoint's api_key filter", () => {
+    useAutoRouterBenchmarks("sk-test", range, "key-hash-1");
+
+    const [, path, init] = vi.mocked($api.useQuery).mock.calls.at(-1) as unknown as [
+      string,
+      string,
+      { params: { query: Record<string, string | undefined> } },
+    ];
+    expect(path).toBe("/auto_router/benchmarks");
+    expect(init.params.query.api_key).toBe("key-hash-1");
+  });
+
+  it("leaves the read deployment-wide when no key is given", () => {
+    useAutoRouterBenchmarks("sk-test", range);
+
+    const [, , init] = vi.mocked($api.useQuery).mock.calls.at(-1) as unknown as [
+      string,
+      string,
+      { params: { query: Record<string, string | undefined> } },
+    ];
+    expect(init.params.query.api_key).toBeUndefined();
   });
 });
