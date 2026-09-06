@@ -1554,3 +1554,63 @@ def test_langfuse_deployment_environment_fallback_never_raises(monkeypatch, env_
         langfuse_host="https://test.langfuse.com",
     )
     assert logger.langfuse_environment == expected
+
+
+def test_tags_header_is_parsed_into_a_list():
+    """A ``langfuse_tags`` header arrives as one comma-separated string."""
+    metadata: dict = {}
+    litellm_params = {
+        "metadata": metadata,
+        "proxy_server_request": {"headers": {"langfuse_tags": "org:acme, agent:support"}},
+    }
+
+    returned = LangFuseLogger.add_metadata_from_header(litellm_params, metadata)
+
+    assert returned["tags"] == ["org:acme", "agent:support"]
+
+
+def test_tags_header_never_leaves_a_string_in_shared_metadata():
+    """``add_metadata_from_header`` mutates the caller's metadata dict in place, and the
+    router reuses that dict across retry attempts: a raw header string in ``tags``
+    crashes ``Router._update_kwargs_with_deployment`` with ``'str' object has no
+    attribute 'append'`` on any retry/fallback deployment that has
+    ``litellm_credential_name`` (https://github.com/BerriAI/litellm/issues/38927)."""
+    metadata: dict = {}
+    litellm_params = {
+        "metadata": metadata,
+        "proxy_server_request": {"headers": {"langfuse_tags": "org:acme,agent:support"}},
+    }
+
+    returned = LangFuseLogger.add_metadata_from_header(litellm_params, metadata)
+
+    assert returned is metadata
+    assert metadata["tags"] == ["org:acme", "agent:support"]
+    # What the router's "CREDENTIAL NAME AS TAG" branch does on the next attempt:
+    metadata["tags"].append("Credential: my-credential")
+    assert "Credential: my-credential" in metadata["tags"]
+
+
+def test_tags_already_in_metadata_pass_through_unchanged():
+    """Body-supplied tags are already a list; only header ingestion needs parsing."""
+    metadata: dict = {"tags": ["pre:set"]}
+    litellm_params = {
+        "metadata": metadata,
+        "proxy_server_request": {"headers": {}},
+    }
+
+    returned = LangFuseLogger.add_metadata_from_header(litellm_params, metadata)
+
+    assert returned["tags"] == ["pre:set"]
+
+
+def test_other_langfuse_headers_stay_raw_strings():
+    """Only ``tags`` needs list parsing; other steering headers keep their raw value."""
+    metadata: dict = {}
+    litellm_params = {
+        "metadata": metadata,
+        "proxy_server_request": {"headers": {"langfuse_existing_trace_id": "trace-123"}},
+    }
+
+    LangFuseLogger.add_metadata_from_header(litellm_params, metadata)
+
+    assert metadata["existing_trace_id"] == "trace-123"
