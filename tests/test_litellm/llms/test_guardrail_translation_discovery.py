@@ -10,6 +10,9 @@ import pytest
 
 import litellm.llms as llms_package
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
+    MCPGuardrailTranslationHandler,
+)
 from litellm.types.utils import CallTypes
 
 OPENAI_CHAT_TRANSLATION_MODULE = "litellm.llms.openai.chat.guardrail_translation"
@@ -184,3 +187,19 @@ def test_a_broken_mcp_dependency_is_reported_and_retried(caplog):
 
     assert CallTypes.call_mcp_tool in recovered
     assert not llms_package.guardrail_translation_discovery.unavailable
+
+
+class _StandInMCPHandler:
+    """A bundled package's handler that claims the call type the MCP package owns."""
+
+
+def test_the_mcp_package_wins_a_handler_collision_with_a_bundled_package(monkeypatch):
+    """MCP handlers are the specialised ones, so a bundled package declaring the same call type must not shadow them."""
+    colliding = ModuleType("litellm.llms.colliding_stub.guardrail_translation")
+    colliding.guardrail_translation_mappings = {CallTypes.call_mcp_tool: _StandInMCPHandler}
+    monkeypatch.setitem(sys.modules, colliding.__name__, colliding)
+    monkeypatch.setattr(llms_package, "_bundled_guardrail_translation_modules", lambda: iter((colliding.__name__,)))
+
+    discovery = llms_package.discover_guardrail_translations()
+
+    assert discovery.mappings[CallTypes.call_mcp_tool] is MCPGuardrailTranslationHandler

@@ -174,9 +174,9 @@ def _guardrail_translations_from(
 
 
 def _guardrail_translation_modules() -> Iterator[str]:
-    """Yield every module that can declare guardrail translation handlers, the optional MCP one first."""
-    yield _MCP_GUARDRAIL_TRANSLATION_MODULE
+    """Yield every module that can declare guardrail translation handlers, the optional MCP one last."""
     yield from _bundled_guardrail_translation_modules()
+    yield _MCP_GUARDRAIL_TRANSLATION_MODULE
 
 
 def _discover(

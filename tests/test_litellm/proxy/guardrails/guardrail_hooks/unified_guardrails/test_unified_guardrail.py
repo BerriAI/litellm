@@ -86,14 +86,6 @@ def _patch_translation_mappings(monkeypatch, mappings):
 
 
 @pytest.fixture(autouse=True)
-def _forget_unscanned_warnings():
-    """The unscanned warning fires once per route and reason, so each test starts with nothing remembered."""
-    unified_module._warn_left_unscanned_once.cache_clear()
-    yield
-    unified_module._warn_left_unscanned_once.cache_clear()
-
-
-@pytest.fixture(autouse=True)
 def _inject_mcp_handler_mapping(monkeypatch):
     """Inject MCP handler mapping so the unified guardrail can run inside tests."""
     _patch_translation_mappings(
@@ -2356,6 +2348,7 @@ class TestUnscannedStreamIsAnnounced:
         assert len(chunks) == 3
         assert any(
             "no guardrail translation handler" in message
+            and "Add a guardrail translation handler for that call type." in message
             and "recording-guardrail" in message
             and "/chat/completions" in message
             for message in warnings
@@ -2374,6 +2367,7 @@ class TestUnscannedStreamIsAnnounced:
         assert len(chunks) == 3
         assert any(
             "call type could not be resolved" in message
+            and "Add the route to API_ROUTE_TO_CALL_TYPES." in message
             and "recording-guardrail" in message
             for message in warnings
         ), warnings
@@ -2473,6 +2467,7 @@ class TestUnscannedRequestIsAnnounced:
         assert returned["messages"] == [{"role": "user", "content": "hello world"}]
         assert any(
             "call type 'not_a_call_type' is not one litellm can scan" in message
+            and "Map the route to a CallTypes member in API_ROUTE_TO_CALL_TYPES." in message
             and "skipping pre-call scanning" in message
             for message in self._warnings(caplog)
         ), self._warnings(caplog)
@@ -2494,6 +2489,7 @@ class TestUnscannedRequestIsAnnounced:
         assert returned["messages"] == [{"role": "user", "content": "hello world"}]
         assert any(
             "call type 'not_a_call_type' is not one litellm can scan" in message
+            and "Map the route to a CallTypes member in API_ROUTE_TO_CALL_TYPES." in message
             and "skipping during-call scanning" in message
             for message in self._warnings(caplog)
         ), self._warnings(caplog)
