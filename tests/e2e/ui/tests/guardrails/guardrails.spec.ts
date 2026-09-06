@@ -7,6 +7,7 @@ import { CHAT_MODEL_A, MOCK_RESPONSE_TEXT, masterKey } from "../../helpers/traff
 interface StoredGuardrail {
   guardrail_id: string;
   guardrail_name: string | null;
+  litellm_params?: { pii_entities_config?: Record<string, string> | null } | null;
 }
 
 async function listGuardrails(page: PlaywrightPage): Promise<StoredGuardrail[]> {
@@ -248,6 +249,17 @@ test.describe("Guardrails", () => {
 
     const row = page.getByRole("row").filter({ hasText: guardrailName });
     await expect(row).toHaveCount(1, { timeout: 15_000 });
+
+    const stored = await findGuardrail(page, guardrailName);
+    const piiConfig = stored?.litellm_params?.pii_entities_config ?? {};
+    expect(
+      Object.keys(piiConfig).length,
+      "Select All & Mask persisted no PII entities, so the guardrail would mask nothing",
+    ).toBeGreaterThan(0);
+    expect(
+      Object.entries(piiConfig).filter(([, action]) => action !== "MASK"),
+      "Select All & Mask must persist every entity with the MASK action",
+    ).toEqual([]);
 
     await navigateToPage(page, Page.Teams);
     await dismissFeedbackPopup(page);
