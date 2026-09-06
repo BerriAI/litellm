@@ -1,0 +1,1 @@
+# MiniMax image generation tests
