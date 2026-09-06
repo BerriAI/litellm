@@ -2,7 +2,6 @@ import asyncio
 import os
 import sys
 from typing import Final
-from unittest.mock import patch
 
 from callback_support import CallbackRecorder, OcrArguments, call_ocr, verify_installed_package
 
@@ -62,5 +61,4 @@ if __name__ == "__main__":
     else:
         native: Final = get_native_bridge()
         assert native is not None
-        with patch.object(native, "ready_endpoints", {"ocr": frozenset({"callbacks"})}, create=True):
-            asyncio.run(smoke(baseline=False))
+        asyncio.run(smoke(baseline=False))

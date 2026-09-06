@@ -10,11 +10,12 @@ use crate::auth::{
 use crate::http_utils::string_headers;
 use crate::ocr::common_utils::convert_document_url_to_data_uri;
 use crate::ocr::transformation::{OcrAuthStrategy, OcrProviderConfig};
-use crate::ocr::types::{OcrRequest, PreparedOcrRequest, ProviderOcrRequest};
+use crate::ocr::types::{OcrRequest, PendingOcrUpload, PreparedOcrRequest, ProviderOcrRequest};
 use crate::providers::azure_ai::ocr::transformation::{
     AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
 };
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
+use crate::providers::reducto::ocr::transformation as reducto;
 use crate::providers::vertex_ai::ocr::transformation as vertex_ai;
 use crate::providers::vertex_ai::ocr::transformation::{
     VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
@@ -28,6 +29,7 @@ pub(crate) fn ocr_provider_config(
 ) -> Option<&'static dyn OcrProviderConfig> {
     match provider {
         "mistral" => Some(&MISTRAL_OCR_CONFIG),
+        "reducto" => reducto::config_for_model(model),
         "azure_ai" if is_azure_document_intelligence_model(model) => {
             Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
         }
@@ -49,6 +51,13 @@ pub fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrRequest {
         .litellm_call_id
         .map(str::to_string)
         .unwrap_or_else(new_ocr_call_id);
+    let mut context = request.context;
+    context
+        .litellm_call_id
+        .get_or_insert_with(|| call_id.clone());
+    context
+        .request_model
+        .get_or_insert_with(|| request.model.to_string());
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
         .unwrap_or(CustomLlmProvider {
             model: request.model,
@@ -58,18 +67,22 @@ pub fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrRequest {
     let custom_llm_provider = provider_info.custom_llm_provider.to_string();
     let config = ocr_provider_config(&custom_llm_provider, &model)
         .ok_or_else(|| Error::InvalidProvider(custom_llm_provider.clone()));
+    let mut provider_params = request.optional_params;
+    provider_params.retain(|name, _| {
+        !matches!(
+            name.as_str(),
+            "callbacks"
+                | "litellm_logging_obj"
+                | "litellm_call_id"
+                | "max_retries"
+                | "metadata"
+                | "num_retries"
+                | "tags"
+        )
+    });
     let optional_params = match &config {
-        Ok(config) => {
-            let supported = config.supported_ocr_params();
-            config.map_ocr_params(
-                &request
-                    .optional_params
-                    .into_iter()
-                    .filter(|(name, _)| supported.contains(&name.as_str()))
-                    .collect(),
-            )
-        }
-        Err(_) => request.optional_params,
+        Ok(config) => config.map_ocr_params(&provider_params),
+        Err(_) => provider_params,
     };
 
     PreparedOcrRequest {
@@ -83,6 +96,7 @@ pub fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrRequest {
         extra_headers: request.extra_headers,
         optional_params,
         timeout: request.timeout,
+        context,
     }
 }
 
@@ -121,18 +135,39 @@ pub async fn prepare_ocr_provider_call_with_token(
     } else {
         request.document
     };
-    let body = config
-        .transform_ocr_request(&request.model, document, request.optional_params)?
-        .data;
+    let pending_upload = if request.custom_llm_provider == "reducto" {
+        match reducto::extract_document_source(&document)? {
+            reducto::ReductoDocumentSource::FileId(_) => None,
+            reducto::ReductoDocumentSource::Upload { bytes, mime_type } => Some(PendingOcrUpload {
+                url: reducto::upload_url(request.api_base.as_deref()),
+                bytes,
+                mime_type,
+            }),
+        }
+    } else {
+        None
+    };
+    let body = if pending_upload.is_none() {
+        Some(
+            config
+                .transform_ocr_request(&request.model, document, request.optional_params.clone())?
+                .data,
+        )
+    } else {
+        None
+    };
     Ok(ProviderOcrRequest {
         model,
         custom_llm_provider,
         config,
         url,
         body,
+        pending_upload,
+        optional_params: request.optional_params,
         upstream_headers,
         authorization,
         timeout: request.timeout,
+        context: request.context,
     })
 }
 

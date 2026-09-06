@@ -262,11 +262,7 @@ impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn map_ocr_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {
-        non_default_params
-            .iter()
-            .filter(|(name, _)| DEEPSEEK_SUPPORTED_OCR_PARAMS.contains(&name.as_str()))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect()
+        non_default_params.clone()
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]

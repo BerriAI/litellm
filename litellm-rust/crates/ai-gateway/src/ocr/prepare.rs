@@ -36,6 +36,7 @@ pub(crate) fn prepare_ocr_call(request: OcrRequest<'_>) -> PreparedOcrCall {
             optional_params,
             timeout,
             litellm_call_id,
+            context: Default::default(),
         }),
         hooks: OcrLifecycleHooks::new(
             CustomLoggerRunner::new(callbacks),

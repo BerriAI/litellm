@@ -166,9 +166,6 @@ class FakeOCRConfig:
     def get_api_key_env_var(self) -> str:
         return self.api_key_env_var
 
-    def supports_rust_bridge(self) -> bool:
-        return True
-
     def validate_environment(
         self,
         *,
@@ -677,6 +674,26 @@ def test_ocr_routes_azure_ai_to_rust_when_enabled(fake_bridge):
     assert len(fake_bridge.calls) == 1
     assert fake_bridge.calls[0]["model"] == "pixtral-12b-2409"
     assert fake_bridge.calls[0]["custom_llm_provider"] == "azure_ai"
+
+
+def test_native_ocr_does_not_load_python_provider_configuration(monkeypatch, fake_bridge):
+    monkeypatch.setattr(
+        ocr_main.ProviderConfigManager,
+        "get_provider_ocr_config",
+        lambda **_kwargs: pytest.fail("native OCR must not load Python provider configuration"),
+    )
+
+    response = litellm.ocr(
+        model=MODEL,
+        document=DOCUMENT,
+        api_key="sk-test",
+        unknown_provider_extension={"enabled": True},
+    )
+
+    assert isinstance(response, OCRResponse)
+    assert fake_bridge.calls[0]["optional_params"]["unknown_provider_extension"] == {
+        "enabled": True
+    }
 
 
 def test_ocr_rust_path_keeps_file_document_opaque_until_native_admission(fake_bridge):

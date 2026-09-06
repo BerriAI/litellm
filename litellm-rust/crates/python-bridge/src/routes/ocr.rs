@@ -2,7 +2,7 @@ use crate::errors::ocr_error_to_pyerr;
 use crate::marshal::{NativeRequestContext, NativeRequestOptions, required_value};
 use crate::ocr_callbacks::PythonOcrObserver;
 use litellm_core::Error;
-use litellm_core::ocr::{OcrRequest, ocr_with_observer};
+use litellm_core::ocr::{OcrRequest, ocr_with_observer, ocr_with_token_provider};
 use litellm_core::request_context::LiteLlmRequestContext;
 use litellm_core::request_options::RequestOptions;
 use pyo3::prelude::*;
@@ -19,7 +19,7 @@ struct OcrInputs {
 
 fn prepare_ocr(
     input: OcrInputs,
-    options: NativeRequestOptions,
+    mut options: NativeRequestOptions,
     context: NativeRequestContext,
     callback_adapter: Option<Py<PyAny>>,
     python_context: crate::execution::PythonCallContext<'_>,
@@ -36,6 +36,20 @@ fn prepare_ocr(
         return Err(crate::errors::RustBridgeDeclined::new_err(decline.reason()));
     }
     let py = python_context.py;
+    let token_provider = options
+        .take_auth_provider()
+        .map(|callable| {
+            py.import("litellm.rust_bridge._native").and_then(|module| {
+                crate::auth::PythonTokenProvider::new(
+                    &module,
+                    callable,
+                    py,
+                    python_context.asynchronous,
+                )
+                .map(std::sync::Arc::new)
+            })
+        })
+        .transpose()?;
     let document = if input
         .document
         .bind(py)
@@ -56,21 +70,22 @@ fn prepare_ocr(
     let options: RequestOptions = options.into();
     let mut observer = PythonOcrObserver::new(callback_adapter, python_context)?;
     Ok(async move {
-        ocr_with_observer(
-            OcrRequest {
-                model: &input.model,
-                document,
-                api_key: options.api_key.as_deref(),
-                api_base: options.api_base.as_deref(),
-                custom_llm_provider: options.custom_llm_provider.as_deref(),
-                extra_headers: options.extra_headers,
-                optional_params: input.optional_params,
-                timeout: options.timeout,
-                litellm_call_id: call_id.as_deref(),
-            },
-            &mut observer,
-        )
-        .await
+        let request = OcrRequest {
+            model: &input.model,
+            document,
+            api_key: options.api_key.as_deref(),
+            api_base: options.api_base.as_deref(),
+            custom_llm_provider: options.custom_llm_provider.as_deref(),
+            extra_headers: options.extra_headers,
+            optional_params: input.optional_params,
+            timeout: options.timeout,
+            litellm_call_id: call_id.as_deref(),
+            context,
+        };
+        match token_provider {
+            Some(provider) => ocr_with_token_provider(request, provider, &mut observer).await,
+            None => ocr_with_observer(request, &mut observer).await,
+        }
     })
 }
 

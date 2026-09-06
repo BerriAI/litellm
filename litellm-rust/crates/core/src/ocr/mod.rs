@@ -28,10 +28,14 @@ pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
     level = "trace",
     skip_all
 )]
-pub async fn ocr_with_observer(
+pub async fn ocr_with_observer<Observer>(
     request: OcrRequest<'_>,
-    observer: &mut impl OcrObserver,
-) -> Result<Value, Error> {
+    observer: &mut Observer,
+) -> Result<Value, Error>
+where
+    Observer: OcrObserver,
+    Observer::Error: std::fmt::Display,
+{
     let prepared = prepare_ocr_call(request);
     let provider_request = prepare_ocr_provider_call(prepared).await?;
     execute_ocr_provider_call(provider_request, observer).await
@@ -43,11 +47,15 @@ pub fn ocr_admitted(model: &str, provider: &str, request_format: Option<&str>) -
     })
 }
 
-pub async fn ocr_with_token_provider(
+pub async fn ocr_with_token_provider<Observer>(
     request: OcrRequest<'_>,
     token_provider: std::sync::Arc<dyn crate::auth::TokenProvider>,
-    observer: &mut impl OcrObserver,
-) -> Result<Value, Error> {
+    observer: &mut Observer,
+) -> Result<Value, Error>
+where
+    Observer: OcrObserver,
+    Observer::Error: std::fmt::Display,
+{
     let prepared = prepare_ocr_call(request);
     let provider_request =
         prepare_ocr_provider_call_with_token(prepared, Some(token_provider)).await?;

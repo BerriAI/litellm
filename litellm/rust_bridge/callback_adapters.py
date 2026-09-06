@@ -48,6 +48,31 @@ class ProviderPostCall(ProviderEvent):
     ended_at: float
 
 
+class OcrPreCall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    call_id: str | None
+    trace_id: str | None
+    requested_model: str | None
+    attribution: Mapping[str, JsonValue]
+    capabilities: Mapping[str, JsonValue]
+    model: str
+    request: Mapping[str, JsonValue]
+    api_base: str
+    headers: Mapping[str, str]
+
+
+class OcrPostCall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    call_id: str | None
+    trace_id: str | None
+    requested_model: str | None
+    attribution: Mapping[str, JsonValue]
+    capabilities: Mapping[str, JsonValue]
+    original_response: str
+
+
 class ProviderError(ProviderEvent):
     message: str
     stage: str
@@ -89,8 +114,17 @@ class ProviderLoggingAdapter:
     api_key: str | None
 
     def pre_call(self, payload: object, /) -> CallbackDecision:
-        event: Final = ProviderPreCall.model_validate(payload)
-        request: Final = dict(event.request)  # mutable-ok: Python hooks may mutate their owned request copy
+        event: Final = (
+            ProviderPreCall.model_validate(payload)
+            if isinstance(payload, Mapping) and "provider" in payload
+            else OcrPreCall.model_validate(payload)
+        )
+        request_payload: Final = event.request.get("data") if isinstance(event, OcrPreCall) else event.request
+        if not isinstance(request_payload, Mapping):
+            raise TypeError("OCR callback request data must be a mapping")
+        request: Final = dict(  # mutable-ok: legacy hook contract permits in-place request mutation
+            request_payload
+        )
         additional_args: Final[PreCallArguments] = {
             "complete_input_dict": request,
             "api_base": event.api_base,
@@ -98,16 +132,21 @@ class ProviderLoggingAdapter:
         }
         self.logging_obj.pre_call(input=self.input, api_key=self.api_key, additional_args=additional_args)
         mutated: Final = additional_args["complete_input_dict"]
-        if dict(mutated) != dict(event.request):  # mutable-ok: compare hook-owned mapping snapshots
+        if dict(mutated) != dict(request_payload):  # mutable-ok: compare hook-owned mapping snapshots
             return {  # mutable-ok: callback decisions are fixed-shape wire dictionaries
                 "action": "replace",
-                "payload": dict(mutated),
+                "payload": dict(mutated),  # mutable-ok: callback wire payload owns its mapping
             }
         return _unchanged()
 
     def post_call(self, payload: object, /) -> CallbackDecision:
-        event: Final = ProviderPostCall.model_validate(payload)
-        response: Final = event.response if isinstance(event.response, str) else json.dumps(event.response)
+        event: Final = (
+            ProviderPostCall.model_validate(payload)
+            if isinstance(payload, Mapping) and "response" in payload
+            else OcrPostCall.model_validate(payload)
+        )
+        raw_response: Final = event.response if isinstance(event, ProviderPostCall) else event.original_response
+        response: Final = raw_response if isinstance(raw_response, str) else json.dumps(raw_response)
         self.logging_obj.post_call(original_response=response, input=self.input, api_key=self.api_key)
         return _unchanged()
 

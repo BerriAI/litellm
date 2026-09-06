@@ -62,6 +62,72 @@ class _PreparedOCRRequest:
     execution_mode: str = "sync"
 
 
+@dataclass(frozen=True, slots=True)
+class _NativeOCRRequest:
+    model: str
+    document: Mapping[str, object]
+    api_key: str | None
+    api_base: str | None
+    custom_llm_provider: str | None
+    extra_headers: dict[str, object] | None  # mutable-ok: preserves the public SDK header contract
+    kwargs: Mapping[str, object]
+    effective_timeout: float | httpx.Timeout
+    litellm_logging_obj: LiteLLMLoggingObj
+    execution_mode: str
+
+
+def _native_provider(model: str, explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    provider, separator, _ = model.partition("/")
+    return provider if separator else "mistral"
+
+
+def _native_model(model: str, provider: str) -> str:
+    prefix: Final = f"{provider}/"
+    return model.removeprefix(prefix)
+
+
+def _python_fallback_document(document: Mapping[str, object]) -> Mapping[str, object]:
+    """Materialize local files only after native dispatch selected Python."""
+    if document.get("type") != "file":
+        return document
+    owned_document: Final = dict(  # mutable-ok: legacy file conversion owns and rewrites this copy
+        document
+    )
+    return convert_file_document_to_url_document(owned_document)
+
+
+def _native_ocr_request(
+    *,
+    model: str,
+    document: Mapping[str, object],
+    api_key: str | None,
+    api_base: str | None,
+    timeout: float | httpx.Timeout | None,
+    custom_llm_provider: str | None,
+    extra_headers: dict[str, object] | None,  # mutable-ok: preserves the public SDK header contract
+    kwargs: Mapping[str, object],
+    execution_mode: str,
+) -> _NativeOCRRequest:
+    logging_value: Final = kwargs["litellm_logging_obj"]
+    if not isinstance(logging_value, LiteLLMLoggingObj):
+        raise TypeError("litellm_logging_obj must be a LiteLLM Logging instance")
+    logging_obj: Final = logging_value
+    return _NativeOCRRequest(
+        model=model,
+        document=document,
+        api_key=api_key,
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+        extra_headers=extra_headers,
+        kwargs=dict(kwargs),  # mutable-ok: fallback receives an isolated request snapshot
+        effective_timeout=timeout or request_timeout,
+        litellm_logging_obj=logging_obj,
+        execution_mode=execution_mode,
+    )
+
+
 def _prepare_ocr_request(
     model: str,
     document: Mapping[str, object],
@@ -244,6 +310,101 @@ def _prepare_rust_ocr_call(
     )
 
 
+def _prepare_native_ocr_call(
+    request: _NativeOCRRequest,
+) -> PreparedNativeCall[rust_ocr_bridge.NativeOCRRequest]:
+    provider: Final = _native_provider(request.model, request.custom_llm_provider)
+    model: Final = _native_model(request.model, provider)
+    litellm_params: Final = dict(  # mutable-ok: request context helper consumes a mapping snapshot
+        GenericLiteLLMParams.model_validate(request.kwargs)
+    )
+    internal_params: Final = set(GenericLiteLLMParams.model_fields) | {  # mutable-ok: local classification set
+        "litellm_logging_obj",
+        "litellm_call_id",
+    }
+    optional_params: Final = {  # mutable-ok: native request owns provider extension fields
+        name: value for name, value in request.kwargs.items() if name not in internal_params
+    }
+    vertex_params: Final = {  # mutable-ok: combines typed routing fields without mutating either source
+        **litellm_params,
+        **optional_params,
+    }
+    request_format: Final = optional_params.get(OCR_REQUEST_FORMAT_PARAM)
+    auth_provider = request.kwargs.get("azure_ad_token_provider")
+    if not callable(auth_provider):
+        auth_provider = None
+    request.litellm_logging_obj.update_from_kwargs(
+        kwargs=dict(request.kwargs),  # mutable-ok: logger owns its request-state snapshot
+        model=model,
+        optional_params=optional_params,
+        litellm_params={  # mutable-ok: logger contract requires its call context as a dict
+            "litellm_call_id": litellm_params.get("litellm_call_id"),
+            "api_base": request.api_base,
+        },
+        custom_llm_provider=provider,
+    )
+    return PreparedNativeCall(
+        request=rust_ocr_bridge.NativeOCRRequest(
+            model=model,
+            document=request.document,
+            optional_params=optional_params,
+        ),
+        options=NativeRequestOptions(
+            vertex=vertex_options(vertex_params),
+            api_key=request.api_key,
+            api_base=request.api_base,
+            custom_llm_provider=provider,
+            extra_headers=request.extra_headers,
+            timeout_seconds=timeout_to_seconds(request.effective_timeout),
+            auth_provider=auth_provider,
+        ),
+        context=request_context(
+            logging_obj=request.litellm_logging_obj,
+            request_model=request.model,
+            litellm_params=litellm_params,
+            capabilities=NativeRequestCapabilities(
+                execution_mode=request.execution_mode,
+                input_source_kind=str(request.document.get("type") or "unknown"),
+                request_format=request_format if isinstance(request_format, str) else None,
+                native_response_format=request_format == "native",
+            ),
+        ),
+        callback_adapter=ProviderLoggingAdapter(
+            request.litellm_logging_obj,
+            "OCR document processing",
+            request.api_key,
+        ),
+    )
+
+
+def _run_native_ocr(
+    request: _NativeOCRRequest,
+    fallback: Callable[[], OCRResponse | Coroutine[object, object, OCRResponse]],
+) -> OCRResponse | Coroutine[object, object, OCRResponse]:
+    provider: Final = _native_provider(request.model, request.custom_llm_provider)
+    return rust_ocr_bridge.dispatch_ocr(
+        prepare=lambda: _prepare_native_ocr_call(request),
+        fallback=fallback,
+        adapt=OCRResponse.model_validate,
+        model=_native_model(request.model, provider),
+        provider=provider,
+    )
+
+
+async def _run_native_aocr(
+    request: _NativeOCRRequest,
+    fallback: Callable[[], Coroutine[object, object, OCRResponse]],
+) -> OCRResponse:
+    provider: Final = _native_provider(request.model, request.custom_llm_provider)
+    return await rust_ocr_bridge.adispatch_ocr(
+        prepare=lambda: _prepare_native_ocr_call(request),
+        fallback=fallback,
+        adapt=OCRResponse.model_validate,
+        model=_native_model(request.model, provider),
+        provider=provider,
+    )
+
+
 @dataclass
 class _OCROperation:
     request: _PreparedOCRRequest
@@ -382,7 +543,7 @@ async def aocr(
         "kwargs": kwargs,
     }
     try:
-        prepared: Final = _prepare_ocr_request(
+        native_request: Final = _native_ocr_request(
             model=model,
             document=document,
             api_key=api_key,
@@ -393,13 +554,26 @@ async def aocr(
             kwargs=kwargs,
             execution_mode="async",
         )
-        model = prepared.model
-        custom_llm_provider = prepared.custom_llm_provider
+        custom_llm_provider = _native_provider(model, custom_llm_provider)
+        model = _native_model(model, custom_llm_provider)
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
-
-        from litellm.secret_managers.main import get_secret_str
+        prepared: _PreparedOCRRequest | None = None
 
         async def python_fallback() -> OCRResponse:
+            nonlocal prepared
+            prepared = prepared or _prepare_ocr_request(
+                model=native_request.model,
+                document=native_request.document,
+                api_key=native_request.api_key,
+                api_base=native_request.api_base,
+                timeout=native_request.effective_timeout,
+                custom_llm_provider=native_request.custom_llm_provider,
+                extra_headers=native_request.extra_headers,
+                kwargs=dict(  # mutable-ok: Python fallback owns its single mutable preparation copy
+                    native_request.kwargs
+                ),
+                execution_mode="async",
+            )
             fallback_document: Final = _python_fallback_document(prepared.document)
             pending: Final = base_llm_http_handler.ocr(
                 model=prepared.model,
@@ -420,9 +594,8 @@ async def aocr(
                 raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
             return response
 
-        return await _run_rust_aocr(
-            prepared_request=prepared,
-            resolve_api_key=get_secret_str,
+        return await _run_native_aocr(
+            request=native_request,
             fallback=python_fallback,
         )
     except Exception as e:
@@ -649,7 +822,7 @@ def ocr(
     try:
         _is_async: Final = kwargs.pop("aocr", False) is True
         completion_kwargs["aocr"] = _is_async
-        prepared: Final = _prepare_ocr_request(
+        native_request: Final = _native_ocr_request(
             model=model,
             document=document,
             api_key=api_key,
@@ -658,14 +831,28 @@ def ocr(
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
             timeout=timeout,
+            execution_mode="async" if _is_async else "sync",
         )
-        model = prepared.model
-        custom_llm_provider = prepared.custom_llm_provider
+        custom_llm_provider = _native_provider(model, custom_llm_provider)
+        model = _native_model(model, custom_llm_provider)
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
-
-        from litellm.secret_managers.main import get_secret_str
+        prepared: _PreparedOCRRequest | None = None
 
         def python_fallback() -> OCRResponse | Coroutine[object, object, OCRResponse]:
+            nonlocal prepared
+            prepared = prepared or _prepare_ocr_request(
+                model=native_request.model,
+                document=native_request.document,
+                api_key=native_request.api_key,
+                api_base=native_request.api_base,
+                timeout=native_request.effective_timeout,
+                custom_llm_provider=native_request.custom_llm_provider,
+                extra_headers=native_request.extra_headers,
+                kwargs=dict(  # mutable-ok: Python fallback owns its single mutable preparation copy
+                    native_request.kwargs
+                ),
+                execution_mode=native_request.execution_mode,
+            )
             fallback_document: Final = _python_fallback_document(prepared.document)
             return base_llm_http_handler.ocr(
                 model=prepared.model,
@@ -682,9 +869,8 @@ def ocr(
                 litellm_params=prepared.litellm_params,
             )
 
-        return _run_rust_ocr(
-            prepared_request=prepared,
-            resolve_api_key=get_secret_str,
+        return _run_native_ocr(
+            request=native_request,
             fallback=python_fallback,
         )
     except Exception as e:

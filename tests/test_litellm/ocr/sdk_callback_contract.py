@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
-from unittest.mock import patch
 
 from callback_support import (
     DOCUMENT,
@@ -24,10 +23,9 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.rust_bridge import get_native_bridge
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.ocr import supports_callback_adapter
 from litellm.rust_bridge.callback_adapters import PreCallArguments
+from litellm.rust_bridge.ocr import supports_callback_adapter
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,11 +91,16 @@ async def exercise(asynchronous: bool, rust: bool, case: str, *, native_expected
             assert all(event.model == "mistral-ocr-4-1" for event in events)
             assert events[0].input == "OCR document processing"
             pre_arguments: Final = TypeAdapter(PreCallArguments).validate_json(events[0].additional_args)
-            assert pre_arguments["complete_input_dict"] == {"model": "mistral-ocr-4-1", "document": DOCUMENT}
+            assert pre_arguments["complete_input_dict"] == {
+                "model": "mistral-ocr-4-1",
+                "document": DOCUMENT,
+            }, pre_arguments
             assert pre_arguments["api_base"] == upstream.api_base + "/ocr"
-            assert {key.lower(): value for key, value in pre_arguments["headers"].items()}[
-                "authorization"
-            ] == "Bearer test-key"
+            pre_headers: Final = {key.lower(): value for key, value in pre_arguments["headers"].items()}
+            if native:
+                assert "authorization" not in pre_headers
+            else:
+                assert pre_headers["authorization"] == "Bearer test-key"
             for event in events[: len(prefix)]:
                 assert event.context == context
                 assert event.native_provider_hook is native
@@ -264,12 +267,9 @@ async def verify_unavailable() -> None:
 
 
 async def verify_foundation() -> None:
-    assert_native_unavailable()
-    native: Final = get_native_bridge()
-    assert native is not None
-    with patch.object(native, "ready_endpoints", {"ocr": frozenset({"callbacks"})}, create=True):
-        await verify_parity()
-    assert_native_unavailable()
+    assert supports_callback_adapter()
+    assert NativeBinding(lambda native: native.ocr, route="ocr").load() is not None
+    await verify_parity()
 
 
 if __name__ == "__main__":

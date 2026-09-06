@@ -39,7 +39,7 @@ def supports_callback_adapter(*, asynchronous: bool = False) -> bool:
     native: Final = get_native_bridge()
     return (
         native is not None
-        and hasattr(native, "__python_callback_runtime__")
+        and hasattr(native, "__callback_runtime__")
         and native_route_ready("ocr", frozenset({"callbacks"}))
     )
 

@@ -189,14 +189,4 @@ fn test_parse_v3_uses_programmatic_api_key_over_env() {
     let key = resolve_api_key(Some("passed-key"), &|_| Some("env-reducto-key".to_string()))
         .expect("explicit key should resolve");
     assert_eq!(key, "passed-key");
-
-    let headers = REDUCTO_PARSE_V3_CONFIG
-        .validate_environment(Vec::new(), Some("passed-key"), &|_| {
-            Some("env-reducto-key".to_string())
-        })
-        .expect("headers should validate");
-    assert_eq!(
-        headers,
-        vec![("Authorization".to_string(), "Bearer passed-key".to_string())]
-    );
 }

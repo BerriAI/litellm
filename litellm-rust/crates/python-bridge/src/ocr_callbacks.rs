@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 
 use litellm_core::ocr::observers::{OcrObserver, OcrPostCall, OcrPreCall};
+use litellm_core::provider_callbacks::CallbackDecision;
 use litellm_python_interop::callback_runtime::{AsyncContext, CallbackRuntime, SyncContext};
 use pyo3::prelude::*;
 
@@ -63,18 +64,18 @@ impl OcrObserver for PythonOcrObserver {
     type Error = PyErr;
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    async fn pre_call(&mut self, input: &OcrPreCall) -> PyResult<()> {
+    async fn pre_call(&mut self, input: &OcrPreCall) -> PyResult<CallbackDecision> {
         match self {
-            Self::Disabled => Ok(()),
+            Self::Disabled => Ok(CallbackDecision::Unchanged),
             Self::Sync(session) => session.pre_call(input).await,
             Self::Async(session) => session.pre_call(input).await,
         }
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    async fn post_call(&mut self, input: &OcrPostCall) -> PyResult<()> {
+    async fn post_call(&mut self, input: &OcrPostCall) -> PyResult<CallbackDecision> {
         match self {
-            Self::Disabled => Ok(()),
+            Self::Disabled => Ok(CallbackDecision::Unchanged),
             Self::Sync(session) => session.post_call(input).await,
             Self::Async(session) => session.post_call(input).await,
         }

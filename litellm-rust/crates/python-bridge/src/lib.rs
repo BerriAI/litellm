@@ -158,7 +158,7 @@ mod _native {
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
-        use pyo3::types::PyDict;
+        use pyo3::types::{PyDict, PySet};
 
         litellm_python_interop::callback_runtime::register(module)?;
         super::callback_bindings::register(module)?;
@@ -166,6 +166,7 @@ mod _native {
         super::ocr_callbacks::register(module)?;
         super::errors::register(module)?;
         let ready_endpoints = PyDict::new(module.py());
+        ready_endpoints.set_item("ocr", PySet::new(module.py(), ["callbacks"])?)?;
         module.add("ready_endpoints", ready_endpoints)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
@@ -215,6 +216,17 @@ mod tests {
                 .filter(|name| !name.starts_with('_'))
                 .collect();
             assert_eq!(public_names, expected);
+            let ready = module
+                .getattr("ready_endpoints")
+                .expect("readiness map is exported");
+            assert_eq!(
+                ready
+                    .get_item("ocr")
+                    .expect("OCR readiness is published")
+                    .extract::<std::collections::HashSet<String>>()
+                    .expect("OCR capabilities are strings"),
+                std::collections::HashSet::from(["callbacks".to_string()])
+            );
 
             #[cfg(not(feature = "trace-parity"))]
             assert!(!module.hasattr("_trace").expect("module lookup should work"));

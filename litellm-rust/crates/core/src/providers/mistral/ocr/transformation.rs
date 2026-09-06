@@ -239,11 +239,11 @@ mod tests {
     }
 
     #[test]
-    fn map_ocr_params_drops_unknown_params() {
+    fn map_ocr_params_preserves_provider_extensions() {
         let params = json!({"extract_header": true, "unsupported_param": "value"});
         let mapped = map_ocr_params(params.as_object().unwrap());
         assert_eq!(mapped.get("extract_header"), Some(&json!(true)));
-        assert!(!mapped.contains_key("unsupported_param"));
+        assert_eq!(mapped.get("unsupported_param"), Some(&json!("value")));
     }
 
     #[test]

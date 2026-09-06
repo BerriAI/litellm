@@ -278,11 +278,7 @@ def _write_worker_case(directory: Path, index: int, case: OcrWorkerCase) -> Path
 
 @contextmanager
 def parity_checks() -> Generator[tuple[E2ECheck, ...]]:
-    fixtures: Final = tuple(
-        fixture
-        for fixture in recorded_fixtures(configured_fixture_directory(), OcrParityCase)
-        if fixture.litellm_input.contract not in {"reducto_v3", "reducto_legacy"}
-    )
+    fixtures: Final = recorded_fixtures(configured_fixture_directory(), OcrParityCase)
     runner: Final = SubprocessRunner(
         entrypoint=Path(__file__),
         baseline_user_agent=PYTHON_HTTP_SENTINEL,

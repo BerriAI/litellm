@@ -490,14 +490,12 @@ def test_vertex_deepseek_request_maps_both_document_types_to_image_content(
         ReductoParseLegacySdkInput(model="reducto/parse-legacy", document=_reducto_document()),
     ),
 )
-def test_reducto_parity_cases_are_non_strict_xfails(
+def test_reducto_parity_cases_are_enabled(
     sdk_input: ReductoParseV3SdkInput | ReductoParseLegacySdkInput,
 ) -> None:
     marks: Final = ocr_fixture_marks(OcrParityCase(litellm_input=sdk_input, provider_responses=()))
 
-    assert len(marks) == 1
-    assert marks[0].mark.name == "xfail"
-    assert marks[0].mark.kwargs["strict"] is False
+    assert marks == ()
 
 
 def test_supported_parity_cases_have_no_marks() -> None:
