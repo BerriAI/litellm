@@ -55,6 +55,11 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     relative_request_url,
     revoke_refresh_token,
 )
+from litellm.proxy._experimental.mcp_server.oauth_identity_binding import (
+    RefreshOwnershipProven,
+    RefreshTokenPresented,
+    enforce_oauth_identity_binding,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     build_upstream_oauth2_token_request,
@@ -1054,7 +1059,13 @@ async def exchange_token_with_server(
         refresh_request_scope = scope or bridge_upstream_scope
         if refresh_request_scope:
             token_data["scope"] = refresh_request_scope
+        refresh_ownership = (  # rebind-ok: grant-specific branches assign one ownership value
+            RefreshOwnershipProven()
+            if bridge_upstream_refresh is not None
+            else RefreshTokenPresented(upstream_refresh_token)
+        )
     else:
+        refresh_ownership = None  # rebind-ok: grant-specific branches assign one ownership value
         if not code:
             raise HTTPException(
                 status_code=400,
@@ -1140,11 +1151,27 @@ async def exchange_token_with_server(
             server_id=resolved_server.server_id,
         )
 
+    # Bind the exchanged token to the LiteLLM caller BEFORE it is returned, stored, or cached, so a
+    # token minted for a different upstream principal never becomes usable under the caller's user_id.
+    resolved_user_id: Final = (
+        await _extract_user_id_from_request(request)
+        if resolved_server.needs_user_oauth_token or resolved_server.oauth_identity_binding is not None
+        else None
+    )
+    if isinstance(token_response, dict):
+        await enforce_oauth_identity_binding(
+            server=resolved_server,
+            token_response=token_response,
+            litellm_user_id=resolved_user_id,
+            grant_type=grant_type,
+            refresh_ownership=refresh_ownership,
+        )
+
     # Store server-side when the server is configured for per-user OAuth and
     # the calling client has provided a valid LiteLLM identity.
     # Errors are non-fatal: the token is still returned to the client.
     if resolved_server.needs_user_oauth_token:
-        user_id: Final = await _extract_user_id_from_request(request)
+        user_id: Final = resolved_user_id
         if user_id:
             try:
                 await _store_per_user_token_server_side(
