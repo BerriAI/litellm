@@ -9586,6 +9586,9 @@ class Router:
         """
         idx: Final = len(self.model_list)
         self.model_list.append(model)
+        # A router built without a model_list joins the registry here instead, so a price
+        # reload rebuilds what it serves and delete_deployment can see it still holds an id.
+        _live_routers.add(self)
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
 

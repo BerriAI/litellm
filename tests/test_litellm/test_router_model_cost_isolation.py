@@ -382,6 +382,36 @@ def test_should_keep_the_cost_map_key_while_another_router_still_serves_it():
         _restore_model_cost_entries(original)
 
 
+def test_should_keep_the_cost_map_key_while_a_dynamically_built_router_serves_it():
+    """A router built with no model_list still serves whatever add_deployment gives it, so it
+    counts when deciding whether the shared cost-map claim can be released."""
+    from litellm.router import _DEPLOYMENT_COST_MAP_KEYS
+
+    model_id = "deployment-added-dynamically"
+    original = {model_id: litellm.model_cost.get(model_id)}
+    entry = {
+        "model_name": "added-dynamically",
+        "litellm_params": {"model": "gpt-4o-mini", "mock_response": "ok"},
+        "model_info": {"id": model_id, "input_cost_per_token": 0.005},
+    }
+    configured = Router(model_list=[entry])
+    dynamic = Router()
+    dynamic.add_deployment(deployment=Deployment(**entry))
+
+    try:
+        assert configured.delete_deployment(id=model_id) is not None
+
+        assert model_id in _DEPLOYMENT_COST_MAP_KEYS, (
+            "the claim was released while a dynamically built router still served the deployment"
+        )
+
+        assert dynamic.delete_deployment(id=model_id) is not None
+        assert model_id not in _DEPLOYMENT_COST_MAP_KEYS
+    finally:
+        _DEPLOYMENT_COST_MAP_KEYS.discard(model_id)
+        _restore_model_cost_entries(original)
+
+
 def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
     """
     The built-in pricing should be preserved no matter which deployment
