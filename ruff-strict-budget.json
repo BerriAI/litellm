@@ -1,6 +1,6 @@
 {
   "ANN001": {
-    "limit": 2956
+    "limit": 2937
   },
   "ANN002": {
     "limit": 71
@@ -9,10 +9,10 @@
     "limit": 806
   },
   "ANN201": {
-    "limit": 1979
+    "limit": 1972
   },
   "ANN202": {
-    "limit": 831
+    "limit": 830
   },
   "ANN204": {
     "limit": 683
@@ -57,7 +57,7 @@
     "limit": 3
   },
   "BLE001": {
-    "limit": 2916
+    "limit": 2915
   },
   "C401": {
     "limit": 8
@@ -189,7 +189,7 @@
     "limit": 0
   },
   "S110": {
-    "limit": 217
+    "limit": 212
   },
   "S112": {
     "limit": 22
