@@ -3484,6 +3484,50 @@ class TestStreamCloseOnDisconnect:
         assert "/etc/litellm/secrets/db.yaml" not in message
         assert "Traceback (most recent call last)" not in message
 
+    async def test_async_streaming_data_generator_http_exception_after_first_chunk_is_serialized(
+        self,
+    ):
+        """An HTTPException raised once chunks are already on the wire (for example a
+        post-call guardrail block) used to be re-raised out of the body iterator, which
+        the ASGI server turns into a dropped connection with no error and no terminator.
+        It has to reach serialize_error with its status and detail intact instead."""
+
+        class BlockedMidStream:
+            def __init__(self):
+                self._sent = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self._sent:
+                    self._sent = True
+                    return {"choices": [{"delta": {"content": "partial"}}]}
+                raise HTTPException(
+                    status_code=400,
+                    detail={"error": "Content blocked: keyword 'kumquat' detected", "guardrail": "keyword-block"},
+                )
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        captured: list = []
+        frames = [
+            frame
+            async for frame in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=BlockedMidStream(),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                request_data={"model": "mock-model"},
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+                serialize_chunk=lambda c: "data: x\n\n",
+                serialize_error=lambda e: captured.append(e) or "data: error\n\n",
+            )
+        ]
+
+        assert frames == ["data: x\n\n", "data: error\n\n"]
+        assert len(captured) == 1
+        assert captured[0].code == "400"
+        assert captured[0].message == "Content blocked: keyword 'kumquat' detected"
+        assert captured[0].provider_specific_fields["guardrail"] == "keyword-block"
+
     @staticmethod
     def _request_that_disconnects() -> Request:
         async def receive():
