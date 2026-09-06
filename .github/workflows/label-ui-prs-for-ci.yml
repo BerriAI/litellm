@@ -2,6 +2,8 @@
 # request that never gets the label never runs e2e_ui_testing or e2e_ui_testing_server_root_path.
 # A push to an already-labelled pull request fires no label event and therefore builds nothing,
 # so every new head removes the label and adds it back rather than leaving the existing one alone.
+# Drafts are left alone, which is the way to work on a UI branch without paying for a pipeline
+# on every push; marking the pull request ready for review labels it.
 name: Label UI PRs for CircleCI
 
 on:
@@ -10,6 +12,7 @@ on:
       - opened
       - reopened
       - synchronize
+      - ready_for_review
     paths:
       - "ui/**"
       - "tests/e2e/ui/**"
@@ -24,7 +27,9 @@ jobs:
   add-run-ci-label:
     name: add run-ci label
     # Fork pull requests get a read-only token, so labelling them stays manual.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -36,5 +41,11 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
           gh pr edit "$PR_NUMBER" --repo "$REPO" --remove-label run-ci || true
+          labels="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '.labels[].name')"
+          if printf '%s\n' "$labels" | grep -Fxq run-ci; then
+            echo "run-ci is still on the pull request, so adding it back fires no label event and CircleCI builds nothing"
+            exit 1
+          fi
           gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label run-ci
