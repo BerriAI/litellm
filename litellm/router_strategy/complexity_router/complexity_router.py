@@ -84,6 +84,7 @@ from .config import (
     TierDefinition,
 )
 from .stall_detector import detect_stalled_task
+from .trajectory_signals import compute_trajectory_signals
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -1473,6 +1474,38 @@ class ComplexityRouter(CustomLogger):
             simple_medium=boundaries.get("simple_medium", 0.15),
             medium_complex=boundaries.get("medium_complex", 0.35),
             complex_reasoning=boundaries.get("complex_reasoning", 0.60),
+        )
+
+    def _trajectory_signal_strings(self, messages: Sequence[Mapping[str, object]] | None) -> tuple[str, ...]:
+        """This turn's trajectory as `trajectory:<name>=<value>` entries, for the decision record.
+
+        Observational: nothing reads these back to choose a tier. A turn carrying tool calls
+        always records `observed_calls`, so a window that was read and scored zero on every
+        fraction stays distinguishable from a plain chat turn with nothing to read, and it is
+        also the denominator the fractions are over, which decides how much they are worth. The
+        fractions themselves are recorded only when non-zero, to keep the record short.
+        """
+        if not self.config.trajectory_signals_enabled:
+            return ()
+        trajectory: Final = compute_trajectory_signals(
+            messages,
+            window=self.config.trajectory_signal_window,
+            tool_intents=self.config.trajectory_tool_intents,
+        )
+        if trajectory.observed_calls == 0:
+            return ()
+        return (
+            f"trajectory:observed_calls={trajectory.observed_calls}",
+            *(
+                f"trajectory:{name}={value:.3f}"
+                for name, value in (
+                    ("error_severity", trajectory.error_severity),
+                    ("spinning", trajectory.spinning),
+                    ("exploring", trajectory.exploring),
+                    ("production_intensity", trajectory.production_intensity),
+                )
+                if value > 0.0
+            ),
         )
 
     def _build_routing_decision(
@@ -3368,6 +3401,11 @@ class ComplexityRouter(CustomLogger):
                                         routed_model=routed_model,
                                         cause=cause,
                                         tier=routed_pin_tier,
+                                        # Replaying a pin skips classification, but the turn still
+                                        # happened and its trajectory is still the calibration data
+                                        # this records. Leaving it off here would drop exactly the
+                                        # agentic continuations a pinned session is made of.
+                                        signals=self._trajectory_signal_strings(resolved_messages),
                                         matched_keyword=pin_plan_sentinel if plan_floored else None,
                                         escalation_keyword=pin_escalation_keyword,
                                         escalated=escalated,
@@ -3494,6 +3532,9 @@ class ComplexityRouter(CustomLogger):
                     routed_model=routed_model,
                     cause="default_fallback",
                     tier=fallback_tier,
+                    # An agentic turn answering a tool call carries no user text of its own, so it
+                    # lands here rather than at the classifier. Its trajectory is still readable.
+                    signals=self._trajectory_signal_strings(resolved_messages),
                     conversation_continuing=conversation_continuing,
                 ),
             )
@@ -3509,6 +3550,9 @@ class ComplexityRouter(CustomLogger):
             window=self.config.stall_escalation_window,
             repeat_threshold=self.config.stall_escalation_repeat_threshold,
         )
+        # Read here for the same reason `stalled` is: the keyword-override path below returns
+        # before any classification runs, and its decision record carries these too.
+        trajectory_signals: Final = self._trajectory_signal_strings(resolved_messages)
 
         plan_mode_sentinel: Final = self._matched_plan_mode_signal(request_kwargs, resolved_messages)
         plan_floor: Final = self._resolve_plan_mode_floor() if plan_mode_sentinel is not None else None
@@ -3530,6 +3574,7 @@ class ComplexityRouter(CustomLogger):
                     conversation_continuing=conversation_continuing,
                     cause="plan_mode",
                     tier=plan_floor,
+                    signals=trajectory_signals,
                     matched_keyword=plan_mode_sentinel,
                     escalation_keyword=escalation_keyword,
                     escalated=False,
@@ -3570,7 +3615,7 @@ class ComplexityRouter(CustomLogger):
                     conversation_continuing=conversation_continuing,
                     cause=keyword_cause,
                     tier=routed_tier,
-                    signals=("stall_escalation",) if stalled else None,
+                    signals=(*trajectory_signals, "stall_escalation") if stalled else trajectory_signals,
                     matched_keyword=plan_mode_sentinel if keyword_plan_floored else override.matched_keyword,
                     escalation_keyword=escalation_keyword,
                     escalated=keyword_escalated,
@@ -3633,7 +3678,7 @@ class ComplexityRouter(CustomLogger):
                     routed_model=fallback_model,
                     conversation_continuing=conversation_continuing,
                     cause=outcome.cause,
-                    signals=outcome.signals,
+                    signals=(*outcome.signals, *trajectory_signals),
                     escalation_keyword=escalation_keyword,
                     escalated=False,
                 ),
@@ -3708,9 +3753,9 @@ class ComplexityRouter(CustomLogger):
             None if outcome.cause == "default_model_fallback" and plan_mode_sentinel is None else tier
         )
         decision_signals: Final = (
-            (*signals, f"plugin-filtered-pool:{_tier_name(tier)}")
+            (*signals, f"plugin-filtered-pool:{_tier_name(tier)}", *trajectory_signals)
             if outcome.cause == "default_model_fallback" and self.config.plugins
-            else signals
+            else (*signals, *trajectory_signals)
         )
         decision_cause: Final[RoutingDecisionCause] = "plan_mode" if plan_floored else outcome.cause
         decision_keyword: Final = (
