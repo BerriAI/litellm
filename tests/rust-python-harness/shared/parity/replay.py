@@ -4,13 +4,14 @@ import base64
 import queue
 from contextlib import AbstractContextManager
 from typing import Final
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from pydantic import JsonValue, TypeAdapter
 
 from .http import local_response_header
 from .local_server import LocalHttpHandler, LocalHttpServer, serve_in_thread
 from .models import CapturedRequest
-from .recorded_http import RecordedHttpResponse, RecordedHttpStreamResponse, RecordedResponse
+from .recorded_http import RecordedExchange, RecordedHttpResponse, RecordedHttpStreamResponse, ReplayItem
 
 JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 EXCLUDED_REQUEST_HEADERS: Final = frozenset(
@@ -32,13 +33,18 @@ def _replay_response_header(name: str, value: str, provider_url: str) -> str:
     return local_response_header(name, value, provider_url)
 
 
+def _normalized_request_target(value: str) -> tuple[str, tuple[tuple[str, str], ...]]:
+    parsed: Final = urlsplit(value)
+    return unquote(parsed.path), tuple(sorted(parse_qsl(parsed.query, keep_blank_values=True)))
+
+
 class ReplayServer(LocalHttpServer):
     def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), _ReplayHandler)
-        self.responses: queue.Queue[RecordedResponse] = queue.Queue()
+        self.responses: queue.Queue[ReplayItem] = queue.Queue()
         self.requests: queue.Queue[CapturedRequest] = queue.Queue()
 
-    def enqueue_response(self, response: RecordedResponse) -> None:
+    def enqueue_response(self, response: ReplayItem) -> None:
         self.responses.put(response)
 
     def take_requests(self, expected_count: int) -> tuple[CapturedRequest, ...]:
@@ -100,10 +106,21 @@ class _ReplayHandler(LocalHttpHandler):
             )
         )
         try:
-            response: Final = provider.responses.get(timeout=5)
+            replay_item: Final = provider.responses.get(timeout=5)
         except queue.Empty:
             self.send_error(500, "no replay response queued")
             return
+        if isinstance(replay_item, RecordedExchange):
+            expected: Final = replay_item.request
+            if self.command != expected.method or _normalized_request_target(self.path) != _normalized_request_target(
+                expected.path
+            ):
+                self.send_error(
+                    500,
+                    f"unexpected replay request: {self.command} {self.path}; expected {expected.method} {expected.path}",
+                )
+                return
+        response: Final = replay_item.response if isinstance(replay_item, RecordedExchange) else replay_item
         self.send_response_only(response.status_code)
         for header in response.headers:
             if header.name.lower() not in EXCLUDED_RESPONSE_HEADERS:

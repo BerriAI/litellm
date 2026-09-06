@@ -105,6 +105,9 @@ mod tests {
                 "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
+                "responses_decline",
+                "responses",
+                "aresponses",
                 "ResponsesWebSocketConnection",
                 "gil_stats",
             ];
@@ -148,6 +151,8 @@ mod tests {
                         "amessages",
                         "chat_completions",
                         "achat_completions",
+                        "responses",
+                        "aresponses",
                         "gateway_messages",
                     ]
                 );

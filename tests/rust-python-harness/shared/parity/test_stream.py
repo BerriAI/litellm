@@ -339,6 +339,6 @@ async def test_capture_preserves_partial_output_and_complete_error(mode: Literal
     error: Final = _PublicStreamError()
     report: Final = await _capture(mode, (_Chunk(value="partial"),), error)
     assert report == SDKStreamReport(
-        chunks=(SDKJsonChunk(value={"value": "partial"}),),
+        chunks=(SDKJsonChunk(value={"value": "partial"}, value_type=f"{_Chunk.__module__}.{_Chunk.__qualname__}"),),
         terminal=SDKStreamFailed(error=sdk_error_report(error)),
     )

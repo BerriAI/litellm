@@ -13,7 +13,10 @@ tests/rust-python-harness/
 │   │   ├── __init__.py
 │   │   ├── reporting.py
 │   │   ├── sdk/
-│   │   │   └── ocr/
+│   │   │   ├── chat_completions/
+│   │   │   ├── messages/
+│   │   │   ├── ocr/
+│   │   │   └── responses/
 │   │
 │   ├── trace_parity/
 │   │   ├── __init__.py
@@ -65,6 +68,8 @@ tests/rust-python-harness/
 - `e2e_parity/` compares SDK objects, exceptions, callbacks, and streams, or gateway HTTP responses
 - `trace_parity/` compares mapped operations, call counts, and required execution ordering; before running it rebuilds the native bridge with the `trace-parity` feature whenever `litellm-rust` sources are newer than the installed extension (`shared/native_build.py`)
 - E2E and trace strategies load their registered module cases and run surface-specific execution from their folders
+- E2E SDK contracts share subprocess execution, typed outcome capture, narrow normalization rules, and ordered replay matching; each API owns its inputs, invocation, and recording strategy
+- Generate API fixtures with the API's `fixtures.record` module and shared `--examples`, `--concurrency`, and `--fixture-dir` options; recording always runs the Python baseline
 - `unit_tests_mapping/contracts.py` owns typed harness-side mapping contracts, per-function contracts live below `cases/`, and `mappings.py` exports the registry; live test discovery derives unmapped Python and Rust-only tests without an exhaustive manifest
 - `unit_tests_mapping/runner.py` validates confirmed mappings against the live Python and Rust inventories and attaches the derived status report
 - `unit_tests_parity/runner.py` runs each contract's `unit_parity_scope` with `LITELLM_RUST=0` and `LITELLM_RUST=1` in separate processes and requires matching outcomes, including failures; exclusions require a reason in the contract

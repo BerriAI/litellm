@@ -21,6 +21,7 @@ class SDKSuccess(BaseModel):
 
     status: Literal["ok"] = "ok"
     response: JsonValue
+    response_type: str | None = None
 
 
 class SDKError(BaseModel):
@@ -42,6 +43,7 @@ class SDKJsonChunk(BaseModel):
 
     kind: Literal["json"] = "json"
     value: JsonValue
+    value_type: str | None = None
 
 
 class SDKBytesChunk(BaseModel):
@@ -49,6 +51,7 @@ class SDKBytesChunk(BaseModel):
 
     kind: Literal["bytes"] = "bytes"
     data_b64: str
+    value_type: str = "builtins.bytes"
 
     def data_bytes(self) -> bytes:
         return base64.b64decode(self.data_b64, validate=True)
@@ -89,8 +92,24 @@ def sdk_chunk(value: object) -> SDKChunk:
     if isinstance(value, bytes):
         return SDKBytesChunk(data_b64=base64.b64encode(value).decode("ascii"))
     if isinstance(value, BaseModel):
-        return SDKJsonChunk(value=JSON_VALUE_ADAPTER.validate_python(value.model_dump(mode="json")))
-    return SDKJsonChunk(value=JSON_VALUE_ADAPTER.validate_python(value))
+        return SDKJsonChunk(
+            value=JSON_VALUE_ADAPTER.validate_python(value.model_dump(mode="json")),
+            value_type=f"{type(value).__module__}.{type(value).__qualname__}",
+        )
+    return SDKJsonChunk(
+        value=JSON_VALUE_ADAPTER.validate_python(value),
+        value_type=f"{type(value).__module__}.{type(value).__qualname__}",
+    )
+
+
+def sdk_success(value: object) -> SDKSuccess:
+    response: Final = JSON_VALUE_ADAPTER.validate_python(
+        value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+    )
+    return SDKSuccess(
+        response=response,
+        response_type=f"{type(value).__module__}.{type(value).__qualname__}",
+    )
 
 
 def _string_attribute(error: Exception, name: str) -> str | None:

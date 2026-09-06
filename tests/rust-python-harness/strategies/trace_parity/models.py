@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final, Literal, TypeAlias
 
-from ...shared.parity.recorded_http import RecordedHttpResponse
+from ...shared.parity.recorded_http import ReplayItem
 from ...shared.reporting.models import SdkFunction
 from ...shared.tracing.steps import Engine, TraceContract, TraceMapping
 
@@ -15,7 +15,7 @@ TraceFailureSource = Literal["python", "rust", "harness"]
 @dataclass(frozen=True, slots=True)
 class RouteFixture:
     kwargs: dict[str, object]
-    provider_responses: tuple[RecordedHttpResponse, ...]
+    provider_responses: tuple[ReplayItem, ...]
 
 
 @dataclass(frozen=True, slots=True)
