@@ -1,95 +1,117 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
-from litellm.exceptions import APIError
-from litellm.rust_bridge import bindings, runtime
-
-
-class RustBridgeDeclined(Exception):
-    pass
-
-
-class RustUpstreamError(Exception):
-    pass
-
-
-@pytest.fixture(autouse=True)
-def native_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
-    native = SimpleNamespace(
-        RustBridgeDeclined=RustBridgeDeclined,
-        RustUpstreamError=RustUpstreamError,
-    )
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-
-
-def context() -> runtime.BridgeErrorContext:
-    return runtime.BridgeErrorContext(route="messages", provider="anthropic", model="model")
-
-
-def test_invoke_tags_native_decline_before_running_fallback() -> None:
-    calls: list[str] = []
-
-    def decline() -> object:
-        calls.append("rust")
-        raise RustBridgeDeclined("unsupported")
-
-    value = runtime.invoke(
-        native_call=decline,
-        fallback=lambda: calls.append("python") or "fallback",
-        adapt=str,
-        mode=runtime.FallbackMode.PYTHON,
-        context=context(),
-    )
-
-    assert value == "fallback"
-    assert calls == ["rust", "python"]
-
-
-def test_invoke_translates_upstream_without_fallback() -> None:
-    def fail() -> object:
-        raise RustUpstreamError(429, "rate limited")
-
-    with pytest.raises(APIError, match="rate limited") as caught:
-        runtime.invoke(
-            native_call=fail,
-            fallback=lambda: pytest.fail("fallback must not run"),
-            adapt=str,
-            mode=runtime.FallbackMode.PYTHON,
-            context=context(),
-        )
-
-    assert caught.value.status_code == 429
+from litellm.rust_bridge import runtime
 
 
 @pytest.mark.asyncio
-async def test_ainvoke_handles_native_success() -> None:
-    async def native() -> int:
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("state", ("disabled", "ineligible", "unavailable", "handled"))
+async def test_attempt_only_prepares_selected_requests(asynchronous: bool, state: str) -> None:
+    events: Final[list[str]] = []
+
+    def load() -> object | None:
+        events.append("load")
+        return None if state == "unavailable" else object()
+
+    def prepare() -> int:
+        events.append("prepare")
         return 3
 
-    async def fallback() -> str:
-        pytest.fail("fallback must not run")
+    def call(_binding: object, request: int) -> int:
+        events.append("call")
+        return request * 2
 
-    assert (
-        await runtime.ainvoke(
-            native_call=native,
-            fallback=fallback,
-            adapt=str,
-            mode=runtime.FallbackMode.PYTHON,
-            context=context(),
+    async def acall(binding: object, request: int) -> int:
+        return call(binding, request)
+
+    def adapt(value: int) -> str:
+        events.append("adapt")
+        return str(value)
+
+    result: Final = (
+        await runtime.aattempt(
+            load=load,
+            enabled=state != "disabled",
+            eligible=state != "ineligible",
+            prepare=prepare,
+            call=acall,
+            adapt=adapt,
         )
-        == "3"
+        if asynchronous
+        else runtime.attempt(
+            load=load,
+            enabled=state != "disabled",
+            eligible=state != "ineligible",
+            prepare=prepare,
+            call=call,
+            adapt=adapt,
+        )
     )
+    if state == "handled":
+        assert result == runtime.Handled("6")
+        assert events == ["load", "prepare", "call", "adapt"]
+    else:
+        assert result == runtime.NativeSkipped(runtime.NativeSkipReason(state))
+        assert events == (["load"] if state == "unavailable" else [])
 
 
-def test_required_mode_rejects_unavailable_bridge() -> None:
-    with pytest.raises(RuntimeError, match="is unavailable"):
-        runtime.invoke(
-            native_call=None,
-            fallback=lambda: pytest.fail("fallback must not run"),
-            adapt=str,
-            mode=runtime.FallbackMode.RUST_REQUIRED,
-            context=context(),
-        )
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("phase", ("prepare", "call"))
+async def test_attempt_reports_failure_without_deciding_retry(asynchronous: bool, phase: str) -> None:
+    error: Final = RuntimeError("native failure")
+
+    def prepare() -> int:
+        if phase == "prepare":
+            raise error
+        return 3
+
+    def call(_binding: object, request: int) -> int:
+        raise error
+
+    async def acall(binding: object, request: int) -> int:
+        return call(binding, request)
+
+    def adapt(value: int) -> str:
+        pytest.fail("failed attempts cannot be adapted")
+
+    result: Final = (
+        await runtime.aattempt(load=object, enabled=True, eligible=True, prepare=prepare, call=acall, adapt=adapt)
+        if asynchronous
+        else runtime.attempt(load=object, enabled=True, eligible=True, prepare=prepare, call=call, adapt=adapt)
+    )
+    assert isinstance(result, runtime.NativeFailed)
+    assert result.error is error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_adaptation_failure_remains_distinct_from_native_failure(asynchronous: bool) -> None:
+    error: Final = ValueError("invalid response")
+
+    async def acall(_binding: object, request: int) -> int:
+        return request
+
+    def adapt(value: int) -> str:
+        raise error
+
+    async def run() -> None:
+        if asynchronous:
+            await runtime.aattempt(load=object, enabled=True, eligible=True, prepare=lambda: 3, call=acall, adapt=adapt)
+        else:
+            runtime.attempt(
+                load=object,
+                enabled=True,
+                eligible=True,
+                prepare=lambda: 3,
+                call=lambda binding, request: request,
+                adapt=adapt,
+            )
+
+    with pytest.raises(ValueError, match="invalid response") as caught:
+        await run()
+    assert caught.value is error
