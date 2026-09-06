@@ -164,10 +164,10 @@ export const MountedFormField: React.FC<MountedFormFieldProps> = ({
       <Field data-invalid={invalid || undefined} className={className}>
         {label !== undefined && <FieldLabel htmlFor={path}>{label}</FieldLabel>}
         {children(controlProps)}
-        {hasHelp ? (
-          <FieldDescription id={helpId}>{help}</FieldDescription>
-        ) : (
+        {invalid ? (
           <FieldError id={helpId} errors={[fieldState.error]} />
+        ) : (
+          hasHelp && <FieldDescription id={helpId}>{help}</FieldDescription>
         )}
       </Field>
     );
