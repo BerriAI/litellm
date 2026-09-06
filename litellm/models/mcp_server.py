@@ -98,6 +98,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None

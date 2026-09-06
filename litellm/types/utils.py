@@ -168,6 +168,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
+    supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
+    vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
 
@@ -335,6 +337,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "image_generation",
             "chat",
             "audio_transcription",
+            "audio_speech",
             "responses",
             "ocr",
             "realtime",
@@ -3078,7 +3081,9 @@ class GuardrailMode(TypedDict, total=False):
     default: str | list[str] | None
 
 
-GuardrailStatus = Literal["success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"]
+GuardrailStatus = Literal[
+    "success", "guardrail_flagged", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"
+]
 
 # Fields on a guardrail record whose values can quote the caller's prompt: the payload sent to the
 # guardrail, the provider response that echoes it back, and the two first-party hooks that inline
@@ -3320,6 +3325,7 @@ class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """
     Status of guardrail execution:
     - 'success': Guardrail ran and allowed content through
+    - 'guardrail_flagged': Guardrail allowed content through but recorded a non-blocking violation
     - 'guardrail_intervened': Guardrail blocked or modified content
     - 'guardrail_failed_to_respond': Guardrail had technical failure
     - 'not_run': No guardrail was run
@@ -3769,6 +3775,8 @@ all_litellm_params = (
         "auto_router_default_model",
         "auto_router_embedding_model",
         "auto_router_max_input_chars",
+        "auto_router_routing_compression",
+        "auto_router_model_compression",
         "complexity_router_config",
         "complexity_router_default_model",
         "adaptive_router_config",

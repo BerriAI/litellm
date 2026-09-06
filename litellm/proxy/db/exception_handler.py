@@ -200,6 +200,12 @@ class PrismaDBExceptionHandler:
         return False
 
     @staticmethod
+    def is_prisma_error(e: Exception) -> bool:
+        import prisma
+
+        return isinstance(e, _exception_types(prisma.errors.PrismaError))
+
+    @staticmethod
     def is_deadlock_error(e: Exception) -> bool:
         """True iff ``e`` is a Postgres deadlock (P2034 / 40P01) surfaced through prisma."""
         import prisma
