@@ -1,7 +1,10 @@
+import asyncio
+
 import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisPipelineIncrementOperation
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.types.router import LiteLLM_Params
 from litellm.types.utils import BudgetConfig
@@ -194,6 +197,68 @@ async def test_async_filter_deployments_does_not_recompute_provider_when_resolve
 
     assert len(filtered_deployments) == len(healthy_deployments)
     assert provider_resolution_calls == len(healthy_deployments)
+
+
+class _OrderRecordingRedisCache:
+    """
+    Fake redis cache that records the order of increment-pipeline writes relative
+    to read-backs, so we can prove the sync flushes queued spend before reading.
+    """
+
+    def __init__(self):
+        self.events: list[str] = []
+        self.batch_get_seen_values: list[float] = []
+        self._store: dict[str, float] = {}
+
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        self.events.append("pipeline_start")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        results = []
+        for op in increment_list:
+            self._store[op["key"]] = self._store.get(op["key"], 0.0) + op["increment_value"]
+            results.append(self._store[op["key"]])
+        self.events.append("pipeline_end")
+        return results
+
+    async def async_batch_get_cache(self, key_list, **kwargs):
+        self.events.append("batch_get")
+        values = {key: self._store.get(key, 0.0) for key in key_list}
+        self.batch_get_seen_values = list(values.values())
+        return values
+
+    async def async_get_cache(self, key, **kwargs):
+        return self._store.get(key, 0.0)
+
+    async def async_set_cache(self, key, value, **kwargs):
+        self._store[key] = value
+
+
+@pytest.mark.asyncio
+async def test_sync_flushes_increments_to_redis_before_reading_back(disable_budget_sync):
+    """
+    Regression for router budget sync race (#32614): _push_in_memory_increments_to_redis
+    must await the pipeline write instead of firing a background task. Otherwise the
+    subsequent read-back sees stale Redis spend and overwrites fresher in-memory spend.
+    """
+    dual_cache = DualCache()
+    redis = _OrderRecordingRedisCache()
+    dual_cache.redis_cache = redis
+
+    budget_limiter = RouterBudgetLimiting(
+        dual_cache=dual_cache,
+        provider_budget_config={"openai": BudgetConfig(budget_duration="1d", max_budget=100.0)},
+    )
+    spend_key = "provider_spend:openai:1d"
+    budget_limiter.redis_increment_operation_queue = [
+        RedisPipelineIncrementOperation(key=spend_key, increment_value=7.0, ttl=3600),
+    ]
+
+    await budget_limiter._sync_in_memory_spend_with_redis()
+
+    assert redis.events == ["pipeline_start", "pipeline_end", "batch_get"]
+    assert redis.batch_get_seen_values == [7.0]
+    assert budget_limiter.redis_increment_operation_queue == []
 
 
 def _legacy_provider_resolution(deployment):
