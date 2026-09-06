@@ -86,9 +86,8 @@ def test_supported_params_match_gateway_surface() -> None:
     params = ClfAiGatewayConfig().get_supported_openai_params(model="glm-5.3")
     assert "reasoning_effort" in params
     assert "tools" in params and "tool_choice" in params
-    # the gateway rejects these legacy/unknown fields with a 400 — never advertise them
-    for legacy in ("functions", "function_call", "logit_bias"):
-        assert legacy not in params
+    for rejected_by_gateway_with_400 in ("functions", "function_call", "logit_bias"):
+        assert rejected_by_gateway_with_400 not in params
 
 
 @pytest.mark.parametrize("model", MODELS)
