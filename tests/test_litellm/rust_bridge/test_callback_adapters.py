@@ -45,7 +45,6 @@ def test_provider_logging_adapter_preserves_provider_lifecycle() -> None:
             stage="provider_response",
             committed=True,
             status_code=429,
-            will_retry=True,
             ended_at=11.0,
         )
     )
@@ -69,7 +68,6 @@ def test_provider_logging_adapter_preserves_provider_lifecycle() -> None:
         "stage": "provider_response",
         "committed": True,
         "status_code": 429,
-        "will_retry": True,
         "ended_at": 11.0,
     }
 

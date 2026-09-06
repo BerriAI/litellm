@@ -58,7 +58,6 @@ pub struct ProviderError {
     pub stage: &'static str,
     pub committed: bool,
     pub status_code: Option<u16>,
-    pub will_retry: bool,
     pub ended_at: f64,
 }
 

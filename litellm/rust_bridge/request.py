@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Generic, Protocol, TypeVar
+from typing import Generic, Protocol
 
 from .callbacks import OneShotCallbackHandle
 
@@ -73,6 +73,7 @@ def vertex_options(params: Mapping[str, object]) -> NativeVertexOptions:
         project=project if isinstance(project, str) else None,
         location=location if isinstance(location, str) else None,
     )
+
 
 from typing_extensions import ReadOnly, TypedDict, TypeVar
 
@@ -192,6 +193,12 @@ def call_native(
     native: NativeFunction[RequestT, ResultT, CallbackT],
     prepared: PreparedNativeCall[RequestT, CallbackT],
 ) -> ResultT:
+    if prepared.callback_adapter is None:
+        return native(
+            prepared.request,
+            options=prepared.options,
+            context=prepared.context,
+        )
     return native(
         prepared.request,
         options=prepared.options,

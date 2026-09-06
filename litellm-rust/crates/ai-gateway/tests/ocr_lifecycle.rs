@@ -86,7 +86,6 @@ impl ProviderAttemptObserver for ProviderObserver {
 
     async fn error(&mut self, input: &ProviderError) -> Result<(), Self::Error> {
         assert!(input.committed);
-        assert!(!input.will_retry);
         assert!(!input.message.is_empty());
         self.events.lock().unwrap().push("error");
         if self.rejected_callback == Some("error") {

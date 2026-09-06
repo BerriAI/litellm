@@ -62,5 +62,5 @@ if __name__ == "__main__":
     else:
         native: Final = get_native_bridge()
         assert native is not None
-        with patch.object(native, "ready_endpoints", {"ocr": frozenset({"callbacks"})}):
+        with patch.object(native, "ready_endpoints", {"ocr": frozenset({"callbacks"})}, create=True):
             asyncio.run(smoke(baseline=False))

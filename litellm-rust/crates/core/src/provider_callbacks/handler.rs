@@ -143,7 +143,6 @@ where
             Error::Http { status, .. } => Some(*status),
             _ => None,
         },
-        will_retry: false,
         ended_at: epoch_seconds(),
     };
     observer.error(&event).await.map_err(callback_error)
@@ -240,7 +239,6 @@ mod tests {
             assert_eq!(event.attempt, 3);
             assert_eq!(event.trace_id.as_deref(), Some("trace-1"));
             assert!(event.committed);
-            assert!(!event.will_retry);
             self.events.push("error");
             Ok(())
         }

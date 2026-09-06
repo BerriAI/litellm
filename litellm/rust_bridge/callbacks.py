@@ -22,12 +22,11 @@ CallbackDecision: TypeAlias = CallbackUnchanged | CallbackReplace | CallbackReje
 
 
 class ProviderAttemptCallbackHandle(Protocol):
-    """Observe one provider attempt.
+    """Observe the provider operation inside one native call.
 
-    Retries repeat ``pre_call`` and ``error`` with incremented attempt metadata.
-    Only the successful attempt receives ``post_call``. These callbacks observe
-    the provider operation; outer SDK success and failure callbacks remain owned
-    by Python after endpoint dispatch completes.
+    Successful operations receive ``pre_call`` and ``post_call`` once. Failed
+    operations receive ``pre_call`` and ``error`` once. Outer SDK success and
+    failure callbacks remain owned by Python after endpoint dispatch completes.
     """
 
     def pre_call(self, payload: object, /) -> CallbackDecision: ...

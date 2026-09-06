@@ -53,7 +53,6 @@ class ProviderError(ProviderEvent):
     stage: str
     committed: bool
     status_code: int | None
-    will_retry: bool
     ended_at: float
 
 
