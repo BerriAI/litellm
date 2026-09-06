@@ -621,6 +621,27 @@ describe("MCPToolPermissions", () => {
       );
 
       expect(await screen.findByText("Unable to load MCP servers")).toBeInTheDocument();
+      expect(screen.queryByText(/has 0 servers/)).not.toBeInTheDocument();
+    });
+
+    it("tells the admin when a loaded access group has no member servers", async () => {
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([groupServer]);
+      vi.mocked(networking.fetchMCPToolsets).mockResolvedValue([]);
+      vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: groupTools, error: false });
+
+      renderWithProviders(
+        <MCPToolPermissions
+          accessToken={mockAccessToken}
+          selectedServers={[]}
+          selectedAccessGroups={["production-group", "ops_readonly"]}
+          toolPermissions={{}}
+          onChange={vi.fn()}
+        />,
+      );
+
+      expect(await screen.findByText('Access group "ops_readonly" has 0 servers')).toBeInTheDocument();
+      expect(screen.getByText("Group Server")).toBeInTheDocument();
+      expect(screen.queryByText('Access group "production-group" has 0 servers')).not.toBeInTheDocument();
     });
 
     it("warns when the selected toolsets cannot be resolved to servers", async () => {

@@ -54,6 +54,12 @@ const accessGroupNamesOf = (server: MCPServer): readonly string[] =>
     return [typeof parsed.data === "string" ? parsed.data : parsed.data.name];
   });
 
+export const emptyMcpAccessGroups = (
+  allServers: readonly MCPServer[],
+  selectedAccessGroups: readonly string[],
+): readonly string[] =>
+  selectedAccessGroups.filter((group) => !allServers.some((server) => accessGroupNamesOf(server).includes(group)));
+
 // Which servers an identifier names, with the same precedence the backend's expand_permission_list
 // applies: a string that is a registry server id names exactly that server, and only a string that
 // is not falls back to server_name/alias, which can name several. Matching all three fields at once
