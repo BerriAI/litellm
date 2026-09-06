@@ -255,6 +255,35 @@ def test_should_drop_a_price_the_deployment_no_longer_carries():
         _restore_model_cost_entries(original)
 
 
+def test_should_not_strip_a_builtin_entry_when_a_deployment_id_collides_with_it():
+    """Deployments are keyed into the same cost map as the built-in catalog, so a deployment
+    whose id happens to name a real model must not evict that model's entry.
+
+    Stripping it would take the pricing and capability flags every other deployment of that
+    model reads, process-wide, until the next price-map reload.
+    """
+    colliding_id = "gpt-4o"
+    original = {colliding_id: litellm.model_cost.get(colliding_id)}
+    builtin_max_tokens = litellm.model_cost[colliding_id]["max_tokens"]
+
+    try:
+        Router._register_deployment_in_model_cost(
+            model_id=colliding_id,
+            model_info={"id": colliding_id, "db_model": True, "mode": "chat"},
+            model="gpt-4o-mini",
+            custom_llm_provider="openai",
+        )
+
+        entry = litellm.model_cost[colliding_id]
+        assert entry["max_tokens"] == builtin_max_tokens, (
+            "registering a deployment under a catalog model's name wiped that model's context window"
+        )
+        assert entry["litellm_provider"] == "openai"
+        assert entry["supports_vision"] is True
+    finally:
+        _restore_model_cost_entries(original)
+
+
 def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
     """
     The built-in pricing should be preserved no matter which deployment

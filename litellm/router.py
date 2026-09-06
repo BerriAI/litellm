@@ -9765,7 +9765,12 @@ class Router:
             }
 
         if model_id is not None:
-            litellm.model_cost.pop(model_id, None)
+            # Deployments key into the same cost map as the built-in catalog, so evict only an
+            # entry this registration owns; a deployment id that names a real model keeps the
+            # old merge rather than stripping what every other deployment of it reads.
+            registered: Final = litellm.model_cost.get(model_id)
+            if registered is not None and registered.get("litellm_provider") is None:
+                litellm.model_cost.pop(model_id, None)
             litellm.register_model(
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,

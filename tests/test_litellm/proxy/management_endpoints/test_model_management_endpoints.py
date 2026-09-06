@@ -3470,6 +3470,45 @@ class TestUpdateDBModelNullClearsAnyKey:
         assert info[field] == _PROTECTED_MODEL_INFO_VALUES[field]
         assert info["max_input_tokens"] == 4096
 
+    def test_echoing_the_read_back_blob_preserves_every_stored_key(self):
+        """The Admin UI edit form submits the whole /model/info row back, and that read reports
+        every key the deployment never stored as an explicit null. Those nulls have to stay
+        no-ops: a write drops None before storing, so a null in the echoed blob always names a
+        key the stored row does not carry.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+
+        db_model = _build_db_model_with_pinned_model_info()
+        echoed = {
+            "id": "dep-pinned-0",
+            "max_input_tokens": 4096,
+            "mode": "chat",
+            "supports_vision": True,
+            "input_cost_per_token": 0.000001,
+            "team_id": "team-keep-me",
+            "base_model": None,
+            "tier": None,
+            "max_output_tokens": None,
+            "supports_function_calling": None,
+            "cache_read_input_token_cost": None,
+        }
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment.model_validate({"model_info": echoed}),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info["max_input_tokens"] == 4096
+        assert info["mode"] == "chat"
+        assert info["supports_vision"] is True
+        assert info["input_cost_per_token"] == 0.000001
+        assert info["team_id"] == "team-keep-me"
+        for never_stored in ("base_model", "tier", "max_output_tokens", "supports_function_calling"):
+            assert never_stored not in info
+
     def test_null_on_pricing_key_still_clears_both_blobs(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             update_db_model,
