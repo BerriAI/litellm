@@ -188,9 +188,16 @@ interface ResultsStepProps {
   isDone: boolean;
   creationResults: CreationResult[];
   aliasCollisions: string[];
+  onClose: () => void;
 }
 
-export const ResultsStep: React.FC<ResultsStepProps> = ({ isCreating, isDone, creationResults, aliasCollisions }) => (
+export const ResultsStep: React.FC<ResultsStepProps> = ({
+  isCreating,
+  isDone,
+  creationResults,
+  aliasCollisions,
+  onClose,
+}) => (
   <Card>
     <CardContent className="space-y-4">
       {isCreating && (
@@ -219,6 +226,9 @@ export const ResultsStep: React.FC<ResultsStepProps> = ({ isCreating, isDone, cr
               </AlertDescription>
             </Alert>
           )}
+          <div className="flex justify-end">
+            <Button onClick={onClose}>Close</Button>
+          </div>
         </>
       )}
     </CardContent>

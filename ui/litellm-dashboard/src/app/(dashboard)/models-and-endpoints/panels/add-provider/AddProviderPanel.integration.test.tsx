@@ -128,9 +128,10 @@ const PROXY_ADMIN = { accessToken: "test-access-token" };
 
 const setup = async () => {
   const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
-  renderWithProviders(<AddProviderPanel />);
+  const onClose = vi.fn();
+  renderWithProviders(<AddProviderPanel onClose={onClose} />);
   await screen.findByLabelText("Provider");
-  return { user };
+  return { user, onClose };
 };
 
 const chooseProvider = async (user: ReturnType<typeof userEvent.setup>, name: string) => {
@@ -193,7 +194,7 @@ describe("AddProviderPanel", () => {
 
   it("walks provider -> credential -> discover -> review -> create, with blocked and aliases wired correctly", async () => {
     discoverProviderModelsCall.mockResolvedValue({ models: ["claude-3-opus", "claude-3-haiku"] });
-    const { user } = await setup();
+    const { user, onClose } = await setup();
 
     await chooseProvider(user, "Anthropic");
     await user.type(screen.getByLabelText("Credential name"), "anthropic-prod");
@@ -259,6 +260,10 @@ describe("AddProviderPanel", () => {
     expect(await screen.findByText(/claude-3-opus: created/)).toBeInTheDocument();
     expect(screen.getByText(/claude-3-haiku: created/)).toBeInTheDocument();
     expect(screen.getByText(/claude-hidden: created/)).toBeInTheDocument();
+
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("shows a sanitized discovery error with a working retry", async () => {

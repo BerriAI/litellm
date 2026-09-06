@@ -5,13 +5,10 @@ import { useState } from "react";
 
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import {
-  credentialCreateCall,
-  credentialDeleteCall,
-  CredentialItem,
-  credentialUpdateCall,
-} from "@/components/networking";
+import AddProviderPanel from "@/app/(dashboard)/models-and-endpoints/panels/add-provider/AddProviderPanel";
+import { credentialDeleteCall, CredentialItem, credentialUpdateCall } from "@/components/networking";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { stripMaskedSecrets } from "@/utils/maskedSecretUtils";
 import { isProxyAdminRole } from "@/utils/roles";
 
@@ -40,7 +37,7 @@ export default function CredentialsPanel() {
   const { data: credentialsResponse, isLoading, refetch: refetchCredentials } = useCredentials();
   const credentialList = credentialsResponse?.credentials || [];
 
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isAddWizardOpen, setIsAddWizardOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
   const [credentialToDelete, setCredentialToDelete] = useState<CredentialItem | null>(null);
@@ -62,21 +59,6 @@ export default function CredentialsPanel() {
       await refetchCredentials();
     } catch (error) {
       toast.error("Failed to update credential");
-    }
-  };
-
-  const handleAddCredential = async (values: Record<string, unknown>) => {
-    if (!accessToken) {
-      return;
-    }
-    try {
-      const newCredential = buildCredential(values, withoutRestrictedFields(values));
-      await credentialCreateCall(accessToken, newCredential);
-      toast.success("Credential added successfully");
-      setIsAddModalOpen(false);
-      await refetchCredentials();
-    } catch (error) {
-      toast.error("Failed to add credential");
     }
   };
 
@@ -120,7 +102,7 @@ export default function CredentialsPanel() {
           Configured credentials for different AI providers. Add and manage your API credentials.
         </p>
         {canModifyCredentials && (
-          <Button onClick={() => setIsAddModalOpen(true)}>
+          <Button onClick={() => setIsAddWizardOpen(true)}>
             <Plus className="size-4" />
             Add Credential
           </Button>
@@ -135,13 +117,15 @@ export default function CredentialsPanel() {
         isLoading={isLoading}
       />
 
-      {isAddModalOpen && (
-        <CredentialModal
-          mode="add"
-          onSubmit={handleAddCredential}
-          open={isAddModalOpen}
-          onCancel={() => setIsAddModalOpen(false)}
-        />
+      {isAddWizardOpen && (
+        <Dialog open onOpenChange={(open) => !open && setIsAddWizardOpen(false)}>
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Add Credential</DialogTitle>
+            </DialogHeader>
+            <AddProviderPanel onClose={() => setIsAddWizardOpen(false)} />
+          </DialogContent>
+        </Dialog>
       )}
       {isUpdateModalOpen && (
         <CredentialModal

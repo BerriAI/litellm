@@ -1,10 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CredentialItem, credentialCreateCall, credentialUpdateCall } from "@/components/networking";
-import { toast } from "@/lib/toast";
+import { CredentialItem, credentialUpdateCall } from "@/components/networking";
 
 import CredentialsPanel from "./CredentialsPanel";
 
@@ -23,13 +22,12 @@ vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();
   return {
     ...actual,
-    credentialCreateCall: vi.fn(),
     credentialUpdateCall: vi.fn(),
     credentialDeleteCall: vi.fn(),
   };
 });
 
-// Stub the modal so the panel's submit handlers can be driven directly: the
+// Stub the edit modal so the panel's submit handler can be driven directly: the
 // button fires onSubmit with form-shaped values, and it only renders when open.
 vi.mock("./CredentialModal", () => ({
   default: function CredentialModalMock({
@@ -44,18 +42,25 @@ vi.mock("./CredentialModal", () => ({
     if (!open) {
       return null;
     }
-    const values =
-      mode === "edit"
-        ? {
-            credential_name: "openai-key",
-            custom_llm_provider: "openai",
-            api_key: "sk-1****2345",
-            api_base: "https://proxy.e2e.example.com/v1",
-          }
-        : { credential_name: "new-cred", custom_llm_provider: "openai" };
+    const values = {
+      credential_name: "openai-key",
+      custom_llm_provider: "openai",
+      api_key: "sk-1****2345",
+      api_base: "https://proxy.e2e.example.com/v1",
+    };
     return (
       <button data-testid={`credential-modal-${mode}-submit`} onClick={() => onSubmit(values)}>
         submit {mode}
+      </button>
+    );
+  },
+}));
+
+vi.mock("@/app/(dashboard)/models-and-endpoints/panels/add-provider/AddProviderPanel", () => ({
+  default: function AddProviderPanelMock({ onClose }: { onClose: () => void }) {
+    return (
+      <button data-testid="add-credential-wizard-close" onClick={onClose}>
+        close wizard
       </button>
     );
   },
@@ -128,54 +133,33 @@ describe("CredentialsPanel", () => {
     expect(screen.queryByText("No credentials configured")).not.toBeInTheDocument();
   });
 
-  it("opens the add modal when the add button is clicked", async () => {
+  it("opens the Add Credential wizard, not the credential form, when the add button is clicked", async () => {
     const user = userEvent.setup();
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({ data: { credentials: [] }, isLoading: false, refetch: vi.fn() });
 
     renderPanel();
 
-    expect(screen.queryByTestId("credential-modal-add-submit")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /add credential/i }));
-    expect(screen.getByTestId("credential-modal-add-submit")).toBeInTheDocument();
-  });
-
-  it("closes the add modal and refetches after a successful add", async () => {
-    const user = userEvent.setup();
-    const refetch = vi.fn();
-    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
-    mockUseCredentials.mockReturnValue({ data: { credentials: [] }, isLoading: false, refetch });
-    vi.mocked(credentialCreateCall).mockResolvedValueOnce(undefined as never);
-
-    renderPanel();
-
-    await user.click(screen.getByRole("button", { name: /add credential/i }));
-    await user.click(screen.getByTestId("credential-modal-add-submit"));
-
-    await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Credential added successfully");
-    });
-    expect(refetch).toHaveBeenCalled();
+    const dialog = await screen.findByRole("dialog", { name: "Add Credential" });
+    expect(within(dialog).getByTestId("add-credential-wizard-close")).toBeInTheDocument();
     expect(screen.queryByTestId("credential-modal-add-submit")).not.toBeInTheDocument();
   });
 
-  it("surfaces an error and keeps the add modal open when the create call fails", async () => {
+  it("closes the wizard dialog when the wizard finishes", async () => {
     const user = userEvent.setup();
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({ data: { credentials: [] }, isLoading: false, refetch: vi.fn() });
-    vi.mocked(credentialCreateCall).mockRejectedValueOnce(new Error("network down"));
 
     renderPanel();
 
     await user.click(screen.getByRole("button", { name: /add credential/i }));
-    await user.click(screen.getByTestId("credential-modal-add-submit"));
+    await user.click(await screen.findByTestId("add-credential-wizard-close"));
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith("Failed to add credential");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
-    // The modal stays open so the user can retry, and no success toast fired.
-    expect(screen.getByTestId("credential-modal-add-submit")).toBeInTheDocument();
-    expect(toast.success).not.toHaveBeenCalled();
   });
 
   it("drops the masked api key from the update payload while keeping the edited api base", async () => {

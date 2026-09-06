@@ -77,15 +77,7 @@ describe("ModelsAndEndpointsPage", () => {
     expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "LLM Credentials" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Add Provider" })).toBeInTheDocument();
     expect(screen.getByTestId("panel-all-models")).toBeInTheDocument();
-  });
-
-  it("hides the write-only Add Provider tab from a view-only admin", () => {
-    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
-    renderPage();
-    expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Add Provider" })).not.toBeInTheDocument();
   });
 
   it("switches tabs in-memory, mounting only the active panel", async () => {
@@ -114,7 +106,6 @@ describe("ModelsAndEndpointsPage", () => {
     renderPage();
     expect(screen.queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Health Status" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("tab", { name: "Add Provider" })).not.toBeInTheDocument();
   });
 
   // POST /model/new 403s a proxy_admin_viewer, so the form's tab must not render for one.

@@ -94,7 +94,11 @@ const StepIndicator: React.FC<{ step: WizardStep; skipJwks: boolean }> = ({ step
   );
 };
 
-export default function AddProviderPanel() {
+interface AddProviderPanelProps {
+  onClose: () => void;
+}
+
+export default function AddProviderPanel({ onClose }: AddProviderPanelProps) {
   const { accessToken } = useAuthorized();
   const queryClient = useQueryClient();
   const { data: providerMetadata } = useProviderFields();
@@ -314,8 +318,7 @@ export default function AddProviderPanel() {
   const isInternalIssuer = savedValues.anthropic_identity_source === ANTHROPIC_INTERNAL_ISSUER_DISCRIMINATOR;
 
   return (
-    <div className="mx-auto max-w-3xl">
-      <h2 className="mb-4 text-2xl font-semibold text-foreground">Add Provider</h2>
+    <div>
       <StepIndicator step={step} skipJwks={!isInternalIssuer} />
 
       {step === "provider" && (
@@ -400,6 +403,7 @@ export default function AddProviderPanel() {
           isDone={step === "done"}
           creationResults={creationResults}
           aliasCollisions={aliasCollisions}
+          onClose={onClose}
         />
       )}
     </div>
