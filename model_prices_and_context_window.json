@@ -3524,6 +3524,7 @@
         "supports_none_reasoning_effort": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
+        "supports_prompt_cache_breakpoint": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
