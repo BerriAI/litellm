@@ -434,6 +434,36 @@ def _inherited_constraint_sets(
     return frozenset(inherited_required), frozenset(inherited_excluded)
 
 
+def _inherited_full_tags(inherited_tags: object, routing_prefix: str) -> frozenset[str]:
+    # Policy tags exempt request-tag scoping regardless of prefix (see
+    # _scope_to_confirmed_and_inherited_tags); matched by exact rewritten form,
+    # not bare value, so a caller can't exempt an unrelated tag by reusing a
+    # policy tag's bare value under a different "&"/"!" marker.
+    if not isinstance(inherited_tags, (list, tuple)):
+        return frozenset()
+    return frozenset(_strip_routing_prefix(inherited_tags, routing_prefix)[0])
+
+
+def _scope_to_confirmed_and_inherited_tags(
+    rewritten_tags: tuple[str, ...],
+    original_tags: Sequence[str],
+    inherited_tags: object,
+    routing_prefix: str,
+) -> tuple[str, ...]:
+    # Once a prefix is configured, an unprefixed request tag is noise, not a
+    # routing signal -- except a tag the caller explicitly prefixed, or one
+    # policy already contributed via inherited_tags (not caller-controlled, so
+    # exempt regardless of prefix). Matching the full rewritten tag rather than
+    # _strip_routing_prefix's bare-value `confirmed` return (used elsewhere for
+    # the "known required tag" fail-open check) avoids exempting an unrelated
+    # tag that happens to share a bare value under a different marker.
+    confirmed_full_tags: Final = frozenset(
+        rewritten for rewritten, original in zip(rewritten_tags, original_tags) if original.startswith(routing_prefix)
+    )
+    inherited_full_tags: Final = _inherited_full_tags(inherited_tags, routing_prefix)
+    return tuple(t for t in rewritten_tags if t in confirmed_full_tags or t in inherited_full_tags)
+
+
 def _tag_known_to_group(
     llm_router_instance: LitellmRouter,
     model: str,
@@ -529,7 +559,14 @@ async def get_deployments_for_tag(
         # caller-declared routing directive, exempt from the "maybe foreign to this
         # group" heuristics that unprefixed tags still go through unchanged below.
         rewritten_tags, routing_confirmed = _strip_routing_prefix(request_tags or [], routing_prefix)
-        required_tags, positive_tags, excluded_patterns = _split_tags(rewritten_tags)
+        scoped_tags: Final = (
+            _scope_to_confirmed_and_inherited_tags(
+                rewritten_tags, request_tags or (), metadata.get("inherited_tags"), routing_prefix
+            )
+            if routing_prefix
+            else rewritten_tags
+        )
+        required_tags, positive_tags, excluded_patterns = _split_tags(scoped_tags)
         inherited_required_set, inherited_excluded_set = _inherited_constraint_sets(
             metadata.get("inherited_tags"), routing_prefix
         )
