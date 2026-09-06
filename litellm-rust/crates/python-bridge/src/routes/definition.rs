@@ -102,12 +102,17 @@ pub(super) fn add_function(
     module.add_function(function)
 }
 
-pub(crate) fn request_decline(
-    provider_supported: bool,
+pub(crate) fn admission(
+    provider_admitted: bool,
     context: &litellm_core::request_context::LiteLlmRequestContext,
-) -> Option<String> {
-    litellm_core::eligibility::native_route_decline(provider_supported, &context.capabilities)
-        .map(|reason| reason.reason().to_string())
+) -> litellm_core::native_outcome::NativeOutcome<()> {
+    match litellm_core::eligibility::native_route_decline(provider_admitted, &context.capabilities)
+    {
+        Some(reason) => litellm_core::native_outcome::NativeOutcome::Declined(
+            litellm_core::native_outcome::Decline::new(reason.reason()),
+        ),
+        None => litellm_core::native_outcome::NativeOutcome::Completed(()),
+    }
 }
 
 #[cfg(test)]
@@ -285,7 +290,7 @@ for field in ('litellm_call_id', 'trace_id', 'request_model'):
     }
 
     #[test]
-    fn acceptance_and_execution_decline_unsupported_requests_before_io() {
+    fn normal_execution_declines_unsupported_requests_without_acceptance_exports() {
         Python::initialize();
         Python::attach(|py| {
             let module = PyModule::new(py, "routes").expect("module should be created");
@@ -293,69 +298,48 @@ for field in ('litellm_call_id', 'trace_id', 'request_model'):
             module
                 .add_class::<crate::ResponsesWebSocketConnection>()
                 .unwrap();
-            module
-                .add_function(
-                    wrap_pyfunction!(crate::responses_websocket_decline, &module).unwrap(),
-                )
-                .unwrap();
             let locals = crate::marshal::request_fixtures(py);
             locals.set_item("routes", module).unwrap();
             py.run(
                 c"
+import asyncio
+
+async def invoke_async(execute, request, options):
+    return await execute(request, options=options, context=context)
+
 for route, provider in (
+    ('chat_completions', 'anthropic'),
     ('messages', 'anthropic'),
     ('transcription', 'bedrock'),
     ('ocr', 'mistral'),
     ('responses_websocket', 'openai'),
 ):
-    decline = getattr(routes, route + '_decline')
-    assert decline('model', provider, context=context) is None, route
-    for flag in ('stream', 'has_agentic_hook', 'has_custom_client'):
-        flagged_context = replace(
-            context,
-            capabilities=replace(context.capabilities, **{flag: True}),
-        )
-        assert decline('model', provider, context=flagged_context) is not None, (route, flag)
-    reason = decline('model', 'unsupported-native-provider', context=context)
-    assert reason is not None, route
+    assert not hasattr(routes, route + '_decline'), route
     request = Request(
         messages=[], body={}, audio={}, document={}, optional_params={},
         url='invalid-url-must-not-be-used',
     )
     unsupported_options = Options(custom_llm_provider='unsupported-native-provider')
     functions = (
-        (routes.ResponsesWebSocketConnection.connect,)
+        ((routes.ResponsesWebSocketConnection.connect, True),)
         if route == 'responses_websocket'
-        else (getattr(routes, route), getattr(routes, 'a' + route))
+        else ((getattr(routes, route), False), (getattr(routes, 'a' + route), True))
     )
-    for execute in functions:
+    for execute, is_async in functions:
         try:
-            execute(request, options=unsupported_options, context=context)
+            if is_async:
+                asyncio.run(invoke_async(execute, request, unsupported_options))
+            else:
+                execute(request, options=unsupported_options, context=context)
         except Exception as error:
             assert type(error).__name__ == 'RustBridgeDeclined', (route, error)
-            assert str(error) == reason, (route, reason, error)
         else:
             raise AssertionError('unsupported request reached provider execution')
-native_context = replace(
-    context,
-    capabilities=replace(context.capabilities, request_format='native'),
-)
-litellm_context = replace(
-    context,
-    capabilities=replace(context.capabilities, request_format='litellm'),
-)
-assert routes.ocr_decline('model', 'mistral', context=native_context) is not None
-assert routes.ocr_decline('model', 'mistral', context=litellm_context) is None
-assert routes.ocr_decline(
-    'doc-intelligence/prebuilt-layout',
-    'azure_ai',
-    context=native_context,
-) is None
 ",
                 Some(&locals),
                 Some(&locals),
             )
-            .expect("acceptance must match execution eligibility without I/O");
+            .expect("normal execution must decline unsupported requests without I/O");
         });
     }
 

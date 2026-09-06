@@ -7,6 +7,7 @@ import pytest
 from litellm.rust_bridge import configuration, responses_websocket
 from litellm.rust_bridge.callbacks import SessionCallbackHandle
 from litellm.rust_bridge.request import NativeRequestContext, NativeResponsesWebSocketRequest
+from tests.test_litellm._rust_bridge_utils import use_fake_native_bridge
 
 
 class _FakeNativeConnection:
@@ -44,18 +45,8 @@ class _FakeNativeBridge:
 
 @pytest.fixture(autouse=True)
 def reset_responses_websocket():
-    responses_websocket.set_rust_responses_websocket(connection=None, decline=None)
     configuration.reset_rust_configuration()
-    responses_websocket.set_rust_responses_websocket(
-        decline=lambda model, custom_llm_provider, *, context: (
-            "unsupported feature"
-            if any(getattr(context.capabilities, key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
-            or context.capabilities.request_format == "native"
-            else None
-        )
-    )
     yield
-    responses_websocket.set_rust_responses_websocket(connection=None, decline=None)
     configuration.reset_rust_configuration()
 
 
@@ -70,7 +61,7 @@ async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
 @pytest.mark.asyncio
 async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     configuration.rust(True)
-    responses_websocket._RESPONSES_WEBSOCKET.override(None)
+    use_fake_native_bridge(monkeypatch)
 
     assert (
         await responses_websocket.connect(
@@ -87,7 +78,7 @@ async def test_enabled_bridge_connects_and_adapts_socket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     configuration.rust(True)
-    responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
+    use_fake_native_bridge(monkeypatch, ResponsesWebSocketConnection=_FakeNativeBridge)
 
     connection = await responses_websocket.connect(
         url="wss://example.test/responses",
@@ -102,7 +93,7 @@ async def test_enabled_bridge_connects_and_adapts_socket(
 
 
 @pytest.mark.asyncio
-async def test_connection_forwards_session_callback_adapter() -> None:
+async def test_connection_forwards_session_callback_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     configuration.rust(True)
     received: list[object] = []
     callback_adapter = cast(SessionCallbackHandle, object())
@@ -120,7 +111,7 @@ async def test_connection_forwards_session_callback_adapter() -> None:
             received.append(callback_adapter)
             return _FakeNativeConnection()
 
-    responses_websocket.set_rust_responses_websocket(connection=Native)
+    use_fake_native_bridge(monkeypatch, ResponsesWebSocketConnection=Native)
 
     connection = await responses_websocket.connect(
         url="wss://example.test/responses",
@@ -147,9 +138,9 @@ class _FailingNativeBridge:
 
 
 @pytest.mark.asyncio
-async def test_connection_failure_does_not_authorize_python_fallback() -> None:
+async def test_connection_failure_does_not_authorize_python_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     configuration.rust(True)
-    responses_websocket.set_rust_responses_websocket(connection=_FailingNativeBridge)
+    use_fake_native_bridge(monkeypatch, ResponsesWebSocketConnection=_FailingNativeBridge)
 
     with pytest.raises(RuntimeError, match="connection failed"):
         await responses_websocket.connect(url="wss://example.test/responses", headers={}, timeout=None)
@@ -158,7 +149,7 @@ async def test_connection_failure_does_not_authorize_python_fallback() -> None:
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("session_error", [False, True])
 @pytest.mark.asyncio
-async def test_connection_dispatch_cleans_up_without_reconnecting(native, session_error):
+async def test_connection_dispatch_cleans_up_without_reconnecting(monkeypatch, native, session_error):
     from contextlib import asynccontextmanager
 
     configuration.rust(True)
@@ -181,11 +172,10 @@ async def test_connection_dispatch_cleans_up_without_reconnecting(native, sessio
         finally:
             await python_socket.close()
 
-    responses_websocket.set_rust_responses_websocket(connection=Native)
-    if not native:
-        responses_websocket.set_rust_responses_websocket(
-            decline=lambda model, custom_llm_provider, **features: "declined"
-        )
+    if native:
+        use_fake_native_bridge(monkeypatch, ResponsesWebSocketConnection=Native)
+    else:
+        use_fake_native_bridge(monkeypatch)
 
     async def run():
         async with responses_websocket.open_connection(
@@ -210,7 +200,7 @@ async def test_connection_dispatch_cleans_up_without_reconnecting(native, sessio
 
 
 @pytest.mark.asyncio
-async def test_missing_acceptance_export_uses_python_connection_once():
+async def test_missing_acceptance_export_keeps_native_failure_terminal(monkeypatch: pytest.MonkeyPatch):
     from contextlib import asynccontextmanager
 
     calls = []
@@ -225,11 +215,11 @@ async def test_missing_acceptance_export_uses_python_connection_once():
             await socket.close()
 
     configuration.rust(True)
-    responses_websocket.set_rust_responses_websocket(connection=_FailingNativeBridge)
-    responses_websocket._PREFLIGHT.override(None)
-    async with responses_websocket.open_connection(
-        url="wss://example.test", headers={}, timeout=1, model="model", provider="openai", fallback=python
-    ) as connection:
-        assert connection is socket
-    assert calls == ["python"]
-    assert socket.closed
+    use_fake_native_bridge(monkeypatch, ResponsesWebSocketConnection=_FailingNativeBridge)
+    with pytest.raises(RuntimeError, match="connection failed"):
+        async with responses_websocket.open_connection(
+            url="wss://example.test", headers={}, timeout=1, model="model", provider="openai", fallback=python
+        ):
+            pass
+    assert calls == []
+    assert not socket.closed

@@ -15,6 +15,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
+from tests.test_litellm._rust_bridge_utils import use_fake_native_bridge
 
 
 @pytest.mark.asyncio

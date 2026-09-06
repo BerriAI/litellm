@@ -1,9 +1,4 @@
-"""Tests for the Rust chat completions bridge.
-
-The native callables are dependency-injected through
-``set_rust_chat_completions`` rather than patched, so these run without the
-compiled extension present.
-"""
+"""Tests for the Rust chat completions bridge."""
 
 from __future__ import annotations
 
@@ -19,6 +14,7 @@ from litellm.rust_bridge.request import (
     anthropic_options,
 )
 from litellm.types.utils import ModelResponse
+from tests.test_litellm._rust_bridge_utils import use_fake_native_bridge
 
 RUST_RESPONSE = {
     "created": 1_700_000_000,
@@ -58,41 +54,16 @@ class _FakeNative:
     RustUpstreamError = _FakeUpstream
 
 
-def _fake_native_bridge(monkeypatch):
-    """Expose the bridge's exception classes without the compiled extension."""
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: _FakeNative())
-
-
 def _hide_native_bridge(monkeypatch):
-    """Simulate a wheel built without the compiled extension.
-
-    There is no injection seam for "the .so is absent", so the loader itself is
-    replaced; every other case here uses `set_rust_chat_completions`.
-    """
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
 
 
 @pytest.fixture(autouse=True)
 def reset_bridge(monkeypatch):
-    """Every test starts with no injected callables, and leaves none behind."""
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
     configuration.reset_rust_configuration()
     monkeypatch.setenv("LITELLM_RUST", "1")
     yield
-    bridge.set_rust_chat_completions(chat_completions=None, achat_completions=None, decline=None)
     configuration.reset_rust_configuration()
-
-
-class _RecordingDecline:
-    """A stand-in for the native gate that records what it was asked."""
-
-    def __init__(self, reason: str | None = None):
-        self.reason = reason
-        self.calls: list[dict] = []
-
-    def __call__(self, **kwargs):
-        self.calls.append(kwargs)
-        return self.reason
 
 
 class _RecordingCall:
@@ -119,131 +90,6 @@ class _RecordingAsyncCall(_RecordingCall):
         )
 
 
-def _accepts(**overrides) -> bool:
-    kwargs = {
-        "model": "claude-sonnet-4-5",
-        "messages": MESSAGES,
-        "optional_params": {"max_tokens": 16},
-        "custom_llm_provider": "anthropic",
-        "litellm_params": {},
-        "stream": None,
-    }
-    kwargs.update(overrides)
-    return bridge.rust_chat_completions_accepts(**kwargs)
-
-
-class TestGate:
-    def test_declines_when_the_deployment_did_not_opt_in(self, monkeypatch):
-        monkeypatch.delenv("LITELLM_RUST", raising=False)
-        gate = _RecordingDecline()
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts(litellm_params={}) is False
-        assert _accepts(litellm_params=None) is False
-        assert gate.calls == [], "the gate must not be consulted before opt-in"
-
-    def test_accepts_when_the_deployment_opted_in_and_the_core_agrees(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = _RecordingDecline()
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts() is True
-        assert gate.calls[0]["model"] == "claude-sonnet-4-5"
-        assert gate.calls[0]["custom_llm_provider"] == "anthropic"
-
-    def test_process_enable_applies_without_request_override(self):
-        bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        configuration.rust(True)
-
-        assert _accepts(litellm_params={}) is True
-
-    def test_the_env_var_opts_in_without_a_per_model_flag(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "true")
-        bridge.set_rust_chat_completions(decline=_RecordingDecline())
-        assert _accepts(litellm_params={}) is True
-
-    def test_declines_streaming_and_providers_off_the_path(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts(stream=True) is False
-        assert _accepts(custom_llm_provider="openai") is False
-        assert _accepts(custom_llm_provider=None) is False
-
-    def test_declines_an_anthropic_request_carrying_a_litellm_metadata_user_id(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
-        bridge.set_rust_chat_completions(decline=gate)
-        assert _accepts(litellm_params={"metadata": {"user_id": "u-123"}}) is False
-
-        # Bedrock's Converse transform reads no `user_id`, and an Anthropic request
-        # whose metadata carries none is one Python would not attribute either.
-        assert (
-            _accepts(
-                custom_llm_provider="bedrock",
-                model="bedrock/us-east-1/anthropic.claude-v2",
-                optional_params={"maxTokens": 16},
-                litellm_params={"metadata": {"user_id": "u-123"}},
-            )
-            is True
-        )
-        assert _accepts(litellm_params={"metadata": {"trace_id": "t-1"}}) is True
-        assert _accepts(litellm_params={"metadata": {"user_id": None}}) is True
-        assert _accepts(litellm_params={"metadata": None}) is True
-        assert _accepts(litellm_params={"litellm_metadata": {"user_id": "u-123"}}) is True
-        assert _accepts(litellm_params={"metadata": "invalid"}) is True
-        assert _accepts(litellm_params={"metadata": {"trace": object()}}) is True
-        assert _accepts(litellm_params={"metadata": {"user_id": object()}}) is False
-        assert (
-            _accepts(
-                custom_llm_provider="bedrock",
-                model="bedrock/us-east-1/anthropic.claude-v2",
-                optional_params={"maxTokens": 16},
-                litellm_params={"metadata": {"user_id": object()}},
-            )
-            is True
-        )
-
-    def test_declines_a_bedrock_request_while_the_proxy_owns_request_metadata(self, monkeypatch):
-        """`AmazonConverseConfig` resolves proxy-owned `requestMetadata` onto the
-        Converse body from `litellm_params`, and owning that field also means
-        evicting a caller-supplied one. The core can do neither, so an operator
-        who armed `bedrock_request_metadata_fields` keeps the Python path.
-        """
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        gate = pytest.importorskip("litellm.rust_bridge._native").chat_completions_decline
-        bridge.set_rust_chat_completions(decline=gate)
-        bedrock = {
-            "custom_llm_provider": "bedrock",
-            "model": "bedrock/us-east-1/anthropic.claude-v2",
-            "optional_params": {"maxTokens": 16},
-        }
-
-        monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["user_api_key_team_id"])
-        assert _accepts(**bedrock) is False
-        assert _accepts() is True, "arming Bedrock attribution must not decline Anthropic"
-
-        monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", None)
-        assert _accepts(**bedrock) is True, "the decline follows the operator's opt-in alone"
-
-    def test_declines_when_the_core_declines(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        bridge.set_rust_chat_completions(decline=_RecordingDecline("streaming"))
-        assert _accepts() is False
-
-    def test_declines_when_the_bridge_is_unavailable(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-        _hide_native_bridge(monkeypatch)
-        assert _accepts() is False
-
-    def test_declines_when_the_gate_itself_raises(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_RUST", "1")
-
-        def exploding(**_kwargs):
-            raise RuntimeError("boom")
-
-        bridge.set_rust_chat_completions(decline=exploding)
-        assert _accepts() is False
-
-
 def _call_kwargs(model_response: ModelResponse) -> dict:
     return {
         "model": "claude-sonnet-4-5",
@@ -260,9 +106,9 @@ def _call_kwargs(model_response: ModelResponse) -> dict:
 
 
 class TestSyncCall:
-    def test_builds_a_model_response_and_stamps_the_rust_header(self):
+    def test_builds_a_model_response_and_stamps_the_rust_header(self, monkeypatch):
         native = _RecordingCall()
-        bridge.set_rust_chat_completions(chat_completions=native)
+        use_fake_native_bridge(monkeypatch, chat_completions=native)
         model_response = ModelResponse()
         original_id = model_response.id
 
@@ -278,9 +124,9 @@ class TestSyncCall:
         assert result._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
         assert result.id == original_id, "the rust path must keep the chatcmpl id litellm already minted"
 
-    def test_passes_the_timeout_through_as_seconds(self):
+    def test_passes_the_timeout_through_as_seconds(self, monkeypatch):
         native = _RecordingCall()
-        bridge.set_rust_chat_completions(chat_completions=native)
+        use_fake_native_bridge(monkeypatch, chat_completions=native)
         bridge.chat_completions(**_call_kwargs(ModelResponse()))
         assert native.calls[0]["options"].timeout_seconds == 30.0
 
@@ -289,15 +135,19 @@ class TestSyncCall:
         assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
 
     def test_falls_back_when_the_core_declines_before_calling_the_provider(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeDeclined("streaming")))
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            chat_completions=_RecordingCall(error=_FakeDeclined("streaming")),
+        )
         assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
 
 
 class TestAsyncCall:
     @pytest.mark.asyncio
-    async def test_builds_a_model_response(self):
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall())
+    async def test_builds_a_model_response(self, monkeypatch):
+        use_fake_native_bridge(monkeypatch, achat_completions=_RecordingAsyncCall())
         result = await bridge.achat_completions(**_call_kwargs(ModelResponse()))
         assert result is not None
         assert result.choices[0].message.content == "hello from rust"
@@ -310,15 +160,19 @@ class TestAsyncCall:
 
     @pytest.mark.asyncio
     async def test_falls_back_when_the_core_declines_before_calling_the_provider(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeDeclined("streaming")))
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            achat_completions=_RecordingAsyncCall(error=_FakeDeclined("streaming")),
+        )
         assert await bridge.achat_completions(**_call_kwargs(ModelResponse())) is None
 
 
 class TestAsyncFallbackWrapper:
     @pytest.mark.asyncio
-    async def test_returns_the_rust_response_without_running_the_fallback(self):
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall())
+    async def test_returns_the_rust_response_without_running_the_fallback(self, monkeypatch):
+        use_fake_native_bridge(monkeypatch, achat_completions=_RecordingAsyncCall())
         ran = []
 
         async def fallback():
@@ -331,8 +185,12 @@ class TestAsyncFallbackWrapper:
 
     @pytest.mark.asyncio
     async def test_runs_the_fallback_when_the_core_declines(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeDeclined("streaming")))
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            achat_completions=_RecordingAsyncCall(error=_FakeDeclined("streaming")),
+        )
 
         async def fallback():
             return "python"
@@ -355,41 +213,62 @@ class TestFailureClassification:
     """A failure the provider already saw must not be retried on the Python
     path: it would bill the customer for the same work twice."""
 
-    @pytest.fixture(autouse=True)
-    def _native_exceptions(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
-
-    def test_a_decline_falls_back_because_nothing_was_sent(self):
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeDeclined("streaming")))
+    def test_a_decline_falls_back_because_nothing_was_sent(self, monkeypatch):
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            chat_completions=_RecordingCall(error=_FakeDeclined("streaming")),
+        )
         assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
 
-    def test_an_upstream_failure_is_surfaced_with_its_status(self):
+    def test_an_upstream_failure_is_surfaced_with_its_status(self, monkeypatch):
         from litellm.exceptions import RateLimitError
 
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeUpstream(429, "429: rate limited")))
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            chat_completions=_RecordingCall(error=_FakeUpstream(429, "429: rate limited")),
+        )
         with pytest.raises(RateLimitError) as raised:
             bridge.chat_completions(**_call_kwargs(ModelResponse()))
         assert raised.value.status_code == 429
         assert "rate limited" in str(raised.value)
 
-    def test_a_transport_failure_with_no_response_surfaces_as_a_500(self):
+    def test_a_transport_failure_with_no_response_surfaces_as_a_500(self, monkeypatch):
         from litellm.exceptions import APIError
 
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeUpstream(0, "connection reset")))
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            chat_completions=_RecordingCall(error=_FakeUpstream(0, "connection reset")),
+        )
         with pytest.raises(APIError) as raised:
             bridge.chat_completions(**_call_kwargs(ModelResponse()))
         assert raised.value.status_code == 500
 
-    def test_an_unrecognized_error_is_not_swallowed(self):
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=RuntimeError("something else")))
+    def test_an_unrecognized_error_is_not_swallowed(self, monkeypatch):
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            chat_completions=_RecordingCall(error=RuntimeError("something else")),
+        )
         with pytest.raises(RuntimeError):
             bridge.chat_completions(**_call_kwargs(ModelResponse()))
 
     @pytest.mark.asyncio
-    async def test_the_async_wrapper_does_not_fall_back_on_an_upstream_failure(self):
+    async def test_the_async_wrapper_does_not_fall_back_on_an_upstream_failure(self, monkeypatch):
         from litellm.exceptions import InternalServerError
 
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeUpstream(500, "500: boom")))
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            achat_completions=_RecordingAsyncCall(error=_FakeUpstream(500, "500: boom")),
+        )
         ran = []
 
         async def fallback():
@@ -401,9 +280,12 @@ class TestFailureClassification:
         assert ran == [], "a request the provider already served must not be re-issued"
 
     @pytest.mark.asyncio
-    async def test_the_async_wrapper_falls_back_on_a_decline(self):
-        bridge.set_rust_chat_completions(
-            achat_completions=_RecordingAsyncCall(error=_FakeDeclined("blank message text"))
+    async def test_the_async_wrapper_falls_back_on_a_decline(self, monkeypatch):
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            achat_completions=_RecordingAsyncCall(error=_FakeDeclined("blank message text")),
         )
 
         async def fallback():
@@ -415,8 +297,8 @@ class TestFailureClassification:
 
 @pytest.mark.asyncio
 async def test_missing_native_exception_types_does_not_authorize_python_fallback(monkeypatch):
-    _hide_native_bridge(monkeypatch)
-    bridge.set_rust_chat_completions(
+    use_fake_native_bridge(
+        monkeypatch,
         chat_completions=_RecordingCall(error=RuntimeError("connection failed")),
         achat_completions=_RecordingAsyncCall(error=RuntimeError("connection failed")),
     )
@@ -431,9 +313,9 @@ async def test_missing_native_exception_types_does_not_authorize_python_fallback
         await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
 
 
-def test_provider_credentials_are_separate_from_chat_body_params():
+def test_provider_credentials_are_separate_from_chat_body_params(monkeypatch):
     native = _RecordingCall()
-    bridge.set_rust_chat_completions(chat_completions=native)
+    use_fake_native_bridge(monkeypatch, chat_completions=native)
     configuration.rust(True)
     kwargs = _call_kwargs(ModelResponse())
     kwargs["optional_params"] = {
@@ -451,9 +333,9 @@ def test_provider_credentials_are_separate_from_chat_body_params():
     assert options.bedrock.aws_secret_access_key == "test-secret-key"
 
 
-def test_provider_payload_extensions_cross_the_boundary_without_partitioning():
+def test_provider_payload_extensions_cross_the_boundary_without_partitioning(monkeypatch):
     native = _RecordingCall()
-    bridge.set_rust_chat_completions(chat_completions=native)
+    use_fake_native_bridge(monkeypatch, chat_completions=native)
     configuration.rust(True)
     extensions = {
         "vendor_object": {"nested": None},
@@ -488,14 +370,14 @@ def test_typed_capability_and_provider_metadata_facts_are_isolated():
     assert anthropic_options({"metadata": {"user_id": None}}).has_user_id is False
 
 
+
 @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "openai"])
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
-async def test_public_completion_discovers_any_provider(provider, asynchronous):
+async def test_public_completion_discovers_any_provider(monkeypatch, provider, asynchronous):
     native = _RecordingCall()
     anative = _RecordingAsyncCall()
-    gate = _RecordingDecline()
-    bridge.set_rust_chat_completions(chat_completions=native, achat_completions=anative, decline=gate)
+    use_fake_native_bridge(monkeypatch, chat_completions=native, achat_completions=anative)
     kwargs = {
         "model": f"{provider}/test-model",
         "messages": MESSAGES,
@@ -509,14 +391,11 @@ async def test_public_completion_discovers_any_provider(provider, asynchronous):
     assert len(calls) == 1
     assert calls[0]["options"].custom_llm_provider == provider
     assert calls[0]["request"].messages == MESSAGES
-    assert gate.calls[0]["custom_llm_provider"] == provider
     assert len(native.calls) + len(anative.calls) == 1
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize(
-    "failure", ["preflight", "missing_preflight", "decline", "unavailable", "error", "malformed", "cancelled"]
-)
+@pytest.mark.parametrize("failure", ["decline", "unavailable", "error", "malformed", "cancelled"])
 @pytest.mark.asyncio
 async def test_public_completion_fallback_contract(monkeypatch, asynchronous, failure):
     import asyncio
@@ -537,7 +416,6 @@ async def test_public_completion_fallback_contract(monkeypatch, asynchronous, fa
 
     recorder = Recorder()
     monkeypatch.setattr(litellm, "input_callback", [recorder])
-    _fake_native_bridge(monkeypatch)
     python_calls = []
 
     def python(ctx):
@@ -561,16 +439,20 @@ async def test_public_completion_fallback_contract(monkeypatch, asynchronous, fa
     }.get(failure)
     native = _RecordingCall(result={} if failure == "malformed" else None, error=native_error)
     anative = _RecordingAsyncCall(result={} if failure == "malformed" else None, error=native_error)
-    bridge.set_rust_chat_completions(
-        chat_completions=native,
-        achat_completions=anative,
-        decline=_RecordingDecline("unsupported" if failure == "preflight" else None),
-    )
-    if failure == "missing_preflight":
-        bridge._CHAT_PREFLIGHT.override(None)
     if failure == "unavailable":
-        bridge._CHAT.sync.override(None)
-        bridge._CHAT.asynchronous.override(None)
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+        )
+    else:
+        use_fake_native_bridge(
+            monkeypatch,
+            RustBridgeDeclined=_FakeDeclined,
+            RustUpstreamError=_FakeUpstream,
+            chat_completions=native,
+            achat_completions=anative,
+        )
 
     async def run():
         kwargs = {"model": "openai/test-model", "messages": MESSAGES, "api_key": "key", "num_retries": 0}

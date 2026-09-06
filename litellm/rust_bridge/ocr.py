@@ -6,13 +6,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, TypeVar
 
 from . import configuration as _configuration
-from .protocols import RustAocr, RustOcr, RustRouteDecline
+from .protocols import RustAocr, RustOcr
 from .request import NativeOCRRequest, PreparedNativeCall, call_native
 from .runtime import (
     BridgeErrorContext,
-    EndpointBinding,
     EndpointDispatch,
-    assess_route,
 )
 
 ResultT = TypeVar("ResultT")
@@ -26,13 +24,6 @@ _OCR: Final[EndpointDispatch[RustOcr, RustAocr]] = EndpointDispatch.native(
 )
 
 
-_PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
-    route="ocr",
-    select=lambda native: native.ocr_decline,
-    enabled=_configuration.rust_enabled,
-)
-
-
 def load_rust_ocr() -> RustOcr | None:
     return _OCR.sync.load()
 
@@ -42,9 +33,6 @@ def load_rust_aocr() -> RustAocr | None:
 
 
 def supports_callback_adapter(*, asynchronous: bool = False) -> bool:
-    binding = _OCR.asynchronous if asynchronous else _OCR.sync
-    if binding.is_overridden():
-        return False
     from litellm.rust_bridge import get_native_bridge
     from litellm.rust_bridge.loader import native_route_ready
 
@@ -63,8 +51,6 @@ def dispatch_ocr(
     adapt: Callable[[Mapping[str, object]], ResultT],
     model: str,
     provider: str,
-    eligible: bool = True,
-    request_format: str | None = None,
 ) -> ResultT:
     return _OCR.invoke(
         prepare=prepare,
@@ -72,8 +58,6 @@ def dispatch_ocr(
         fallback=fallback,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),
-        eligible=eligible,
-        preflight=lambda: assess_route(_PREFLIGHT, model, provider, request_format=request_format),
     )
 
 
@@ -84,8 +68,6 @@ async def adispatch_ocr(
     adapt: Callable[[Mapping[str, object]], ResultT],
     model: str,
     provider: str,
-    eligible: bool = True,
-    request_format: str | None = None,
 ) -> ResultT:
     return await _OCR.ainvoke(
         prepare=prepare,
@@ -93,6 +75,4 @@ async def adispatch_ocr(
         fallback=fallback,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),
-        eligible=eligible,
-        preflight=lambda: assess_route(_PREFLIGHT, model, provider, request_format=request_format),
     )

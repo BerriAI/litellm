@@ -8,7 +8,6 @@ import mimetypes
 import os
 import re
 from collections.abc import Callable, Coroutine, Mapping
-from contextlib import nullcontext
 from dataclasses import dataclass
 from io import IOBase
 from typing import Any, Final, cast
@@ -82,11 +81,7 @@ def _prepare_ocr_request(
 
     doc_type = document.get("type")
 
-    if doc_type == "file":
-        document = convert_file_document_to_url_document(document)
-        doc_type = document.get("type")
-
-    if doc_type not in ["document_url", "image_url"]:
+    if doc_type not in ("document_url", "image_url", "file"):
         raise ValueError(f"Invalid document type: {doc_type}. Must be 'document_url', 'image_url', or 'file'")
 
     caller_supplied_api_base: Final = api_base is not None
@@ -188,7 +183,6 @@ def _prepare_ocr_request(
 
 def _rust_bridge_optional_params(
     prepared_request: _PreparedOCRRequest,
-    resolve_secret: Callable[[str], str | None],
 ) -> dict[str, object]:  # mutable-ok: returns an owned provider-parameter copy
     optional_params: Final = dict(prepared_request.optional_params)
     if prepared_request.custom_llm_provider == "vertex_ai":
@@ -196,14 +190,11 @@ def _rust_bridge_optional_params(
             prepared_request.litellm_params.get("vertex_project")
             or prepared_request.litellm_params.get("vertex_ai_project")
             or litellm.vertex_project
-            or resolve_secret("VERTEXAI_PROJECT")
         )
         vertex_location: Final = (
             prepared_request.litellm_params.get("vertex_location")
             or prepared_request.litellm_params.get("vertex_ai_location")
             or litellm.vertex_location
-            or resolve_secret("VERTEXAI_LOCATION")
-            or resolve_secret("VERTEX_LOCATION")
         )
         if vertex_project is not None:
             optional_params["vertex_project"] = vertex_project
@@ -212,37 +203,10 @@ def _rust_bridge_optional_params(
     return optional_params
 
 
-def _rust_bridge_api_base(
-    prepared_request: _PreparedOCRRequest,
-    resolve_secret: Callable[[str], str | None],
-) -> str | None:
-    if prepared_request.api_base is not None:
-        return prepared_request.api_base
-    if prepared_request.custom_llm_provider == "azure_ai":
-        if is_azure_document_intelligence_model(prepared_request.model):
-            return resolve_secret("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
-        return resolve_secret("AZURE_AI_API_BASE")
-    return None
-
-
 def _prepare_rust_ocr_call(
     prepared_request: _PreparedOCRRequest,
-    resolve_api_key: Callable[[str], str | None],
 ) -> PreparedNativeCall[rust_ocr_bridge.NativeOCRRequest]:
-    provider_config: Final = prepared_request.provider_config
-    api_key_env_var: Final = provider_config.get_api_key_env_var()
-    resolved_api_key: Final = prepared_request.api_key or (
-        resolve_api_key(api_key_env_var) if api_key_env_var is not None else None
-    )
-    resolved_headers: Final = provider_config.validate_environment(
-        headers=prepared_request.extra_headers or {},
-        model=prepared_request.model,
-        api_key=resolved_api_key,
-        api_base=prepared_request.api_base,
-        litellm_params=prepared_request.litellm_params,
-    )
-    rust_api_base: Final = _rust_bridge_api_base(prepared_request, resolve_api_key)
-    rust_optional_params: Final = _rust_bridge_optional_params(prepared_request, resolve_api_key)
+    rust_optional_params: Final = _rust_bridge_optional_params(prepared_request)
     return PreparedNativeCall(
         request=rust_ocr_bridge.NativeOCRRequest(
             model=prepared_request.model,
@@ -251,12 +215,10 @@ def _prepare_rust_ocr_call(
         ),
         options=NativeRequestOptions(
             vertex=vertex_options(rust_optional_params),
-            api_key=resolved_api_key,
-            api_base=rust_api_base,
+            api_key=prepared_request.api_key,
+            api_base=prepared_request.api_base,
             custom_llm_provider=prepared_request.custom_llm_provider,
-            extra_headers=cast(  # cast-ok: provider header normalization returns string-object pairs
-                dict[str, object], resolved_headers
-            ),
+            extra_headers=prepared_request.extra_headers,
             timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
         ),
         context=request_context(
@@ -277,7 +239,7 @@ def _prepare_rust_ocr_call(
         callback_adapter=ProviderLoggingAdapter(
             prepared_request.litellm_logging_obj,
             "OCR document processing",
-            resolved_api_key,
+            prepared_request.api_key,
         ),
     )
 
@@ -285,23 +247,17 @@ def _prepare_rust_ocr_call(
 @dataclass
 class _OCROperation:
     request: _PreparedOCRRequest
-    resolve_api_key: Callable[[str], str | None]
     python: Callable[[], OCRResponse | Coroutine[object, object, OCRResponse]]
-    logged: bool = False
 
     def prepare(self) -> PreparedNativeCall[rust_ocr_bridge.NativeOCRRequest]:
-        prepared: Final = _prepare_rust_ocr_call(self.request, self.resolve_api_key)
-        self.logged = True
-        return prepared
+        return _prepare_rust_ocr_call(self.request)
 
     def fallback(self) -> OCRResponse | Coroutine[object, object, OCRResponse]:
-        with self.request.litellm_logging_obj.suppress_next_pre_call() if self.logged else nullcontext():
-            return self.python()
+        return self.python()
 
     async def afallback(self) -> OCRResponse:
-        with self.request.litellm_logging_obj.suppress_next_pre_call() if self.logged else nullcontext():
-            result: Final = self.python()
-            return await result if isinstance(result, Coroutine) else result
+        result: Final = self.python()
+        return await result if isinstance(result, Coroutine) else result
 
 
 def _run_rust_ocr(
@@ -309,16 +265,14 @@ def _run_rust_ocr(
     resolve_api_key: Callable[[str], str | None],
     fallback: Callable[[], OCRResponse | Coroutine[object, object, OCRResponse]],
 ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
-    operation: Final = _OCROperation(prepared_request, resolve_api_key, fallback)
+    del resolve_api_key
+    operation: Final = _OCROperation(prepared_request, fallback)
     return rust_ocr_bridge.dispatch_ocr(
         prepare=operation.prepare,
         fallback=operation.fallback,
         adapt=OCRResponse.model_validate,
         model=prepared_request.model,
         provider=prepared_request.custom_llm_provider,
-        request_format=(
-            "native" if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native" else None
-        ),
     )
 
 
@@ -327,17 +281,25 @@ async def _run_rust_aocr(
     resolve_api_key: Callable[[str], str | None],
     fallback: Callable[[], Coroutine[object, object, OCRResponse]],
 ) -> OCRResponse:
-    operation: Final = _OCROperation(prepared_request, resolve_api_key, fallback)
+    del resolve_api_key
+    operation: Final = _OCROperation(prepared_request, fallback)
     return await rust_ocr_bridge.adispatch_ocr(
         prepare=operation.prepare,
         fallback=operation.afallback,
         adapt=OCRResponse.model_validate,
         model=prepared_request.model,
         provider=prepared_request.custom_llm_provider,
-        request_format=(
-            "native" if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native" else None
-        ),
     )
+
+
+def _python_fallback_document(document: Mapping[str, object]) -> Mapping[str, object]:
+    """Materialize local files only after native dispatch selected Python."""
+    if document.get("type") != "file":
+        return document
+    owned_document: Final = dict(  # mutable-ok: legacy file conversion owns and rewrites this copy
+        document
+    )
+    return convert_file_document_to_url_document(owned_document)
 
 
 @client
@@ -438,9 +400,10 @@ async def aocr(
         from litellm.secret_managers.main import get_secret_str
 
         async def python_fallback() -> OCRResponse:
+            fallback_document: Final = _python_fallback_document(prepared.document)
             pending: Final = base_llm_http_handler.ocr(
                 model=prepared.model,
-                document=prepared.document,
+                document=fallback_document,
                 optional_params=prepared.optional_params,
                 timeout=prepared.effective_timeout,
                 logging_obj=prepared.litellm_logging_obj,
@@ -703,9 +666,10 @@ def ocr(
         from litellm.secret_managers.main import get_secret_str
 
         def python_fallback() -> OCRResponse | Coroutine[object, object, OCRResponse]:
+            fallback_document: Final = _python_fallback_document(prepared.document)
             return base_llm_http_handler.ocr(
                 model=prepared.model,
-                document=prepared.document,
+                document=fallback_document,
                 optional_params=prepared.optional_params,
                 timeout=prepared.effective_timeout,
                 logging_obj=prepared.litellm_logging_obj,

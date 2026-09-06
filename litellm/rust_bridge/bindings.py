@@ -4,46 +4,25 @@ from collections.abc import Callable
 from types import ModuleType
 from typing import Final, Generic, TypeVar, cast  # noqa: TID251  # PyO3 module boundary
 
-from litellm.rust_bridge.loader import get_native_bridge, module_route_ready
+from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.protocols import NativeModule
 
 BindingT = TypeVar("BindingT")
 
 
-class _Unset:
-    pass
-
-
-_UNSET: Final = _Unset()
-
-
-class Unchanged:
-    pass
-
-
-UNCHANGED: Final = Unchanged()
-
-
 class NativeBinding(Generic[BindingT]):
-    """Resolve one native attribute with an explicit, resettable test override."""
+    """Resolve one callable exported by the native module."""
 
     def __init__(
         self,
         select: Callable[[NativeModule], BindingT],
         *,
-        route: str = "",
-        required_capabilities: frozenset[str] = frozenset({"callbacks"}),
         module_loader: Callable[[], ModuleType | None] | None = None,
     ) -> None:
-        self._route: Final = route
-        self._required_capabilities: Final = required_capabilities
         self._select: Final = select
         self._module_loader: Final = module_loader
-        self._override: BindingT | None | _Unset = _UNSET
 
     def load(self) -> BindingT | None:
-        if not isinstance(self._override, _Unset):
-            return self._override
         native: Final = self._module_loader() if self._module_loader is not None else get_native_bridge()
         if native is None:
             return None
@@ -52,20 +31,7 @@ class NativeBinding(Generic[BindingT]):
             value: Final = self._select(module)
         except AttributeError:
             return None
-        if not callable(value):
-            return None
-        if self._route and not module_route_ready(native, self._route, self._required_capabilities):
-            return None
-        return value
-
-    def override(self, value: BindingT | None) -> None:
-        self._override = value
-
-    def reset(self) -> None:
-        self._override = _UNSET
-
-    def is_overridden(self) -> bool:
-        return not isinstance(self._override, _Unset)
+        return value if callable(value) else None
 
 
 _DECLINED: Final = NativeBinding(lambda native: native.RustBridgeDeclined)

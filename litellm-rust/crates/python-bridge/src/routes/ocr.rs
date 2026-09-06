@@ -13,8 +13,7 @@ use std::future::Future;
 #[derive(FromPyObject)]
 struct OcrInputs {
     model: String,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)]
-    document: Value,
+    document: Py<PyAny>,
     #[pyo3(from_py_with = litellm_python_interop::from_py)]
     optional_params: Map<String, Value>,
 }
@@ -27,15 +26,32 @@ fn prepare_ocr(
     python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     let context: LiteLlmRequestContext = context.into();
-    let provider_supported = litellm_ai_gateway::io::ocr::ocr_provider_supported(
+    let provider_admitted = litellm_ai_gateway::io::ocr::ocr_admitted(
         &input.model,
         options.provider("mistral"),
         context.capabilities.request_format.as_deref(),
     );
-    if let Some(reason) = super::definition::request_decline(provider_supported, &context) {
-        return Err(crate::errors::RustBridgeDeclined::new_err(reason));
+    if let litellm_core::native_outcome::NativeOutcome::Declined(decline) =
+        super::definition::admission(provider_admitted, &context)
+    {
+        return Err(crate::errors::RustBridgeDeclined::new_err(decline.reason()));
     }
-    let document = input.document;
+    let py = python_context.py;
+    let document = if input
+        .document
+        .bind(py)
+        .get_item("type")
+        .and_then(|value| value.extract::<String>())
+        .is_ok_and(|kind| kind == "file")
+    {
+        py.import("litellm.ocr.main")?
+            .getattr("convert_file_document_to_url_document")?
+            .call1((input.document.bind(py),))?
+            .unbind()
+    } else {
+        input.document
+    };
+    let document: Value = litellm_python_interop::from_py(document.bind(py))?;
     let mut observer = PythonProviderObserver::new(callback_adapter, python_context)?;
     Ok(async move {
         run_route(
@@ -56,27 +72,10 @@ fn prepare_ocr(
     })
 }
 
-#[pyfunction]
-#[pyo3(signature = (model, custom_llm_provider, *, context))]
-fn ocr_decline(
-    model: &str,
-    custom_llm_provider: &str,
-    context: NativeRequestContext,
-) -> Option<String> {
-    let context: LiteLlmRequestContext = context.into();
-    let provider_supported = litellm_ai_gateway::io::ocr::ocr_provider_supported(
-        model,
-        custom_llm_provider,
-        context.capabilities.request_format.as_deref(),
-    );
-    super::definition::request_decline(provider_supported, &context)
-}
-
 bridge_route! {
     sync = ocr,
     asynchronous = aocr,
     request = OcrInputs,
     prepare = prepare_ocr,
     errors = ocr_error_to_pyerr,
-    extra = [ocr_decline],
 }

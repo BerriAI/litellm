@@ -10,18 +10,13 @@ import pytest
 from litellm.rust_bridge import bindings
 
 
-def test_binding_distinguishes_disable_from_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_binding_uses_injected_module_loader() -> None:
     native: Final = SimpleNamespace(chat_completions=lambda: "native")
-    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
-    binding: Final = bindings.NativeBinding(lambda module: module.chat_completions)
+    binding: Final = bindings.NativeBinding(
+        lambda module: module.chat_completions,
+        module_loader=lambda: native,
+    )
 
-    assert binding.load() is native.chat_completions
-    binding.override(None)
-    assert binding.load() is None
-    replacement: Final = SimpleNamespace(chat_completions=lambda: "replacement")
-    binding.override(replacement.chat_completions)
-    assert binding.load() is replacement.chat_completions
-    binding.reset()
     assert binding.load() is native.chat_completions
 
 
@@ -127,7 +122,7 @@ def test_missing_execution_export_does_not_inspect_readiness(export):
     native.__getattr__ = missing
     if export is not None:
         native.messages = export
-    binding = bindings.NativeBinding(lambda module: module.messages, route="messages", module_loader=lambda: native)
+    binding = bindings.NativeBinding(lambda module: module.messages, module_loader=lambda: native)
     assert binding.load() is None
     assert "ready_endpoints" not in lookups
 
@@ -136,8 +131,6 @@ def test_discovery_reuses_one_module_and_does_not_cache_binding():
     from types import ModuleType
 
     native = ModuleType("test_native")
-    native.ready_endpoints = {"messages": frozenset({"callbacks"})}
-
     def first():
         return "first"
 
@@ -151,12 +144,9 @@ def test_discovery_reuses_one_module_and_does_not_cache_binding():
         loads.append(native)
         return native
 
-    binding = bindings.NativeBinding(lambda module: module.messages, route="messages", module_loader=load)
+    binding = bindings.NativeBinding(lambda module: module.messages, module_loader=load)
     assert binding.load() is first
     assert len(loads) == 1
     native.messages = second
     assert binding.load() is second
     assert len(loads) == 2
-    native.ready_endpoints = {"messages": frozenset()}
-    assert binding.load() is None
-    assert len(loads) == 3
