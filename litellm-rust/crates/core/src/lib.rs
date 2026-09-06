@@ -5,11 +5,13 @@ pub mod chat_completions;
 pub mod constants;
 pub mod eligibility;
 pub mod error;
+pub mod hook_contracts;
 pub mod http_utils;
 pub mod messages;
 #[cfg(any(feature = "observability", test))]
 pub mod observability;
 pub mod ocr;
+pub mod provider_callbacks;
 pub mod providers;
 pub mod realtime;
 pub mod responses;

@@ -3,7 +3,6 @@ use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
 use futures_util::FutureExt;
-use litellm_core::error::Error;
 use litellm_python_interop::{Pythonized, panic_to_pyerr, release_gil};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -11,14 +10,19 @@ use serde::Serialize;
 use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
 
-pub(crate) fn run_sync<T, F>(
+pub(crate) struct PythonCallContext<'py> {
+    pub(crate) py: Python<'py>,
+    pub(crate) asynchronous: bool,
+}
+
+pub(crate) fn run_sync<T, E>(
     py: Python<'_>,
-    future: F,
-    map_error: fn(Error) -> PyErr,
+    future: impl Future<Output = Result<T, E>> + Send + 'static,
+    map_error: fn(E) -> PyErr,
 ) -> PyResult<Py<PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
 {
     run_sync_on(
         py,
@@ -28,15 +32,15 @@ where
     )
 }
 
-fn run_sync_on<T, F>(
+fn run_sync_on<T, E>(
     py: Python<'_>,
     runtime: &Runtime,
-    future: F,
-    map_error: fn(Error) -> PyErr,
+    future: impl Future<Output = Result<T, E>> + Send + 'static,
+    map_error: fn(E) -> PyErr,
 ) -> PyResult<Py<PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
 {
     if Handle::try_current().is_ok() {
         return Err(PyRuntimeError::new_err(
@@ -45,27 +49,27 @@ where
     }
 
     let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
-    let result = map_core_result(result, map_error)?;
+    let result = map_result(result, map_error)?;
     Pythonized(result).into_pyobject(py).map(Bound::unbind)
 }
 
-pub(crate) fn run_async<T, F>(
+pub(crate) fn run_async<T, E>(
     py: Python<'_>,
-    future: F,
-    map_error: fn(Error) -> PyErr,
+    future: impl Future<Output = Result<T, E>> + Send + 'static,
+    map_error: fn(E) -> PyErr,
 ) -> PyResult<Bound<'_, PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let result = catch_future_panic(future).await?;
-        let result = map_core_result(result, map_error)?;
+        let result = map_result(result, map_error)?;
         Ok(Pythonized(result))
     })
 }
 
-fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -> PyResult<T> {
+fn map_result<T, E>(result: Result<T, E>, map_error: fn(E) -> PyErr) -> PyResult<T> {
     match result {
         Ok(value) => Ok(value),
         Err(error) => Err(
@@ -75,9 +79,9 @@ fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -
     }
 }
 
-async fn catch_future_panic<T, F>(future: F) -> PyResult<Result<T, Error>>
+async fn catch_future_panic<T, E, F>(future: F) -> PyResult<Result<T, E>>
 where
-    F: Future<Output = Result<T, Error>>,
+    F: Future<Output = Result<T, E>>,
 {
     AssertUnwindSafe(future)
         .catch_unwind()
@@ -85,9 +89,9 @@ where
         .map_err(panic_to_pyerr)
 }
 
-async fn wait_for_sync_result<T, F>(future: F) -> PyResult<Result<T, Error>>
+async fn wait_for_sync_result<T, E, F>(future: F) -> PyResult<Result<T, E>>
 where
-    F: Future<Output = Result<T, Error>>,
+    F: Future<Output = Result<T, E>>,
 {
     let future = catch_future_panic(future);
     tokio::pin!(future);
@@ -108,12 +112,14 @@ where
 mod tests {
     use std::ffi::CString;
     use std::future::poll_fn;
+    use std::process::Command;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, mpsc};
     use std::task::Poll;
     use std::thread;
     use std::time::Instant;
 
+    use litellm_core::error::Error;
     use pyo3::panic::PanicException;
     use pyo3::types::{PyDict, PyModule};
     use serde::Serializer;
@@ -385,6 +391,31 @@ asyncio.run(exercise())
 
     #[test]
     fn async_result_delivery_does_not_stall_tokio_workers() {
+        const CHILD_PROCESS: &str = "LITELLM_ASYNC_RESULT_DELIVERY_TEST_CHILD";
+
+        if std::env::var_os(CHILD_PROCESS).is_none() {
+            let output =
+                Command::new(std::env::current_exe().expect("test executable should exist"))
+                    .arg("--exact")
+                    .arg(
+                        thread::current()
+                            .name()
+                            .expect("test thread should be named"),
+                    )
+                    .arg("--nocapture")
+                    .env(CHILD_PROCESS, "1")
+                    .env("TOKIO_WORKER_THREADS", "1")
+                    .output()
+                    .expect("isolated result-delivery test should start");
+            assert!(
+                output.status.success(),
+                "isolated result-delivery test failed:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
         Python::initialize();
         ASYNC_PROBE_COMPLETED.store(0, Ordering::SeqCst);
         Python::attach(|py| {

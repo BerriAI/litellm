@@ -4,7 +4,7 @@ from collections.abc import Callable
 from types import ModuleType
 from typing import Final, Generic, TypeVar, cast  # noqa: TID251  # PyO3 module boundary
 
-from litellm.rust_bridge.loader import get_native_bridge
+from litellm.rust_bridge.loader import get_native_bridge, module_route_ready
 from litellm.rust_bridge.protocols import NativeModule
 
 BindingT = TypeVar("BindingT")
@@ -31,8 +31,12 @@ class NativeBinding(Generic[BindingT]):
         self,
         select: Callable[[NativeModule], BindingT],
         *,
+        route: str = "",
+        required_capabilities: frozenset[str] = frozenset({"callbacks"}),
         module_loader: Callable[[], ModuleType | None] | None = None,
     ) -> None:
+        self._route: Final = route
+        self._required_capabilities: Final = required_capabilities
         self._select: Final = select
         self._module_loader: Final = module_loader
         self._override: BindingT | None | _Unset = _UNSET
@@ -48,13 +52,20 @@ class NativeBinding(Generic[BindingT]):
             value: Final = self._select(module)
         except AttributeError:
             return None
-        return value if callable(value) else None
+        if not callable(value):
+            return None
+        if self._route and not module_route_ready(native, self._route, self._required_capabilities):
+            return None
+        return value
 
     def override(self, value: BindingT | None) -> None:
         self._override = value
 
     def reset(self) -> None:
         self._override = _UNSET
+
+    def is_overridden(self) -> bool:
+        return not isinstance(self._override, _Unset)
 
 
 _DECLINED: Final = NativeBinding(lambda native: native.RustBridgeDeclined)

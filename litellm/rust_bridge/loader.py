@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Set
 from types import ModuleType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # runtime typing constructs
 
 _BRIDGE_SENTINEL: Final = object()
 _cached_bridge: ModuleType | None | object = _BRIDGE_SENTINEL
@@ -33,3 +34,21 @@ def reset_native_bridge_cache() -> None:
 def native_bridge_available() -> bool:
     """Whether the packaged Rust extension is importable."""
     return get_native_bridge() is not None
+
+
+def native_route_ready(route: str, required_capabilities: frozenset[str] = frozenset()) -> bool:
+    native: Final = get_native_bridge()
+    if native is None:
+        return False
+    return module_route_ready(native, route, required_capabilities)
+
+
+def module_route_ready(native: ModuleType, route: str, required_capabilities: frozenset[str]) -> bool:
+    ready_endpoints: Final = getattr(native, "ready_endpoints", None)
+    if not isinstance(ready_endpoints, Mapping):
+        return False
+    typed_endpoints: Final = cast(  # cast-ok: native metadata was validated as a Mapping
+        Mapping[object, object], ready_endpoints
+    )
+    capabilities: Final = typed_endpoints.get(route)
+    return isinstance(capabilities, Set) and required_capabilities.issubset(capabilities)

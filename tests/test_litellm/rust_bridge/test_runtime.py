@@ -7,7 +7,7 @@ from typing import Final
 import pytest
 
 from litellm.exceptions import APIError, AuthenticationError, InternalServerError, RateLimitError
-from litellm.rust_bridge import bindings, runtime
+from litellm.rust_bridge import bindings, loader, runtime
 
 
 class RustBridgeDeclined(Exception):
@@ -336,7 +336,11 @@ def test_native_endpoint_applies_partial_overrides_and_reset(monkeypatch: pytest
     monkeypatch.setattr(
         bindings,
         "get_native_bridge",
-        lambda: SimpleNamespace(chat_completions=native_sync, achat_completions=native_async),
+        lambda: SimpleNamespace(
+            chat_completions=native_sync,
+            achat_completions=native_async,
+            ready_endpoints={"test": frozenset({"callbacks"})},
+        ),
     )
     endpoint: Final[runtime.EndpointDispatch[object, object]] = runtime.EndpointDispatch.native(
         route="test",
@@ -439,7 +443,9 @@ async def test_preflight_runs_after_binding_selection_before_preparation(
     assert events == (
         ["load", "preflight", "prepare", "native"]
         if available and accepted
-        else ["load", "preflight", "python"] if available else ["load", "python"]
+        else ["load", "preflight", "python"]
+        if available
+        else ["load", "python"]
     )
 
 
@@ -458,3 +464,50 @@ def test_preflight_failure_is_not_a_native_decline() -> None:
             error_context=context(),
             preflight=preflight,
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    (
+        "ocr",
+        "chat_completions",
+        "messages",
+        "responses_websocket",
+        "transcription",
+    ),
+)
+@pytest.mark.parametrize("capabilities", (None, frozenset(), frozenset({"streaming_callbacks"})))
+async def test_unready_routes_never_prepare_or_call_native(
+    monkeypatch: pytest.MonkeyPatch, route: str, capabilities: frozenset[str] | None
+) -> None:
+    def unexpected(*_args: object) -> object:
+        pytest.fail("unready native route must not prepare or execute")
+
+    native: Final = SimpleNamespace(
+        ready_endpoints={} if capabilities is None else {route: capabilities},
+        chat_completions=unexpected,
+    )
+    monkeypatch.setattr(loader, "get_native_bridge", lambda: native)
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
+    endpoint: Final = runtime.EndpointBinding.native(
+        route=route, select=lambda native: native.chat_completions, enabled=runtime.always_enabled
+    )
+    arguments: Final = {
+        "prepare": unexpected,
+        "preflight": unexpected,
+        "call": unexpected,
+        "adapt": unexpected,
+        "error_context": runtime.BridgeErrorContext(provider="test", model="test-model"),
+    }
+    assert not endpoint.can_attempt()
+    assert endpoint.invoke(**arguments, fallback=lambda: "python") == "python"
+    with pytest.raises(RuntimeError, match=f"native {route} endpoint is unavailable"):
+        endpoint.require(**arguments)
+
+    async def fallback() -> str:
+        return "python"
+
+    assert await endpoint.ainvoke(**arguments, fallback=fallback) == "python"
+    with pytest.raises(RuntimeError, match=f"native {route} endpoint is unavailable"):
+        await endpoint.arequire(**arguments)

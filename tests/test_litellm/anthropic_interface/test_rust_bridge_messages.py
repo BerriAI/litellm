@@ -85,7 +85,12 @@ class ExplodingAsyncMessages:
         self.calls = 0
 
     async def __call__(
-        self, request: NativeMessagesRequest, *, options: object, context: NativeRequestContext
+        self,
+        request: NativeMessagesRequest,
+        *,
+        options: object,
+        context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         self.calls += 1
         raise AssertionError("bridge must not be called")
@@ -96,7 +101,12 @@ class RaisingAsyncMessages:
         self.calls = 0
 
     async def __call__(
-        self, request: NativeMessagesRequest, *, options: object, context: NativeRequestContext
+        self,
+        request: NativeMessagesRequest,
+        *,
+        options: object,
+        context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         self.calls += 1
         raise RuntimeError("upstream request failed with status 400: bad request")

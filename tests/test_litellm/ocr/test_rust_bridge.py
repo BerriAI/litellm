@@ -11,6 +11,7 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
 from litellm.rust_bridge import configuration
 from litellm.rust_bridge.request import (
     NativeOCRRequest,
@@ -52,6 +53,7 @@ class RecordingBridge:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.callback_adapter: object | None = None
 
     def __call__(
         self,
@@ -59,7 +61,9 @@ class RecordingBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
+        self.callback_adapter = callback_adapter
         self.calls.append(
             {
                 "model": request.model,
@@ -81,6 +85,7 @@ class RecordingAsyncBridge:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.callback_adapter: object | None = None
 
     async def __call__(
         self,
@@ -88,7 +93,9 @@ class RecordingAsyncBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
+        self.callback_adapter = callback_adapter
         self.calls.append(
             {
                 "model": request.model,
@@ -112,6 +119,7 @@ class RaisingBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -123,6 +131,7 @@ class RaisingAsyncBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -394,6 +403,7 @@ def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
     fake_module = types.ModuleType("litellm.rust_bridge._native")
     fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
     fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
+    fake_module.ready_endpoints = {"ocr": {"callbacks"}}  # type: ignore[attr-defined]
     monkeypatch.setattr(
         importlib.import_module("litellm.rust_bridge.bindings"),
         "get_native_bridge",
@@ -686,7 +696,7 @@ def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
     assert bridge.calls[0]["api_base"] == "https://document-intelligence.example.com"
 
 
-def test_run_rust_ocr_runs_pre_call_logging():
+def test_run_rust_ocr_passes_provider_logging_adapter():
     logging_obj = RecordingLogging()
     bridge = RecordingBridge()
     litellm.rust(True)
@@ -704,17 +714,11 @@ def test_run_rust_ocr_runs_pre_call_logging():
         resolve_api_key=lambda _name: None,
     )
 
-    assert logging_obj.pre_call_kwargs is not None
-    assert logging_obj.pre_call_kwargs["input"] == "OCR document processing"
-    additional_args = logging_obj.pre_call_kwargs["additional_args"]
-    complete_input = additional_args["complete_input_dict"]
-    assert complete_input["document"] == DOCUMENT
-    assert complete_input["include_image_base64"] is True
-    assert additional_args["api_base"] == "https://api.mistral.ai/v1/ocr"
-    assert additional_args["headers"] == {
-        "Authorization": "Bearer sk-test",
-        "x-trace-id": "trace-1",
-    }
+    adapter = bridge.callback_adapter
+    assert isinstance(adapter, ProviderLoggingAdapter)
+    assert adapter.logging_obj is logging_obj
+    assert adapter.input == "OCR document processing"
+    assert adapter.api_key == "sk-test"
 
 
 def test_ocr_routes_azure_ai_to_rust_when_enabled(fake_bridge):

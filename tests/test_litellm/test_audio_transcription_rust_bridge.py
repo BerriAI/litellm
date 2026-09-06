@@ -34,6 +34,7 @@ class SyncBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -53,6 +54,7 @@ class AsyncBridge:
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         return {"text": "async"}
 
@@ -135,7 +137,7 @@ async def test_dispatch_async_path_requires_bridge(monkeypatch: pytest.MonkeyPat
 
 def test_bedrock_transcription_uses_rust_only_path() -> None:
     rust_bridge.configure_rust_transcription(
-        transcription=lambda request, *, options, context: {"text": "rust"},
+        transcription=lambda request, *, options, context, callback_adapter=None: {"text": "rust"},
         atranscription=None,
     )
     try:
@@ -152,7 +154,11 @@ def test_bedrock_transcription_uses_rust_only_path() -> None:
 @pytest.mark.asyncio
 async def test_bedrock_atranscription_uses_rust_only_path() -> None:
     async def rust_response(
-        request: NativeTranscriptionRequest, *, options: object, context: NativeRequestContext
+        request: NativeTranscriptionRequest,
+        *,
+        options: object,
+        context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         return {"text": "rust"}
 

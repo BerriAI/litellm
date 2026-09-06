@@ -21,6 +21,8 @@ fn prepare_transcription(
     input: AudioTranscriptionInputs,
     options: NativeRequestOptions,
     context: NativeRequestContext,
+    _callback_adapter: Option<Py<PyAny>>,
+    _python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
     let provider_supported = litellm_core::audio_transcription::transcription_provider_supported(
         options.provider("bedrock"),

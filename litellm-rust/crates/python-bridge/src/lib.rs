@@ -1,18 +1,29 @@
+mod callback_bindings;
+#[cfg(test)]
+#[path = "../tests/callbacks/mod.rs"]
+mod callback_tests;
+mod constants;
 mod diagnostics;
 mod errors;
 mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
 mod marshal;
+mod python_hook_bindings;
 mod routes;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use litellm_ai_gateway::io::responses_ws::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
+use litellm_core::provider_callbacks::{CallbackDecision, SessionEvent, SessionObserver};
 use litellm_core::responses::types::ResponsesWebSocketRequest;
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 use crate::errors::core_error_to_pyerr;
 use crate::marshal::{NativeRequestContext, NativeRequestOptions};
+
+static NEXT_WEBSOCKET_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(FromPyObject)]
 struct WebSocketConnectRequest {
@@ -27,13 +38,14 @@ struct ResponsesWebSocketConnection {
 #[pymethods]
 impl ResponsesWebSocketConnection {
     #[classmethod]
-    #[pyo3(signature = (request, *, options, context))]
+    #[pyo3(signature = (request, *, options, context, callback_adapter=None))]
     fn connect<'py>(
         _cls: &Bound<'py, pyo3::types::PyType>,
         py: Python<'py>,
         request: WebSocketConnectRequest,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let provider_supported = litellm_core::responses::websocket::native_websocket_supported(
             options.provider("openai"),
@@ -43,11 +55,54 @@ impl ResponsesWebSocketConnection {
             return Err(crate::errors::RustBridgeDeclined::new_err(reason));
         }
         let options: litellm_core::request_options::RequestOptions = options.into();
+        let call_id = context.litellm_call_id.clone().unwrap_or_default();
+        let session_id = format!(
+            "responses-websocket-{}",
+            NEXT_WEBSOCKET_SESSION_ID.fetch_add(1, Ordering::Relaxed)
+        );
+        let mut observer = callback_adapter
+            .map(|adapter| crate::callback_bindings::python_async_session(adapter, py))
+            .transpose()?;
         let request = ResponsesWebSocketRequest { url: request.url };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let inner = RustResponsesWebSocketConnection::connect(request, &options, &context)
+            if let Some(observer) = observer.as_mut() {
+                let decision = observer
+                    .before_connect(&session_event(&session_id, &call_id, None))
+                    .await?;
+                match decision {
+                    CallbackDecision::Unchanged => {}
+                    CallbackDecision::Replace { .. } => {
+                        return Err(pyo3::exceptions::PyValueError::new_err(
+                            "before_connect cannot replace WebSocket setup",
+                        ));
+                    }
+                    CallbackDecision::Reject { message, .. } => {
+                        return Err(pyo3::exceptions::PyValueError::new_err(message));
+                    }
+                }
+            }
+            let inner = match RustResponsesWebSocketConnection::connect(request, &options, &context)
                 .await
-                .map_err(core_error_to_pyerr)?;
+            {
+                Ok(inner) => inner,
+                Err(error) => {
+                    if let Some(observer) = observer.as_mut() {
+                        observer
+                            .error(&session_event(
+                                &session_id,
+                                &call_id,
+                                Some(error.to_string()),
+                            ))
+                            .await?;
+                    }
+                    return Err(core_error_to_pyerr(error));
+                }
+            };
+            if let Some(observer) = observer.as_mut() {
+                observer
+                    .connected(&session_event(&session_id, &call_id, None))
+                    .await?;
+            }
             Ok(ResponsesWebSocketConnection { inner })
         })
     }
@@ -74,6 +129,18 @@ impl ResponsesWebSocketConnection {
     }
 }
 
+fn session_event(session_id: &str, call_id: &str, message: Option<String>) -> SessionEvent {
+    SessionEvent {
+        session_id: session_id.to_string(),
+        call_id: call_id.to_string(),
+        trace_id: None,
+        event: None,
+        response_id: None,
+        sequence: None,
+        message,
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (_model, custom_llm_provider, *, context))]
 fn responses_websocket_decline(
@@ -95,6 +162,8 @@ mod _native {
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         super::errors::register(module)?;
+        litellm_python_interop::callback_runtime::register(module)?;
+        super::callback_bindings::register(module)?;
         super::routes::register(module)?;
         module.add_class::<super::ResponsesWebSocketConnection>()?;
         module.add_function(wrap_pyfunction!(
@@ -229,6 +298,16 @@ mod tests {
             let code = CString::new(
                 r#"
 import asyncio
+import sys
+import types
+
+litellm_module = types.ModuleType('litellm')
+rust_bridge_module = types.ModuleType('litellm.rust_bridge')
+litellm_module.rust_bridge = rust_bridge_module
+rust_bridge_module._native = native
+sys.modules['litellm'] = litellm_module
+sys.modules['litellm.rust_bridge'] = rust_bridge_module
+sys.modules['litellm.rust_bridge._native'] = native
 
 async def exercise():
     for request, request_options, request_context, field in (
@@ -248,7 +327,56 @@ async def exercise():
         else:
             raise AssertionError('invalid WebSocket input reached execution')
 
-    connection = await native.ResponsesWebSocketConnection.connect(Request(url=url), options=options, context=context)
+    events = []
+
+    class Adapter:
+        async def before_connect(self, event):
+            events.append(('before_connect', event))
+            return {'action': 'unchanged'}
+
+        async def connected(self, event):
+            events.append(('connected', event))
+
+        async def before_send(self, event):
+            return {'action': 'unchanged'}
+
+        async def after_receive(self, event):
+            return {'action': 'unchanged'}
+
+        async def response_complete(self, event):
+            pass
+
+        async def response_error(self, event):
+            pass
+
+        async def error(self, event):
+            events.append(('error', event))
+
+        async def close(self, event):
+            pass
+
+    class RejectingAdapter(Adapter):
+        async def before_connect(self, event):
+            return {'action': 'reject', 'message': 'blocked', 'status_code': 400}
+
+    try:
+        await native.ResponsesWebSocketConnection.connect(
+            Request(url=url), options=options, context=context, callback_adapter=RejectingAdapter()
+        )
+    except ValueError as error:
+        assert str(error) == 'blocked'
+    else:
+        raise AssertionError('rejected WebSocket setup reached execution')
+
+    connection = await native.ResponsesWebSocketConnection.connect(
+        Request(url=url),
+        options=options,
+        context=replace(context, litellm_call_id='call-1'),
+        callback_adapter=Adapter(),
+    )
+    assert [name for name, _ in events] == ['before_connect', 'connected']
+    assert events[0][1]['call_id'] == 'call-1'
+    assert events[0][1]['session_id'] == events[1][1]['session_id']
     assert type(connection) is native.ResponsesWebSocketConnection
     await connection.send_text("from-python")
     assert await connection.recv_text() == "from-server"
@@ -256,6 +384,9 @@ async def exercise():
     assert await connection.recv_text() is None
 
 asyncio.run(asyncio.wait_for(exercise(), timeout=5))
+sys.modules.pop('litellm.rust_bridge._native')
+sys.modules.pop('litellm.rust_bridge')
+sys.modules.pop('litellm')
 "#,
             )
             .expect("Python source should not contain null bytes");

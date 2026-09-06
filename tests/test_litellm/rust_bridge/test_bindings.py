@@ -111,3 +111,52 @@ def test_selectors_are_checked_by_type_checker(tmp_path: Path, expression: str, 
     assert [(item["rule"], item["range"]["start"]["line"]) for item in diagnostics] == [
         (expected_rule, len(source.read_text().splitlines()) - 1)
     ]
+
+
+@pytest.mark.parametrize("export", (None, 3))
+def test_missing_execution_export_does_not_inspect_readiness(export):
+    from types import ModuleType
+
+    native = ModuleType("test_native")
+    lookups = []
+
+    def missing(name: str):
+        lookups.append(name)
+        raise AttributeError(name)
+
+    native.__getattr__ = missing
+    if export is not None:
+        native.messages = export
+    binding = bindings.NativeBinding(lambda module: module.messages, route="messages", module_loader=lambda: native)
+    assert binding.load() is None
+    assert "ready_endpoints" not in lookups
+
+
+def test_discovery_reuses_one_module_and_does_not_cache_binding():
+    from types import ModuleType
+
+    native = ModuleType("test_native")
+    native.ready_endpoints = {"messages": frozenset({"callbacks"})}
+
+    def first():
+        return "first"
+
+    def second():
+        return "second"
+
+    native.messages = first
+    loads = []
+
+    def load():
+        loads.append(native)
+        return native
+
+    binding = bindings.NativeBinding(lambda module: module.messages, route="messages", module_loader=load)
+    assert binding.load() is first
+    assert len(loads) == 1
+    native.messages = second
+    assert binding.load() is second
+    assert len(loads) == 2
+    native.ready_endpoints = {"messages": frozenset()}
+    assert binding.load() is None
+    assert len(loads) == 3

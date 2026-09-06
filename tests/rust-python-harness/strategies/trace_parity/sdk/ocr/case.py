@@ -16,6 +16,8 @@ COMMON_MAPPINGS: Final = (
     mapping(rust_span="validate_environment", python_frame=r"(?<!_)validate_environment$"),
     mapping(rust_span="complete_url", python_frame=r"get_complete_url$"),
     mapping(rust_span="transform_ocr_request", python_frame=r"(?<!async_)transform_ocr_request$"),
+    # Rust wraps the HTTP attempt to invoke observers; Python has no matching frame.
+    mapping(rust_span="send_provider_request"),
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),
 )
 
@@ -48,7 +50,7 @@ AZURE_COMMON_MAPPINGS: Final = (
             r"|MistralOCRConfig\.transform_ocr_request$"
         ),
     ),
-    COMMON_MAPPINGS[-1],
+    *COMMON_MAPPINGS[-2:],
 )
 AZURE_SYNC_MAPPINGS: Final = (
     *AZURE_COMMON_MAPPINGS,
@@ -201,7 +203,7 @@ VERTEX_COMMON_MAPPINGS: Final = (
             r"|MistralOCRConfig\.transform_ocr_request$"
         ),
     ),
-    COMMON_MAPPINGS[-1],
+    *COMMON_MAPPINGS[-2:],
 )
 VERTEX_SYNC_MAPPINGS: Final = (
     *VERTEX_COMMON_MAPPINGS,
@@ -228,6 +230,8 @@ DEEPSEEK_COMMON_MAPPINGS: Final = (
         rust_span="transform_ocr_request",
         python_frame=r"VertexAIDeepSeekOCRConfig\.transform_ocr_request$",
     ),
+    # Rust wraps the HTTP attempt to invoke observers; Python has no matching frame.
+    mapping(rust_span="send_provider_request"),
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),
     mapping(
         rust_span="transform_ocr_response",
@@ -264,6 +268,8 @@ DOCUMENT_INTELLIGENCE_COMMON_MAPPINGS: Final = (
     mapping(
         rust_span="transform_ocr_request", python_frame=r"AzureDocumentIntelligenceOCRConfig\.transform_ocr_request$"
     ),
+    # Rust wraps the HTTP attempt to invoke observers; Python has no matching frame.
+    mapping(rust_span="send_provider_request"),
     mapping(rust_span="http_request", python_frame=r"AsyncHTTPHandler\.post$|HTTPHandler\.post$"),
     mapping(
         rust_span="poll_document_intelligence",

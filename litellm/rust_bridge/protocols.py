@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Mapping, Sequence
 from typing import Protocol
 
+from .callbacks import SessionCallbackHandle
 from .request import (
     NativeChatCompletionsRequest,
     NativeFunction,
@@ -53,6 +54,7 @@ class RustResponsesWebSocketConnection(Protocol):
         *,
         options: NativeRequestOptions,
         context: NativeRequestContext,
+        callback_adapter: SessionCallbackHandle | None = None,
     ) -> RustResponsesWebSocket: ...
 
 

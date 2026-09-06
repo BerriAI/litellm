@@ -23,6 +23,8 @@ fn prepare_chat_completions(
     input: ChatCompletionsInputs,
     options: NativeRequestOptions,
     context: NativeRequestContext,
+    _callback_adapter: Option<Py<PyAny>>,
+    _python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<ChatCompletionsResponse, Error>> + Send + 'static> {
     let context: LiteLlmRequestContext = context.into();
     let messages = required_value("messages", input.messages, Value::is_array, "list")?;
