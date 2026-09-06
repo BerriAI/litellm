@@ -1,0 +1,93 @@
+services:
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:main-stable
+    container_name: litellm
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /app/cache:rw,noexec,nosuid,nodev,size=256m,uid=101,gid=101,mode=1777
+      - /app/migrations:rw,noexec,nosuid,nodev,size=64m,uid=101,gid=101,mode=1777
+    ports:
+      - "127.0.0.1:4000:4000"
+    environment:
+      DATABASE_URL_FILE: /run/secrets/db_url
+      LITELLM_NON_ROOT: "true"
+      LITELLM_DISABLE_NO_REDIS_WARNING: "true"
+      PRISMA_BINARY_CACHE_DIR: "/app/cache/prisma-python/binaries"
+      XDG_CACHE_HOME: "/app/cache"
+      LITELLM_MIGRATION_DIR: "/app/migrations"
+      ${PROXY_ENV_MAPPING}
+    entrypoint: >
+      /bin/sh -c "
+      export DATABASE_URL=$$(cat /run/secrets/db_url) &&
+      export LITELLM_MASTER_KEY=$$(cat /run/secrets/master_key) &&
+      export LITELLM_SALT_KEY=$$(cat /run/secrets/salt_key) &&
+      exec docker/prod_entrypoint.sh
+      "
+    env_file:
+      - .env
+    secrets:
+      - db_url
+      - master_key
+      - salt_key
+    networks:
+      - public-egress
+      - backend-internal
+    depends_on:
+      db:
+        condition: service_healthy
+      ${LITELLM_SQUID_DEPENDENCY}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    container_name: litellm_db
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets:
+      - db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ${SQUID_SERVICE_BLOCK}
+
+secrets:
+  db_password:
+    file: ./secrets/db_password.txt
+  master_key:
+    file: ./secrets/master_key.txt
+  salt_key:
+    file: ./secrets/salt_key.txt
+  db_url:
+    file: ./secrets/db_url.txt
+
+volumes:
+  postgres_data:
+    name: litellm_postgres_data
+
+networks:
+  public-egress:
+    driver: bridge
+  backend-internal:
+    driver: bridge
+    internal: true
