@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_token_type_cost_breakdown,
+    resolve_token_rates,
 )
 from litellm.types.utils import CacheCreationTokenDetails, Usage
 
@@ -411,6 +412,38 @@ def test_get_token_base_cost_picks_highest_crossed_tier():
     prompt_base_cost = _get_token_base_cost(model_info, usage)[0]
 
     assert prompt_base_cost == 9e-6
+
+
+def test_resolve_token_rates_prices_prompt_past_threshold_at_the_above_rates():
+    """Rates resolved from the token counts alone must follow the same threshold rules the
+    billed cost does: base rates below the threshold, the *_above_Nk_tokens rates past it,
+    and the reasoning rate falling back to the billed output rate when none is declared."""
+    model_info = {
+        "input_cost_per_token": 5e-06,
+        "input_cost_per_token_above_272k_tokens": 1e-05,
+        "output_cost_per_token": 3e-05,
+        "output_cost_per_token_above_272k_tokens": 4.5e-05,
+    }
+
+    below = resolve_token_rates(
+        model_info=model_info,
+        usage=Usage(prompt_tokens=272_000, completion_tokens=10, total_tokens=272_010),
+        custom_llm_provider="openai",
+    )
+    above = resolve_token_rates(
+        model_info=model_info,
+        usage=Usage(prompt_tokens=272_001, completion_tokens=10, total_tokens=272_011),
+        custom_llm_provider="openai",
+    )
+    inclusive = resolve_token_rates(
+        model_info=model_info,
+        usage=Usage(prompt_tokens=272_000, completion_tokens=10, total_tokens=272_010),
+        custom_llm_provider="xai",
+    )
+
+    assert (below.input_rate, below.output_rate, below.billed_reasoning_rate) == (5e-06, 3e-05, 3e-05)
+    assert (above.input_rate, above.output_rate, above.billed_reasoning_rate) == (1e-05, 4.5e-05, 4.5e-05)
+    assert (inclusive.input_rate, inclusive.output_rate) == (1e-05, 4.5e-05)
 
 
 def test_is_within_off_peak_window_same_day():

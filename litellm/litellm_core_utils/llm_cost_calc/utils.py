@@ -1090,6 +1090,41 @@ def _resolve_billed_reasoning_rate(
     )
 
 
+def resolve_token_rates(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    current_time: datetime | None = None,
+) -> TokenRates:
+    """Per-token rates a request with this usage is billed at.
+
+    Applies the same rate selection generic_cost_per_token does (tiered_pricing tables,
+    *_above_Nk_tokens thresholds, off-peak windows, the provider's threshold inclusivity),
+    so a caller that only knows the token counts ahead of the request, such as budget
+    reservation, prices them the way the finished request will be. Service tiers are not
+    applied: the rates are the model's standard ones.
+    """
+    (prompt_rate, completion_rate, cache_creation_rate, _, cache_read_rate) = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        current_time=current_time,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    )
+    return TokenRates(
+        input_rate=prompt_rate,
+        output_rate=completion_rate,
+        cache_read_rate=cache_read_rate,
+        cache_creation_rate=cache_creation_rate,
+        reasoning_rate=_resolve_billed_reasoning_rate(
+            model_info=model_info,
+            usage=usage,
+            service_tier=None,
+            completion_base_cost=completion_rate,
+            current_time=current_time,
+        ),
+    )
+
+
 def generic_cost_per_token(
     model: str,
     usage: Usage,

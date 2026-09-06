@@ -39,6 +39,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
     _approximate_input_size,
     _get_model_access_group_budget_counters,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
@@ -1185,12 +1186,11 @@ def test_reservation_uses_most_expensive_deployment_in_group():
 
     with (
         patch(
-            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
-            return_value={"max_output_tokens": 200000},
-        ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_tiered_pricing_tables",
-            return_value=[cheap, expensive],
+            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_cost_infos",
+            return_value=[
+                {"tiered_pricing": cheap, "max_output_tokens": 200000},
+                {"tiered_pricing": expensive, "max_output_tokens": 200000},
+            ],
         ),
         patch(
             "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
@@ -1211,6 +1211,109 @@ def test_reservation_uses_most_expensive_deployment_in_group():
     expected_cheap = (input_tokens * 1e-06) + (output_tokens * 2e-06)
     assert expected_expensive > expected_cheap
     assert estimated == pytest.approx(expected_expensive)
+
+
+def _long_prompt_request(model: str, max_tokens: int) -> dict[str, object]:
+    return {"model": model, "messages": [{"role": "user", "content": "hello"}], "max_tokens": max_tokens}
+
+
+def test_reservation_prices_prompt_above_272k_at_the_above_threshold_rate():
+    """A prompt past a model's *_above_272k_tokens threshold is billed at the above rate for
+    every token, so the reservation must price it there too. Reserving at the base rate
+    let a 300K-token request through a budget it then overshot by the full above-rate cost."""
+    model_info = litellm.get_model_info("gpt-5.5")
+    above_input_rate = model_info.get("input_cost_per_token_above_272k_tokens")
+    above_output_rate = model_info.get("output_cost_per_token_above_272k_tokens")
+    base_input_rate = model_info.get("input_cost_per_token")
+    base_output_rate = model_info.get("output_cost_per_token")
+    assert above_input_rate is not None and above_output_rate is not None
+    assert base_input_rate is not None and base_output_rate is not None
+    input_tokens = 300_000
+    output_tokens = 1_000
+    request_body = _long_prompt_request(model="gpt-5.5", max_tokens=output_tokens)
+
+    estimated = estimate_request_max_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=None,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+    estimated_input = estimate_request_input_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=None,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+
+    assert estimated is not None
+    assert estimated == pytest.approx((input_tokens * above_input_rate) + (output_tokens * above_output_rate))
+    assert estimated_input == pytest.approx(input_tokens * above_input_rate)
+    base_rate_under_reserve = (input_tokens * base_input_rate) + (output_tokens * base_output_rate)
+    assert estimated > base_rate_under_reserve
+
+
+def test_reservation_prices_above_272k_rate_through_router_deployment():
+    """On the proxy the model name resolves through the router, whose group summary only
+    carries flat rates. The reservation must read each deployment's full pricing so the
+    above-threshold keys from the cost map reach the estimate."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.5",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-fake"},
+            }
+        ]
+    )
+    model_info = litellm.get_model_info("openai/gpt-5.5")
+    above_input_rate = model_info.get("input_cost_per_token_above_272k_tokens")
+    above_output_rate = model_info.get("output_cost_per_token_above_272k_tokens")
+    base_input_rate = model_info.get("input_cost_per_token")
+    assert above_input_rate is not None and above_output_rate is not None
+    assert base_input_rate is not None and above_input_rate > base_input_rate
+    input_tokens = 300_000
+    output_tokens = 1_000
+
+    estimated = estimate_request_max_cost(
+        request_body=_long_prompt_request(model="gpt-5.5", max_tokens=output_tokens),
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+
+    assert estimated == pytest.approx((input_tokens * above_input_rate) + (output_tokens * above_output_rate))
+
+
+def test_reservation_honors_inclusive_threshold_providers():
+    """xAI bills the higher tier once the prompt reaches the threshold while OpenAI bills it
+    only past the threshold, so a prompt of exactly the threshold length reserves at the
+    above rate for xAI and at the base rate for OpenAI."""
+    output_tokens = 10
+
+    def estimate(model: str, input_tokens: int) -> float:
+        estimated = estimate_request_max_cost(
+            request_body=_long_prompt_request(model=model, max_tokens=output_tokens),
+            route="/chat/completions",
+            llm_router=None,
+            input_token_counts={model: input_tokens},
+        )
+        assert estimated is not None
+        return estimated
+
+    xai_info = litellm.get_model_info("xai/grok-4.6")
+    xai_above_input_rate = xai_info.get("input_cost_per_token_above_200k_tokens")
+    xai_above_output_rate = xai_info.get("output_cost_per_token_above_200k_tokens")
+    assert xai_above_input_rate is not None and xai_above_output_rate is not None
+    openai_info = litellm.get_model_info("gpt-5.5")
+    openai_base_input_rate = openai_info.get("input_cost_per_token")
+    openai_base_output_rate = openai_info.get("output_cost_per_token")
+    assert openai_base_input_rate is not None and openai_base_output_rate is not None
+
+    assert estimate("xai/grok-4.6", 200_000) == pytest.approx(
+        (200_000 * xai_above_input_rate) + (output_tokens * xai_above_output_rate)
+    )
+    assert estimate("gpt-5.5", 272_000) == pytest.approx(
+        (272_000 * openai_base_input_rate) + (output_tokens * openai_base_output_rate)
+    )
 
 
 @pytest.mark.asyncio
