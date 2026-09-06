@@ -25163,6 +25163,7 @@
         "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-image": {
+        "supports_reasoning": false,
         "cache_read_input_token_cost": 3e-08,
         "deprecation_date": "2026-10-02",
         "input_cost_per_audio_token": 1e-06,
@@ -25214,6 +25215,7 @@
         "supports_image_size": false
     },
     "gemini/gemini-3-pro-image": {
+        "supports_reasoning": false,
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -25257,6 +25259,7 @@
         "supports_reasoning": false
     },
     "gemini/gemini-3-pro-image-preview": {
+        "supports_reasoning": false,
         "deprecation_date": "2026-06-25",
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
@@ -25344,6 +25347,7 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-image": {
+        "supports_reasoning": false,
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
         "litellm_provider": "gemini",
@@ -25386,6 +25390,7 @@
         "web_search_billing_unit": "per_query"
     },
     "gemini/gemini-3.1-flash-image-preview": {
+        "supports_reasoning": false,
         "deprecation_date": "2026-06-25",
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_batches": 2.5e-07,
@@ -46716,6 +46721,7 @@
         "supports_tool_choice": true
     },
     "vertex_ai/gemini-2.5-flash-image": {
+        "supports_reasoning": false,
         "deprecation_date": "2026-10-02",
         "cache_read_input_token_cost": 3e-08,
         "input_cost_per_audio_token": 1e-06,
@@ -46762,6 +46768,7 @@
         "supports_image_size": false
     },
     "vertex_ai/gemini-3-pro-image": {
+        "supports_reasoning": false,
         "deprecation_date": "2027-05-28",
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
@@ -46779,6 +46786,7 @@
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
     },
     "vertex_ai/gemini-3-pro-image-preview": {
+        "supports_reasoning": false,
         "input_cost_per_image": 0.0011,
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_batches": 1e-06,
@@ -46795,6 +46803,7 @@
         "source": "https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-pro-image"
     },
     "vertex_ai/gemini-3.1-flash-image": {
+        "supports_reasoning": false,
         "deprecation_date": "2027-05-28",
         "input_cost_per_image": 0.00056,
         "input_cost_per_token": 5e-07,
@@ -46810,6 +46819,7 @@
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#gemini-models"
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
+        "supports_reasoning": false,
         "input_cost_per_image": 0.00056,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "vertex_ai-language-models",
