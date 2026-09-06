@@ -278,8 +278,8 @@ class PredibaseConfig(BaseConfig):
             model_prompt_details: Final = custom_prompt_dict[model]
             prompt = custom_prompt(
                 role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
+                initial_prompt_value=model_prompt_details.get("initial_prompt_value", ""),
+                final_prompt_value=model_prompt_details.get("final_prompt_value", ""),
                 messages=messages,
             )
         else:
