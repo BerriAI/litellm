@@ -22,6 +22,7 @@ from litellm.rust_bridge.request import (
     NativeResponsesWebSocketRequest,
     PreparedNativeCall,
     call_native,
+    with_capabilities,
 )
 from litellm.rust_bridge.runtime import DispatchResult, aattempt, adapt_result
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -66,6 +67,7 @@ async def connect(
     timeout: float | httpx.Timeout | None,
     websocket_mode: str = "native",
     requires_connection: bool = True,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[ConnectionAdapter]:
     return await aattempt(
         load=_RESPONSES_WEBSOCKET.load,
@@ -74,11 +76,13 @@ async def connect(
         prepare=lambda: PreparedNativeCall(
             request=NativeResponsesWebSocketRequest(url=url),
             options=NativeRequestOptions(extra_headers=headers, timeout_seconds=timeout_to_seconds(timeout)),
-            context=NativeRequestContext(
-                capabilities=NativeRequestCapabilities(
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="async",
                     websocket_mode=websocket_mode,
                     requires_connection=requires_connection,
-                )
+                ),
             ),
         ),
         call=lambda connection_type, prepared: call_native(connection_type.connect, prepared),
@@ -101,6 +105,7 @@ async def managed_connect(
     timeout: float | httpx.Timeout | None,
     websocket_mode: str = "managed",
     requires_connection: bool = True,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[AbstractAsyncContextManager[ConnectionAdapter]]:
     result: Final = await connect(
         url=url,
@@ -108,5 +113,6 @@ async def managed_connect(
         timeout=timeout,
         websocket_mode=websocket_mode,
         requires_connection=requires_connection,
+        context=context,
     )
     return adapt_result(result, _connection_context)

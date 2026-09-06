@@ -36,6 +36,7 @@ from litellm.rust_bridge.request import (
     NativeRequestOptions,
     PreparedNativeCall,
     call_native,
+    with_capabilities,
 )
 from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -239,12 +240,15 @@ def chat_completions(
     stream: bool = False,
     has_custom_client: bool = False,
     eligible: bool = True,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[ModelResponse]:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
         return _build_model_response(rust_response, model_response)
 
-    def call(native: RustChatCompletions, prepared: PreparedNativeCall[NativeChatCompletionsRequest]) -> Mapping[str, object]:
+    def call(
+        native: RustChatCompletions, prepared: PreparedNativeCall[NativeChatCompletionsRequest]
+    ) -> Mapping[str, object]:
         return call_native(native, prepared)
 
     return attempt(
@@ -262,12 +266,13 @@ def chat_completions(
                 bedrock=bedrock,
                 anthropic=anthropic,
             ),
-            context=NativeRequestContext(
-                capabilities=NativeRequestCapabilities(
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
                     execution_mode="sync",
                     stream=stream,
                     has_custom_client=has_custom_client,
-                )
+                ),
             ),
         ),
         call=call,
@@ -292,6 +297,7 @@ async def achat_completions(
     stream: bool = False,
     has_custom_client: bool = False,
     eligible: bool = True,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[ModelResponse]:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
@@ -318,12 +324,13 @@ async def achat_completions(
                 bedrock=bedrock,
                 anthropic=anthropic,
             ),
-            context=NativeRequestContext(
-                capabilities=NativeRequestCapabilities(
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
                     execution_mode="async",
                     stream=stream,
                     has_custom_client=has_custom_client,
-                )
+                ),
             ),
         ),
         call=call,

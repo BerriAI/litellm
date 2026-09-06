@@ -28,7 +28,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
 from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.rust_bridge.dispatch import anative_first, native_first, provider_errors
-from litellm.rust_bridge.request import anthropic_options
+from litellm.rust_bridge.request import anthropic_options, request_context
 from litellm.rust_bridge.runtime import DispatchResult
 from litellm.types.llms.anthropic import (
     ContentBlockDelta,
@@ -435,6 +435,11 @@ class AnthropicChatCompletion(BaseLLM):
             api_key=api_key,
             additional_args=rust_logging_args,
         )
+        rust_context: Final = request_context(
+            logging_obj=logging_obj,
+            request_model=logging_obj.model,
+            litellm_params=litellm_params,
+        )
 
         def native_completion() -> DispatchResult[ModelResponse]:
             return rust_chat_completions_bridge.chat_completions(
@@ -452,6 +457,7 @@ class AnthropicChatCompletion(BaseLLM):
                 stream=bool(stream),
                 has_custom_client=client is not None,
                 eligible=serves_via_rust,
+                context=rust_context,
             )
 
         async def native_acompletion() -> DispatchResult[ModelResponse]:
@@ -470,6 +476,7 @@ class AnthropicChatCompletion(BaseLLM):
                 stream=bool(stream),
                 has_custom_client=client is not None,
                 eligible=serves_via_rust,
+                context=rust_context,
             )
 
         @anative_first(

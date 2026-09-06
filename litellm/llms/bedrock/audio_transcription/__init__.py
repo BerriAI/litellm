@@ -1,11 +1,14 @@
 import base64
+from io import IOBase
 from typing import Final, NoReturn
 
 import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge import transcription as rust_transcription_bridge
 from litellm.rust_bridge.dispatch import anative_first, native_first, provider_errors
+from litellm.rust_bridge.request import request_context
 from litellm.rust_bridge.runtime import DispatchResult, adapt_result
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
@@ -19,6 +22,17 @@ async def _aunavailable() -> NoReturn:
 
 
 class BedrockAudioTranscriptionRustDispatch:
+    @staticmethod
+    def _input_source_kind(audio_file: FileTypes) -> str:
+        content: Final = audio_file[1] if isinstance(audio_file, tuple) else audio_file
+        if isinstance(content, (bytes, bytearray, memoryview)):
+            return "bytes"
+        if isinstance(content, IOBase):
+            return "file"
+        if isinstance(content, str):
+            return "path"
+        return "opaque"
+
     @staticmethod
     def _audio_payload(audio_file: FileTypes) -> dict[str, object]:
         processed_audio: Final = process_audio_file(audio_file)
@@ -52,6 +66,7 @@ class BedrockAudioTranscriptionRustDispatch:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
+        logging_obj: Logging | None = None,
     ) -> DispatchResult[TranscriptionResponse]:
         result: Final = rust_transcription_bridge.transcription(
             model=model,
@@ -62,13 +77,19 @@ class BedrockAudioTranscriptionRustDispatch:
             extra_headers=extra_headers,
             optional_params=optional_params,
             timeout=timeout,
+            input_source_kind=self._input_source_kind(audio_file),
+            context=request_context(
+                logging_obj=logging_obj,
+                request_model=logging_obj.model if logging_obj is not None else model,
+                litellm_params=logging_obj.litellm_params if logging_obj is not None else None,
+            ),
         )
         return adapt_result(result, lambda response: TranscriptionResponse(**response))
 
     @native_first(
         native=_attempt_audio_transcriptions,
         route="audio transcription",
-        errors=lambda self, model, audio_file, api_key, api_base, custom_llm_provider, extra_headers, optional_params, timeout: (
+        errors=lambda self, model, audio_file, api_key, api_base, custom_llm_provider, extra_headers, optional_params, timeout, logging_obj=None: (
             provider_errors(custom_llm_provider, model)
         ),
     )
@@ -83,6 +104,7 @@ class BedrockAudioTranscriptionRustDispatch:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
+        logging_obj: Logging | None = None,
     ) -> TranscriptionResponse:
         _unavailable()
 
@@ -97,6 +119,7 @@ class BedrockAudioTranscriptionRustDispatch:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
+        logging_obj: Logging | None = None,
     ) -> DispatchResult[TranscriptionResponse]:
         result: Final = await rust_transcription_bridge.atranscription(
             model=model,
@@ -107,13 +130,19 @@ class BedrockAudioTranscriptionRustDispatch:
             extra_headers=extra_headers,
             optional_params=optional_params,
             timeout=timeout,
+            input_source_kind=self._input_source_kind(audio_file),
+            context=request_context(
+                logging_obj=logging_obj,
+                request_model=logging_obj.model if logging_obj is not None else model,
+                litellm_params=logging_obj.litellm_params if logging_obj is not None else None,
+            ),
         )
         return adapt_result(result, lambda response: TranscriptionResponse(**response))
 
     @anative_first(
         native=_attempt_async_audio_transcriptions,
         route="audio transcription",
-        errors=lambda self, model, audio_file, api_key, api_base, custom_llm_provider, extra_headers, optional_params, timeout: (
+        errors=lambda self, model, audio_file, api_key, api_base, custom_llm_provider, extra_headers, optional_params, timeout, logging_obj=None: (
             provider_errors(custom_llm_provider, model)
         ),
     )
@@ -128,5 +157,6 @@ class BedrockAudioTranscriptionRustDispatch:
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
+        logging_obj: Logging | None = None,
     ) -> TranscriptionResponse:
         await _aunavailable()

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import Generic, Protocol, TypeVar
 
 
@@ -110,6 +111,43 @@ class NativeRequestContext:
     capabilities: NativeRequestCapabilities = NativeRequestCapabilities()
 
 
+def request_context(
+    *,
+    logging_obj: object | None,
+    request_model: str,
+    litellm_params: Mapping[str, object] | None = None,
+    capabilities: NativeRequestCapabilities | None = None,
+) -> NativeRequestContext:
+    params = litellm_params if litellm_params is not None else MappingProxyType({})
+    metadata_value = params.get("metadata") or params.get("litellm_metadata")
+    metadata = metadata_value if isinstance(metadata_value, Mapping) else MappingProxyType({})
+
+    def string(name: str) -> str | None:
+        value = params.get(name, metadata.get(name))
+        return value if isinstance(value, str) else None
+
+    call_id = getattr(logging_obj, "litellm_call_id", None)
+    trace_id = getattr(logging_obj, "litellm_trace_id", None)
+    return NativeRequestContext(
+        litellm_call_id=call_id if isinstance(call_id, str) else None,
+        trace_id=trace_id if isinstance(trace_id, str) else None,
+        request_model=request_model,
+        attribution=RequestAttribution(
+            user_api_key_hash=string("user_api_key_hash"),
+            user_api_key_user_id=string("user_api_key_user_id"),
+            user_api_key_team_id=string("user_api_key_team_id"),
+        ),
+        capabilities=capabilities or NativeRequestCapabilities(),
+    )
+
+
+def with_capabilities(
+    context: NativeRequestContext,
+    capabilities: NativeRequestCapabilities,
+) -> NativeRequestContext:
+    return replace(context, capabilities=capabilities)
+
+
 RequestT = TypeVar("RequestT")
 RequestContraT = TypeVar("RequestContraT", contravariant=True)
 ResultT = TypeVar("ResultT", covariant=True)
@@ -152,14 +190,14 @@ class NativeMessagesRequest:
 @dataclass(frozen=True, slots=True)
 class NativeOCRRequest:
     model: str
-    document: dict[str, object]
+    document: object
     optional_params: dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
 class NativeTranscriptionRequest:
     model: str
-    audio: dict[str, object]
+    audio: object
     optional_params: dict[str, object]
 
 

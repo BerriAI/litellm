@@ -2244,6 +2244,7 @@ class BaseLLMHTTPHandler:
                     stream=stream or False,
                     custom_llm_provider=custom_llm_provider,
                 ),
+                logging_obj=logging_obj,
             )
             return adapt_result(result, self._rust_anthropic_messages_fake_stream) if stream else result
 
@@ -2398,6 +2399,7 @@ class BaseLLMHTTPHandler:
         headers: dict,
         request_body: dict,
         timeout: float | httpx.Timeout | None,
+        logging_obj: LiteLLMLoggingObj | None = None,
     ) -> DispatchResult[AnthropicMessagesResponse]:
         if custom_llm_provider not in ("azure_ai", "anthropic"):
             return NativeSkipped(NativeSkipReason.INELIGIBLE)
@@ -2409,6 +2411,7 @@ class BaseLLMHTTPHandler:
             return NativeSkipped(NativeSkipReason.INELIGIBLE)
 
         from litellm.rust_bridge import messages as rust_messages_bridge
+        from litellm.rust_bridge.request import request_context
 
         upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
         result: Final = await rust_messages_bridge.amessages(
@@ -2422,6 +2425,11 @@ class BaseLLMHTTPHandler:
             stream=stream,
             has_custom_client=has_custom_client,
             has_agentic_hook=has_agentic_hook,
+            context=request_context(
+                logging_obj=logging_obj,
+                request_model=logging_obj.model if logging_obj is not None else model,
+                litellm_params=litellm_params.model_dump(),
+            ),
         )
 
         def adapt(rust_response: dict[str, object]) -> AnthropicMessagesResponse:
@@ -6509,6 +6517,7 @@ class BaseLLMHTTPHandler:
             )
 
             from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+            from litellm.rust_bridge.request import request_context
 
             async def attempt_connection() -> DispatchResult[
                 AbstractAsyncContextManager[rust_responses_websocket.ConnectionAdapter]
@@ -6519,6 +6528,11 @@ class BaseLLMHTTPHandler:
                     url=ws_url,
                     headers={str(key): str(value) for key, value in headers.items()},
                     timeout=timeout,
+                    context=request_context(
+                        logging_obj=logging_obj,
+                        request_model=logging_obj.model,
+                        litellm_params=litellm_params.model_dump(),
+                    ),
                 )
 
             @anative_context(
