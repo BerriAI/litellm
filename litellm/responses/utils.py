@@ -277,16 +277,31 @@ class ResponsesAPIRequestUtils:
             )
             non_default_params["previous_response_id"] = decoded_previous_response_id
 
-        if "metadata" in non_default_params:
-            from litellm.utils import add_openai_metadata
+        litellm_metadata_raw: Final = params.get("litellm_metadata")
+        litellm_metadata: Final = litellm_metadata_raw if isinstance(litellm_metadata_raw, dict) else {}
 
-            converted_metadata: Final = add_openai_metadata(non_default_params["metadata"])
-            if converted_metadata is not None:
-                non_default_params["metadata"] = converted_metadata
-            else:
-                non_default_params.pop("metadata", None)
+        proxy_requester_metadata: Final = litellm_metadata.get("requester_metadata")
+        metadata_in_params: Final = non_default_params.get("metadata")
+        is_proxy_internal_metadata: Final = any(key.startswith("user_api_key_") for key in litellm_metadata)
 
-        return cast(ResponsesAPIOptionalRequestParams, non_default_params)
+        metadata_source: Final = (
+            proxy_requester_metadata
+            if isinstance(proxy_requester_metadata, dict)
+            else (
+                metadata_in_params if not is_proxy_internal_metadata and isinstance(metadata_in_params, dict) else None
+            )
+        )
+
+        from litellm.utils import add_openai_metadata
+
+        converted_metadata: Final = add_openai_metadata(metadata_source) if metadata_source is not None else None
+        non_default_params_with_metadata: Final = (
+            {**non_default_params, "metadata": converted_metadata}
+            if converted_metadata
+            else {key: value for key, value in non_default_params.items() if key != "metadata"}
+        )
+
+        return cast(ResponsesAPIOptionalRequestParams, non_default_params_with_metadata)
 
     # fmt: off
     @overload
