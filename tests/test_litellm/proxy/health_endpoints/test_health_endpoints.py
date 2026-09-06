@@ -3771,6 +3771,12 @@ def _stored_health_row(model_id: str, model_name: str):
     )
 
 
+def _stored_health_row_without_id(model_name: str):
+    row = _stored_health_row(f"unused-{model_name}", model_name)
+    row.model_id = None
+    return row
+
+
 _STORED_HEALTH_ROWS = (
     _stored_health_row("id-bedrock", "bedrock-nova"),
     _stored_health_row("id-openai", "gpt-5.4-mini"),
@@ -3830,6 +3836,67 @@ async def test_health_history_endpoint_scopes_stored_rows_to_the_callers_own_dep
 
     assert [row["model_id"] for row in result["health_checks"]] == expected_ids
     assert result["total_records"] == len(expected_ids)
+
+
+_STORED_HEALTH_ROWS_WITHOUT_IDS = (
+    _stored_health_row_without_id("bedrock-nova"),
+    _stored_health_row_without_id("gpt-5.4-mini"),
+)
+
+
+def _stored_health_prisma_without_ids():
+    return SimpleNamespace(
+        get_health_check_history=AsyncMock(return_value=list(_STORED_HEALTH_ROWS_WITHOUT_IDS)),
+        get_all_latest_health_checks=AsyncMock(return_value=list(_STORED_HEALTH_ROWS_WITHOUT_IDS)),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_names"),
+    [
+        (UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]), ["bedrock-nova"]),
+        (
+            UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN),
+            ["bedrock-nova", "gpt-5.4-mini"],
+        ),
+    ],
+)
+async def test_health_latest_endpoint_keeps_rows_a_health_check_saved_without_a_deployment_id(caller, expected_names):
+    """A targeted /health saves its row with no model_id, so scoping by id alone would hide a caller's own history from it."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER, prisma_client=_stored_health_prisma_without_ids()
+    ):
+        result = await latest_health_checks_endpoint(user_api_key_dict=caller)
+
+    assert sorted(result["latest_health_checks"]) == expected_names
+    assert result["total_models"] == len(expected_names)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "expected_names"),
+    [
+        (UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]), ["bedrock-nova"]),
+        (
+            UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN),
+            ["bedrock-nova", "gpt-5.4-mini"],
+        ),
+    ],
+)
+async def test_health_history_endpoint_keeps_rows_a_health_check_saved_without_a_deployment_id(caller, expected_names):
+    """/health/history reads the same id-less rows, and a caller must still get the ones naming a model it may probe."""
+    from litellm.proxy.health_endpoints._health_endpoints import health_check_history_endpoint
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER, prisma_client=_stored_health_prisma_without_ids()
+    ):
+        result = await health_check_history_endpoint(user_api_key_dict=caller)
+
+    assert [row["model_name"] for row in result["health_checks"]] == expected_names
+    assert result["total_records"] == len(expected_names)
 
 
 @pytest.mark.asyncio

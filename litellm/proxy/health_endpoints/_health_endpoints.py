@@ -1266,13 +1266,27 @@ def _caller_may_probe_deployment(
     return any(_passes_every_layer(candidate, model_scopes, llm_router) for candidate in candidates)
 
 
-async def _health_readable_deployment_ids(
+@dataclass(frozen=True, slots=True)
+class _StoredHealthScope:
+    """The deployments a caller may read stored health rows for, by id and by the names those rows carry."""
+
+    deployment_ids: frozenset[str]
+    model_names: frozenset[str]
+
+    def admits(self, model_id: str | None, model_name: str | None) -> bool:
+        """A row is readable when its deployment is, and a row saved without a deployment id falls back to its model name."""
+        if model_id is not None:
+            return model_id in self.deployment_ids
+        return model_name is not None and model_name in self.model_names
+
+
+async def _health_readable_rows_scope(
     caller: UserAPIKeyAuth,
     llm_router: Router | None,
     llm_model_list: Sequence[Mapping[str, object]] | None,
     stores: _AuthStores,
-) -> frozenset[str] | None:
-    """The deployments whose stored health rows this caller may read, scoped exactly as ``GET /health`` scopes live results; ``None`` leaves them unscoped."""
+) -> _StoredHealthScope | None:
+    """What stored health rows this caller may read, scoped exactly as ``GET /health`` scopes live results; ``None`` leaves them unscoped."""
     model_scopes: Final = await _health_caller_model_scopes(caller, llm_router, stores)
     is_admin: Final = _is_proxy_admin(caller)
     if is_admin and not model_scopes:
@@ -1280,12 +1294,15 @@ async def _health_readable_deployment_ids(
     deployments: Final = tuple(llm_model_list or ())
     alias_copies: Final = _router_alias_copies(llm_router)
     wildcard_routes: Final = _wildcard_route_targets(model_scopes, caller.team_id, llm_router, deployments)
-    return frozenset(
-        ident
+    readable: Final = tuple(
+        row
         for row in deployments
         if not _is_router_alias_copy(row, alias_copies)
         and _caller_may_probe_deployment(row, caller, model_scopes, None, llm_router, is_admin, wildcard_routes)
-        and (ident := _deployment_id(row)) is not None
+    )
+    return _StoredHealthScope(
+        deployment_ids=frozenset(ident for row in readable if (ident := _deployment_id(row)) is not None),
+        model_names=frozenset(name for row in readable if isinstance(name := row.get("model_name"), str)),
     )
 
 
@@ -1637,7 +1654,7 @@ async def health_check_history_endpoint(
     prisma_client: Final = _check_prisma_client()
 
     try:
-        readable_ids: Final = await _health_readable_deployment_ids(
+        readable: Final = await _health_readable_rows_scope(
             user_api_key_dict,
             llm_router,
             llm_model_list,
@@ -1654,7 +1671,7 @@ async def health_check_history_endpoint(
         history_data: Final = [
             _convert_health_check_to_dict(check)
             for check in history
-            if readable_ids is None or check.model_id in readable_ids
+            if readable is None or readable.admits(check.model_id, check.model_name)
         ]
 
         return {
@@ -1690,7 +1707,7 @@ async def latest_health_checks_endpoint(
     prisma_client: Final = _check_prisma_client()
 
     try:
-        readable_ids: Final = await _health_readable_deployment_ids(
+        readable: Final = await _health_readable_rows_scope(
             user_api_key_dict,
             llm_router,
             llm_model_list,
@@ -1702,7 +1719,7 @@ async def latest_health_checks_endpoint(
         checks_data: Final = {
             (check.model_id if check.model_id else check.model_name): _convert_health_check_to_dict(check)
             for check in latest_checks
-            if readable_ids is None or check.model_id in readable_ids
+            if readable is None or readable.admits(check.model_id, check.model_name)
         }
 
         return {
