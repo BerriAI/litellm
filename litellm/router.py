@@ -24,7 +24,7 @@ from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Generator, Iterator, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, SupportsInt, TypeAlias, TypeVar, Union, cast
 
 import anyio
 import httpx
@@ -11649,6 +11649,31 @@ class Router:
         _settings_to_return["routing_groups"] = [group.model_dump() for group in self._routing_groups.values()]
         return _settings_to_return
 
+    @staticmethod
+    def max_parallel_requests_cache_key(model_id: str) -> str:
+        return f"{model_id}_max_parallel_requests_client"
+
+    def _clear_max_parallel_requests_clients(self) -> None:
+        for deployment in self.model_list or ():
+            model_info = deployment.get("model_info")
+            model_id = model_info.get("id") if model_info else None
+            if model_id is not None:
+                self.cache.delete_cache(self.max_parallel_requests_cache_key(model_id))
+
+    def _set_default_max_parallel_requests(self, value: SupportsInt | str | None) -> None:
+        limit: Final = None if value is None else int(value)
+        if limit is not None and limit < 1:
+            verbose_router_logger.warning(
+                "Ignoring default_max_parallel_requests=%s: a deployment's concurrency limiter cannot be built "
+                "from it, so the previous limit stays in effect",
+                limit,
+            )
+            return
+        if limit == self.default_max_parallel_requests:
+            return
+        self.default_max_parallel_requests = limit
+        self._clear_max_parallel_requests_clients()
+
     def update_settings(self, **kwargs):
         """
         Update the router settings.
@@ -11659,6 +11684,7 @@ class Router:
             "retry_after",
             "allowed_fails",
             "cooldown_time",
+            "max_fallbacks",
         ]
 
         _existing_router_settings: Final = self.get_settings()
@@ -11667,8 +11693,10 @@ class Router:
         for var in kwargs:
             if var in RUNTIME_UPDATABLE_ROUTER_SETTINGS:
                 if var in _int_settings:
-                    _casted_value = int(kwargs[var])
-                    setattr(self, var, _casted_value)
+                    if kwargs[var] is not None:
+                        setattr(self, var, int(kwargs[var]))
+                elif var == "default_max_parallel_requests":
+                    self._set_default_max_parallel_requests(kwargs[var])
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True
@@ -11731,7 +11759,7 @@ class Router:
         model_id: Final = deployment["model_info"]["id"]
         parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(kwargs)
         if client_type == "max_parallel_requests":
-            cache_key = f"{model_id}_max_parallel_requests_client"
+            cache_key = self.max_parallel_requests_cache_key(model_id)
             client = self.cache.get_cache(key=cache_key, local_only=True, parent_otel_span=parent_otel_span)
             if client is None:
                 InitalizeCachedClient.set_max_parallel_requests_client(litellm_router_instance=self, model=deployment)
