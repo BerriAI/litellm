@@ -26,6 +26,10 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
             "forwards the request uncompressed instead of blocking it."
         ),
     )
+    ccr_retrieval: bool = Field(
+        default=True,
+        description="Inject the Headroom retrieval tool for hashes declared by the compression service.",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:
