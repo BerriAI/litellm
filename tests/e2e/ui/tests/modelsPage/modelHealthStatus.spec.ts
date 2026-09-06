@@ -1,4 +1,9 @@
-import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
+import {
+  test,
+  expect,
+  type Locator,
+  type Page as PlaywrightPage,
+} from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
@@ -19,8 +24,51 @@ async function isRegistered(
   return body.data.some((row) => row.model_name === modelName);
 }
 
-function healthRow(page: PlaywrightPage, modelName: string) {
+function healthRow(page: PlaywrightPage, modelName: string): Locator {
   return page.getByRole("row").filter({ hasText: modelName });
+}
+
+function pageOf(label: string): { current: number; total: number } {
+  const [current, total] = label
+    .replace("Page ", "")
+    .split(" of ")
+    .map((part) => Number(part.trim()));
+  return { current, total };
+}
+
+async function locateHealthRow(
+  page: PlaywrightPage,
+  modelName: string,
+): Promise<Locator> {
+  const pageLabel = page.getByTestId("pagination-page");
+  await expect(
+    pageLabel,
+    "the health table reports which page it is showing",
+  ).toBeVisible({ timeout: 20_000 });
+
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const row = healthRow(page, modelName);
+    const onThisPage = await row
+      .first()
+      .waitFor({ state: "visible", timeout: 3_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (onThisPage) return row;
+
+    const { current, total } = pageOf(await pageLabel.innerText());
+    const goTo = current < total ? current + 1 : 1;
+    if (total === 1) continue;
+    await page
+      .getByRole("button", {
+        name: current < total ? "Go to next page" : "Go to first page",
+      })
+      .click();
+    await expect(pageLabel).toContainText(`Page ${goTo} of`, {
+      timeout: 15_000,
+    });
+  }
+  return healthRow(page, modelName);
 }
 
 async function openHealthTab(page: PlaywrightPage): Promise<void> {
@@ -35,7 +83,7 @@ async function expectStatus(
   modelName: string,
   status: string,
 ): Promise<void> {
-  const row = healthRow(page, modelName);
+  const row = await locateHealthRow(page, modelName);
   await expect(row, `${modelName} has one row in the health table`).toHaveCount(
     1,
     { timeout: 20_000 },
@@ -130,7 +178,7 @@ test.describe("Model health status", () => {
     await openHealthTab(page);
 
     for (const name of [reachableName, unreachableName]) {
-      const row = healthRow(page, name);
+      const row = await locateHealthRow(page, name);
       await expect(row, `${name} has one row in the health table`).toHaveCount(
         1,
         { timeout: 20_000 },
@@ -147,7 +195,9 @@ test.describe("Model health status", () => {
     ).toHaveCount(0);
     await expectStatus(page, unreachableName, "unhealthy");
 
-    const successDetail = healthRow(page, reachableName).getByRole("button", {
+    const successDetail = (
+      await locateHealthRow(page, reachableName)
+    ).getByRole("button", {
       name: "View response details",
     });
     await expect(
@@ -165,7 +215,9 @@ test.describe("Model health status", () => {
     await successDialog.getByRole("button", { name: "Close" }).last().click();
     await expect(successDialog).toBeHidden({ timeout: 10_000 });
 
-    const errorDetail = healthRow(page, unreachableName).getByRole("button", {
+    const errorDetail = (
+      await locateHealthRow(page, unreachableName)
+    ).getByRole("button", {
       name: "View full error details",
     });
     await expect(
