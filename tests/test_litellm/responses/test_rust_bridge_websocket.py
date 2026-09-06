@@ -4,6 +4,7 @@ import pytest
 
 from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket_enabled
 from litellm.rust_bridge import configuration, responses_websocket
+from litellm.rust_bridge.runtime import Handled, NativeSkipped, NativeSkipReason, NativeFailed
 
 
 class _FakeNativeConnection:
@@ -64,18 +65,15 @@ async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bridge_reports_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     configuration.rust(True)
     responses_websocket._RESPONSES_WEBSOCKET.override(None)
 
-    assert (
-        await responses_websocket.connect(
-            url="wss://example.test/responses",
-            headers={},
-            timeout=None,
-        )
-        is None
-    )
+    assert await responses_websocket.connect(
+        url="wss://example.test/responses",
+        headers={},
+        timeout=None,
+    ) == NativeSkipped(NativeSkipReason.UNAVAILABLE)
 
 
 @pytest.mark.asyncio
@@ -91,7 +89,8 @@ async def test_enabled_bridge_connects_and_adapts_socket(
         timeout=1.0,
     )
 
-    assert connection is not None
+    assert isinstance(connection, Handled)
+    connection = connection.value
     await connection.send("response.create")
     assert await connection.recv() == "response.completed"
     await connection.close()
@@ -110,15 +109,9 @@ class _FailingNativeBridge:
 
 
 @pytest.mark.asyncio
-async def test_connection_failure_preserves_python_fallback() -> None:
+async def test_connection_failure_is_reported_to_orchestration() -> None:
     configuration.rust(True)
     responses_websocket.set_rust_responses_websocket(connection=_FailingNativeBridge)
-
-    assert (
-        await responses_websocket.connect(
-            url="wss://example.test/responses",
-            headers={},
-            timeout=None,
-        )
-        is None
-    )
+    result = await responses_websocket.connect(url="wss://example.test/responses", headers={}, timeout=None)
+    assert isinstance(result, NativeFailed)
+    assert str(result.error) == "connection failed"

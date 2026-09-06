@@ -4,6 +4,7 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
+from litellm.rust_bridge.runtime import Handled
 
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 
@@ -55,7 +56,8 @@ def test_enabled_sync_bridge_receives_audio() -> None:
         optional_params={"temperature": 0},
         timeout=5.0,
     )
-    assert result == {"text": "hello"}
+    assert isinstance(result, Handled)
+    assert result.value == {"text": "hello"}
     assert bridge.calls[0]["audio"] == {"data": "AQI=", "format": "wav", "filename": "audio.wav"}
 
 
@@ -72,7 +74,7 @@ async def test_enabled_async_bridge() -> None:
         optional_params={},
         timeout=None,
     )
-    assert result == {"text": "async"}
+    assert result == Handled({"text": "async"})
 
 
 def test_loader_returns_none_without_native_extension(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,7 +85,8 @@ def test_loader_returns_none_without_native_extension(monkeypatch: pytest.Monkey
 
 
 def test_dispatch_sync_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rust_bridge, "transcription", lambda **_: None)
+    rust_bridge.configure_rust_transcription(transcription=None)
+    monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: None)
 
     with pytest.raises(RuntimeError, match="bridge is unavailable"):
         BedrockAudioTranscriptionRustDispatch().audio_transcriptions(
@@ -100,10 +103,8 @@ def test_dispatch_sync_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.mark.asyncio
 async def test_dispatch_async_path_requires_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def unavailable(**_: object) -> None:
-        return None
-
-    monkeypatch.setattr(rust_bridge, "atranscription", unavailable)
+    rust_bridge.configure_rust_transcription(atranscription=None)
+    monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: None)
 
     with pytest.raises(RuntimeError, match="bridge is unavailable"):
         await BedrockAudioTranscriptionRustDispatch().async_audio_transcriptions(

@@ -48,7 +48,8 @@ def test_native_exception_types_reject_non_exception_classes(monkeypatch: pytest
     native: Final = SimpleNamespace(RustBridgeDeclined=invalid, RustUpstreamError=RuntimeError)
     monkeypatch.setattr(bindings, "get_native_bridge", lambda: native)
 
-    assert bindings.native_exception_types() is None
+    assert bindings.native_declined_types() == ()
+    assert bindings.native_upstream_types() == (RuntimeError,)
 
 
 @pytest.mark.parametrize(
@@ -58,10 +59,6 @@ def test_native_exception_types_reject_non_exception_classes(monkeypatch: pytest
         (
             "wrong: NativeBinding[RustAchatCompletions] = NativeBinding(lambda native: native.chat_completions)",
             "reportAssignmentType",
-        ),
-        (
-            'EndpointBinding.native(route="chat", select=lambda native: native.chat_completion, enabled=always_enabled)',
-            "reportAttributeAccessIssue",
         ),
         ("NativeBinding(lambda native: native.ocrr)", "reportAttributeAccessIssue"),
         (
@@ -85,14 +82,8 @@ def test_selectors_are_checked_by_type_checker(tmp_path: Path, expression: str, 
         "from litellm.rust_bridge.bindings import NativeBinding\n"
         "from litellm.rust_bridge.protocols import RustChatCompletions, RustAchatCompletions, "
         "RustMessages, RustAmessages, RustOcr, RustAocr, RustTranscription, RustAtranscription\n"
-        "from litellm.rust_bridge.runtime import EndpointBinding, EndpointDispatch, always_enabled\n"
         "binding = NativeBinding(lambda native: native.chat_completions)\n"
         "assert_type(binding, NativeBinding[RustChatCompletions])\n"
-        'bridge = EndpointBinding.native(route="chat", select=lambda native: native.chat_completions, enabled=always_enabled)\n'
-        "assert_type(bridge, EndpointBinding[RustChatCompletions])\n"
-        'endpoint = EndpointDispatch.native(route="chat", sync=lambda native: native.chat_completions, '
-        "asynchronous=lambda native: native.achat_completions, enabled=always_enabled)\n"
-        "assert_type(endpoint, EndpointDispatch[RustChatCompletions, RustAchatCompletions])\n"
         "assert_type(NativeBinding(lambda native: native.messages), NativeBinding[RustMessages])\n"
         "assert_type(NativeBinding(lambda native: native.ocr), NativeBinding[RustOcr])\n"
         "assert_type(NativeBinding(lambda native: native.transcription), NativeBinding[RustTranscription])\n"
@@ -117,4 +108,6 @@ def test_selectors_are_checked_by_type_checker(tmp_path: Path, expression: str, 
     )
     diagnostics: Final = json.loads(result.stdout)["generalDiagnostics"]
     assert result.returncode == 1, result.stdout + result.stderr
-    assert [(item["rule"], item["range"]["start"]["line"]) for item in diagnostics] == [(expected_rule, 13)]
+    assert [(item["rule"], item["range"]["start"]["line"]) for item in diagnostics] == [
+        (expected_rule, len(source.read_text().splitlines()) - 1)
+    ]

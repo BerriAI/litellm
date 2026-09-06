@@ -1,11 +1,20 @@
 import base64
-from typing import Final
+from typing import Final, NoReturn
 
 import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import transcription as rust_transcription_bridge
+from litellm.rust_bridge.dispatch import PROPAGATE, adispatch, dispatch
 from litellm.types.utils import FileTypes, TranscriptionResponse
+
+
+def _unavailable() -> NoReturn:
+    raise RuntimeError("Rust audio transcription bridge is unavailable")
+
+
+async def _aunavailable() -> NoReturn:
+    _unavailable()
 
 
 class BedrockAudioTranscriptionRustDispatch:
@@ -43,18 +52,21 @@ class BedrockAudioTranscriptionRustDispatch:
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        rust_response: Final = rust_transcription_bridge.transcription(
-            model=model,
-            audio=self._audio_payload(audio_file),
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout=timeout,
+        rust_response: Final = dispatch(
+            native=lambda: rust_transcription_bridge.transcription(
+                model=model,
+                audio=self._audio_payload(audio_file),
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout=timeout,
+            ),
+            python=_unavailable,
+            route="audio transcription",
+            errors=PROPAGATE,
         )
-        if rust_response is None:
-            raise RuntimeError("Rust audio transcription bridge is unavailable")
         return TranscriptionResponse(**rust_response)
 
     async def async_audio_transcriptions(
@@ -69,16 +81,19 @@ class BedrockAudioTranscriptionRustDispatch:
         optional_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
     ) -> TranscriptionResponse:
-        rust_response: Final = await rust_transcription_bridge.atranscription(
-            model=model,
-            audio=self._audio_payload(audio_file),
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            optional_params=optional_params,
-            timeout=timeout,
+        rust_response: Final = await adispatch(
+            native=lambda: rust_transcription_bridge.atranscription(
+                model=model,
+                audio=self._audio_payload(audio_file),
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                optional_params=optional_params,
+                timeout=timeout,
+            ),
+            python=_aunavailable,
+            route="audio transcription",
+            errors=PROPAGATE,
         )
-        if rust_response is None:
-            raise RuntimeError("Rust audio transcription bridge is unavailable")
         return TranscriptionResponse(**rust_response)

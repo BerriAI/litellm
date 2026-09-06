@@ -12,6 +12,7 @@ import pytest
 import litellm
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import chat_completions as bridge
+from litellm.rust_bridge.runtime import Handled, NativeSkipped, NativeFailed
 from litellm.types.utils import ModelResponse
 
 RUST_RESPONSE = {
@@ -250,7 +251,8 @@ class TestSyncCall:
 
         result = bridge.chat_completions(**_call_kwargs(model_response))
 
-        assert result is not None
+        assert isinstance(result, Handled)
+        result = result.value
         assert result.choices[0].message.content == "hello from rust"
         assert result.choices[0].finish_reason == "stop"
         assert result.model == "claude-sonnet-4-5-20260101"
@@ -266,14 +268,14 @@ class TestSyncCall:
         bridge.chat_completions(**_call_kwargs(ModelResponse()))
         assert native.calls[0]["timeout_seconds"] == 30.0
 
-    def test_falls_back_when_the_bridge_is_unavailable(self, monkeypatch):
+    def test_reports_unavailable_bridge(self, monkeypatch):
         _hide_native_bridge(monkeypatch)
-        assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
+        assert isinstance(bridge.chat_completions(**_call_kwargs(ModelResponse())), NativeSkipped)
 
-    def test_falls_back_when_the_core_declines_before_calling_the_provider(self, monkeypatch):
+    def test_reports_native_decline_to_orchestration(self, monkeypatch):
         _fake_native_bridge(monkeypatch)
         bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeDeclined("streaming")))
-        assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
+        assert isinstance(bridge.chat_completions(**_call_kwargs(ModelResponse())), NativeFailed)
 
 
 class TestAsyncCall:
@@ -281,134 +283,18 @@ class TestAsyncCall:
     async def test_builds_a_model_response(self):
         bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall())
         result = await bridge.achat_completions(**_call_kwargs(ModelResponse()))
-        assert result is not None
+        assert isinstance(result, Handled)
+        result = result.value
         assert result.choices[0].message.content == "hello from rust"
         assert result._hidden_params["additional_headers"] == {"x-litellm-rust": "true"}
 
     @pytest.mark.asyncio
-    async def test_falls_back_when_the_bridge_is_unavailable(self, monkeypatch):
+    async def test_reports_unavailable_bridge(self, monkeypatch):
         _hide_native_bridge(monkeypatch)
-        assert await bridge.achat_completions(**_call_kwargs(ModelResponse())) is None
+        assert isinstance(await bridge.achat_completions(**_call_kwargs(ModelResponse())), NativeSkipped)
 
     @pytest.mark.asyncio
-    async def test_falls_back_when_the_core_declines_before_calling_the_provider(self, monkeypatch):
+    async def test_reports_native_decline_to_orchestration(self, monkeypatch):
         _fake_native_bridge(monkeypatch)
         bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeDeclined("streaming")))
-        assert await bridge.achat_completions(**_call_kwargs(ModelResponse())) is None
-
-
-class TestAsyncFallbackWrapper:
-    @pytest.mark.asyncio
-    async def test_returns_the_rust_response_without_running_the_fallback(self):
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall())
-        ran = []
-
-        async def fallback():
-            ran.append(True)
-            return "python"
-
-        result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert result.choices[0].message.content == "hello from rust"
-        assert ran == []
-
-    @pytest.mark.asyncio
-    async def test_runs_the_fallback_when_the_core_declines(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeDeclined("streaming")))
-
-        async def fallback():
-            return "python"
-
-        result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert result == "python"
-
-    @pytest.mark.asyncio
-    async def test_runs_the_fallback_when_the_bridge_is_unavailable(self, monkeypatch):
-        _hide_native_bridge(monkeypatch)
-
-        async def fallback():
-            return "python"
-
-        result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert result == "python"
-
-
-class TestFailureClassification:
-    """A failure the provider already saw must not be retried on the Python
-    path: it would bill the customer for the same work twice."""
-
-    @pytest.fixture(autouse=True)
-    def _native_exceptions(self, monkeypatch):
-        _fake_native_bridge(monkeypatch)
-
-    def test_a_decline_falls_back_because_nothing_was_sent(self):
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeDeclined("streaming")))
-        assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
-
-    def test_an_upstream_failure_is_surfaced_with_its_status(self):
-        from litellm.exceptions import APIError
-
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeUpstream(429, "429: rate limited")))
-        with pytest.raises(APIError) as raised:
-            bridge.chat_completions(**_call_kwargs(ModelResponse()))
-        assert raised.value.status_code == 429
-        assert "rate limited" in str(raised.value)
-
-    def test_a_transport_failure_with_no_response_surfaces_as_a_500(self):
-        from litellm.exceptions import APIError
-
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeUpstream(0, "connection reset")))
-        with pytest.raises(APIError) as raised:
-            bridge.chat_completions(**_call_kwargs(ModelResponse()))
-        assert raised.value.status_code == 500
-
-    def test_an_unrecognized_error_is_not_swallowed(self):
-        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=RuntimeError("something else")))
-        with pytest.raises(RuntimeError):
-            bridge.chat_completions(**_call_kwargs(ModelResponse()))
-
-    @pytest.mark.asyncio
-    async def test_the_async_wrapper_does_not_fall_back_on_an_upstream_failure(self):
-        from litellm.exceptions import APIError
-
-        bridge.set_rust_chat_completions(achat_completions=_RecordingAsyncCall(error=_FakeUpstream(500, "500: boom")))
-        ran = []
-
-        async def fallback():
-            ran.append(True)
-            return "python"
-
-        with pytest.raises(APIError):
-            await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert ran == [], "a request the provider already served must not be re-issued"
-
-    @pytest.mark.asyncio
-    async def test_the_async_wrapper_falls_back_on_a_decline(self):
-        bridge.set_rust_chat_completions(
-            achat_completions=_RecordingAsyncCall(error=_FakeDeclined("blank message text"))
-        )
-
-        async def fallback():
-            return "python"
-
-        result = await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        assert result == "python"
-
-
-@pytest.mark.asyncio
-async def test_missing_native_exception_types_preserves_python_fallback(monkeypatch):
-    _hide_native_bridge(monkeypatch)
-    bridge.set_rust_chat_completions(
-        chat_completions=_RecordingCall(error=RuntimeError("connection failed")),
-        achat_completions=_RecordingAsyncCall(error=RuntimeError("connection failed")),
-    )
-
-    assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
-
-    async def fallback():
-        return "python"
-
-    assert (
-        await bridge.achat_completions_or_fallback(**_call_kwargs(ModelResponse()), python_fallback=fallback)
-        == "python"
-    )
+        assert isinstance(await bridge.achat_completions(**_call_kwargs(ModelResponse())), NativeFailed)

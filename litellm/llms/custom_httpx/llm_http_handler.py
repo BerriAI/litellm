@@ -2408,8 +2408,10 @@ class BaseLLMHTTPHandler:
         from litellm.rust_bridge import messages as rust_messages_bridge
 
         upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
-        try:
-            rust_response: Final = await rust_messages_bridge.amessages(
+        from litellm.rust_bridge.dispatch import PYTHON_ON_ERROR, adispatch, async_none
+
+        rust_response: Final = await adispatch(
+            native=lambda: rust_messages_bridge.amessages(
                 model=model,
                 body=upstream_body,
                 api_key=api_key,
@@ -2417,13 +2419,11 @@ class BaseLLMHTTPHandler:
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=headers,
                 timeout=timeout,
-            )
-        except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
-            verbose_logger.debug(
-                "Rust Anthropic messages bridge raised %s; falling back to Python path",
-                type(rust_error).__name__,
-            )
-            return None
+            ),
+            python=async_none,
+            route="messages",
+            errors=PYTHON_ON_ERROR,
+        )
         if rust_response is None:
             return None
 
@@ -6511,11 +6511,17 @@ class BaseLLMHTTPHandler:
             async def _backend_connection():
                 if _rust_responses_websocket_enabled(custom_llm_provider):
                     from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+                    from litellm.rust_bridge.dispatch import PYTHON_ON_ERROR, adispatch, async_none
 
-                    rust_backend: Final = await rust_responses_websocket.connect(
-                        url=ws_url,
-                        headers={str(key): str(value) for key, value in headers.items()},
-                        timeout=timeout,
+                    rust_backend: Final = await adispatch(
+                        native=lambda: rust_responses_websocket.connect(
+                            url=ws_url,
+                            headers={str(key): str(value) for key, value in headers.items()},
+                            timeout=timeout,
+                        ),
+                        python=async_none,
+                        route="responses_websocket",
+                        errors=PYTHON_ON_ERROR,
                     )
                     if rust_backend is not None:
                         yield rust_backend

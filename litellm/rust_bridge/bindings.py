@@ -67,9 +67,11 @@ def _exception_class(value: object) -> type[BaseException] | None:
     return None
 
 
-def native_exception_types() -> tuple[type[BaseException], type[BaseException]] | None:
-    declined: Final = _exception_class(_DECLINED.load())
+def native_upstream_types() -> tuple[type[BaseException], ...]:
     upstream: Final = _exception_class(_UPSTREAM.load())
-    if declined is None or upstream is None:
-        return None
-    return declined, upstream
+    return () if upstream is None else (upstream,)
+
+
+def native_declined_types() -> tuple[type[BaseException], ...]:
+    declined: Final = _exception_class(_DECLINED.load())
+    return () if declined is None else (declined,)

@@ -12,6 +12,7 @@ import pytest
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.runtime import Handled
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
@@ -202,7 +203,7 @@ def build_prepared_request(
     litellm_params: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = 12.5,
 ) -> Any:
-    return ocr_main._PreparedOCRRequest(
+    return rust_bridge.PreparedOCRRequest(
         model=model,
         document=document,
         api_key=api_key,
@@ -399,99 +400,13 @@ def test_timeout_to_seconds_handles_float_timeout_and_none():
     assert timeout_to_seconds(httpx.Timeout(30.0, read=42.0)) == 42.0
 
 
-def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
-    bridge = RecordingBridge()
-
-    litellm.rust(True)
-
-    rust_bridge.set_rust_ocr(ocr=bridge)
-    response = rust_bridge.dispatch_ocr(
-        prepare=lambda: 12.5,
-        call=lambda native, timeout: native(
-            model="mistral-ocr-latest",
-            document=DOCUMENT,
-            api_key="sk-test",
-            api_base="https://proxy.internal",
-            custom_llm_provider="mistral",
-            extra_headers={"Authorization": "Bearer sk-test", "x-trace-id": "trace-1"},
-            optional_params={"include_image_base64": True, "pages": [0]},
-            timeout_seconds=timeout,
-        ),
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
-        adapt=dict,
-        model="mistral-ocr-latest",
-        provider="mistral",
-        eligible=True,
-    )
-
-    assert response == FAKE_OCR_RESPONSE
-    call = bridge.calls[0]
-    assert call == {
-        "model": "mistral-ocr-latest",
-        "document": DOCUMENT,
-        "api_key": "sk-test",
-        "api_base": "https://proxy.internal",
-        "custom_llm_provider": "mistral",
-        "extra_headers": {
-            "Authorization": "Bearer sk-test",
-            "x-trace-id": "trace-1",
-        },
-        "optional_params": {"include_image_base64": True, "pages": [0]},
-        "timeout_seconds": 12.5,
-    }
-
-
-@pytest.mark.asyncio
-async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
-    bridge = RecordingAsyncBridge()
-
-    litellm.rust(True)
-
-    rust_bridge.set_rust_ocr(aocr=bridge)
-
-    async def unexpected_fallback():
-        pytest.fail("unexpected Python fallback")
-
-    response = await rust_bridge.adispatch_ocr(
-        prepare=lambda: 42.0,
-        call=lambda native, timeout: native(
-            model="mistral-ocr-maas",
-            document=DOCUMENT,
-            api_key=None,
-            api_base=None,
-            custom_llm_provider="vertex_ai",
-            extra_headers=None,
-            optional_params={"vertex_project": "project-1"},
-            timeout_seconds=timeout,
-        ),
-        fallback=unexpected_fallback,
-        adapt=dict,
-        model="mistral-ocr-maas",
-        provider="vertex_ai",
-        eligible=True,
-    )
-
-    assert response == FAKE_OCR_RESPONSE
-    assert bridge.calls[0] == {
-        "model": "mistral-ocr-maas",
-        "document": DOCUMENT,
-        "api_key": None,
-        "api_base": None,
-        "custom_llm_provider": "vertex_ai",
-        "extra_headers": None,
-        "optional_params": {"vertex_project": "project-1"},
-        "timeout_seconds": 42.0,
-    }
-
-
 def test_run_rust_ocr_prepares_request_and_wraps_response():
     bridge = RecordingBridge()
     logging_obj = RecordingLogging()
     litellm.rust(True)
     rust_bridge.set_rust_ocr(ocr=bridge)
 
-    response = ocr_main._run_rust_ocr(
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
+    response = rust_bridge.attempt_ocr(
         prepared_request=build_prepared_request(
             logging_obj=logging_obj,
             api_base="https://proxy.internal",
@@ -502,6 +417,8 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
         resolve_api_key=lambda _name: None,
     )
 
+    assert isinstance(response, Handled)
+    response = response.value
     assert isinstance(response, OCRResponse)
     assert response.pages[0].markdown == "hello world"
     assert bridge.calls[0] == {
@@ -524,8 +441,7 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
     litellm.rust(True)
     rust_bridge.set_rust_ocr(ocr=bridge)
 
-    ocr_main._run_rust_ocr(
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
+    rust_bridge.attempt_ocr(
         prepared_request=build_prepared_request(api_key=None, timeout=None),
         resolve_api_key=lambda name: "sk-from-vault" if name == "MISTRAL_API_KEY" else None,
     )
@@ -541,8 +457,7 @@ def test_run_rust_ocr_prefers_explicit_key_over_resolver():
     def _resolver(name: str) -> str | None:
         raise AssertionError(f"resolver should not be called for {name}")
 
-    ocr_main._run_rust_ocr(
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
+    rust_bridge.attempt_ocr(
         prepared_request=build_prepared_request(
             api_key="sk-explicit",
             timeout=None,
@@ -563,8 +478,7 @@ def test_run_rust_ocr_uses_provider_api_key_env_var():
         resolver_calls.append(name)
         return "sk-provider-env"
 
-    ocr_main._run_rust_ocr(
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
+    rust_bridge.attempt_ocr(
         prepared_request=build_prepared_request(
             provider_config=FakeOCRConfig(api_key_env_var="PROVIDER_OCR_API_KEY"),
             model="provider-ocr-model",
@@ -583,8 +497,7 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
     litellm.rust(True)
     rust_bridge.set_rust_ocr(ocr=bridge)
 
-    ocr_main._run_rust_ocr(
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
+    rust_bridge.attempt_ocr(
         prepared_request=build_prepared_request(
             custom_llm_provider="vertex_ai",
             model="mistral-ocr-maas",
@@ -617,8 +530,7 @@ def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_mana
             "VERTEXAI_LOCATION": "us-east5",
         }.get(name)
 
-    ocr_main._run_rust_ocr(
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
+    rust_bridge.attempt_ocr(
         prepared_request=build_prepared_request(
             custom_llm_provider="vertex_ai",
             model="mistral-ocr-maas",
@@ -636,8 +548,7 @@ def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
     litellm.rust(True)
     rust_bridge.set_rust_ocr(ocr=bridge)
 
-    ocr_main._run_rust_ocr(
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
+    rust_bridge.attempt_ocr(
         prepared_request=build_prepared_request(
             custom_llm_provider="azure_ai",
             model="pixtral-12b-2409",
@@ -655,8 +566,7 @@ def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
     litellm.rust(True)
     rust_bridge.set_rust_ocr(ocr=bridge)
 
-    ocr_main._run_rust_ocr(
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
+    rust_bridge.attempt_ocr(
         prepared_request=build_prepared_request(
             custom_llm_provider="azure_ai",
             model="doc-intelligence/prebuilt-layout",
@@ -677,8 +587,7 @@ def test_run_rust_ocr_runs_pre_call_logging():
     litellm.rust(True)
     rust_bridge.set_rust_ocr(ocr=bridge)
 
-    ocr_main._run_rust_ocr(
-        fallback=lambda: pytest.fail("unexpected Python fallback"),
+    rust_bridge.attempt_ocr(
         prepared_request=build_prepared_request(
             logging_obj=logging_obj,
             api_base="https://api.mistral.ai/v1",
@@ -851,7 +760,7 @@ async def test_ocr_fallback_skips_native_preparation(
     def unexpected_preparation(*_args: object, **_kwargs: object) -> None:
         pytest.fail("Python fallback must not resolve native credentials or emit native pre_call")
 
-    monkeypatch.setattr(ocr_main, "_prepare_rust_ocr_call", unexpected_preparation)
+    monkeypatch.setattr(rust_bridge, "_prepare_rust_ocr_call", unexpected_preparation)
     monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", fallback)
 
     response: Final = (
