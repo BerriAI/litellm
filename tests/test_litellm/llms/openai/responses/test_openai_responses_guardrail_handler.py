@@ -152,15 +152,9 @@ class TestOpenAIResponsesHandlerInputProcessing:
 
         result = await handler.process_input_messages(data, guardrail)
 
-        assert (
-            result["input"][0]["content"][0]["text"]
-            == "Describe this image [GUARDRAILED]"
-        )
+        assert result["input"][0]["content"][0]["text"] == "Describe this image [GUARDRAILED]"
         # Image URL should remain unchanged
-        assert (
-            result["input"][0]["content"][1]["image_url"]["url"]
-            == "https://example.com/image.jpg"
-        )
+        assert result["input"][0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
 
     @pytest.mark.asyncio
     async def test_process_input_with_empty_content(self):
@@ -578,10 +572,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert tool_call["id"] == "call_4SjsMeA6DUHwGKaE87ZojgOF"
         assert tool_call["type"] == "function"
         assert tool_call["function"]["name"] == "get_current_weather"
-        assert (
-            tool_call["function"]["arguments"]
-            == '{"location":"Boston, MA","unit":"celsius"}'
-        )
+        assert tool_call["function"]["arguments"] == '{"location":"Boston, MA","unit":"celsius"}'
         assert tool_call["index"] == 0
 
     def test_extract_tool_call_from_dict_format(self):
@@ -622,10 +613,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert tool_call["id"] == "call_4SjsMeA6DUHwGKaE87ZojgOF"
         assert tool_call["type"] == "function"
         assert tool_call["function"]["name"] == "get_current_weather"
-        assert (
-            tool_call["function"]["arguments"]
-            == '{"location":"Boston, MA","unit":"celsius"}'
-        )
+        assert tool_call["function"]["arguments"] == '{"location":"Boston, MA","unit":"celsius"}'
 
     @pytest.mark.asyncio
     async def test_process_output_response_with_tool_calls(self):
@@ -1044,9 +1032,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 logging_obj: Optional[Any] = None,
             ) -> GenericGuardrailAPIInputs:
                 texts = inputs.get("texts", [])
-                inputs["texts"] = [
-                    t.replace("<TOKEN_1>", "john@example.com") for t in texts
-                ]
+                inputs["texts"] = [t.replace("<TOKEN_1>", "john@example.com") for t in texts]
                 return inputs
 
         handler = OpenAIResponsesHandler()
@@ -1082,15 +1068,11 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
             litellm_logging_obj=None,
         )
 
-        completed_chunk = next(
-            c
-            for c in result
-            if isinstance(c, dict) and c.get("type") == "response.completed"
-        )
+        completed_chunk = next(c for c in result if isinstance(c, dict) and c.get("type") == "response.completed")
         output_text = completed_chunk["response"]["output"][0]["content"][0]["text"]
-        assert (
-            output_text == "send to john@example.com"
-        ), f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+        assert output_text == "send to john@example.com", (
+            f"Expected PII token to be unmasked in response.completed output, got: {output_text!r}"
+        )
 
     @pytest.mark.asyncio
     async def test_process_output_streaming_response_pass_through_unchanged(self):
@@ -1243,9 +1225,7 @@ class TestGetStructuredMessages:
         }
         result = handler.get_structured_messages(data)
         assert result is not None
-        has_system = any(
-            isinstance(msg, dict) and msg.get("role") == "system" for msg in result
-        )
+        has_system = any(isinstance(msg, dict) and msg.get("role") == "system" for msg in result)
         assert has_system, f"Expected system message from instructions, got: {result}"
 
     def test_should_return_none_when_no_input(self):
@@ -1345,9 +1325,7 @@ class StructuredRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first_user = next(i for i, m in enumerate(messages) if m.get("role") == "user")
-        rewritten = [
-            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten}
 
 
@@ -1363,9 +1341,7 @@ class ToolOutputRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first_tool = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "tool")
-        rewritten = [
-            {**m, "content": COMPRESSED_MARKER} if i == first_tool else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_tool else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten}
 
 
@@ -1382,9 +1358,7 @@ class DroppingRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first_user = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user")
-        rewritten = [
-            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten[:-1]}
 
 
@@ -1769,9 +1743,7 @@ class SystemRewriteGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         messages = list(inputs.get("structured_messages") or [])
         first = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "system")
-        rewritten = [
-            {**m, "content": self.rewritten_content} if i == first else m for i, m in enumerate(messages)
-        ]
+        rewritten = [{**m, "content": self.rewritten_content} if i == first else m for i, m in enumerate(messages)]
         return {**inputs, "structured_messages": rewritten}
 
 
@@ -2146,9 +2118,7 @@ class TestBuildBlockSseChunks:
             {"type": "message", "id": "msg_live", "status": "in_progress", "role": "assistant", "content": []}
         )
         yielded = [
-            OutputItemAddedEvent(
-                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=open_item
-            ),
+            OutputItemAddedEvent(type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=open_item),
             ContentPartAddedEvent(
                 type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
                 item_id="msg_live",
@@ -2338,3 +2308,134 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
     def test_output_item_done_round_is_never_deduped(self):
         done = {"type": "response.output_item.done", "sequence_number": 1, "item": {"type": "function_call"}}
         assert OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hi"), done]) is None
+
+
+class ToolRecordingGuardrail(CustomGuardrail):
+    """Records the tools the handler hands to the guardrail, and returns them unchanged."""
+
+    def __init__(self, guardrail_name: str = "recorder"):
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_tools: List[Any] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_tools = list(inputs.get("tools") or [])
+        return inputs
+
+
+def _additional_tools_item(name: str = "restricted_tool") -> dict:
+    """The Codex "responses lite" shape: tools nested in an input item, top-level empty."""
+    return {
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "functions",
+                "description": "Local tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": name,
+                        "description": "x",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            }
+        ],
+    }
+
+
+class TestOpenAIResponsesHandlerAdditionalToolsGuardrailing:
+    """Tools nested in an ``additional_tools`` input item must reach the guardrail.
+
+    The Chat Completions bridge lifts them into the live tool list, so a guardrail that
+    only inspected ``data["tools"]`` never got the chance to block them -- and the old
+    gate skipped tool extraction entirely when ``tools`` was empty, which is exactly the
+    shape Codex sends (VERIA finding on PR #38388).
+    """
+
+    @pytest.mark.asyncio
+    async def test_nested_tools_are_sent_to_the_guardrail(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = ToolRecordingGuardrail()
+        data = {
+            "input": [
+                _additional_tools_item(),
+                {"role": "user", "content": "hi", "type": "message"},
+            ],
+            "tools": [],
+            "model": "gpt-4",
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        names = [(t.get("function") or {}).get("name") for t in guardrail.seen_tools]
+        # The name is namespace-prefixed because the tool transform expands a namespace
+        # container into "<namespace>__<tool>", the same form the bridge sends the model.
+        assert "functions__restricted_tool" in names, "guardrail must see tools nested in input"
+
+    @pytest.mark.asyncio
+    async def test_nested_tools_are_not_merged_into_request_tools(self):
+        """Inspection only. Merging them here would hoist them at the proxy layer and the
+        bridge would lift them again, handing the model two copies."""
+        handler = OpenAIResponsesHandler()
+        guardrail = ToolRecordingGuardrail()
+        data = {
+            "input": [
+                _additional_tools_item(),
+                {"role": "user", "content": "hi", "type": "message"},
+            ],
+            "tools": [],
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        names = [t.get("name") for t in (result.get("tools") or [])]
+        assert names == [], "nested tools must not be hoisted into the request here"
+
+    @pytest.mark.asyncio
+    async def test_top_level_tools_still_survive_alongside_nested_ones(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = ToolRecordingGuardrail()
+        data = {
+            "input": [
+                _additional_tools_item(),
+                {"role": "user", "content": "hi", "type": "message"},
+            ],
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}],
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        seen = [(t.get("function") or {}).get("name") for t in guardrail.seen_tools]
+        assert "get_weather" in seen and "functions__restricted_tool" in seen
+        assert [t.get("name") for t in result["tools"]] == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_guardrail_appended_tool_still_survives_with_nested_tools_present(self):
+        """The trim that drops inspection-only tools must not also drop injected ones."""
+        handler = OpenAIResponsesHandler()
+        guardrail = ToolAppendingGuardrail(guardrail_name="test")
+        data = {
+            "input": [
+                _additional_tools_item(),
+                {"role": "user", "content": "hi", "type": "message"},
+            ],
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}],
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        names = [t.get("name") for t in result["tools"]]
+        assert "get_weather" in names
+        assert "injected_tool" in names
+        assert "restricted_tool" not in names

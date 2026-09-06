@@ -56,9 +56,14 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     stream_item_fingerprint,
     stream_item_items,
 )
+from litellm.llms.base_llm.responses.transformation import (
+    additional_tools_in,
+    flatten_namespace_tools,
+)
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    ResponseTools,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -242,9 +247,22 @@ class _RequestFields(NamedTuple):
     instructions: str | None
 
 
+def _guardrail_tool_identity(tool: object) -> str:
+    """Stable key for a chat-format tool, used to spot inspection-only entries."""
+    if not isinstance(tool, Mapping):
+        return ""
+    entry: Final = cast("Mapping[str, object]", tool)  # cast-ok: guardrail payloads are untyped
+    function: Final = entry.get("function")
+    name: Final = (
+        function.get("name") if isinstance(function, Mapping) else entry.get("name") or entry.get("server_label")
+    )
+    return f"{entry.get('type')}:{name}"
+
+
 class _ExtractedInputs(NamedTuple):
     inputs: GenericGuardrailAPIInputs
     task_mappings: tuple[tuple[int, int | None], ...]
+    inspection_only_identities: frozenset[str] = frozenset()
 
 
 def _patched_request_fields(
@@ -380,7 +398,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
         self._apply_guardrailed_tools_to_data(
-            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
+            data,
+            original_tools,
+            flattened_tool_groups,
+            guardrailed_inputs.get("tools"),
+            inspection_only_identities=extracted.inspection_only_identities,
         )
         written_back: Final = self._written_back_request_fields(data, structured_messages, guardrailed_inputs)
         if written_back is not None:
@@ -410,11 +432,22 @@ class OpenAIResponsesHandler(BaseTranslation):
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
         task_mappings: Final[list[tuple[int, int | None]]] = []
+        # Nested additional_tools go to the guardrail after the top-level groups, for
+        # inspection only: the chat bridge lifts them, so merging them back would hoist
+        # them into the request and hand the model two copies. _apply_guardrailed_tools_to_data
+        # merges only as many entries as flattened_tool_groups accounts for.
+        nested_chat_tools: Final = tuple(  # inspection only; excluded from the merge below
+            chat_tool
+            for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(
+                cast("ResponseTools", list(additional_tools_in(data.get("input"))))  # cast-ok: untyped request data
+            )
+            for chat_tool in form.chat_tools
+        )
         tools_to_check: Final[list[ChatCompletionToolParam]] = list(  # mutable-ok: guardrail inputs want a list
             copy.deepcopy(
                 tuple(
                     cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
-                    for group in flattened_tool_groups
+                    for group in (*flattened_tool_groups, nested_chat_tools)
                     for tool in group
                 )
             )
@@ -438,7 +471,11 @@ class OpenAIResponsesHandler(BaseTranslation):
         model: Final = data.get("model")
         if isinstance(model, str):
             inputs["model"] = model
-        return _ExtractedInputs(inputs=inputs, task_mappings=tuple(task_mappings))
+        return _ExtractedInputs(
+            inputs=inputs,
+            task_mappings=tuple(task_mappings),
+            inspection_only_identities=frozenset(map(_guardrail_tool_identity, nested_chat_tools)),
+        )
 
     @staticmethod
     def _written_back_request_fields(
@@ -458,9 +495,18 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
-        and custom, tools[].server_label for mcp)."""
+        and custom, tools[].server_label for mcp).
+
+        Covers tools nested in ``additional_tools`` input items, and descends into
+        ``namespace`` containers. Codex sends both shapes and the chat bridge lifts
+        them into the live tool list, so an allowlist reading only top-level ``tools``
+        extracts no enforceable name at all.
+        """
         names: Final[list[str]] = []
-        for tool in data.get("tools") or []:
+        candidates: Final = flatten_namespace_tools(
+            (*(data.get("tools") or ()), *additional_tools_in(data.get("input")))
+        )
+        for tool in candidates:
             if not isinstance(tool, dict):
                 continue
             if tool.get("type") in ("function", "custom") and tool.get("name"):
@@ -475,11 +521,21 @@ class OpenAIResponsesHandler(BaseTranslation):
         original_tools: Sequence[Mapping[str, object]],
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
         guardrailed_tools: Sequence[ChatCompletionToolParam] | None,
+        inspection_only_identities: frozenset[str] = frozenset(),
     ) -> None:
         if guardrailed_tools is None:
             return
+        # Drop the entries that came from additional_tools input items: the chat bridge
+        # lifts those, and merge_guardrailed_tools appends anything it does not own, so
+        # keeping them would put a second copy in the request. Identity-matched rather
+        # than position-sliced, so tools a guardrail *appended* still reach the model.
+        excluded: Final = inspection_only_identities
         data["tools"] = list(  # mutable-ok: downstream wants a list  # rebind-ok: in-place request rewrite
-            merge_guardrailed_tools(original_tools, flattened_tool_groups, guardrailed_tools)
+            merge_guardrailed_tools(
+                original_tools,
+                flattened_tool_groups,
+                tuple(t for t in guardrailed_tools if _guardrail_tool_identity(t) not in excluded),
+            )
         )
 
     def _extract_input_text_and_images(
