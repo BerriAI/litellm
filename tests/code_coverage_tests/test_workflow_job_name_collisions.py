@@ -846,3 +846,35 @@ def test_a_file_holding_two_yaml_documents_is_reported_rather_than_raising() -> 
 
     assert len(unreadable(sources)) == 1
     assert exit_code(sources) == 1
+
+
+def test_an_exclude_that_is_itself_an_expression_is_reported_rather_than_ignored() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n  one:\n    name: build\n    runs-on: ubuntu-latest\n"
+            "    strategy:\n      matrix:\n        python: ['3.11', '3.12']\n"
+            "        exclude: ${{ fromJson(vars.SKIP) }}\n"
+        ),
+    }
+
+    found: Final = blind_spots(sources)
+
+    assert collisions(sources) == ()
+    assert len(found) == 1
+    assert "a matrix `exclude` is itself an expression" in found[0]
+
+
+def test_an_include_that_is_itself_an_expression_is_reported_rather_than_ignored() -> None:
+    sources: Final = {
+        "a.yml": (
+            "on: pull_request\njobs:\n  one:\n    name: build-${{ matrix.python }}\n    runs-on: ubuntu-latest\n"
+            "    strategy:\n      matrix:\n        python: ['3.11']\n"
+            "        include: ${{ fromJson(vars.EXTRA) }}\n"
+        ),
+    }
+
+    found: Final = blind_spots(sources)
+
+    assert collisions(sources) == ()
+    assert len(found) == 1
+    assert "a matrix `include` is itself an expression" in found[0]
