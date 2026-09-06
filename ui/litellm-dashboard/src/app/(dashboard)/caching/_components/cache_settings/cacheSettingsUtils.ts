@@ -2,7 +2,7 @@ import { CACHE_FIELDS, CacheField, CacheSection, REDACTED_VALUE, RedisType } fro
 
 export type CacheFormValue = string | number | boolean | undefined;
 export type CacheFormValues = Record<string, CacheFormValue>;
-export type CacheSavePayloadValue = string | number | boolean | unknown[];
+export type CacheSavePayloadValue = string | number | boolean | unknown[] | null;
 export type CacheSavePayload = Record<string, CacheSavePayloadValue>;
 
 export const isFieldVisible = (field: CacheField, redisType: RedisType): boolean =>
@@ -86,13 +86,18 @@ const saveValueForField = (field: CacheField, raw: CacheFormValue): CacheSavePay
 export const buildCachePayload = (
   redisType: RedisType,
   values: CacheFormValues,
-  { forTesting }: { forTesting: boolean },
+  { forTesting, semanticEnabled = false }: { forTesting: boolean; semanticEnabled?: boolean },
 ): CacheSavePayload => {
-  const type = !forTesting && redisType === "semantic" ? "redis-semantic" : "redis";
+  const type = !forTesting && semanticEnabled ? "redis-semantic" : "redis";
 
   const entries = CACHE_FIELDS.filter((field) => isFieldVisible(field, redisType)).flatMap((field) => {
+    // Semantic fields are always visible now, so clearing the toggle has to send an
+    // explicit null - omitting them would leave the previous values on the server.
+    if (field.section === "semantic" && !semanticEnabled) {
+      return [[field.name, null] as [string, CacheSavePayloadValue]];
+    }
     const value = saveValueForField(field, values[field.name]);
-    return value === undefined ? [] : [[field.name, value] as const];
+    return value === undefined ? [] : [[field.name, value] as [string, CacheSavePayloadValue]];
   });
 
   return { type, ...Object.fromEntries(entries) };

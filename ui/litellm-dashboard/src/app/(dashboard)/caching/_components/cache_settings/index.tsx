@@ -6,6 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { getCacheSettingsCall, testCacheConnectionCall, updateCacheSettingsCall } from "@/components/networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import { toast } from "@/lib/toast";
+import { Switch } from "@/components/ui/switch";
 import RedisTypeSelector from "./RedisTypeSelector";
 import CacheFieldSection from "./CacheFieldSection";
 import { EmbeddingModelOption } from "./CacheFormField";
@@ -37,6 +38,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
   const [isTesting, setIsTesting] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [configuredSecrets, setConfiguredSecrets] = useState<ReadonlySet<string>>(new Set());
+  const [semanticEnabled, setSemanticEnabled] = useState<boolean>(false);
 
   const loadCacheSettings = useCallback(async () => {
     if (!accessToken) {
@@ -48,6 +50,12 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
       form.reset(buildInitialValues(currentValues));
       setConfiguredSecrets(configuredSecretFields(currentValues));
       setRedisType(toRedisType(currentValues.redis_type));
+      // "semantic" is no longer a redis_type, but existing configs were saved with it.
+      setSemanticEnabled(
+        currentValues.redis_type === "semantic" ||
+          currentValues.similarity_threshold != null ||
+          currentValues.redis_semantic_cache_embedding_model != null,
+      );
     } catch (error) {
       console.error("Failed to load cache settings:", error);
       toast.fromError("Failed to load cache settings");
@@ -102,7 +110,7 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
     try {
       const result = await testCacheConnectionCall(
         accessToken,
-        buildCachePayload(redisType, values, { forTesting: true }),
+        buildCachePayload(redisType, values, { forTesting: true, semanticEnabled }),
       );
       if (result.status === "success") {
         toast.success("Cache connection test successful!");
@@ -128,7 +136,10 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
 
     setIsSaving(true);
     try {
-      await updateCacheSettingsCall(accessToken, buildCachePayload(redisType, values, { forTesting: false }));
+      await updateCacheSettingsCall(
+        accessToken,
+        buildCachePayload(redisType, values, { forTesting: false, semanticEnabled }),
+      );
       toast.success("Cache settings updated successfully");
       await loadCacheSettings();
     } catch (error) {
@@ -192,16 +203,25 @@ const CacheSettings: React.FC<CacheSettingsProps> = ({ accessToken }) => {
             </div>
           )}
 
-          {redisType === "semantic" && (
-            <div className="pt-4 border-t border-border">
+          <div className="pt-4 border-t border-border">
+            <div className="mb-4 flex items-center gap-3">
+              <Switch checked={semanticEnabled} onCheckedChange={setSemanticEnabled} />
+              <div>
+                <span className="text-sm font-medium text-foreground">Enable Semantic Caching</span>
+                <p className="text-xs text-muted-foreground">
+                  Reuse responses for semantically similar prompts using embedding vectors
+                </p>
+              </div>
+            </div>
+            {semanticEnabled && (
               <CacheFieldSection
                 title="Semantic Configuration"
                 section="semantic"
                 redisType={redisType}
                 embeddingModels={embeddingModels}
               />
-            </div>
-          )}
+            )}
+          </div>
 
           <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen} className="mt-4">
             <CollapsibleTrigger className="group flex w-full items-center justify-between py-2 text-left">
