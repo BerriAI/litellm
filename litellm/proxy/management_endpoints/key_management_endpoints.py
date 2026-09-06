@@ -2074,6 +2074,13 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
+    data_json: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
+    if "metadata" not in non_default_values and not any(
+        field in LiteLLM_ManagementEndpoint_MetadataFields or field in LiteLLM_ManagementEndpoint_MetadataFields_Premium
+        for field in data_json
+    ):
+        return non_default_values
+
     raise_on_invalid_key_logging_config(non_default_values.get("metadata"))
 
     if "metadata" not in non_default_values:  # allow user to set metadata to none
@@ -2095,8 +2102,6 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
                 detail=f"{reserved_field} is immutable once set and cannot be changed via update.",
             )
         casted_metadata[reserved_field] = existing_value
-
-    data_json: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
 
     try:
         for k, v in data_json.items():

@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import litellm
 import pytest
@@ -1922,18 +1923,25 @@ async def test_update_rejects_whole_metadata_null_on_service_account_key():
 
 @pytest.mark.asyncio
 async def test_update_without_metadata_still_preserves_existing():
-    """Omitting metadata entirely must not drop existing metadata fields."""
-    data = UpdateKeyRequest(key="sk-1", max_budget=100)
-    existing_key = LiteLLM_VerificationToken(
+    """A budget-only update must preserve metadata written after the initial read."""
+    data: Final = UpdateKeyRequest(key="sk-1", max_budget=100)
+    existing_key: Final = LiteLLM_VerificationToken(
         token="hashed",
         team_id="IJ",
         metadata={"service_account_id": "sa-123", "other": "kept"},
     )
 
-    result = await prepare_key_update_data(data=data, existing_key_row=existing_key)
+    result: Final = await prepare_key_update_data(data=data, existing_key_row=existing_key)
 
-    assert result["metadata"]["service_account_id"] == "sa-123"
-    assert result["metadata"]["other"] == "kept"
+    current_row: Final = {
+        "max_budget": 50,
+        "metadata": {"service_account_id": "sa-123", "other": "concurrent-value"},
+    }
+    saved_row: Final = current_row | result
+
+    assert "metadata" not in result
+    assert saved_row["max_budget"] == 100
+    assert saved_row["metadata"] == current_row["metadata"]
 
 
 @pytest.mark.asyncio
