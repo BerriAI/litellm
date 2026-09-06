@@ -23712,6 +23712,11 @@ export interface components {
              */
             guard_name?: string | null;
             /**
+             * Inspect Embeddings
+             * @description When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.
+             */
+            inspect_embeddings?: boolean | null;
+            /**
              * Keyword Redaction Tag
              * @description Tag to use for keyword redaction
              */
@@ -28865,6 +28870,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Review Notes */
@@ -30494,6 +30504,12 @@ export interface components {
             categories?: components["schemas"]["ContentFilterCategoryConfig"][] | null;
             /** @description Threshold configuration for Lakera guardrail categories */
             category_thresholds?: components["schemas"]["LakeraCategoryThresholds"] | null;
+            /**
+             * Ccr Retrieval
+             * @description Inject the Headroom retrieval tool for hashes declared by the compression service.
+             * @default true
+             */
+            ccr_retrieval: boolean;
             /** @description Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier. */
             checks?: components["schemas"]["BedrockChecksConfigModel"] | null;
             /**
@@ -30674,6 +30690,11 @@ export interface components {
              * @default true
              */
             include_scanners: boolean | null;
+            /**
+             * Inspect Embeddings
+             * @description When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.
+             */
+            inspect_embeddings?: boolean | null;
             /**
              * Is Detector Server
              * @description Boolean flag to determine if calling a detector server (True) or the FMS Orchestrator (False). Defaults to True.
@@ -31994,6 +32015,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -37817,6 +37843,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
