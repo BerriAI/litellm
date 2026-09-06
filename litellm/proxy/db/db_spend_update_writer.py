@@ -82,7 +82,10 @@ else:
 
 
 RESPONSES_SESSION_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
-IMMEDIATE_FLUSH_CALL_TYPES: Final = RESPONSES_SESSION_CALL_TYPES | frozenset({CallTypes.aretrieve_batch.value})
+
+
+def _is_batch_cost_row(payload: SpendLogsPayload) -> bool:
+    return payload.get("call_type") == CallTypes.aretrieve_batch.value and payload.get("status") == "success"
 
 
 class _SpendBatch(Protocol):
@@ -216,7 +219,12 @@ class DBSpendUpdateWriter:
         start_time: datetime | None,
         end_time: datetime | None,
         response_cost: float | None,
-    ) -> None:
+    ) -> bool:
+        """Record the request's spend, answering whether its cost still needs charging.
+
+        False only for a batch retrieve whose cost row another retrieve already wrote,
+        so the caller leaves the key, team, and user counters alone (LIT-7048).
+        """
         from litellm.proxy.proxy_server import (
             disable_spend_logs,
             litellm_proxy_budget_name,
@@ -233,7 +241,7 @@ class DBSpendUpdateWriter:
                 team_id,
             )
             if ProxyUpdateSpend.disable_spend_updates() is True:
-                return
+                return True
             if token is not None and isinstance(token, str) and token.startswith("sk-"):
                 hashed_token = hash_token(token=token)
             else:
@@ -264,10 +272,8 @@ class DBSpendUpdateWriter:
                 payload["team_id"] = team_id
 
             if disable_spend_logs is False:
-                await self._insert_spend_log_to_db(
-                    payload=payload,
-                    prisma_client=prisma_client,
-                )
+                if not await self._record_spend_log(payload=payload, prisma_client=prisma_client):
+                    return False
                 await self._enqueue_tool_usage_transaction(
                     payload=payload,
                     completion_response=completion_response,
@@ -307,6 +313,7 @@ class DBSpendUpdateWriter:
             )
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
+            return True
         except Exception:
             spend_log_error(
                 "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
@@ -319,7 +326,55 @@ class DBSpendUpdateWriter:
                 org_id,
                 end_user_id,
             )
-            return
+            return True
+
+    async def _record_spend_log(self, payload: SpendLogsPayload, prisma_client: "PrismaClient | None") -> bool:
+        if prisma_client is None or not _is_batch_cost_row(payload):
+            await self._insert_spend_log_to_db(payload=payload, prisma_client=prisma_client)
+            return True
+        return await self._claim_batch_cost_spend_log(payload=payload, prisma_client=prisma_client)
+
+    async def _claim_batch_cost_spend_log(self, payload: SpendLogsPayload, prisma_client: "PrismaClient") -> bool:
+        """Write the batch's cost row now, or learn that another retrieve already did.
+
+        Every retrieve of one batch shares this row, so the insert that lands first owns
+        the charge and every later one finds the row and charges nothing (LIT-7048). Only
+        a row a successful retrieve wrote counts: a failed retrieve, or any request whose
+        client picked the batch id as its call id, cannot take the charge away.
+        """
+        from litellm.repositories.table_repositories import SpendLogsRepository
+
+        request_id: Final = payload["request_id"]
+        spend_logs: Final = SpendLogsRepository(prisma_client).table
+        try:
+            claimed: Final = await spend_logs.create_many(
+                data=[prisma_client.jsonify_object(payload)],  # mutable-ok: prisma create_many takes a list
+                skip_duplicates=True,
+            )
+            if claimed == 1:
+                return True
+            existing: Final = await spend_logs.find_unique(
+                where={"request_id": request_id}  # mutable-ok: prisma where clause
+            )
+        except Exception as e:  # noqa: BLE001  # prisma raises its own hierarchy; an unreachable DB queues the row like any other spend log
+            verbose_proxy_logger.warning(
+                "Could not claim spend row %s for a batch's cost, queueing it: %s", request_id, e
+            )
+            await self._insert_spend_log_to_db(payload=payload, prisma_client=prisma_client)
+            return True
+        if (
+            existing is not None
+            and existing.call_type == CallTypes.aretrieve_batch.value
+            and existing.status == "success"
+        ):
+            verbose_proxy_logger.debug("Cost tracking skipped: spend row %s already charged this batch", request_id)
+            return False
+        verbose_proxy_logger.warning(
+            "Spend row %s belongs to a %s request, so this batch's cost is charged without a row of its own",
+            request_id,
+            getattr(existing, "call_type", None),
+        )
+        return True
 
     async def _enqueue_tool_usage_transaction(
         self,
@@ -940,7 +995,7 @@ class DBSpendUpdateWriter:
             from litellm.proxy.utils import enqueue_spend_logs, request_spend_log_flush
 
             await enqueue_spend_logs(prisma_client, (payload,))
-            if payload.get("call_type") in IMMEDIATE_FLUSH_CALL_TYPES:
+            if payload.get("call_type") in RESPONSES_SESSION_CALL_TYPES:
                 request_spend_log_flush()
         else:
             verbose_proxy_logger.debug("prisma_client is None. Skipping writing spend logs to db.")

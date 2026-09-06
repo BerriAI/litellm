@@ -665,14 +665,14 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
             endpoint="/v1/chat/completions",
             input_file_id="file-in",
             object="batch",
-            status=status,
+            status="validating",
             output_file_id=output_file_id,
-        )
+        ).model_copy(update={"status": status})
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("status", "output_file_id"),
-        [("validating", None), ("in_progress", None), ("finalizing", None), ("completed", None)],
+        [("validating", None), ("in_progress", None), ("finalizing", None), ("completed", None), ("complete", None)],
     )
     async def test_non_final_batch_is_not_priced(self, monkeypatch, status, output_file_id) -> None:
         from litellm.litellm_core_utils import litellm_logging as logging_module
@@ -681,8 +681,7 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
         batch = self._batch(status, output_file_id)
 
-        with contextlib.suppress(Exception):
-            await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
+        await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
 
         handle_completed_batch.assert_not_awaited()
         assert "response_cost" not in batch._hidden_params
@@ -705,8 +704,7 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
         batch = self._batch("completed", "file-out")
 
-        with contextlib.suppress(Exception):
-            await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
+        await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
 
         handle_completed_batch.assert_awaited_once()
         assert batch._hidden_params["response_cost"] == 8e-06

@@ -25,7 +25,8 @@ class BatchCostUsageResult:
     failed_requests: int
 
 
-_TERMINAL_BATCH_STATUSES: Final = frozenset({"completed", "failed", "cancelled", "expired"})
+_COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
+_TERMINAL_BATCH_STATUSES: Final = _COMPLETED_BATCH_STATUSES | frozenset({"failed", "cancelled", "expired"})
 
 
 def batch_cost_is_final(batch: Batch) -> bool:
@@ -39,7 +40,7 @@ def batch_cost_is_final(batch: Batch) -> bool:
     """
     if batch.status not in _TERMINAL_BATCH_STATUSES:
         return False
-    if batch.status != "completed" or batch.output_file_id is not None:
+    if batch.status not in _COMPLETED_BATCH_STATUSES or batch.output_file_id is not None:
         return True
     request_counts: Final = batch.request_counts
     return request_counts is not None and request_counts.total > 0 and request_counts.completed == 0

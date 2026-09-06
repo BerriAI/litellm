@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6,7 +7,6 @@ import pytest
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.proxy_track_cost_callback import (
-    _batch_cost_is_trackable_now,
     _get_budget_reservation_from_metadata,
     _ProxyDBLogger,
     _should_track_cost_callback,
@@ -783,110 +783,46 @@ def _retrieved_batch(status: str, output_file_id: str | None):
     )
 
 
-def _prisma_client_with(queued_request_ids: tuple[str, ...], stored_row: object) -> MagicMock:
-    import asyncio
-
-    prisma_client = MagicMock()
-    prisma_client._spend_log_transactions_lock = asyncio.Lock()
-    prisma_client.spend_log_transactions = [{"request_id": request_id} for request_id in queued_request_ids]
-    prisma_client.db.litellm_spendlogs.find_unique = AsyncMock(return_value=stored_row)
-    return prisma_client
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("status", "output_file_id", "spend_log_id", "prisma_client", "trackable"),
+    ("call_type", "status", "output_file_id", "row_claimed", "spend_written", "charged"),
     [
-        ("in_progress", None, "batch_abc_batch_cost", None, False),
-        ("in_progress", None, "batch_abc_batch_cost", _prisma_client_with((), None), False),
-        ("completed", None, "batch_abc_batch_cost", _prisma_client_with((), None), False),
-        ("completed", "file-out", "batch_abc_batch_cost", None, True),
-        ("completed", "file-out", None, _prisma_client_with((), None), True),
-        ("completed", "file-out", "batch_abc_batch_cost", _prisma_client_with(("batch_abc_batch_cost",), None), False),
-        (
-            "completed",
-            "file-out",
-            "batch_abc_batch_cost",
-            _prisma_client_with((), {"request_id": "batch_abc_batch_cost"}),
-            False,
-        ),
-        ("completed", "file-out", "batch_abc_batch_cost", _prisma_client_with((), None), True),
-        ("failed", None, "batch_abc_batch_cost", _prisma_client_with((), None), True),
+        ("aretrieve_batch", "in_progress", None, True, False, False),
+        ("aretrieve_batch", "completed", None, True, False, False),
+        ("aretrieve_batch", "completed", "file-out", False, True, False),
+        ("aretrieve_batch", "completed", "file-out", True, True, True),
+        ("aretrieve_batch", "failed", None, True, True, True),
+        ("acreate_batch", "validating", None, True, True, True),
     ],
     ids=[
-        "in_progress_without_db",
-        "in_progress_never_consults_db",
-        "completed_without_output_yet",
-        "final_without_db",
-        "final_without_spend_log_id",
-        "final_row_queued_for_flush",
-        "final_row_already_stored",
-        "final_first_sighting",
-        "failed_first_sighting",
+        "retrieve_before_final",
+        "retrieve_completed_without_output_yet",
+        "retrieve_after_another_retrieve_charged",
+        "retrieve_first_final",
+        "retrieve_failed_batch",
+        "create_before_final",
     ],
 )
-async def test_batch_cost_is_trackable_now(status, output_file_id, spend_log_id, prisma_client, trackable):
-    """
-    A batch is billed from the first retrieve that sees it final and never again:
-    a poll before that wrote the shared spend row at $0 and pinned it there, and
-    every completed retrieve after the first charged the key again (LIT-7048).
-    """
-    assert (
-        await _batch_cost_is_trackable_now(
-            batch=_retrieved_batch(status, output_file_id), spend_log_id=spend_log_id, prisma_client=prisma_client
-        )
-        is trackable
-    )
-
-
-@pytest.mark.asyncio
-async def test_batch_cost_is_trackable_now_when_the_spend_row_lookup_fails():
-    """An unreadable spend log table must not drop the batch's only spend row."""
-    prisma_client = _prisma_client_with((), None)
-    prisma_client.db.litellm_spendlogs.find_unique = AsyncMock(side_effect=RuntimeError("db unreachable"))
-
-    assert (
-        await _batch_cost_is_trackable_now(
-            batch=_retrieved_batch("completed", "file-out"),
-            spend_log_id="batch_abc_batch_cost",
-            prisma_client=prisma_client,
-        )
-        is True
-    )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("call_type", "status", "output_file_id", "stored_row", "charged"),
-    [
-        ("aretrieve_batch", "in_progress", None, None, False),
-        ("aretrieve_batch", "completed", "file-out", {"request_id": "batch_abc_batch_cost"}, False),
-        ("aretrieve_batch", "completed", "file-out", None, True),
-        ("acreate_batch", "validating", None, None, True),
-    ],
-    ids=["retrieve_before_final", "retrieve_already_recorded", "retrieve_first_final", "create_before_final"],
-)
-async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # test-quality-ok: whether the spend writer runs and whether the poll's reservation is handed back is the whole observable contract of the gate
-    call_type, status, output_file_id, stored_row, charged
+async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # test-quality-ok: whether the spend writer runs, whether the counters move, and whether the poll's reservation is handed back is the whole observable contract of the gate
+    call_type, status, output_file_id, row_claimed, spend_written, charged
 ):
     """
-    Only retrieves are gated, since creating a batch is its own billable request.
-    A retrieve that writes nothing hands its budget reservation back instead.
+    A poll before the batch is final used to pin its shared spend row at $0, and every
+    completed retrieve after the first charged the key again (LIT-7048). Only retrieves
+    are gated, since creating a batch is its own billable request, and a retrieve that
+    charges nothing hands its budget reservation back instead.
     """
     logger = _ProxyDBLogger()
     budget_reservation = None if charged else {"reserved_cost": 0.5, "entries": []}
     kwargs = _batch_retrieve_kwargs(call_type, reservation=budget_reservation)
 
     with (
-        patch(  # test-quality-ok: prisma_client is a proxy_server global the callback reads lazily, no seam
-            "litellm.proxy.proxy_server.prisma_client", _prisma_client_with((), stored_row)
-        ),
         patch(  # test-quality-ok: increment_spend_counters is a proxy_server global the callback reads lazily, no seam
             "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
-        ),
+        ) as mock_increment_spend_counters,
         patch(  # test-quality-ok: update_cache is a proxy_server global the callback reads lazily, no seam
             "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
-        ),
+        ) as mock_update_cache,
         patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
             "litellm.proxy.proxy_server.proxy_logging_obj"
         ) as mock_proxy_logging,
@@ -895,7 +831,7 @@ async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # 
         ) as mock_release_budget_reservation,
     ):
         mock_proxy_logging.failed_tracking_alert = AsyncMock()
-        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+        mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(return_value=row_claimed)
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
 
         await logger._PROXY_track_cost_callback(
@@ -904,13 +840,15 @@ async def test_track_cost_callback_charges_a_batch_once_and_only_when_final(  # 
             start_time=datetime.now(),
             end_time=datetime.now(),
         )
+        await asyncio.sleep(0)
 
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+        assert mock_proxy_logging.db_spend_update_writer.update_database.await_count == (1 if spend_written else 0)
+        assert mock_increment_spend_counters.await_count == (1 if charged else 0)
+        assert mock_update_cache.await_count == (1 if charged else 0)
         if charged:
-            mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
             mock_release_budget_reservation.assert_not_awaited()
         else:
-            mock_proxy_logging.db_spend_update_writer.update_database.assert_not_called()
             mock_release_budget_reservation.assert_awaited_once_with(budget_reservation=budget_reservation)
 
 
