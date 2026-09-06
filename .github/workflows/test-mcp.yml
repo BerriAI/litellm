@@ -47,9 +47,9 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Cache the Rust build
+      - name: Set up Rust
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-cargo-build
+        uses: ./.github/actions/setup-rust
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'

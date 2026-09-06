@@ -44,8 +44,8 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Cache the Rust build
-        uses: ./.github/actions/cache-cargo-build
+      - name: Set up Rust
+        uses: ./.github/actions/setup-rust
 
       # Build the wheel and resolve every dependency outside the CodSpeed
       # runner: the same maturin build took 42 minutes inside `codspeed run`

@@ -104,10 +104,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-downloads-py${{ env.UV_PYTHON }}-
 
-      - name: Cache the Rust build
+      - name: Set up Rust
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/cache-cargo-build
+        uses: ./.github/actions/setup-rust
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'

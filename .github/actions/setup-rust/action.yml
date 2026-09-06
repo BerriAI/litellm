@@ -1,0 +1,20 @@
+name: Set up Rust
+description: Install the pinned Rust toolchain and cache a Cargo workspace
+inputs:
+  cache-namespace:
+    description: Stable cache namespace shared by jobs with the same build profile
+    required: false
+    default: maturin-dev
+  cache-workspaces:
+    description: Cargo workspace and target directory pairs to cache
+    required: false
+    default: litellm-rust -> target
+runs:
+  using: composite
+  steps:
+    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+      with:
+        cache-shared-key: ${{ inputs.cache-namespace }}-${{ runner.arch }}
+        cache-workspaces: ${{ inputs.cache-workspaces }}
+        rust-src-dir: ${{ github.workspace }}
+        rustflags: ""

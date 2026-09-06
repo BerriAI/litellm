@@ -9,11 +9,9 @@ runs:
     - uses: ./.github/actions/setup-uv-with-retries
       with:
         version: "0.10.9"
-    - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+    - uses: ./.github/actions/setup-rust
       with:
-        cache-key: boundary-release-bench-${{ runner.arch }}
-        cache-workspaces: litellm-rust -> target
-        rustflags: ""
+        cache-namespace: boundary-release-bench
     - name: Build and install release benchmark wheel
       shell: bash
       run: |
