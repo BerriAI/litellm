@@ -629,7 +629,6 @@ class PrometheusMetricLabels:
     litellm_deployment_state = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
-        UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
 
