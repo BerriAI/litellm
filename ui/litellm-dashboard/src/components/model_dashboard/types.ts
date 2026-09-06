@@ -1,3 +1,8 @@
+export interface PerSecondCostTier {
+  resolution: string;
+  cost: number;
+}
+
 export interface ModelInfo {
   id: string;
   created_at: string;
@@ -27,6 +32,8 @@ export interface ModelData {
   litellm_model_name: string;
   input_cost: number;
   output_cost: number;
+  output_cost_per_second?: number | null;
+  output_cost_per_second_tiers?: PerSecondCostTier[];
   max_tokens: number;
   max_input_tokens: number;
   api_base?: string;

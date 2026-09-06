@@ -41,6 +41,7 @@ import {
   testConnectionRequest,
 } from "./networking";
 import { Logo } from "@/components/molecules/logo/Logo";
+import { ModelPricingSummary } from "@/components/molecules/models/ModelPricingSummary";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
 import ModelInfoEditForm, { type ModelEditFormValues, type TouchedPricingField } from "./ModelInfoEditForm";
 import { Tag } from "./tag_management/types";
@@ -698,10 +699,7 @@ export default function ModelInfoView({
               </Card>
               <Card className="block p-6">
                 <p className="text-sm">Pricing</p>
-                <div className="mt-2">
-                  <p className="text-sm">Input: ${modelData.input_cost}/1M tokens</p>
-                  <p className="text-sm">Output: ${modelData.output_cost}/1M tokens</p>
-                </div>
+                <ModelPricingSummary model={modelData} />
               </Card>
             </div>
 
