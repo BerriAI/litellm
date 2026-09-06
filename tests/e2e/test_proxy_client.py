@@ -148,7 +148,7 @@ class TestReplicasFor:
             control_plane_base_url="http://backend",
             replica_urls=("http://gateway-1", "http://gateway-2"),
         )
-        assert set(client.replicas_for("/v1/mcp/server/abc")) == {"http://backend"}
+        assert set(client.replicas_for("/key/info")) == {"http://backend"}
         assert set(client.replicas_for("/v1/models")) == {"http://gateway-1", "http://gateway-2"}
 
     def test_monolith_reads_management_routes_back_from_every_replica(self) -> None:
@@ -157,7 +157,20 @@ class TestReplicasFor:
             control_plane_base_url="http://lb",
             replica_urls=("http://pod-1", "http://pod-2"),
         )
-        assert set(client.replicas_for("/v1/mcp/server/abc")) == {"http://pod-1", "http://pod-2"}
+        assert set(client.replicas_for("/key/info")) == {"http://pod-1", "http://pod-2"}
+
+    def test_mcp_admin_routes_read_back_from_every_data_plane_replica(self) -> None:
+        """/v1/mcp/* is a lazily mounted feature, so a data-plane replica serves it
+        too and answers from its own in-memory registry. Routing it to the control
+        plane would leave every replica but that one unproven, and would move the
+        tools/list barrier in mcp_client off the plane that serves tools/list."""
+        client: Final = build_proxy_client(
+            base_url="http://lb",
+            control_plane_base_url="http://backend",
+            replica_urls=("http://gateway-1", "http://gateway-2"),
+        )
+        assert set(client.replicas_for("/v1/mcp/server/abc")) == {"http://gateway-1", "http://gateway-2"}
+        assert set(client.replicas_for("/v1/mcp/toolset/abc")) == {"http://gateway-1", "http://gateway-2"}
 
     def test_a_route_no_replica_serves_is_refused_rather_than_read_back_vacuously(self) -> None:
         """A read-back over zero replicas would satisfy every predicate and assert

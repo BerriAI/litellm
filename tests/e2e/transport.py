@@ -291,7 +291,6 @@ class HttpTransport:
 # (/chat, /embeddings, and native passthrough like /gemini, /anthropic) are NOT
 # here and fall through to the data plane. Matched as path prefixes.
 CONTROL_PLANE_PREFIXES: tuple[str, ...] = (
-    "/v1/mcp/",
     "/key",
     "/user",
     "/team",
