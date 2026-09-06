@@ -617,7 +617,7 @@ async def test_oauth_protected_resource_dcr_bridge_returns_gateway_facade(auth_t
         else "https://gateway.example.com/sample_docs/mcp"
     )
     assert result == {
-        "authorization_servers": ["https://gateway.example.com/sample_docs"],
+        "authorization_servers": ["https://gateway.example.com/mcp/sample_docs"],
         "resource": expected_resource,
         "scopes_supported": ["read"],
     }

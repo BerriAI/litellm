@@ -2472,6 +2472,7 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
 
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             oauth_authorization_server_mcp,
+            oauth_authorization_server_mcp_standard,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -2505,13 +2506,19 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
     mock_request.base_url = "http://litellm.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
 
-    # Call the endpoint
-    response = await oauth_authorization_server_mcp(
+    legacy_response = await oauth_authorization_server_mcp(
+        request=mock_request,
+        mcp_server_name="test_oauth",
+    )
+    assert legacy_response["issuer"] == "https://litellm.example.com/test_oauth"
+
+    response = await oauth_authorization_server_mcp_standard(
         request=mock_request,
         mcp_server_name="test_oauth",
     )
 
     # Verify response uses HTTPS URLs
+    assert response["issuer"] == "https://litellm.example.com/mcp/test_oauth"
     assert response["authorization_endpoint"].startswith("https://litellm.example.com/")
     assert response["token_endpoint"].startswith("https://litellm.example.com/")
     assert response["registration_endpoint"].startswith("https://litellm.example.com/")
@@ -3367,16 +3374,16 @@ async def test_oauth_protected_resource_gateway_managed_oauth2_advertises_gatewa
         relay_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name="relay_mcp", use_standard_pattern=True
         )
-        assert relay_response["authorization_servers"] == ["https://litellm.example.com/relay_mcp"]
+        assert relay_response["authorization_servers"] == ["https://litellm.example.com/mcp/relay_mcp"]
         relay_legacy_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name="relay_mcp", use_standard_pattern=False
         )
-        assert relay_legacy_response["authorization_servers"] == ["https://litellm.example.com/relay_mcp"]
+        assert relay_legacy_response["authorization_servers"] == ["https://litellm.example.com/mcp/relay_mcp"]
 
         delegated_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name="delegated_mcp", use_standard_pattern=True
         )
-        assert delegated_response["authorization_servers"] == ["https://litellm.example.com/delegated_mcp"]
+        assert delegated_response["authorization_servers"] == ["https://litellm.example.com/mcp/delegated_mcp"]
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -3495,6 +3502,7 @@ def _create_oauth2_server(
     client_secret="test_client_secret",
     available_on_public_internet=True,
     delegate_auth_to_upstream: bool = False,
+    per_server_oauth_discovery: bool = False,
 ):
     """Helper to create a mock OAuth2 MCPServer."""
     from litellm.proxy._types import MCPTransport
@@ -3515,6 +3523,7 @@ def _create_oauth2_server(
         scopes=["read", "write"],
         available_on_public_internet=available_on_public_internet,
         delegate_auth_to_upstream=delegate_auth_to_upstream,
+        per_server_oauth_discovery=per_server_oauth_discovery,
     )
 
 
@@ -3676,7 +3685,7 @@ def test_authorization_server_metadata_resolves_server_by_id_when_name_lookup_fa
         )
 
     assert result["scopes_supported"] == server.scopes
-    assert result["issuer"] == f"https://llm.example.com/{server.server_id}"
+    assert result["issuer"] == f"https://llm.example.com/mcp/{server.server_id}"
     by_name.assert_called_once_with(server.server_id, client_ip=None)
     by_id.assert_called_once_with(server.server_id, client_ip=None)
 
@@ -8872,9 +8881,9 @@ def test_as_aggregate_route_reserves_mcp_for_the_aggregate():
         assert prm.status_code == 200
         assert prm.json()["authorization_servers"] == [asm.json()["issuer"]]
 
-        # the mcp-named server keeps its own document on the standard two-segment route
         per_server = client.get("/.well-known/oauth-authorization-server/mcp/mcp")
         assert per_server.status_code == 200
+        assert per_server.json()["issuer"] == "http://testserver/mcp/mcp"
         assert "/mcp/authorize" in per_server.json()["authorization_endpoint"]
     finally:
         global_mcp_server_manager.registry.clear()
@@ -8904,11 +8913,13 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
     oauth2 server configured, the no-suffix /.well-known/oauth-{authorization-server,
     protected-resource} still resolves THAT server, so an existing single-server deployment's
     discovery is unchanged. The aggregate document lives only at the /mcp-suffixed routes."""
-    from fastapi import Request
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
 
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         _build_oauth_authorization_server_response,
         _build_oauth_protected_resource_response,
+        router,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
@@ -8919,7 +8930,7 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "https://llm.example.com/"
+    mock_request.base_url = "http://testserver/"
     mock_request.headers = {}
 
     try:
@@ -8929,43 +8940,63 @@ async def test_bare_origin_discovery_resolves_single_server_not_aggregate():
         )
         # per-server, not aggregate: the single server's name is in the endpoints
         assert "/test_oauth/authorize" in authorization_response["authorization_endpoint"]
-        assert authorization_response["issuer"] == "https://llm.example.com"
-        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
+        assert authorization_response["issuer"] == "http://testserver"
+        assert resource_response["authorization_servers"] == ["http://testserver/test_oauth"]
+
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        named_authorization_response = client.get("/.well-known/oauth-authorization-server/test_oauth")
+        assert named_authorization_response.status_code == 200
+        assert named_authorization_response.json()["issuer"] == resource_response["authorization_servers"][0]
     finally:
         global_mcp_server_manager.registry.clear()
 
 
 @pytest.mark.asyncio
-async def test_named_discovery_issuer_matches_protected_resource_authorization_servers():
-    """RFC 8414 requires the issuer to equal the authorization server identifier the client
-    resolved the metadata from, which is the protected-resource authorization_servers entry."""
-    from fastapi import Request
+@pytest.mark.parametrize(
+    "resource_metadata_path",
+    (
+        "/.well-known/oauth-protected-resource/mcp/test_oauth",
+        "/.well-known/oauth-protected-resource/test_oauth/mcp",
+    ),
+)
+async def test_named_discovery_issuer_matches_protected_resource_authorization_servers(resource_metadata_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
 
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _build_oauth_authorization_server_response,
-        _build_oauth_protected_resource_response,
-    )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-        global_mcp_server_manager,
-    )
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
     global_mcp_server_manager.registry.clear()
-    server = _create_oauth2_server(delegate_auth_to_upstream=True)
+    server = _create_oauth2_server(per_server_oauth_discovery=True)
     global_mcp_server_manager.registry[server.server_id] = server
-
-    mock_request = MagicMock(spec=Request)
-    mock_request.base_url = "https://llm.example.com/"
-    mock_request.headers = {}
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
 
     try:
-        resource_response = await _build_oauth_protected_resource_response(
-            request=mock_request, mcp_server_name="test_oauth", use_standard_pattern=True
+        resource_response = client.get(resource_metadata_path)
+        assert resource_response.status_code == 200
+        issuer = resource_response.json()["authorization_servers"][0]
+        assert issuer == "http://testserver/mcp/test_oauth"
+
+        authorization_response = client.get("/.well-known/oauth-authorization-server/mcp/test_oauth")
+        assert authorization_response.status_code == 200
+        assert authorization_response.json()["issuer"] == issuer
+
+        legacy_response = client.get("/.well-known/oauth-authorization-server/test_oauth")
+        assert legacy_response.status_code == 200
+        assert legacy_response.json()["issuer"] == "http://testserver/test_oauth"
+
+        legacy_alias_response = client.get(
+            "/.well-known/oauth-authorization-server/test_oauth/mcp",
+            follow_redirects=False,
         )
-        authorization_response = _build_oauth_authorization_server_response(
-            request=mock_request, mcp_server_name="test_oauth"
+        assert legacy_alias_response.status_code == 308
+        assert legacy_alias_response.headers["location"] == (
+            "http://testserver/.well-known/oauth-authorization-server/mcp/test_oauth"
         )
-        assert resource_response["authorization_servers"] == ["https://llm.example.com/test_oauth"]
-        assert authorization_response["issuer"] == resource_response["authorization_servers"][0]
     finally:
         global_mcp_server_manager.registry.clear()
 

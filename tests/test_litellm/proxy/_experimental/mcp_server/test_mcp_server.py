@@ -8137,13 +8137,13 @@ class TestPreemptive401ModeAware:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "original_path, expected_as_path",
+        "original_path",
         (
-            ("/litellm/mcp/interactive", "/litellm/.well-known/oauth-authorization-server/litellm/mcp/interactive"),
-            ("/litellm/interactive/mcp", "/litellm/.well-known/oauth-authorization-server/litellm/interactive"),
+            "/litellm/mcp/interactive",
+            "/litellm/interactive/mcp",
         ),
     )
-    async def test_gateway_as_metadata_challenge_under_server_root_path(self, original_path, expected_as_path):
+    async def test_gateway_as_metadata_challenge_under_server_root_path(self, original_path):
         """Under SERVER_ROOT_PATH the challenge must keep the spelling the client called and point at
         a route the proxy registered, so it has to compare a route-relative path and carry the root suffix."""
         from litellm.proxy._experimental.mcp_server import server as server_module
@@ -8181,7 +8181,9 @@ class TestPreemptive401ModeAware:
 
         assert exc.value.status_code == 401
         headers = {k.lower(): v for k, v in (exc.value.headers or {}).items()}
-        assert headers["www-authenticate"] == f'Bearer authorization_uri="http://testserver{expected_as_path}"'
+        assert headers["www-authenticate"] == (
+            'Bearer authorization_uri="http://testserver/litellm/.well-known/oauth-authorization-server/litellm/mcp/interactive"'
+        )
 
     @pytest.mark.asyncio
     async def test_gateway_managed_interactive_no_token_challenges_with_authorization_bearer(self):

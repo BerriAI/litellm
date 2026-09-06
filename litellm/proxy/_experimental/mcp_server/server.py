@@ -51,8 +51,7 @@ from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
     get_passthrough_www_authenticate,
-    get_route_relative_request_path,
-    well_known_root_suffix,
+    per_server_authorization_server_challenge,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
@@ -3802,23 +3801,14 @@ if MCP_AVAILABLE:
                             },
                         )
 
-                    request = StarletteRequest(scope)
-                    base_url = get_request_base_url(request)
-                    _path = get_route_relative_request_path(scope)
-
-                    # Pick the well-known AS-metadata form that matches the inbound route
-                    # so strict RFC 9728 §3.2 clients can resolve it correctly.
-                    as_metadata_root = f"{base_url}/.well-known/oauth-authorization-server{well_known_root_suffix()}"
-                    if _path.startswith(f"/mcp/{server_name}"):
-                        _as_url = f"{as_metadata_root}/mcp/{server_name}"
-                    else:
-                        _as_url = f"{as_metadata_root}/{server_name}"
-                    authorization_uri = f'Bearer authorization_uri="{_as_url}"'
-
                     raise HTTPException(
                         status_code=401,
                         detail="Unauthorized",
-                        headers={"www-authenticate": authorization_uri},
+                        headers={
+                            "www-authenticate": per_server_authorization_server_challenge(
+                                StarletteRequest(scope), server_name
+                            )
+                        },
                     )
 
                 if not oauth2_headers:

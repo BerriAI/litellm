@@ -180,6 +180,24 @@ def well_known_root_suffix() -> str:
     return "" if root == "/" else root
 
 
+def per_server_authorization_server_url(request_base_url: str, server_name: str) -> str:
+    return f"{request_base_url}/mcp/{server_name}"
+
+
+def legacy_per_server_authorization_server_url(request_base_url: str, server_name: str) -> str:
+    return f"{request_base_url}/{server_name}"
+
+
+def per_server_authorization_server_metadata_url(request_base_url: str, server_name: str) -> str:
+    return f"{request_base_url}/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp/{server_name}"
+
+
+def per_server_authorization_server_challenge(request: Request, server_name: str) -> str:
+    request_base_url: Final = get_request_base_url(request)
+    metadata_url: Final = per_server_authorization_server_metadata_url(request_base_url, server_name)
+    return f'Bearer authorization_uri="{metadata_url}"'
+
+
 def get_route_relative_request_path(scope: Scope) -> str:
     """The request path the MCP route shapes are written against: the raw ASGI path with the
     deployment's ``root_path`` removed.
