@@ -164,7 +164,7 @@ mod tests {
             inputs: EchoInputs,
             _options: crate::marshal::NativeRequestOptions,
             _context: crate::marshal::NativeRequestContext,
-            _callback_adapter: Option<Py<PyAny>>,
+            _callback_adapter: Option<pyo3::Py<pyo3::PyAny>>,
             _python_context: crate::execution::PythonCallContext<'_>,
         ) -> PyResult<impl Future<Output = Result<String, Error>> + Send + 'static> {
             FUTURE_DROPPED.store(false, Ordering::SeqCst);
