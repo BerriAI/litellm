@@ -151,3 +151,38 @@ fn outcome_identifies_binding(scenario_scope: Py<PyDict>, #[case] awaited: bool)
         Ok(())
     })
 }
+
+#[rstest]
+fn awaited_raise_surfaces_when_driven(scenario_scope: Py<PyDict>) -> PyResult<()> {
+    use litellm_python_interop::{InvocationMode, InvocationOutcome, PreparedCall};
+    use pyo3::types::PyTuple;
+    Python::attach(|py| {
+        let globals = scenario_scope.bind(py);
+        py.run(
+            c"events = []\nerror = ValueError('await failure')\nasync def callback():\n    events.append('started')\n    raise error\ndef drive(coroutine):\n    try:\n        coroutine.send(None)\n        return False\n    except BaseException as caught:\n        return caught is error\n",
+            Some(globals),
+            None,
+        )?;
+        let started = || -> PyResult<usize> { Ok(globals.get_item("events")?.unwrap().len()?) };
+        let call = PreparedCall::new(
+            InvocationMode::Await,
+            globals.get_item("callback")?.unwrap().unbind(),
+            PyTuple::empty(py).unbind(),
+            None,
+        );
+        let pending = match call.invoke(py)? {
+            InvocationOutcome::Awaitable(value) => value,
+            InvocationOutcome::Returned(_) => panic!("await binding produced a settled outcome"),
+        };
+        assert_eq!(started()?, 0);
+        assert!(
+            globals
+                .get_item("drive")?
+                .unwrap()
+                .call1((pending,))?
+                .extract::<bool>()?
+        );
+        assert_eq!(started()?, 1);
+        Ok(())
+    })
+}
