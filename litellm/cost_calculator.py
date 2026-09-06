@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     get_billable_input_tokens,
     get_token_type_cost_breakdown,
+    normalize_service_tier,
     parse_prompt_tokens_details,
     select_cost_metric_for_model,
 )
@@ -110,7 +111,6 @@ from litellm.types.utils import (
     LlmProvidersSet,
     ModelInfo,
     PromptTokensDetailsWrapper,
-    ServiceTier,
     StandardBuiltInToolsParams,
     TranscriptionUsageDurationObject,
     TranscriptionUsageTokensObject,
@@ -901,20 +901,6 @@ def _map_traffic_type_to_service_tier(traffic_type: str | None) -> str | None:
     return service_tier
 
 
-def _normalize_service_tier(service_tier: object) -> str | None:
-    """
-    Reduce a service_tier value to a concrete billable tier string or None.
-
-    "auto" is a routing preference and any non-string value is not a billable
-    tier, so both defer to standard pricing (or to the tier the provider reports
-    on the response usage) instead of crashing the downstream cost-key lookup,
-    which calls service_tier.lower()
-    """
-    if not isinstance(service_tier, str) or service_tier.lower() == ServiceTier.AUTO.value:
-        return None
-    return service_tier
-
-
 def _extract_service_tier(source: object) -> str | None:
     """Read a raw ``service_tier`` off a response body or usage object, dict or pydantic model alike."""
     if isinstance(source, BaseModel):
@@ -1268,19 +1254,19 @@ def completion_cost(
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
 
-        service_tier = _normalize_service_tier(service_tier)
+        service_tier = normalize_service_tier(service_tier)
 
         # Extract service_tier from completion_response if not provided
         if service_tier is None and completion_response is not None:
             service_tier = _extract_service_tier(completion_response)
 
-        service_tier = _normalize_service_tier(service_tier)
+        service_tier = normalize_service_tier(service_tier)
 
         # Extract service_tier from usage object if not provided
         if service_tier is None and cost_per_token_usage_object is not None:
             service_tier = _extract_service_tier(cost_per_token_usage_object)
 
-        service_tier = _normalize_service_tier(service_tier)
+        service_tier = normalize_service_tier(service_tier)
 
         selected_model: Final = _select_model_name_for_cost_calc(
             model=model,

@@ -113,6 +113,11 @@ def _accepts_prompt_cache_breakpoint(block: object) -> bool:
 CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_points"
 
 
+def _sequence_field(request_body: Mapping[str, object], field: str) -> tuple[object, ...]:
+    value: Final = request_body.get(field)
+    return tuple(value) if isinstance(value, (list, tuple)) else ()
+
+
 class AnthropicCacheControlHook(CustomPromptManagement):
     def get_chat_completion_prompt(
         self,
@@ -573,13 +578,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         if all(point.get("_litellm_judged") for point in points):
             return False
-        return AnthropicCacheControlHook._request_has_cache_control(messages, system, tools)
+        return AnthropicCacheControlHook.request_has_cache_control(messages, system, tools)
 
     @staticmethod
-    def _request_has_cache_control(
-        messages: list[AllMessageValues],
-        system: str | list | None,
-        tools: list | None = None,
+    def request_has_cache_control(
+        messages: Iterable[object],
+        system: object = None,
+        tools: Iterable[object] | None = None,
     ) -> bool:
         """Return True if the request already carries any client-supplied cache_control.
 
@@ -603,6 +608,17 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 for tool in tools
             )
         return False
+
+    @staticmethod
+    def body_has_cache_control(request_body: Mapping[str, object]) -> bool:
+        """Whether a proxy request body marks a cache breakpoint of its own, on either surface a
+        breakpoint can arrive on: `messages` for chat completions and `input` for the Responses
+        API, alongside the `system` and `tools` blocks both surfaces share."""
+        return AnthropicCacheControlHook.request_has_cache_control(
+            messages=_sequence_field(request_body, "messages") + _sequence_field(request_body, "input"),
+            system=request_body.get("system"),
+            tools=_sequence_field(request_body, "tools"),
+        )
 
     @staticmethod
     def get_default_injection_points(
@@ -649,7 +665,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not supports_prompt_caching(model=model, custom_llm_provider=provider):
             return []
 
-        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools):
+        if AnthropicCacheControlHook.request_has_cache_control(messages, system, tools):
             return []
 
         control: Final = AnthropicCacheControlHook._default_control()

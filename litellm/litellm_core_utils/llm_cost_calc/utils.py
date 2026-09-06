@@ -782,6 +782,35 @@ class PromptTokensDetailsResult(TypedDict):
     audio_length_seconds: float
 
 
+AUTO_CACHE_WRITING_PROVIDERS: Final = frozenset({"openai", "azure"})
+AUTO_CACHE_WRITING_MINIMUM_PROMPT_TOKENS: Final = 1024
+
+
+def provider_writes_prompt_to_cache_unasked(custom_llm_provider: object, prompt_tokens: int) -> bool:
+    """OpenAI and Azure write a long prompt into their own cache without the request asking for it
+    and bill every written token at the cache-creation rate, which runs above the input rate. Both
+    of them cache from 1024 tokens up and nothing below that, so a shorter prompt bills the plain
+    input rate. Every other provider writes only the blocks a request marks with cache_control."""
+    return (
+        custom_llm_provider in AUTO_CACHE_WRITING_PROVIDERS
+        and prompt_tokens >= AUTO_CACHE_WRITING_MINIMUM_PROMPT_TOKENS
+    )
+
+
+def normalize_service_tier(service_tier: object) -> str | None:
+    """
+    Reduce a service_tier value to a concrete billable tier string or None.
+
+    "auto" is a routing preference and any non-string value is not a billable
+    tier, so both defer to standard pricing (or to the tier the provider reports
+    on the response usage) instead of crashing the downstream cost-key lookup,
+    which calls service_tier.lower()
+    """
+    if not isinstance(service_tier, str) or service_tier.lower() == ServiceTier.AUTO.value:
+        return None
+    return service_tier
+
+
 def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     cache_hit_tokens: Final = cast(int | None, getattr(usage.prompt_tokens_details, "cached_tokens", 0)) or 0
     cache_creation_tokens: Final = (
@@ -1087,6 +1116,85 @@ def _resolve_billed_reasoning_rate(
         model_info=model_info,
         service_tier=service_tier,
         completion_base_cost=completion_base_cost,
+    )
+
+
+def _token_rates_at(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    service_tier: str | None,
+    current_time: datetime | None,
+) -> TokenRates:
+    (prompt_rate, completion_rate, cache_creation_rate, _, cache_read_rate) = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+        current_time=current_time,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    )
+    return TokenRates(
+        input_rate=prompt_rate,
+        output_rate=completion_rate,
+        cache_read_rate=cache_read_rate,
+        cache_creation_rate=cache_creation_rate,
+        reasoning_rate=_resolve_billed_reasoning_rate(
+            model_info=model_info,
+            usage=usage,
+            service_tier=service_tier,
+            completion_base_cost=completion_rate,
+            current_time=current_time,
+        ),
+    )
+
+
+def _highest_token_rates(rates: Sequence[TokenRates], multiplier: float) -> TokenRates:
+    return TokenRates(
+        input_rate=max(rate.input_rate for rate in rates) * multiplier,
+        output_rate=max(rate.output_rate for rate in rates) * multiplier,
+        cache_read_rate=max(rate.cache_read_rate for rate in rates) * multiplier,
+        cache_creation_rate=max(rate.cache_creation_rate for rate in rates) * multiplier,
+        reasoning_rate=max(rate.billed_reasoning_rate for rate in rates) * multiplier,
+    )
+
+
+def resolve_token_rates(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    current_time: datetime | None = None,
+) -> TokenRates:
+    """The highest per-token rates a request with this usage can be billed at.
+
+    Applies the same rate selection generic_cost_per_token does (tiered_pricing tables,
+    *_above_Nk_tokens thresholds, service-tier rates, the uplift of the regional OpenAI host or
+    non-global Vertex location the request is sent to, and the provider's threshold inclusivity),
+    so a caller that only knows the token counts ahead of the request, such as budget reservation,
+    prices them the way the finished request will be. One of those can still move between the
+    estimate and the bill: an off-peak window open right now can close before the response lands,
+    so each rate is the highest of the off-peak and standard-hours candidates rather than the one
+    in force right now.
+    """
+    standard_hours_info: Final[ModelInfo] = {**model_info, "off_peak_pricing": None}
+    off_peak_variants: Final = (
+        (model_info,) if model_info.get("off_peak_pricing") is None else (model_info, standard_hours_info)
+    )
+    return _highest_token_rates(
+        tuple(
+            _token_rates_at(
+                model_info=info,
+                usage=usage,
+                custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
+                current_time=current_time,
+            )
+            for info in off_peak_variants
+        ),
+        multiplier=_get_regional_uplift_multiplier(model_info, data_residency)
+        * get_vertex_regional_endpoint_uplift(model_info, vertex_location),
     )
 
 

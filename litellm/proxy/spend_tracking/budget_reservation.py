@@ -12,8 +12,15 @@ from fastapi import HTTPException, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    TokenRates,
+    normalize_service_tier,
+    provider_writes_prompt_to_cache_unasked,
+    resolve_token_rates,
+)
+from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_TeamMembership,
@@ -36,6 +43,7 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
+from litellm.types.utils import ModelInfo, Usage
 
 
 @dataclass
@@ -1095,10 +1103,10 @@ def _estimate_request_input_cost_for_model(
             request_body=request_body,
             route=route,
             model=model,
-            model_info=model_info,
+            pricing=pricing,
             input_tokens=input_tokens,
         )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        for pricing in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
@@ -1108,27 +1116,86 @@ def _input_cost_for_cost_info(
     request_body: dict,
     route: str,
     model: str,
-    model_info: Mapping[str, object],
+    pricing: _DeploymentPricing,
     input_tokens: int | None = None,
 ) -> float | None:
     estimated_input_tokens: Final = _estimate_input_tokens(
         request_body=request_body,
         route=route,
         model=model,
-        model_info=model_info,
+        model_info=pricing.model_info,
         input_tokens=input_tokens,
     )
     if estimated_input_tokens is None:
         return None
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
-        if tier is not None:
-            return estimated_input_tokens * tier_rate(tier, "input_cost_per_token")
-    input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
-    if input_cost_per_token is None:
-        return None
-    return estimated_input_tokens * input_cost_per_token
+    rates: Final = _token_rates_for_cost_info(
+        request_body=request_body,
+        pricing=pricing,
+        input_tokens=estimated_input_tokens,
+        output_tokens=0,
+    )
+    return estimated_input_tokens * _billed_input_rate(
+        rates=rates,
+        model_info=pricing.model_info,
+        request_body=request_body,
+        input_tokens=estimated_input_tokens,
+    )
+
+
+def _billed_input_rate(
+    rates: TokenRates,
+    model_info: Mapping[str, object],
+    request_body: Mapping[str, object],
+    input_tokens: int,
+) -> float:
+    """An input token costs the higher of the input and cache-creation rates wherever the prompt
+    lands in the provider's cache, since every written token bills at the write rate. Holding the
+    write rate for a request that marks nothing, on a provider that writes nothing unasked, would
+    reserve above anything the request can bill."""
+    if _writes_the_prompt_to_cache(model_info=model_info, request_body=request_body, input_tokens=input_tokens):
+        return max(rates.input_rate, rates.cache_creation_rate)
+    return rates.input_rate
+
+
+def _writes_the_prompt_to_cache(
+    model_info: Mapping[str, object],
+    request_body: Mapping[str, object],
+    input_tokens: int,
+) -> bool:
+    return provider_writes_prompt_to_cache_unasked(
+        model_info.get("litellm_provider"), prompt_tokens=input_tokens
+    ) or AnthropicCacheControlHook.body_has_cache_control(request_body)
+
+
+def _token_rates_for_cost_info(
+    request_body: Mapping[str, object],
+    pricing: _DeploymentPricing,
+    input_tokens: int,
+    output_tokens: int,
+) -> TokenRates:
+    """The rates this request will be billed at, so a prompt past a *_above_Nk_tokens
+    threshold, inside a tiered_pricing tier, sent on a service tier, or bound for a
+    regional host is reserved at that price rather than the model's base one."""
+    return resolve_token_rates(
+        model_info=pricing.model_info,
+        usage=Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        ),
+        custom_llm_provider=pricing.model_info.get("litellm_provider"),
+        service_tier=_billed_service_tier(request_body=request_body, pricing=pricing),
+        data_residency=pricing.data_residency,
+        vertex_location=pricing.vertex_location,
+    )
+
+
+def _billed_service_tier(request_body: Mapping[str, object], pricing: _DeploymentPricing) -> str | None:
+    """The tier the finished request bills on: its own `service_tier` when it names one, and
+    otherwise the tier the deployment pins, which the router applies to every request that does
+    not. "auto" leaves the choice to the provider, so it prices as the standard tier does."""
+    requested: Final = request_body.get("service_tier")
+    return normalize_service_tier(requested if isinstance(requested, str) else pricing.service_tier)
 
 
 def _estimate_request_max_cost_for_model(
@@ -1143,10 +1210,10 @@ def _estimate_request_max_cost_for_model(
             request_body=request_body,
             route=route,
             model=model,
-            model_info=model_info,
+            pricing=pricing,
             input_tokens=input_tokens,
         )
-        for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
+        for pricing in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
     valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
@@ -1156,12 +1223,12 @@ def _max_cost_for_cost_info(
     request_body: dict,
     route: str,
     model: str,
-    model_info: Mapping[str, object],
+    pricing: _DeploymentPricing,
     input_tokens: int | None = None,
 ) -> float | None:
     image_cost: Final = _estimate_image_generation_cost(
         request_body=request_body,
-        model_info=model_info,
+        model_info=pricing.model_info,
     )
     if image_cost is not None:
         return image_cost
@@ -1170,49 +1237,49 @@ def _max_cost_for_cost_info(
         request_body=request_body,
         route=route,
         model=model,
-        model_info=model_info,
+        model_info=pricing.model_info,
         input_tokens=input_tokens,
     )
     output_tokens: Final = _estimate_output_tokens(
         request_body=request_body,
         route=route,
-        model_info=model_info,
+        model_info=pricing.model_info,
     )
     if estimated_input_tokens is None or output_tokens is None:
         return None
 
     output_multiplier: Final = _get_output_multiplier(request_body=request_body)
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=estimated_input_tokens)
-        if tier is not None:
-            output_rate = max(
-                tier_rate(tier, "output_cost_per_token"),
-                tier_rate(tier, "output_cost_per_reasoning_token"),
-            )
-            return (estimated_input_tokens * tier_rate(tier, "input_cost_per_token")) + (
-                output_tokens * output_multiplier * output_rate
-            )
+    rates: Final = _token_rates_for_cost_info(
+        request_body=request_body,
+        pricing=pricing,
+        input_tokens=estimated_input_tokens,
+        output_tokens=output_tokens,
+    )
+    input_rate: Final = _billed_input_rate(
+        rates=rates,
+        model_info=pricing.model_info,
+        request_body=request_body,
+        input_tokens=estimated_input_tokens,
+    )
+    output_rate: Final = _billed_output_rate(rates=rates, model_info=pricing.model_info)
+    return (estimated_input_tokens * input_rate) + (output_tokens * output_multiplier * output_rate)
 
-    input_cost_per_token: Final = _to_float(model_info.get("input_cost_per_token"))
-    output_cost_per_token: Final = _to_float(model_info.get("output_cost_per_token"))
-    output_cost_per_reasoning_token: Final = _to_float(model_info.get("output_cost_per_reasoning_token"))
-    cost = 0.0
-    if input_cost_per_token is not None:
-        cost += estimated_input_tokens * input_cost_per_token
-    elif estimated_input_tokens > 0:
-        return None
 
-    # The reasoning-token share is unknown before the request runs, so reserve every
-    # output token at the higher of the standard and reasoning rates to avoid
-    # under-reserving reasoning-heavy requests.
-    output_rate = max(output_cost_per_token or 0.0, output_cost_per_reasoning_token or 0.0)
-    if output_cost_per_token is not None or output_cost_per_reasoning_token is not None:
-        cost += output_tokens * output_multiplier * output_rate
-    elif output_tokens > 0:
-        return None
+def _billed_output_rate(rates: TokenRates, model_info: Mapping[str, object]) -> float:
+    """How much of the reasoning budget a response spends is unknown before it runs, so every
+    output token reserves at the higher of the standard and reasoning rates. An image model
+    priced only per image token is the exception: that rate belongs to the tokens of a generated
+    picture, which the per-image path reserves, and charging it for the text-completion cap an
+    image route never spends would hold tens of times the picture's price."""
+    if _prices_output_per_image_token(model_info):
+        return 0.0
+    return max(rates.output_rate, rates.billed_reasoning_rate)
 
-    return cost
+
+def _prices_output_per_image_token(model_info: Mapping[str, object]) -> bool:
+    return not _to_float(model_info.get("output_cost_per_token")) and bool(
+        _to_float(model_info.get("output_cost_per_image_token"))
+    )
 
 
 def _estimate_image_generation_cost(
@@ -1253,74 +1320,89 @@ def _estimate_image_generation_cost(
     return cost_per_image * max(n, 1)
 
 
-def _get_model_cost_info(
-    model: str,
-    llm_router: Router | None,
-) -> Mapping[str, object] | None:
-    if llm_router is not None:
-        model_group_info: Final = llm_router.get_model_group_info(model_group=model)
-        if model_group_info is not None:
-            return model_group_info.model_dump()
-    return dict(litellm.get_model_info(model=model))
+@dataclass(frozen=True, slots=True)
+class _DeploymentPricing:
+    """A deployment's cost entry, with the pricing context that comes from the deployment rather
+    than the request: the regional host or Vertex location it is sent to carries a price uplift,
+    and a service tier pinned in its litellm_params bills every request that does not name its
+    own tier at that tier's rates."""
+
+    model_info: ModelInfo
+    data_residency: str | None = None
+    vertex_location: str | None = None
+    service_tier: str | None = None
+
+
+def _get_model_cost_info(model: str) -> ModelInfo:
+    return litellm.get_model_info(model=model)
 
 
 def _get_model_cost_infos(
     model: str,
     llm_router: Router | None,
-) -> Sequence[Mapping[str, object]]:
-    """Cost-info candidates to estimate a request against for one model group.
+) -> Sequence[_DeploymentPricing]:
+    """Cost-info candidates to estimate a request against for one model name.
 
     Reservation runs before routing, so the deployment that will serve the request
-    is unknown. Rather than guess, we estimate the cost against every eligible
-    pricing shape in the group (the group's flat rates plus each deployment's
-    tiered table) and let the caller reserve the maximum, so a cheaper sibling
-    deployment can never leave the request under-reserved.
+    is unknown. Rather than guess, we estimate the cost against every deployment's
+    full pricing (its flat rates, *_above_Nk_tokens thresholds, and tiered table)
+    and let the caller reserve the maximum, so a cheaper sibling deployment can
+    never leave the request under-reserved. A name the router serves no deployment
+    for is priced from the public cost map entry of the name itself.
     """
     try:
-        base: Final = _get_model_cost_info(model=model, llm_router=llm_router)
-        if base is None:
-            return []
-        tiered_tables: Final = _get_deployment_tiered_pricing_tables(model=model, llm_router=llm_router)
+        deployment_infos: Final = _get_deployment_cost_infos(model=model, llm_router=llm_router)
+        if deployment_infos is not None:
+            return deployment_infos
+        return (_DeploymentPricing(model_info=_get_model_cost_info(model=model)),)
     except Exception:
         verbose_proxy_logger.debug(
             "Unable to load model cost info for budget reservation",
             exc_info=True,
         )
-        return []
-    if not tiered_tables:
-        return [base]
-    return [base, *({**base, "tiered_pricing": table} for table in tiered_tables)]
+        return ()
 
 
-def _deployment_tiered_pricing_table(
-    deployment: DeploymentTypedDict,
-    llm_router: Router,
-) -> Sequence[Mapping[str, object]] | None:
-    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
-    backend_model: Final = _get_value(_get_value(deployment, "litellm_params"), "model")
-    if not isinstance(model_id, str) or not isinstance(backend_model, str):
-        return None
-    deployment_model_info: Final = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
-    if deployment_model_info is None:
-        return None
-    tiered_pricing: Final = deployment_model_info.get("tiered_pricing")
-    if isinstance(tiered_pricing, list) and tiered_pricing:
-        return tiered_pricing
-    return None
-
-
-def _get_deployment_tiered_pricing_tables(
+def _get_deployment_cost_infos(
     model: str,
     llm_router: Router | None,
-) -> Sequence[Sequence[Mapping[str, object]]]:
+) -> Sequence[_DeploymentPricing] | None:
     if llm_router is None:
-        return []
-    deployments: Final = llm_router.get_model_list(model_name=model) or []
-    return [
-        table
+        return None
+    deployments: Final = llm_router.get_model_list(model_name=model)
+    if not deployments:
+        return None
+    return tuple(
+        deployment_pricing
         for deployment in deployments
-        if (table := _deployment_tiered_pricing_table(deployment, llm_router)) is not None
-    ]
+        if (deployment_pricing := _deployment_cost_info(deployment, llm_router)) is not None
+    )
+
+
+def _deployment_cost_info(
+    deployment: DeploymentTypedDict,
+    llm_router: Router,
+) -> _DeploymentPricing | None:
+    litellm_params: Final = _get_value(deployment, "litellm_params")
+    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
+    backend_model: Final = _get_value(litellm_params, "model")
+    if not isinstance(model_id, str) or not isinstance(backend_model, str):
+        return None
+    model_info: Final = llm_router.get_deployment_model_info(model_id=model_id, model_name=backend_model)
+    if model_info is None:
+        return None
+    api_base: Final = _get_value(litellm_params, "api_base")
+    vertex_location: Final = _get_value(litellm_params, "vertex_location") or litellm.vertex_location
+    service_tier: Final = _get_value(litellm_params, "service_tier")
+    return _DeploymentPricing(
+        model_info=model_info,
+        data_residency=infer_openai_data_residency(
+            custom_llm_provider=model_info.get("litellm_provider"),
+            api_base=api_base if isinstance(api_base, str) else None,
+        ),
+        vertex_location=vertex_location if isinstance(vertex_location, str) else None,
+        service_tier=service_tier if isinstance(service_tier, str) else None,
+    )
 
 
 def _get_request_models(

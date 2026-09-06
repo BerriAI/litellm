@@ -39,6 +39,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS,
     _approximate_input_size,
     _get_model_access_group_budget_counters,
+    estimate_request_input_cost,
     estimate_request_max_cost,
     get_budget_window_start,
     invalidate_budget_reservation_counters,
@@ -1174,43 +1175,513 @@ def test_flat_reservation_uses_higher_reasoning_output_rate():
 
 
 def test_reservation_uses_most_expensive_deployment_in_group():
-    """When a model group mixes deployments with different tiered rates, reservation
-    must estimate against the most expensive one. Reserving the cheaper sibling would
-    let a caller repeatedly hit the alias and exceed the budget once routed to the
-    costlier deployment."""
+    """When a model group mixes deployments the config prices differently, reservation must
+    estimate against the most expensive one. Reserving the cheaper sibling would let a caller
+    repeatedly hit the alias and exceed the budget once routed to the costlier deployment."""
     cheap = [{"range": [0, 32000], "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}]
     expensive = [{"range": [0, 32000], "input_cost_per_token": 5e-06, "output_cost_per_token": 1e-05}]
     input_tokens = 1000
     output_tokens = 10
+    router = Router(
+        model_list=[
+            {
+                "model_name": "mixed-rates",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-fake"},
+                "model_info": {"id": deployment_id, "tiered_pricing": tiers, "max_output_tokens": 200_000},
+            }
+            for deployment_id, tiers in (("cheap-deployment", cheap), ("expensive-deployment", expensive))
+        ]
+    )
 
-    with (
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
-            return_value={"max_output_tokens": 200000},
-        ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_tiered_pricing_tables",
-            return_value=[cheap, expensive],
-        ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
-            return_value=input_tokens,
-        ),
-        patch(
-            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
-            return_value=output_tokens,
-        ),
-    ):
-        estimated = estimate_request_max_cost(
-            request_body=_request_body(),
-            route="/chat/completions",
-            llm_router=None,
-        )
+    estimated = estimate_request_max_cost(
+        request_body=_long_prompt_request(model="mixed-rates", max_tokens=output_tokens),
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"mixed-rates": input_tokens},
+    )
 
     expected_expensive = (input_tokens * 5e-06) + (output_tokens * 1e-05)
     expected_cheap = (input_tokens * 1e-06) + (output_tokens * 2e-06)
     assert expected_expensive > expected_cheap
     assert estimated == pytest.approx(expected_expensive)
+
+
+def _long_prompt_request(model: str, max_tokens: int) -> dict[str, object]:
+    return {"model": model, "messages": [{"role": "user", "content": "hello"}], "max_tokens": max_tokens}
+
+
+def test_reservation_prices_prompt_above_272k_at_the_above_threshold_rate():
+    """A prompt past a model's *_above_272k_tokens threshold is billed at the above rate for
+    every token, so the reservation must price it there too. Reserving at the base rate
+    let a 300K-token request through a budget it then overshot by the full above-rate cost."""
+    model_info = litellm.get_model_info("gpt-5.5")
+    above_input_rate = model_info.get("input_cost_per_token_above_272k_tokens")
+    above_output_rate = model_info.get("output_cost_per_token_above_272k_tokens")
+    base_input_rate = model_info.get("input_cost_per_token")
+    base_output_rate = model_info.get("output_cost_per_token")
+    assert above_input_rate is not None and above_output_rate is not None
+    assert base_input_rate is not None and base_output_rate is not None
+    input_tokens = 300_000
+    output_tokens = 1_000
+    request_body = _long_prompt_request(model="gpt-5.5", max_tokens=output_tokens)
+
+    estimated = estimate_request_max_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=None,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+    estimated_input = estimate_request_input_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=None,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+
+    assert estimated is not None
+    assert estimated == pytest.approx((input_tokens * above_input_rate) + (output_tokens * above_output_rate))
+    assert estimated_input == pytest.approx(input_tokens * above_input_rate)
+    base_rate_under_reserve = (input_tokens * base_input_rate) + (output_tokens * base_output_rate)
+    assert estimated > base_rate_under_reserve
+
+
+def test_reservation_prices_every_image_of_a_router_served_image_model():
+    """A deployment's own cost entry carries the per-image price, so an image-generation
+    request through the router reserves `n x per-image cost` instead of nothing."""
+    router = Router(
+        model_list=[{"model_name": "pixels", "litellm_params": {"model": "openai/dall-e-3", "api_key": "sk-fake"}}]
+    )
+    per_image = litellm.get_model_info("dall-e-3").get("input_cost_per_image")
+    assert per_image is not None
+
+    estimated = estimate_request_max_cost(
+        request_body={"model": "pixels", "prompt": "a cat", "n": 3},
+        route="/v1/images/generations",
+        llm_router=router,
+        input_token_counts={"pixels": 5},
+    )
+
+    assert estimated == pytest.approx(3 * per_image)
+
+
+def test_image_generation_reserves_the_picture_not_a_chat_token_fallback():
+    """gpt-image-1 prices its output only per image token, so charging the chat fallback of 16K
+    output tokens at that rate would reserve $0.65 against a 1024x1024 low-quality picture that
+    bills about a cent, and refuse a key holding enough for the picture. The reservation prices
+    the prompt and leaves the picture to the per-image path."""
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,
+    )
+
+    model_info = litellm.get_model_info("gpt-image-1")
+    image_token_rate = model_info.get("output_cost_per_image_token")
+    input_rate = model_info.get("input_cost_per_token")
+    assert image_token_rate is not None and input_rate is not None
+    input_tokens = 8
+
+    estimated = estimate_request_max_cost(
+        request_body={"model": "gpt-image-1", "prompt": "a red bicycle", "size": "1024x1024", "quality": "low"},
+        route="/v1/images/generations",
+        llm_router=None,
+        input_token_counts={"gpt-image-1": input_tokens},
+    )
+
+    assert estimated == pytest.approx(input_tokens * input_rate)
+    assert estimated < DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK * image_token_rate
+
+
+def _openai_router(model_name: str, api_base: str | None = None) -> Router:
+    litellm_params: dict[str, object] = {"model": "openai/gpt-5.5", "api_key": "sk-fake"}
+    if api_base is not None:
+        litellm_params["api_base"] = api_base
+    return Router(model_list=[{"model_name": model_name, "litellm_params": litellm_params}])
+
+
+def test_reservation_prices_a_priority_tier_request_at_the_priority_rate():
+    """A request that asks for the priority service tier is billed at the model's priority rates,
+    which run 2.5x the standard ones on gpt-5.5. Reserving at the standard rate lets a priority
+    request through a budget its own bill then overshoots."""
+    model_info = litellm.get_model_info("gpt-5.5")
+    priority_input_rate = model_info.get("input_cost_per_token_priority")
+    priority_output_rate = model_info.get("output_cost_per_token_priority")
+    assert priority_input_rate is not None and priority_output_rate is not None
+    input_tokens = 10_000
+    output_tokens = 100
+    router = _openai_router("gpt-5.5")
+    standard_request = _long_prompt_request(model="gpt-5.5", max_tokens=output_tokens)
+
+    estimated = estimate_request_max_cost(
+        request_body={**standard_request, "service_tier": "priority"},
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+
+    assert estimated == pytest.approx((input_tokens * priority_input_rate) + (output_tokens * priority_output_rate))
+    standard_estimate = estimate_request_max_cost(
+        request_body=standard_request,
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+    assert standard_estimate is not None and estimated > standard_estimate
+
+
+def test_reservation_prices_a_flex_request_at_the_flex_rate():
+    """The bill prices a request by the service tier it asked for, and gpt-5.5's flex rates are
+    half the standard ones. Reserving at the standard rate holds twice what a flex request can
+    bill, so a key with room for the request is refused."""
+    model_info = litellm.get_model_info("gpt-5.5")
+    flex_input_rate = model_info.get("input_cost_per_token_flex")
+    flex_output_rate = model_info.get("output_cost_per_token_flex")
+    assert flex_input_rate is not None and flex_output_rate is not None
+    input_tokens = 10_000
+    output_tokens = 100
+    router = _openai_router("gpt-5.5")
+    standard_request = _long_prompt_request(model="gpt-5.5", max_tokens=output_tokens)
+
+    estimated = estimate_request_max_cost(
+        request_body={**standard_request, "service_tier": "flex"},
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+
+    assert estimated == pytest.approx((input_tokens * flex_input_rate) + (output_tokens * flex_output_rate))
+    standard_estimate = estimate_request_max_cost(
+        request_body=standard_request,
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+    assert standard_estimate is not None and estimated < standard_estimate
+
+
+def test_reservation_prices_a_regional_deployment_at_the_uplifted_rate():
+    """OpenAI charges a flat uplift on every token a regional host processes, so a deployment
+    pointed at eu.api.openai.com bills above the global rate. Reserving at the global rate
+    under-reserves every request that deployment serves."""
+    uplift = litellm.get_model_info("gpt-5.5").get("regional_processing_uplift_multiplier_eu")
+    assert uplift is not None and uplift > 1
+    input_tokens = 10_000
+    output_tokens = 100
+    request_body = _long_prompt_request(model="gpt-5.5", max_tokens=output_tokens)
+
+    estimates = [
+        estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=_openai_router("gpt-5.5", api_base=api_base),
+            input_token_counts={"gpt-5.5": input_tokens},
+        )
+        for api_base in (None, "https://eu.api.openai.com/v1")
+    ]
+
+    global_estimate, regional_estimate = estimates
+    assert global_estimate is not None and regional_estimate is not None
+    assert regional_estimate == pytest.approx(global_estimate * uplift)
+
+
+def test_reservation_prices_a_deployment_pinned_service_tier_at_that_tier_rate():
+    """The router hands every request that does not name its own service_tier the one pinned in
+    the deployment's litellm_params, and the bill follows it: gpt-5.5's priority rates run 2.5x
+    the standard ones. Reserving at the standard rate lets those requests through a budget their
+    own bill then overshoots. A request that names a tier still wins, so flex on the same
+    deployment reserves at the flex rate."""
+    model_info = litellm.get_model_info("gpt-5.5")
+    priority_input_rate = model_info.get("input_cost_per_token_priority")
+    priority_output_rate = model_info.get("output_cost_per_token_priority")
+    flex_input_rate = model_info.get("input_cost_per_token_flex")
+    flex_output_rate = model_info.get("output_cost_per_token_flex")
+    assert priority_input_rate is not None and priority_output_rate is not None
+    assert flex_input_rate is not None and flex_output_rate is not None
+    input_tokens = 10_000
+    output_tokens = 100
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.5-priority",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-fake", "service_tier": "priority"},
+            }
+        ]
+    )
+    request_body = _long_prompt_request(model="gpt-5.5-priority", max_tokens=output_tokens)
+
+    estimated = estimate_request_max_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5-priority": input_tokens},
+    )
+
+    assert estimated == pytest.approx((input_tokens * priority_input_rate) + (output_tokens * priority_output_rate))
+    flex_estimate = estimate_request_max_cost(
+        request_body={**request_body, "service_tier": "flex"},
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5-priority": input_tokens},
+    )
+    assert flex_estimate == pytest.approx((input_tokens * flex_input_rate) + (output_tokens * flex_output_rate))
+
+
+def test_reservation_prices_a_regional_vertex_deployment_at_the_uplifted_rate():
+    """Google bills every non-global Vertex endpoint at a flat premium over the global one, 1.1x
+    on gemini-3.5-flash, so a deployment pinned to us-east1 costs 10% more than the same model on
+    the global endpoint. Reserving at the global rate under-reserves every request it serves."""
+    uplift = litellm.get_model_info("vertex_ai/gemini-3.5-flash").get("regional_endpoint_uplift_multiplier")
+    assert uplift is not None and uplift > 1
+    input_tokens = 10_000
+    request_body = _long_prompt_request(model="vertex-flash", max_tokens=100)
+
+    estimates = [
+        estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=Router(
+                model_list=[
+                    {
+                        "model_name": "vertex-flash",
+                        "litellm_params": {
+                            "model": "vertex_ai/gemini-3.5-flash",
+                            "vertex_project": "test-project",
+                            "vertex_location": vertex_location,
+                        },
+                    }
+                ]
+            ),
+            input_token_counts={"vertex-flash": input_tokens},
+        )
+        for vertex_location in ("global", "us-east1")
+    ]
+
+    global_estimate, regional_estimate = estimates
+    assert global_estimate is not None and regional_estimate is not None
+    assert regional_estimate == pytest.approx(global_estimate * uplift)
+
+
+def test_reservation_prices_a_prompt_at_the_cache_write_rate():
+    """OpenAI writes a long prompt into its own cache without the request asking and bills every
+    written token at the cache-creation rate: a 305,124-token gpt-5.6-luna request came back with
+    `cache_creation_tokens: 305124` and `x-litellm-response-cost-cache-creation: 0.152562` out of a
+    0.1525938 bill. Reserving at the input rate leaves that whole gap unreserved."""
+    model_info = litellm.get_model_info("gpt-5.6-luna")
+    input_rate = model_info.get("input_cost_per_token_above_272k_tokens")
+    cache_write_rate = model_info.get("cache_creation_input_token_cost_above_272k_tokens")
+    output_rate = model_info.get("output_cost_per_token_above_272k_tokens")
+    assert input_rate is not None and output_rate is not None
+    assert cache_write_rate is not None and cache_write_rate > input_rate
+    input_tokens = 305_124
+    output_tokens = 100
+    router = Router(
+        model_list=[
+            {
+                "model_name": "luna",
+                "litellm_params": {"model": "openai/gpt-5.6-luna", "api_key": "sk-fake"},
+            }
+        ]
+    )
+
+    estimated = estimate_request_max_cost(
+        request_body=_long_prompt_request(model="luna", max_tokens=output_tokens),
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"luna": input_tokens},
+    )
+
+    assert estimated == pytest.approx((input_tokens * cache_write_rate) + (output_tokens * output_rate))
+
+
+def test_cancelled_request_keeps_the_cache_write_cost_it_already_incurred():
+    """A cancelled in-flight request is reconciled down to its input cost, and the provider has
+    already written the prompt into its cache and billed it at the cache-creation rate. Holding
+    only the plain input rate releases budget that is already spent, so the next request is
+    admitted against headroom the key does not have."""
+    model_info = litellm.get_model_info("gpt-5.6-luna")
+    input_rate = model_info.get("input_cost_per_token_above_272k_tokens")
+    cache_write_rate = model_info.get("cache_creation_input_token_cost_above_272k_tokens")
+    assert input_rate is not None
+    assert cache_write_rate is not None and cache_write_rate > input_rate
+    input_tokens = 305_124
+
+    estimated_input = estimate_request_input_cost(
+        request_body=_long_prompt_request(model="gpt-5.6-luna", max_tokens=100),
+        route="/chat/completions",
+        llm_router=None,
+        input_token_counts={"gpt-5.6-luna": input_tokens},
+    )
+
+    assert estimated_input == pytest.approx(input_tokens * cache_write_rate)
+
+
+def test_a_prompt_too_short_to_cache_reserves_the_plain_input_rate():
+    """OpenAI and Azure write a prompt into their own cache from 1024 tokens up and nothing below
+    that, so a shorter prompt bills the plain input rate. Reserving the 25% dearer write rate for
+    it holds budget the request cannot spend, and a cancelled request is reconciled to that
+    inflated number as real spend rather than as a hold that gets released."""
+    model_info = litellm.get_model_info("gpt-5.6-luna")
+    input_rate = model_info.get("input_cost_per_token")
+    cache_write_rate = model_info.get("cache_creation_input_token_cost")
+    assert input_rate is not None
+    assert cache_write_rate is not None and cache_write_rate > input_rate
+
+    below_threshold, at_threshold = [
+        estimate_request_input_cost(
+            request_body=_long_prompt_request(model="gpt-5.6-luna", max_tokens=100),
+            route="/chat/completions",
+            llm_router=None,
+            input_token_counts={"gpt-5.6-luna": input_tokens},
+        )
+        for input_tokens in (1_023, 1_024)
+    ]
+
+    assert below_threshold == pytest.approx(1_023 * input_rate)
+    assert at_threshold == pytest.approx(1_024 * cache_write_rate)
+
+
+def test_reservation_holds_the_cache_write_rate_only_when_the_request_asks_for_it():
+    """Anthropic writes a prompt into its cache only where cache_control marks a block, so a
+    request that marks nothing is billed the plain input rate. Holding the 25% dearer write rate
+    for every Anthropic request reserves above anything the request can bill, and one that does
+    mark a block still has to hold it."""
+    model_info = litellm.get_model_info("claude-haiku-4-5")
+    input_rate = model_info.get("input_cost_per_token")
+    cache_write_rate = model_info.get("cache_creation_input_token_cost")
+    assert input_rate is not None
+    assert cache_write_rate is not None and cache_write_rate > input_rate
+    input_tokens = 72_801
+    plain_request = _long_prompt_request(model="claude-haiku-4-5", max_tokens=100)
+    cached_request = {
+        **plain_request,
+        "messages": [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}],
+            }
+        ],
+    }
+
+    cached_responses_request = {
+        "model": "claude-haiku-4-5",
+        "max_output_tokens": 100,
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello", "cache_control": {"type": "ephemeral"}}],
+            }
+        ],
+    }
+
+    estimates = [
+        estimate_request_input_cost(
+            request_body=body,
+            route=route,
+            llm_router=None,
+            input_token_counts={"claude-haiku-4-5": input_tokens},
+        )
+        for body, route in (
+            (plain_request, "/chat/completions"),
+            (cached_request, "/chat/completions"),
+            (cached_responses_request, "/v1/responses"),
+        )
+    ]
+
+    plain, cached, cached_responses = estimates
+    assert plain == pytest.approx(input_tokens * input_rate)
+    assert cached == pytest.approx(input_tokens * cache_write_rate)
+    assert cached_responses == pytest.approx(input_tokens * cache_write_rate)
+
+
+def test_reservation_prices_above_272k_rate_through_router_deployment():
+    """On the proxy the model name resolves through the router, whose group summary only
+    carries flat rates. The reservation must read each deployment's full pricing so the
+    above-threshold keys from the cost map reach the estimate."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.5",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-fake"},
+            }
+        ]
+    )
+    model_info = litellm.get_model_info("openai/gpt-5.5")
+    above_input_rate = model_info.get("input_cost_per_token_above_272k_tokens")
+    above_output_rate = model_info.get("output_cost_per_token_above_272k_tokens")
+    base_input_rate = model_info.get("input_cost_per_token")
+    assert above_input_rate is not None and above_output_rate is not None
+    assert base_input_rate is not None and above_input_rate > base_input_rate
+    input_tokens = 300_000
+    output_tokens = 1_000
+
+    estimated = estimate_request_max_cost(
+        request_body=_long_prompt_request(model="gpt-5.5", max_tokens=output_tokens),
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5": input_tokens},
+    )
+
+    assert estimated == pytest.approx((input_tokens * above_input_rate) + (output_tokens * above_output_rate))
+
+
+def test_reservation_honors_inclusive_threshold_providers():
+    """xAI bills the higher tier once the prompt reaches the threshold while OpenAI bills it
+    only past the threshold, so a prompt of exactly the threshold length reserves at the
+    above rate for xAI and at the base rate for OpenAI."""
+    output_tokens = 10
+
+    def estimate(model: str, input_tokens: int) -> float:
+        estimated = estimate_request_max_cost(
+            request_body=_long_prompt_request(model=model, max_tokens=output_tokens),
+            route="/chat/completions",
+            llm_router=None,
+            input_token_counts={model: input_tokens},
+        )
+        assert estimated is not None
+        return estimated
+
+    xai_info = litellm.get_model_info("xai/grok-4.6")
+    xai_above_input_rate = xai_info.get("input_cost_per_token_above_200k_tokens")
+    xai_above_output_rate = xai_info.get("output_cost_per_token_above_200k_tokens")
+    assert xai_above_input_rate is not None and xai_above_output_rate is not None
+    openai_info = litellm.get_model_info("gpt-5.5")
+    openai_base_input_rate = openai_info.get("input_cost_per_token")
+    openai_base_output_rate = openai_info.get("output_cost_per_token")
+    assert openai_base_input_rate is not None and openai_base_output_rate is not None
+
+    assert estimate("xai/grok-4.6", 200_000) == pytest.approx(
+        (200_000 * xai_above_input_rate) + (output_tokens * xai_above_output_rate)
+    )
+    assert estimate("gpt-5.5", 272_000) == pytest.approx(
+        (272_000 * openai_base_input_rate) + (output_tokens * openai_base_output_rate)
+    )
+
+
+def test_reservation_ignores_an_off_peak_discount_whose_window_can_close():
+    """A deployment's off-peak window can close between the reservation and the response, and the
+    finished request is then billed at the standard rate. Reserving the discounted rate would let
+    a request through a budget the standard rate goes on to overshoot."""
+    now = datetime.now(timezone.utc)
+    open_window = f"{(now - timedelta(hours=1)).strftime('%H:%M')}-{(now + timedelta(hours=1)).strftime('%H:%M')}"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.5-off-peak",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-fake"},
+                "model_info": {"off_peak_pricing": {"hours_utc": open_window, "input_cost_per_token": 1e-08}},
+            }
+        ]
+    )
+    above_input_rate = litellm.get_model_info("openai/gpt-5.5").get("input_cost_per_token_above_272k_tokens")
+    assert above_input_rate is not None
+    input_tokens = 300_000
+
+    estimated_input = estimate_request_input_cost(
+        request_body=_long_prompt_request(model="gpt-5.5-off-peak", max_tokens=16),
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5-off-peak": input_tokens},
+    )
+
+    assert estimated_input == pytest.approx(input_tokens * above_input_rate)
 
 
 @pytest.mark.asyncio
