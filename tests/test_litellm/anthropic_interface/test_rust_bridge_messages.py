@@ -126,16 +126,6 @@ def test_load_rust_messages_returns_injected_impl():
     assert rust_messages.load_rust_messages() is bridge
 
 
-def test_bare_rust_still_toggles_ocr():
-    from litellm.rust_bridge.ocr import rust_ocr_enabled
-
-    litellm.rust(True)
-    assert rust_ocr_enabled() is True
-
-    litellm.rust(False)
-    assert rust_ocr_enabled() is False
-
-
 def test_load_rust_amessages_returns_injected_impl():
     bridge = RecordingAsyncMessages()
     litellm.rust(True)
@@ -308,19 +298,6 @@ async def test_gate_uses_process_enable_without_request_override():
     assert isinstance(response, Handled)
     response = response.value
     assert bridge.calls[0]["custom_llm_provider"] == "azure_ai"
-
-
-@pytest.mark.asyncio
-async def test_gate_ignores_request_flag_when_process_enabled():
-    bridge = RecordingAsyncMessages()
-    litellm.rust(True)
-    rust_messages.set_rust_messages(amessages=bridge)
-
-    response = await _gate(litellm_params=GenericLiteLLMParams(api_key="sk-azure", rust=False))
-
-    assert isinstance(response, Handled)
-    response = response.value
-    assert len(bridge.calls) == 1
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,7 @@ from litellm.rust_bridge.request import (
     NativeRequestOptions,
     PreparedNativeCall,
     call_native,
+    with_capabilities,
 )
 from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt, identity
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -60,6 +61,7 @@ def messages(
     stream: bool = False,
     has_custom_client: bool = False,
     has_agentic_hook: bool = False,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[dict[str, object]]:
     return attempt(
         load=_MESSAGES.load,
@@ -74,13 +76,14 @@ def messages(
                 extra_headers=extra_headers,
                 timeout_seconds=timeout_to_seconds(timeout),
             ),
-            context=NativeRequestContext(
-                capabilities=NativeRequestCapabilities(
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
                     execution_mode="sync",
                     stream=stream,
                     has_custom_client=has_custom_client,
                     has_agentic_hook=has_agentic_hook,
-                )
+                ),
             ),
         ),
         call=call_native,
@@ -100,6 +103,7 @@ async def amessages(
     stream: bool = False,
     has_custom_client: bool = False,
     has_agentic_hook: bool = False,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[dict[str, object]]:
     return await aattempt(
         load=_AMESSAGES.load,
@@ -114,13 +118,14 @@ async def amessages(
                 extra_headers=extra_headers,
                 timeout_seconds=timeout_to_seconds(timeout),
             ),
-            context=NativeRequestContext(
-                capabilities=NativeRequestCapabilities(
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
                     execution_mode="async",
                     stream=stream,
                     has_custom_client=has_custom_client,
                     has_agentic_hook=has_agentic_hook,
-                )
+                ),
             ),
         ),
         call=call_native,

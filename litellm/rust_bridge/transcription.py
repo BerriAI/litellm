@@ -14,6 +14,7 @@ from litellm.rust_bridge.request import (
     PreparedNativeCall,
     bedrock_options,
     call_native,
+    with_capabilities,
 )
 from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt, identity
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -50,7 +51,7 @@ def load_rust_atranscription() -> RustAtranscription | None:
 def transcription(
     *,
     model: str,
-    audio: dict[str, object],
+    audio: object,
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
@@ -60,6 +61,7 @@ def transcription(
     stream: bool = False,
     has_custom_client: bool = False,
     input_source_kind: str | None = None,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[dict[str, object]]:
     return attempt(
         load=_TRANSCRIPTION.load,
@@ -75,13 +77,14 @@ def transcription(
                 timeout_seconds=timeout_to_seconds(timeout),
                 bedrock=bedrock_options(optional_params),
             ),
-            context=NativeRequestContext(
-                capabilities=NativeRequestCapabilities(
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
                     execution_mode="sync",
                     stream=stream,
                     has_custom_client=has_custom_client,
                     input_source_kind=input_source_kind,
-                )
+                ),
             ),
         ),
         call=call_native,
@@ -92,7 +95,7 @@ def transcription(
 async def atranscription(
     *,
     model: str,
-    audio: dict[str, object],
+    audio: object,
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
@@ -102,6 +105,7 @@ async def atranscription(
     stream: bool = False,
     has_custom_client: bool = False,
     input_source_kind: str | None = None,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[dict[str, object]]:
     return await aattempt(
         load=_ATRANSCRIPTION.load,
@@ -117,13 +121,14 @@ async def atranscription(
                 timeout_seconds=timeout_to_seconds(timeout),
                 bedrock=bedrock_options(optional_params),
             ),
-            context=NativeRequestContext(
-                capabilities=NativeRequestCapabilities(
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
                     execution_mode="async",
                     stream=stream,
                     has_custom_client=has_custom_client,
                     input_source_kind=input_source_kind,
-                )
+                ),
             ),
         ),
         call=call_native,
