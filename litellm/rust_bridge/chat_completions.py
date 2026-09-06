@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import get_bedrock_request_metadata_fields
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.protocols import (
@@ -113,6 +114,8 @@ _CHAT: Final[EndpointDispatch[RustChatCompletions, RustAchatCompletions]] = Endp
     asynchronous=lambda native: native.achat_completions,
     enabled=rust_enabled,
 )
+
+
 def set_rust_chat_completions(
     *,
     chat_completions: RustChatCompletions | None | Unchanged = UNCHANGED,

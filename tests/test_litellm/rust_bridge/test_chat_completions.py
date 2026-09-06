@@ -351,6 +351,7 @@ def test_typed_capability_and_provider_metadata_facts_are_isolated():
     assert anthropic_options({"metadata": {"user_id": None}}).has_user_id is False
 
 
+
 @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "openai"])
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.asyncio
@@ -375,9 +376,7 @@ async def test_public_completion_discovers_any_provider(provider, asynchronous):
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize(
-    "failure", ["decline", "unavailable", "error", "malformed", "cancelled"]
-)
+@pytest.mark.parametrize("failure", ["decline", "unavailable", "error", "malformed", "cancelled"])
 @pytest.mark.asyncio
 async def test_public_completion_fallback_contract(monkeypatch, asynchronous, failure):
     import asyncio

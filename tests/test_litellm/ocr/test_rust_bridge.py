@@ -224,24 +224,11 @@ def _reset_rust_flag():
     """Keep the global toggle isolated between tests."""
     rust_bridge._OCR.sync.reset()
     rust_bridge._OCR.asynchronous.reset()
-    rust_bridge._PREFLIGHT.reset()
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
-    rust_bridge._PREFLIGHT.override(
-        lambda model, custom_llm_provider, *, context: (
-            "unsupported feature"
-            if any(getattr(context.capabilities, key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
-            or (
-                context.capabilities.request_format == "native"
-                and not (custom_llm_provider == "azure_ai" and "doc-intelligence" in model)
-            )
-            else None
-        )
-    )
     yield
     rust_bridge._OCR.sync.reset()
     rust_bridge._OCR.asynchronous.reset()
-    rust_bridge._PREFLIGHT.reset()
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
@@ -378,7 +365,6 @@ def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
 
     rust_bridge._OCR.sync.reset()
     rust_bridge._OCR.asynchronous.reset()
-    rust_bridge._PREFLIGHT.reset()
     assert rust_bridge.load_rust_ocr() is None
     assert rust_bridge.load_rust_aocr() is None
 
