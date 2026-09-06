@@ -412,9 +412,11 @@ class DBSpendUpdateWriter:
                     "spend": 0.0,
                 },
             )
-        except Exception as e:  # noqa: BLE001  # prisma raises its own hierarchy; a row it cannot take over charges the batch
-            verbose_proxy_logger.warning("Could not take over spend row %s for a batch's cost: %s", request_id, e)
-            return True
+        except Exception as e:  # noqa: BLE001  # prisma raises its own hierarchy; the next retrieve takes the row over
+            verbose_proxy_logger.warning(
+                "Could not take over spend row %s, leaving this batch's cost to the next retrieve: %s", request_id, e
+            )
+            return False
         if taken_over == 0:
             verbose_proxy_logger.debug("Cost tracking skipped: spend row %s already charged this batch", request_id)
             return False

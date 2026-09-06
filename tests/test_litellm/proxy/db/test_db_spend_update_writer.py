@@ -3093,17 +3093,21 @@ async def test_update_database_charges_a_batch_whose_row_a_pre_upgrade_poll_left
 
 
 @pytest.mark.asyncio
-async def test_update_database_charges_a_batch_whose_zero_row_it_could_not_take_over():
-    """A DB that refuses the takeover must not swallow the batch's cost."""
+async def test_update_database_leaves_a_batch_whose_zero_row_it_could_not_take_over_to_the_next_retrieve():
+    """
+    A DB that refuses the takeover leaves the row reading $0, so charging here would charge
+    the batch again on every later retrieve. The retrieve that does take the row over is the
+    one that charges.
+    """
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
     existing = SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.0)
     prisma = _spend_logs_prisma(0, existing)
     prisma.db.litellm_spendlogs.update_many = AsyncMock(side_effect=RuntimeError("db unreachable"))
 
-    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is True
+    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is False
 
-    assert db_writer._batch_database_updates.await_count == 1
+    assert db_writer._batch_database_updates.await_count == 0
 
 
 @pytest.mark.asyncio
