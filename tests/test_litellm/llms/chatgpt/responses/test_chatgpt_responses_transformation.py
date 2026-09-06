@@ -10,18 +10,23 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-
+import litellm
+from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.main import responses_api_bridge_check
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
-from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 
 
 class TestChatGPTResponsesAPITransformation:
     @pytest.mark.parametrize(
         "model_name",
         [
+            "chatgpt/gpt-5.5",
+            "chatgpt/gpt-5.6-luna",
+            "chatgpt/gpt-5.6-sol",
+            "chatgpt/gpt-5.6-terra",
             "chatgpt/gpt-5.4",
             "chatgpt/gpt-5.4-pro",
             "chatgpt/gpt-5.3-chat-latest",
@@ -39,6 +44,50 @@ class TestChatGPTResponsesAPITransformation:
         assert config is not None
         assert isinstance(config, ChatGPTResponsesAPIConfig)
         assert config.custom_llm_provider == LlmProviders.CHATGPT
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "chatgpt/gpt-5.5",
+            "chatgpt/gpt-5.6-luna",
+            "chatgpt/gpt-5.6-sol",
+            "chatgpt/gpt-5.6-terra",
+        ],
+    )
+    def test_chatgpt_responses_model_metadata(self, model_name, local_model_cost_map):
+        model_info = litellm.get_model_info(model_name)
+
+        assert model_info["litellm_provider"] == "chatgpt"
+        assert model_info["mode"] == "responses"
+        assert model_info["supported_endpoints"] == [
+            "/v1/chat/completions",
+            "/v1/responses",
+        ]
+        assert model_info["max_input_tokens"] == 1050000
+        assert model_info["max_output_tokens"] == 128000
+
+    @pytest.mark.parametrize(
+        "model_name",
+        [
+            "gpt-5.5",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+        ],
+    )
+    def test_chatgpt_models_bridge_chat_completions_to_responses(self, model_name, local_model_cost_map):
+        """A chat completions request for these models must take the Responses bridge.
+
+        `gpt-5.6-*` also exists as an openai chat model, so an unregistered
+        chatgpt model resolves to mode "chat" here and never reaches the bridge.
+        """
+        model_info, resolved_model = responses_api_bridge_check(
+            model=model_name,
+            custom_llm_provider="chatgpt",
+        )
+
+        assert model_info["mode"] == "responses"
+        assert resolved_model == model_name
 
     @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
     def test_chatgpt_responses_endpoint_url(self, mock_authenticator_class):

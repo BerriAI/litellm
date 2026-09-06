@@ -696,9 +696,17 @@ class TestBedrockMantlePricing:
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
         litellm.add_known_models()
         info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-20b")
-        # Bedrock pricing: $0.075/M input, $0.30/M output
-        assert info["input_cost_per_token"] == pytest.approx(7.5e-8)
+        # Bedrock pricing: $0.07/M input, $0.30/M output
+        assert info["input_cost_per_token"] == pytest.approx(7e-8)
         assert info["output_cost_per_token"] == pytest.approx(3e-7)
+
+    def test_gpt_oss_safeguard_20b_pricing(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+        litellm.add_known_models()
+        info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-safeguard-20b")
+        # Bedrock pricing: $0.07/M input, $0.20/M output
+        assert info["input_cost_per_token"] == pytest.approx(7e-8)
+        assert info["output_cost_per_token"] == pytest.approx(2e-7)
 
     def test_pricing_significantly_cheaper_than_openai_native(self, monkeypatch):
         """
