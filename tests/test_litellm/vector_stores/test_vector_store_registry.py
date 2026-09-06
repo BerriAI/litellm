@@ -71,6 +71,22 @@ def test_get_credentials_for_vector_store():
     assert result == {}
 
 
+def test_vector_store_registries_do_not_share_default_list():
+    first = VectorStoreRegistry()
+    second = VectorStoreRegistry()
+
+    first.vector_stores.append(
+        LiteLLM_ManagedVectorStore(
+            vector_store_id="first",
+            custom_llm_provider="openai",
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+
+    assert second.vector_stores == []
+
+
 def test_add_vector_store_to_registry():
     """Test that add_vector_store_to_registry adds vector store correctly when there are pre-existing stores"""
     # Create pre-existing vector stores
