@@ -5941,16 +5941,30 @@ class PrismaClient:
         limit: int = 100,
         offset: int = 0,
         status_filter: str | None = None,
+        readable_deployment_ids: "frozenset[str] | None" = None,
+        readable_id_less_model_names: "frozenset[str]" = frozenset(),
     ) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
         """
-        Get health check history with optional filtering
+        Get health check history with optional filtering.
+
+        When ``readable_deployment_ids`` is not None the caller is scoped: the
+        query restricts to rows whose ``model_id`` is in that set, plus id-less
+        rows whose ``model_name`` is in ``readable_id_less_model_names``, so
+        ``take``/``skip`` page over the caller's own rows. Filtering after the
+        page instead lets background writes for other deployments fill the raw
+        page and hide the caller's rows behind an empty ``total_records``.
         """
         try:
-            where_clause: Final[dict[str, str]] = {}
+            where_clause: dict[str, Any] = {}  # mutable-ok: prisma where is a dict
             if model_name:
                 where_clause["model_name"] = model_name
             if status_filter:
                 where_clause["status"] = status_filter
+            if readable_deployment_ids is not None:
+                where_clause["OR"] = [
+                    {"model_id": {"in": list(readable_deployment_ids)}},
+                    {"model_id": None, "model_name": {"in": list(readable_id_less_model_names)}},
+                ]
 
             results: Final = await HealthCheckRepository(self).table.find_many(
                 where=where_clause,

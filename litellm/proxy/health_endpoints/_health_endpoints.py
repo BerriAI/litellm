@@ -1302,7 +1302,7 @@ async def _health_readable_rows_scope(
     )
     return _StoredHealthScope(
         deployment_ids=frozenset(ident for row in readable if (ident := _deployment_id(row)) is not None),
-        model_names=frozenset(name for row in readable if isinstance(name := row.get("model_name"), str)),
+        model_names=frozenset(name for row in readable for name in _deployment_own_names(row, caller)),
     )
 
 
@@ -1660,19 +1660,20 @@ async def health_check_history_endpoint(
             llm_model_list,
             _AuthStores(prisma_client, user_api_key_cache, proxy_logging_obj),
         )
+        # Push the scope into the query so ``limit``/``offset`` paginate over
+        # the caller's own rows; filtering after the page lets background
+        # writes for other deployments hide the caller's history behind an
+        # empty page and a zero ``total_records``.
         history: Final = await prisma_client.get_health_check_history(
             model_name=model,
             limit=limit,
             offset=offset,
             status_filter=status_filter,
+            readable_deployment_ids=readable.deployment_ids if readable is not None else None,
+            readable_id_less_model_names=readable.model_names if readable is not None else frozenset(),
         )
 
-        # Convert to dict format for JSON response using helper function
-        history_data: Final = [
-            _convert_health_check_to_dict(check)
-            for check in history
-            if readable is None or readable.admits(check.model_id, check.model_name)
-        ]
+        history_data: Final = [_convert_health_check_to_dict(check) for check in history]
 
         return {
             "health_checks": history_data,

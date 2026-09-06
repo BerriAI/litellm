@@ -3783,9 +3783,37 @@ _STORED_HEALTH_ROWS = (
 )
 
 
+def _apply_history_scope(rows, readable_deployment_ids, readable_id_less_model_names):
+    if readable_deployment_ids is None:
+        return list(rows)
+    return [
+        r
+        for r in rows
+        if (r.model_id is not None and r.model_id in readable_deployment_ids)
+        or (r.model_id is None and r.model_name in readable_id_less_model_names)
+    ]
+
+
+def _fake_get_history(rows):
+    async def get_history(
+        model_name=None,
+        limit=100,
+        offset=0,
+        status_filter=None,
+        readable_deployment_ids=None,
+        readable_id_less_model_names=frozenset(),
+    ):
+        scoped = _apply_history_scope(rows, readable_deployment_ids, readable_id_less_model_names)
+        start = offset if isinstance(offset, int) else 0
+        stop = start + limit if isinstance(limit, int) else None
+        return scoped[start:stop]
+
+    return AsyncMock(side_effect=get_history)
+
+
 def _stored_health_prisma():
     return SimpleNamespace(
-        get_health_check_history=AsyncMock(return_value=list(_STORED_HEALTH_ROWS)),
+        get_health_check_history=_fake_get_history(_STORED_HEALTH_ROWS),
         get_all_latest_health_checks=AsyncMock(return_value=list(_STORED_HEALTH_ROWS)),
     )
 
@@ -3846,7 +3874,7 @@ _STORED_HEALTH_ROWS_WITHOUT_IDS = (
 
 def _stored_health_prisma_without_ids():
     return SimpleNamespace(
-        get_health_check_history=AsyncMock(return_value=list(_STORED_HEALTH_ROWS_WITHOUT_IDS)),
+        get_health_check_history=_fake_get_history(_STORED_HEALTH_ROWS_WITHOUT_IDS),
         get_all_latest_health_checks=AsyncMock(return_value=list(_STORED_HEALTH_ROWS_WITHOUT_IDS)),
     )
 
@@ -3897,6 +3925,71 @@ async def test_health_history_endpoint_keeps_rows_a_health_check_saved_without_a
 
     assert [row["model_name"] for row in result["health_checks"]] == expected_names
     assert result["total_records"] == len(expected_names)
+
+
+@pytest.mark.asyncio
+async def test_health_history_endpoint_pages_over_the_callers_own_rows_not_the_raw_ordered_set():
+    """A background check for another deployment ran between the caller's own rows, so /health/history must scope the query, not the page."""
+    from litellm.proxy.health_endpoints._health_endpoints import health_check_history_endpoint
+
+    caller_rows = tuple(_stored_health_row("id-bedrock", "bedrock-nova") for _ in range(3))
+    other_rows = tuple(_stored_health_row("id-openai", "gpt-5.4-mini") for _ in range(150))
+    mixed_rows = other_rows + caller_rows
+
+    prisma = SimpleNamespace(
+        get_health_check_history=_fake_get_history(mixed_rows),
+        get_all_latest_health_checks=AsyncMock(return_value=list(mixed_rows)),
+    )
+
+    with _proxy_health_globals(_ACCESS_GROUP_MODEL_LIST, _ACCESS_GROUP_ROUTER, prisma_client=prisma):
+        result = await health_check_history_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"]),
+            limit=100,
+            offset=0,
+        )
+
+    assert [row["model_id"] for row in result["health_checks"]] == ["id-bedrock"] * 3
+    assert result["total_records"] == 3
+
+
+@pytest.mark.asyncio
+async def test_health_history_endpoint_keeps_id_less_rows_saved_by_a_teams_public_model_name():
+    """A targeted /health from a team key saves the row under the team's public name, so /health/history must admit it though the deployment's model_name differs."""
+    from litellm.proxy.health_endpoints._health_endpoints import health_check_history_endpoint
+
+    rows = (_stored_health_row_without_id("bedrock-nova"),)
+    prisma = SimpleNamespace(
+        get_health_check_history=_fake_get_history(rows),
+        get_all_latest_health_checks=AsyncMock(return_value=list(rows)),
+    )
+
+    with _proxy_health_globals(_TEAM_MODEL_LIST, _router_for(_TEAM_MODEL_LIST), prisma_client=prisma):
+        result = await health_check_history_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+        )
+
+    assert [row["model_name"] for row in result["health_checks"]] == ["bedrock-nova"]
+    assert result["total_records"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_keeps_id_less_rows_saved_by_a_teams_public_model_name():
+    """/health/latest reads the same id-less rows, so a team caller who probed by the team-public name must still see that row."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    rows = (_stored_health_row_without_id("bedrock-nova"),)
+    prisma = SimpleNamespace(
+        get_health_check_history=_fake_get_history(rows),
+        get_all_latest_health_checks=AsyncMock(return_value=list(rows)),
+    )
+
+    with _proxy_health_globals(_TEAM_MODEL_LIST, _router_for(_TEAM_MODEL_LIST), prisma_client=prisma):
+        result = await latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=["bedrock-nova"], team_id="team-b"),
+        )
+
+    assert sorted(result["latest_health_checks"]) == ["bedrock-nova"]
+    assert result["total_models"] == 1
 
 
 @pytest.mark.asyncio
