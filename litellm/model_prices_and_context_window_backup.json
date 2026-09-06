@@ -54875,6 +54875,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-sol": {
@@ -54901,6 +54902,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_vision": true
     },
     "us.openai.gpt-5.6-terra": {
@@ -54927,6 +54929,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-terra": {
@@ -54953,6 +54956,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_vision": true
     },
     "us.openai.gpt-5.6-luna": {
@@ -54979,6 +54983,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_vision": true
     },
     "global.openai.gpt-5.6-luna": {
@@ -55005,6 +55010,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_reasoning": true,
+        "supports_sampling_params": false,
         "supports_vision": true
     },
     "bedrock_mantle/openai.gpt-5.5": {
