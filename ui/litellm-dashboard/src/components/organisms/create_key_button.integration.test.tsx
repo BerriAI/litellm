@@ -565,13 +565,14 @@ describe("CreateKey", () => {
     });
 
     it.fails(
-      "sends only the typed key alias (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      "adds no keys for an Optional Settings section the user opened but never filled (expected to fail until the forms revamp, tri-state PATCH tracker)",
       async () => {
         await openModal();
-        await nameTheKey("wire-alias");
+        await nameTheKey();
+        await openSection(/Optional Settings/i);
         await submit();
 
-        expect(await createdPayload()).toStrictEqual({ key_alias: "wire-alias" });
+        expect(await createdPayload()).toStrictEqual(ALL_CLOSED_PAYLOAD);
       },
     );
   });
