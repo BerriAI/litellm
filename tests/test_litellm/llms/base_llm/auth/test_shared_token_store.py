@@ -1,13 +1,15 @@
 """Two engines standing in for two uvicorn workers that read the same assertion and share one
 ``FileTokenStore``: an issuer that accepts each assertion once must see one exchange per assertion."""
 
+import errno
 import json
 import os
 import stat
 import threading
 from collections.abc import Callable, Mapping
+from os import fdopen as real_fdopen
 from pathlib import Path
-from typing import Final
+from typing import IO, Final
 
 import httpx
 import pytest
@@ -122,6 +124,37 @@ def test_a_failed_write_leaves_no_staging_file_holding_a_live_token(tmp_path: Pa
     leaked = [path for path in tmp_path.rglob("*") if path.is_file() and "sk-ant-oat01-live" in path.read_text()]
     assert leaked == [], "a staged token file survived the failed write"
     assert store.load("occupied") is None
+
+
+def test_a_write_that_only_fails_on_close_leaves_no_staging_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A token is small enough to sit in the handle's buffer until it closes, so a full disk surfaces
+    at close rather than at ``write()``, and the staging file left behind would still hold the token."""
+
+    class FailsOnClose:
+        def __init__(self, handle: IO[bytes]) -> None:
+            self._handle: Final = handle
+
+        def __enter__(self) -> "FailsOnClose":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            self._handle.close()
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        def write(self, data: bytes) -> int:
+            return self._handle.write(data)
+
+    monkeypatch.setattr(os, "fdopen", lambda descriptor, mode: FailsOnClose(real_fdopen(descriptor, mode)))
+    store = FileTokenStore(tmp_path)
+
+    store.save(
+        "closing",
+        StoredToken(access_token=SecretStr("sk-ant-oat01-live"), expires_at_epoch=None, assertion_sha256="sha"),
+    )
+
+    leaked = [path for path in tmp_path.rglob("*") if path.is_file() and "sk-ant-oat01-live" in path.read_text()]
+    assert leaked == [], "a staged token file survived the close that failed"
+    assert store.load("closing") is None
 
 
 def test_a_rotated_assertion_buys_a_fresh_token_that_other_workers_pick_up(tmp_path: Path):

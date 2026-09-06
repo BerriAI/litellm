@@ -73,20 +73,17 @@ def _unlink(path: Path) -> None:
 
 def _write_token_file(directory: Path, key: str, body: bytes) -> None:
     """The token is staged in its own file and renamed over the entry, so a reader never sees a
-    half-written one. A staging file a failure leaves behind is unlinked here: nothing else ever
-    sweeps this directory, and that file holds a token that still works."""
-    with tempfile.NamedTemporaryFile(dir=directory, prefix=f"{key}.", delete=False) as handle:
-        staged: Final = Path(handle.name)
-        try:
-            handle.write(body)
-        except OSError:
-            _unlink(staged)
-            raise
+    half-written one. Every failure unlinks the staging file, including the buffered write that only
+    reaches the disk when the handle closes: nothing else sweeps this directory, and that file holds
+    a token that still works. The rename leaves nothing behind for the unlink to find."""
+    descriptor, name = tempfile.mkstemp(dir=directory, prefix=f"{key}.")
+    staged: Final = Path(name)
     try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(body)
         os.replace(staged, directory / f"{key}.json")
-    except OSError:
+    finally:
         _unlink(staged)
-        raise
 
 
 class FileTokenStore:
