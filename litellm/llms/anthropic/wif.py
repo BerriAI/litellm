@@ -1,0 +1,600 @@
+"""Anthropic workload identity federation: exchanges an external OIDC identity
+token for a short-lived ``sk-ant-oat01`` token via the shared RFC 7523 engine."""
+
+import os
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from functools import lru_cache
+from itertools import chain
+from types import MappingProxyType
+from typing import Final, NoReturn, TypeVar
+from urllib.parse import urlsplit, urlunsplit
+
+from pydantic import BaseModel, ConfigDict, ValidationError
+from typing_extensions import assert_never
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.llms.base_llm.auth.client_credentials import keycloak_assertion_source
+from litellm.llms.base_llm.auth.identity_source import (
+    AnthropicIdentitySourceKind,
+    InternalIssuerSource,
+    KeycloakSource,
+    identity_source_ref,
+)
+from litellm.llms.base_llm.auth.internal_issuer import (
+    internal_issuer_assertion_source,
+    internal_issuer_jwks_document,
+)
+from litellm.llms.base_llm.auth.token_exchange import (
+    JwtBearerTokenExchangeEngine,
+    default_token_exchange_engine,
+)
+from litellm.llms.base_llm.auth.types import (
+    AssertionSourceError,
+    ExchangeError,
+    ExchangeResult,
+    InsecureTokenUrl,
+    MalformedTokenResponse,
+    MintedToken,
+    TokenEndpointError,
+    TokenExchangeSpec,
+    TokenTransportError,
+)
+from litellm.types.llms.anthropic import ANTHROPIC_TOKEN_EXCHANGE_PATH
+
+_JWT_BEARER_GRANT_TYPE: Final = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+_DEFAULT_API_BASE: Final = "https://api.anthropic.com"
+_INLINE_ENV_VAR: Final = "ANTHROPIC_IDENTITY_TOKEN"
+_DISABLE_WIF_PARAM: Final = "anthropic_disable_workload_identity_federation"
+_ACCEPTED_REF_PREFIX: Final = "oidc/"
+_SHADOWED_DEPLOYMENT_WARNING_CAP: Final = 512
+_CHAT_BASE_SUFFIXES: Final = ("/v1/messages", "/v1")
+# Hosts a federated exchange may talk to. api_base decides where the workload's assertion is sent
+# AND where the minted org-scoped token is presented, so anyone able to write api_base on a
+# federated deployment could otherwise redirect both. Gating each write path does not terminate:
+# a deployment, a referenced credential and a future endpoint all reach the same value. This is the
+# one place a federated exchange is built, so the trust decision is enforced here instead, and the
+# allowlist is server-owned -- read from the environment, never from a model or credential API.
+_TRUSTED_EXCHANGE_HOSTS_ENV: Final = "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS"
+_SCHEME_DEFAULT_PORTS: Final[Mapping[str, int]] = MappingProxyType({"http": 80, "https": 443})
+_DEFAULT_TRUSTED_EXCHANGE_HOST: Final = "api.anthropic.com"
+_REJECTED_REF_PREFIX: Final = "oidc/env_path/"
+_IDENTITY_SOURCE_PARAM: Final = "anthropic_identity_source"
+_IDENTITY_SOURCE_ENV: Final = "ANTHROPIC_IDENTITY_SOURCE"
+_IDENTITY_TOKEN_FILE_PARAM: Final = "anthropic_identity_token_file"
+_IDENTITY_TOKEN_PARAM: Final = "anthropic_identity_token"
+
+# litellm_params key -> InternalIssuerSource/KeycloakSource field name. Every key here must
+# also be listed in ANTHROPIC_WIF_KWARGS_KEYS (types/workload_identity.py), which is what makes it
+# request-banned and cleared on a client-redirected api_base -- see types/utils.py's
+# anthropic_wif_litellm_params, derived from that same set.
+_INTERNAL_ISSUER_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "anthropic_issuer_url": "issuer_url",
+        "anthropic_issuer_subject": "subject",
+        "anthropic_issuer_audience": "audience",
+        "anthropic_issuer_ttl_seconds": "ttl_seconds",
+        "anthropic_issuer_signing_key_ref": "signing_key_ref",
+    }
+)
+_KEYCLOAK_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "anthropic_keycloak_token_url": "token_url",
+        "anthropic_keycloak_client_id": "client_id",
+        "anthropic_keycloak_auth_method": "auth_method",
+        "anthropic_keycloak_client_secret_ref": "client_secret_ref",
+        "anthropic_keycloak_scope": "scope",
+    }
+)
+_DENIAL_HINT: Final = (
+    "Anthropic answers every denied exchange with the same 401; the reason (for example"
+    " workspace_id_required or jti_reused) is only shown in the Claude Console under"
+    " Settings > Workload identity, in the rule's authentication history. jti_reused means this"
+    " identity token was already exchanged once: Anthropic accepts each assertion a single time, so a"
+    " token file or env var has to rotate before the minted token expires (the rule's"
+    " token_lifetime_seconds), or switch to the internal issuer or Keycloak source, which mint a"
+    " fresh assertion per exchange"
+)
+_WORKSPACE_HINT: Final = (
+    "If the federation rule is enabled in more than one workspace, set anthropic_federation_workspace_id"
+    " (or ANTHROPIC_FEDERATION_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'."
+    " Federation does not read ANTHROPIC_WORKSPACE_ID, which the Bedrock Claude platform provider already uses"
+)
+_SERVICE_ACCOUNT_HINT: Final = (
+    "Anthropic's reference lists service_account_id as required: set anthropic_service_account_id"
+    " (or ANTHROPIC_SERVICE_ACCOUNT_ID) to the svac_ id the federation rule targets"
+)
+_MISSING_IDS_HINT: Final = (
+    "Copy them from the federation rule's detail page under Settings > Workload identity in the"
+    " Claude Console, or set ANTHROPIC_FEDERATION_RULE_ID and ANTHROPIC_ORGANIZATION_ID"
+)
+_ALLOWLIST_HINT: Final = (
+    "Identity token files must sit under an allowed credential directory"
+    " (/var/run/secrets or /run/secrets by default);"
+    " set LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS to extend the allowlist"
+)
+_EMPTY_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
+
+_IdentitySourceVariant = TypeVar("_IdentitySourceVariant", bound="InternalIssuerSource | KeycloakSource")
+
+
+class AnthropicWifParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    federation_rule_id: str
+    organization_id: str
+    service_account_id: str | None = None
+    workspace_id: str | None = None
+    assertion_ref: str
+    assertion_source: Callable[[], str | None] | None = None
+
+
+def resolve_anthropic_wif_params(litellm_params: Mapping[str, object] | None) -> AnthropicWifParams | None:
+    if litellm_params is not None and litellm_params.get(_DISABLE_WIF_PARAM) is True:
+        return None
+    federation_rule_id: Final = _config_value(
+        litellm_params, "anthropic_federation_rule_id", "ANTHROPIC_FEDERATION_RULE_ID"
+    )
+    organization_id: Final = _config_value(litellm_params, "anthropic_organization_id", "ANTHROPIC_ORGANIZATION_ID")
+    if federation_rule_id is None or organization_id is None:
+        _raise_if_identity_source_configured(litellm_params, federation_rule_id, organization_id)
+        return None
+    identity_source: Final = _resolve_identity_source(litellm_params)
+    if identity_source is None:
+        return None
+    assertion_ref, assertion_source = identity_source
+    return AnthropicWifParams(
+        federation_rule_id=federation_rule_id,
+        organization_id=organization_id,
+        service_account_id=_config_value(
+            litellm_params, "anthropic_service_account_id", "ANTHROPIC_SERVICE_ACCOUNT_ID"
+        ),
+        workspace_id=_config_value(
+            litellm_params, "anthropic_federation_workspace_id", "ANTHROPIC_FEDERATION_WORKSPACE_ID"
+        ),
+        assertion_ref=assertion_ref,
+        assertion_source=assertion_source,
+    )
+
+
+def _resolve_identity_source(
+    litellm_params: Mapping[str, object] | None,
+) -> tuple[str, Callable[[], str] | None] | None:
+    """Dispatches on ``anthropic_identity_source``. Absent (the default) keeps today's
+    token_file/env resolution byte-identical, with no ``assertion_source`` closure -- the engine
+    falls back to its own reader exactly as it does today. A recognized kind builds the matching
+    frozen config, hashes it into the ``oidc/<kind>/<hash>`` cache-key ref (``identity_source_ref``),
+    and closes the source's fetch/mint function over it. An unset-but-invalid config (unknown
+    kind, a missing required field, or a field from the other variant) fails closed here rather
+    than silently falling back to token_file. A deployment whose params carry a legacy token or
+    token_file ref stays on legacy resolution even when ``ANTHROPIC_IDENTITY_SOURCE`` names a
+    fleet-wide kind: the env kind only governs deployments that set no identity params of their own."""
+    source_kind: Final = _resolve_source_kind(litellm_params)
+    if source_kind is None:
+        legacy_ref: Final = _resolve_assertion_ref(litellm_params)
+        return (legacy_ref, None) if legacy_ref is not None else None
+    params: Final[Mapping[str, object]] = MappingProxyType(
+        {key: value for key, value in (litellm_params or _EMPTY_PARAMS).items() if value is not None}
+    )
+    match source_kind:
+        case AnthropicIdentitySourceKind.internal_issuer.value:
+            _reject_foreign_variant_fields(params, foreign_field_map=_KEYCLOAK_FIELD_MAP, chosen_kind=source_kind)
+            issuer_config: Final = _build_variant(InternalIssuerSource, params, _INTERNAL_ISSUER_FIELD_MAP)
+            return identity_source_ref(issuer_config), internal_issuer_assertion_source(issuer_config)
+        case AnthropicIdentitySourceKind.keycloak.value:
+            _reject_foreign_variant_fields(
+                params, foreign_field_map=_INTERNAL_ISSUER_FIELD_MAP, chosen_kind=source_kind
+            )
+            keycloak_config: Final = _build_variant(KeycloakSource, params, _KEYCLOAK_FIELD_MAP)
+            return identity_source_ref(keycloak_config), keycloak_assertion_source(keycloak_config)
+        case _:
+            _raise_unknown_source_kind(source_kind)
+
+
+def _raise_unknown_source_kind(source_kind: str) -> NoReturn:
+    raise litellm.AuthenticationError(
+        message=(
+            f"{_IDENTITY_SOURCE_PARAM} must be one of "
+            f"{', '.join(kind.value for kind in AnthropicIdentitySourceKind)}; got {source_kind!r}"
+        ),
+        llm_provider="anthropic",
+        model="",
+    )
+
+
+def _raise_if_identity_source_configured(
+    litellm_params: Mapping[str, object] | None, federation_rule_id: str | None, organization_id: str | None
+) -> None:
+    """A configured identity source is an explicit request to federate, so a missing rule or
+    organization id fails closed with the ids named, rather than silently skipping federation
+    and surfacing later as a missing API key."""
+    source_kind: Final = _resolve_source_kind(litellm_params)
+    if source_kind is None:
+        return
+    if source_kind not in {kind.value for kind in AnthropicIdentitySourceKind}:
+        _raise_unknown_source_kind(source_kind)
+    missing: Final = tuple(
+        param
+        for param, value in (
+            ("anthropic_federation_rule_id", federation_rule_id),
+            ("anthropic_organization_id", organization_id),
+        )
+        if value is None
+    )
+    raise litellm.AuthenticationError(
+        message=(
+            f"{_IDENTITY_SOURCE_PARAM} is {source_kind!r}, but {' and '.join(missing)} "
+            f"{'is' if len(missing) == 1 else 'are'} not set. {_MISSING_IDS_HINT}"
+        ),
+        llm_provider="anthropic",
+        model="",
+    )
+
+
+def _resolve_source_kind(litellm_params: Mapping[str, object] | None) -> str | None:
+    param_kind: Final = _param_str(litellm_params, _IDENTITY_SOURCE_PARAM)
+    if param_kind is not None:
+        return param_kind
+    has_param_legacy_ref: Final = any(
+        _param_str(litellm_params, key) is not None for key in (_IDENTITY_TOKEN_FILE_PARAM, _IDENTITY_TOKEN_PARAM)
+    )
+    return None if has_param_legacy_ref else _env_str(_IDENTITY_SOURCE_ENV)
+
+
+def _reject_foreign_variant_fields(
+    litellm_params: Mapping[str, object], foreign_field_map: Mapping[str, str], chosen_kind: str
+) -> None:
+    foreign_keys_present: Final = tuple(param for param in foreign_field_map if param in litellm_params)
+    if foreign_keys_present:
+        raise litellm.AuthenticationError(
+            message=(
+                f"{_IDENTITY_SOURCE_PARAM} is {chosen_kind!r}, but {', '.join(sorted(foreign_keys_present))} "
+                "belongs to a different identity source and cannot be set alongside it"
+            ),
+            llm_provider="anthropic",
+            model="",
+        )
+
+
+def _build_variant(
+    model: type[_IdentitySourceVariant],
+    litellm_params: Mapping[str, object],
+    field_map: Mapping[str, str],
+) -> _IdentitySourceVariant:
+    fields: Final = MappingProxyType(
+        {field_map[key]: value for key, value in litellm_params.items() if key in field_map}
+    )
+    try:
+        return model.model_validate(fields)
+    except ValidationError as e:
+        # hide_input_in_errors=True on both variant models keeps a secret pasted into the
+        # wrong field (e.g. a client_secret typed as signing_key_ref) out of str(e).
+        raise litellm.AuthenticationError(
+            message=f"Invalid {_IDENTITY_SOURCE_PARAM} configuration: {e}",
+            llm_provider="anthropic",
+            model="",
+        ) from e
+
+
+@dataclass(frozen=True, slots=True)
+class ExportedJwks:
+    document: str
+
+
+@dataclass(frozen=True, slots=True)
+class NotAnInternalIssuerCredential:
+    required_param: str
+    required_value: str
+
+
+@dataclass(frozen=True, slots=True)
+class UnbuildableIdentitySource:
+    message: str
+
+
+AnthropicJwksExport = ExportedJwks | NotAnInternalIssuerCredential | UnbuildableIdentitySource
+
+
+def anthropic_internal_issuer_jwks(credential_values: Mapping[str, object]) -> AnthropicJwksExport:
+    """Derive the public JWKS a stored anthropic credential publishes to its federation issuer.
+    The private signing key stays in this process; only the derived public document comes back."""
+    if credential_values.get(_IDENTITY_SOURCE_PARAM) != AnthropicIdentitySourceKind.internal_issuer.value:
+        return NotAnInternalIssuerCredential(
+            required_param=_IDENTITY_SOURCE_PARAM,
+            required_value=AnthropicIdentitySourceKind.internal_issuer.value,
+        )
+    try:
+        issuer_source: Final = _build_variant(InternalIssuerSource, credential_values, _INTERNAL_ISSUER_FIELD_MAP)
+        return ExportedJwks(internal_issuer_jwks_document(issuer_source))
+    except (litellm.AuthenticationError, ValueError) as e:
+        return UnbuildableIdentitySource(str(e))
+
+
+def build_anthropic_wif_spec(params: AnthropicWifParams, api_base: str) -> TokenExchangeSpec:
+    return TokenExchangeSpec(
+        token_url=api_base.rstrip("/") + ANTHROPIC_TOKEN_EXCHANGE_PATH,
+        assertion_ref=params.assertion_ref,
+        assertion_field="assertion",
+        static_body=MappingProxyType(
+            {
+                name: value
+                for name, value in (
+                    ("grant_type", _JWT_BEARER_GRANT_TYPE),
+                    ("federation_rule_id", params.federation_rule_id),
+                    ("organization_id", params.organization_id),
+                    ("service_account_id", params.service_account_id),
+                    ("workspace_id", params.workspace_id),
+                )
+                if value is not None
+            }
+        ),
+        body_encoding="json",
+        request_headers=MappingProxyType({}),
+        assertion_source=params.assertion_source,
+        cache_key_identity=(
+            params.federation_rule_id,
+            params.organization_id,
+            params.service_account_id or "",
+            params.workspace_id or "",
+        ),
+    )
+
+
+def get_anthropic_wif_token(
+    litellm_params: Mapping[str, object] | None,
+    api_base: str | None,
+    model: str,
+    engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
+) -> str | None:
+    params: Final = resolve_anthropic_wif_params(litellm_params)
+    if params is None:
+        return None
+    exchange_base: Final = resolve_anthropic_base(api_base)
+    _raise_if_exchange_host_untrusted(exchange_base, model)
+    result: Final = engine.get_token(build_anthropic_wif_spec(params, exchange_base))
+    return _token_from_result(result, model, params)
+
+
+async def aget_anthropic_wif_token(
+    litellm_params: Mapping[str, object] | None,
+    api_base: str | None,
+    model: str,
+    engine: JwtBearerTokenExchangeEngine = default_token_exchange_engine,
+) -> str | None:
+    params: Final = resolve_anthropic_wif_params(litellm_params)
+    if params is None:
+        return None
+    exchange_base: Final = resolve_anthropic_base(api_base)
+    _raise_if_exchange_host_untrusted(exchange_base, model)
+    result: Final = await engine.aget_token(build_anthropic_wif_spec(params, exchange_base))
+    return _token_from_result(result, model, params)
+
+
+def _token_from_result(result: ExchangeResult, model: str, params: AnthropicWifParams) -> str:
+    match result:
+        case MintedToken():
+            return result.access_token.get_secret_value()
+        case _:
+            _raise_anthropic_wif_error(
+                result,
+                model=model,
+                workspace_id_set=params.workspace_id is not None,
+                service_account_id_set=params.service_account_id is not None,
+            )
+
+
+def resolve_anthropic_base(api_base: str | None) -> str:
+    """The base every Anthropic tier derives its URLs from: the deployment api_base when set,
+    else ``ANTHROPIC_API_BASE`` / ``ANTHROPIC_BASE_URL``, else Anthropic's host, with trailing
+    slashes and chat-appended ``/v1/messages`` suffixes stripped, so the token URL, the cache key
+    and the count-tokens URL all agree for the same deployment."""
+    return anthropic_base_without_chat_suffix(api_base or _resolve_default_api_base())
+
+
+def _allowlisted_authority(entry: str) -> tuple[str, int | None] | None:
+    """One allowlist entry as ``(host, port)``. The port stays ``None`` unless the entry spells one
+    out, so ``gateway.internal`` trusts that host on every port while ``gateway.internal:8443``
+    trusts only 8443."""
+    parts: Final = urlsplit(entry if "://" in entry else f"//{entry}")
+    try:
+        port: Final = parts.port
+    except ValueError:
+        return None
+    return (parts.hostname, port) if parts.hostname else None
+
+
+def _exchange_authority(exchange_base: str) -> tuple[str, int | None]:
+    """The host and port an exchange would actually reach, filling in the scheme's default port so
+    an operator who wrote ``api.anthropic.com:443`` still matches ``https://api.anthropic.com``."""
+    parts: Final = urlsplit(exchange_base)
+    try:
+        port: Final = parts.port
+    except ValueError:
+        return "", None
+    return (parts.hostname or "").lower(), port if port is not None else _SCHEME_DEFAULT_PORTS.get(parts.scheme)
+
+
+def _trusted_exchange_authorities() -> frozenset[tuple[str, int | None]]:
+    """Authorities a federated exchange may reach: Anthropic's own, plus whatever the operator put in
+    the environment. Comma separated, case folded, each entry a URL, a bare host, or ``host:port``."""
+    configured: Final = os.getenv(_TRUSTED_EXCHANGE_HOSTS_ENV) or ""
+    entries: Final = (_allowlisted_authority(entry.strip()) for entry in configured.split(",") if entry.strip())
+    return frozenset(chain(((_DEFAULT_TRUSTED_EXCHANGE_HOST, None),), (entry for entry in entries if entry)))
+
+
+def _raise_if_exchange_host_untrusted(exchange_base: str, model: str) -> None:
+    """The federated exchange refuses any authority the operator has not vouched for, whatever wrote
+    the deployment's api_base. Exact host match, never a substring: ``api.anthropic.com.evil.test``
+    contains the real host and must not pass. An entry naming a port trusts that port alone, so a
+    second process on another port of an allowed host is refused."""
+    host, port = _exchange_authority(exchange_base)
+    if host and any(
+        host == allowed_host and allowed_port in (None, port)
+        for allowed_host, allowed_port in _trusted_exchange_authorities()
+    ):
+        return
+    refused: Final = f"{host}:{port}" if host and port is not None else host
+    raise litellm.AuthenticationError(
+        message=(
+            f"Anthropic workload identity federation refused to use host {refused or exchange_base!r}. "
+            f"A federated exchange sends the workload's identity token to this host and presents the "
+            f"minted token to it, so only {_DEFAULT_TRUSTED_EXCHANGE_HOST} is trusted by default. To "
+            f"use a private Anthropic-compatible gateway, add its host, or host:port to pin the port, "
+            f"to the {_TRUSTED_EXCHANGE_HOSTS_ENV} environment variable (comma separated); that is a "
+            f"decision to trust it with org-scoped credentials, so it is deliberately server-owned "
+            f"and cannot be set through the model or credential APIs"
+        ),
+        llm_provider="anthropic",
+        model=model,
+    )
+
+
+@lru_cache(maxsize=_SHADOWED_DEPLOYMENT_WARNING_CAP)
+def _warn_static_credential_shadows_federation(model: str, configured_rule_id: str | None) -> None:
+    """Memoized so a shadowed deployment says this once rather than once per request.
+
+    The environment fallback is resolved in here rather than by the caller so it too costs one
+    secret-manager read per deployment: every static-key Anthropic call reaches this, and a
+    per-request read of a rule id almost nobody sets is an ERROR log with a traceback per call on
+    the deployments that shadow nothing.
+    """
+    if configured_rule_id is None and _env_str("ANTHROPIC_FEDERATION_RULE_ID") is None:
+        return
+    verbose_logger.warning(
+        "Anthropic deployment %s is configured for workload identity federation, but a static "
+        "ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN is set and takes precedence, so every call bills "
+        "that credential and no federated token is minted. Unset it to federate.",
+        model or "(unnamed)",
+    )
+
+
+def warn_if_static_credential_shadows_federation(litellm_params: Mapping[str, object] | None, model: str) -> None:
+    """A process-wide static credential outranks federation everywhere in the provider, which is the
+    Anthropic SDK's own precedence. An operator who configured federation and left a key behind would
+    otherwise get no signal at all that none of their calls are federated."""
+    if litellm_params is not None and litellm_params.get(_DISABLE_WIF_PARAM) is True:
+        return
+    _warn_static_credential_shadows_federation(model, _param_str(litellm_params, "anthropic_federation_rule_id"))
+
+
+def _resolve_default_api_base() -> str:
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    return AnthropicModelInfo.get_api_base(None) or _DEFAULT_API_BASE
+
+
+def anthropic_base_without_chat_suffix(base: str) -> str:
+    """A deployment base with its chat-surface suffix removed, so the token URL and model
+    discovery both derive from the same value whatever form the operator configured."""
+    parts: Final = urlsplit(base)
+    if not parts.scheme or not parts.netloc:
+        return base.rstrip("/")
+    return urlunsplit((parts.scheme, parts.netloc, _strip_path_suffixes(parts.path), "", ""))
+
+
+def _strip_path_suffixes(path: str) -> str:
+    """Drop the chat-surface suffixes a deployment base may carry, so every tier derives the same
+    token URL. Each pass removes at most one suffix, so the loop is bounded by the segment count."""
+    trimmed = path.rstrip("/")  # rebind-ok: fixed-point strip, one suffix per pass
+    while True:
+        shortened = next(  # rebind-ok: one suffix removed per iteration
+            (trimmed.removesuffix(suffix) for suffix in _CHAT_BASE_SUFFIXES if trimmed.endswith(suffix)),
+            trimmed,
+        )
+        if shortened == trimmed:
+            return trimmed
+        # Re-strip: a doubled suffix leaves a trailing slash that would stop the next match.
+        trimmed = shortened.rstrip("/")
+
+
+def _config_value(litellm_params: Mapping[str, object] | None, param_key: str, env_name: str) -> str | None:
+    return _param_str(litellm_params, param_key) or _env_str(env_name)
+
+
+def _param_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
+    if litellm_params is None:
+        return None
+    value: Final = litellm_params.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _env_str(name: str) -> str | None:
+    from litellm.secret_managers.main import get_secret_str
+
+    value: Final = get_secret_str(name)
+    return value if isinstance(value, str) and value else None
+
+
+def _resolve_assertion_ref(litellm_params: Mapping[str, object] | None) -> str | None:
+    file_param: Final = _param_str(litellm_params, _IDENTITY_TOKEN_FILE_PARAM)
+    if file_param is not None:
+        return f"oidc/file/{file_param}"
+    inline_param: Final = _param_str(litellm_params, _IDENTITY_TOKEN_PARAM)
+    if inline_param is not None:
+        return _validated_inline_ref(inline_param)
+    file_env: Final = _env_str("ANTHROPIC_IDENTITY_TOKEN_FILE")
+    if file_env is not None:
+        return f"oidc/file/{file_env}"
+    if _env_str(_INLINE_ENV_VAR) is not None:
+        return f"oidc/env/{_INLINE_ENV_VAR}"
+    return None
+
+
+def _validated_inline_ref(value: str) -> str:
+    if value.startswith(_ACCEPTED_REF_PREFIX) and not value.startswith(_REJECTED_REF_PREFIX):
+        return value
+    raise litellm.AuthenticationError(
+        message=(
+            "anthropic_identity_token must be an oidc/ secret reference such as oidc/env/VAR_NAME,"
+            " oidc/file//absolute/path, oidc/github/<audience>, or oidc/google/<audience>."
+            " Raw identity tokens and oidc/env_path/ references are not accepted;"
+            " to pass a token directly, export it and reference it as oidc/env/VAR_NAME"
+        ),
+        llm_provider="anthropic",
+        model="",
+    )
+
+
+def _raise_anthropic_wif_error(
+    error: ExchangeError, model: str, workspace_id_set: bool, service_account_id_set: bool
+) -> NoReturn:
+    detail: Final = _error_detail(
+        error, workspace_id_set=workspace_id_set, service_account_id_set=service_account_id_set
+    )
+    raise litellm.AuthenticationError(
+        message=f"Anthropic workload identity federation failed. {detail}",
+        llm_provider="anthropic",
+        model=model,
+    )
+
+
+def _denial_hints(workspace_id_set: bool, service_account_id_set: bool) -> str:
+    hints: Final = (
+        _DENIAL_HINT,
+        "" if workspace_id_set else _WORKSPACE_HINT,
+        "" if service_account_id_set else _SERVICE_ACCOUNT_HINT,
+    )
+    return " " + ". ".join(hint for hint in hints if hint)
+
+
+def _error_detail(error: ExchangeError, workspace_id_set: bool, service_account_id_set: bool) -> str:
+    match error:
+        case AssertionSourceError() if error.kind == "disallowed_path":
+            return f"Could not read the OIDC identity token from {error.source_ref}. {_ALLOWLIST_HINT}"
+        case AssertionSourceError():
+            base: Final = f"Could not obtain the OIDC identity token ({error.kind}) from {error.source_ref}"
+            return f"{base}. {error.detail}" if error.detail else base
+        case InsecureTokenUrl():
+            return f"The token endpoint must use https; refusing to send the identity token to host {error.host!r}"
+        case TokenEndpointError() if error.status_code == 401:
+            hints: Final = _denial_hints(workspace_id_set, service_account_id_set)
+            return f"The token endpoint returned HTTP 401: {error.redacted_body}{hints}"
+        case TokenEndpointError():
+            return f"The token endpoint returned HTTP {error.status_code}: {error.redacted_body}"
+        case TokenTransportError():
+            return f"Could not reach the token endpoint: {error.detail}"
+        case MalformedTokenResponse():
+            return f"The token endpoint returned an unusable response: {error.detail}"
+        case _:
+            assert_never(error)

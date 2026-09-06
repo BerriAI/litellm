@@ -4,7 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-from collections.abc import Mapping
+from collections.abc import Container, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
 
@@ -26,6 +26,10 @@ from .utils import (
     MirroredPricingParams,
     ModelResponse,
     StandardLoggingRoutingDecision,
+)
+from .utils import (
+    # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
+    server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
 )
 
 
@@ -297,6 +301,69 @@ class CredentialLiteLLMParams(BaseModel):
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
 
+    ## ANTHROPIC WORKLOAD IDENTITY FEDERATION ##
+    # Without these, get_deployment_credentials_with_provider silently drops a
+    # litellm_params-configured WIF setup before files/batches/passthrough callers see
+    # it, the same #30235-shaped gap azure_ad_token above was added to close.
+    anthropic_federation_rule_id: str | None = None
+    anthropic_organization_id: str | None = None
+    anthropic_service_account_id: str | None = None
+    anthropic_federation_workspace_id: str | None = None
+    anthropic_identity_token_file: str | None = None
+    anthropic_identity_token: str | None = None
+    anthropic_identity_source: str | None = None
+    anthropic_issuer_url: str | None = None
+    anthropic_issuer_subject: str | None = None
+    anthropic_issuer_audience: str | None = None
+    anthropic_issuer_ttl_seconds: int | None = None
+    anthropic_issuer_signing_key_ref: str | None = None
+    anthropic_keycloak_token_url: str | None = None
+    anthropic_keycloak_client_id: str | None = None
+    anthropic_keycloak_auth_method: str | None = None
+    anthropic_keycloak_client_secret_ref: str | None = None
+    anthropic_keycloak_scope: str | None = None
+    # Server-set when a client redirects api_base. Declared so it survives the strict dump the
+    # other federation fields above are declared for, rather than being rebuilt away in transit.
+    anthropic_disable_workload_identity_federation: bool | None = None
+
+    ## OPENAI WORKLOAD IDENTITY FEDERATION ##
+    openai_identity_provider_id: str | None = None
+    openai_service_account_id: str | None = None
+    openai_identity_token_file: str | None = None
+
+
+def server_owned_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
+    """Server-owned workload identity federation field names set in ``fields``.
+
+    ``fields`` is a ``litellm_params`` dict (or a credential's ``credential_values`` mapping,
+    which feeds the same resolution when referenced by name). Derived from
+    ``server_owned_wif_litellm_params`` rather than hand-copied, so a persistence gate built on
+    this stays correct when a new WIF field is added there.
+    """
+    return tuple(name for name in _server_owned_wif_litellm_params if fields.get(name) is not None)
+
+
+def server_owned_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
+    """Server-owned workload identity federation field names that appear in ``keys``, whatever
+    value they carry.
+
+    The write gates on credentials need this key-based sibling of ``server_owned_wif_fields_present``:
+    ``get_litellm_params`` forwards a WIF kwarg on key presence and the federation resolver rejects
+    a foreign variant's field by key, so a persisted ``{"anthropic_issuer_url": None}`` wedges every
+    deployment that references the credential even though no value is set. Pass a mapping (its keys
+    are tested) or a plain collection of key names.
+    """
+    return tuple(name for name in _server_owned_wif_litellm_params if name in keys)
+
+
+_WIF_POINTER_FIELDS: Final = frozenset(name for name in _server_owned_wif_litellm_params if name.endswith("_ref"))
+
+
+def holds_secret_pointer(param_name: str) -> bool:
+    """A ``*_ref`` federation field is a secret POINTER the identity source dereferences at use
+    time, so a loader expanding ``os.environ/`` values must leave it as written."""
+    return param_name in _WIF_POINTER_FIELDS
+
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
@@ -546,6 +613,9 @@ class Deployment(BaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
+    # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked. None means "don't set it
+    # on create" -- the Prisma column defaults to False -- rather than "explicitly unblocked".
+    blocked: bool | None = None
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
@@ -1068,3 +1138,22 @@ class AdaptiveRouterPreferences(BaseModel):
 
     quality_tier: int = Field(ge=1, le=3)
     strengths: list[RequestType] = Field(default_factory=list)
+
+
+def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
+    """Raise ``ValueError`` if a mapping that did not come from deployment config carries a
+    server-owned workload identity federation field.
+
+    These are never settable inline on a client surface, with or without a client-side credential
+    opt-in. Naming a stored credential that already holds them is the other way in and has its own
+    gate: ``_check_banned_params`` resolves ``litellm_credential_name`` and refuses a federated one.
+    This lives here rather than under ``litellm.proxy`` so the router can call it on a
+    post-authentication merge without core importing from the proxy package.
+    """
+    for param in _server_owned_wif_litellm_params:
+        if param in body:
+            raise ValueError(
+                f"Rejected Request: {param} is a server-owned workload identity federation parameter "
+                "and cannot be set in a request body. A proxy admin configures it on the deployment "
+                "or on a stored credential."
+            )

@@ -1,5 +1,6 @@
 """Simple tests for lazy import functionality."""
 
+import subprocess
 import sys
 
 import pytest
@@ -346,3 +347,14 @@ def test_utils_module_lazy_imports():
         assert name in utils_globals
 
         _verify_only_requested_name_imported_in_utils(name, UTILS_MODULE_NAMES)
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["litellm.litellm_core_utils.get_litellm_params", "litellm.batches.batch_utils", "litellm.types.utils"],
+)
+def test_kwargs_funnel_and_its_importers_load_first_in_fresh_process(module: str):
+    """These modules are often the first to pull in litellm.types.utils, and the WIF key sets shared between
+    the funnel and all_litellm_params must not turn that into a cycle."""
+    result = subprocess.run([sys.executable, "-c", f"import {module}"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

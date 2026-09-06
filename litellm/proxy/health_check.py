@@ -31,6 +31,7 @@ from litellm.router_utils.auto_router_model_naming import (
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.types.utils import secret_bearing_wif_litellm_params, server_owned_wif_litellm_params
 
 ILLEGAL_DISPLAY_PARAMS: Final = [
     "messages",
@@ -47,15 +48,23 @@ ILLEGAL_DISPLAY_PARAMS: Final = [
     "aws_secret_access_key",
     "aws_session_token",
     "aws_web_identity_token",
+    *secret_bearing_wif_litellm_params,
     "extra_headers",
     "headers",
     "exception",  # internal; not JSON-serializable, never for display
     "litellm_metadata",  # internal tracking metadata with auth objects; not for display
 ]
-# Provider routing fields. Allowed for proxy admins so they can see which
-# region/version a deployment is checking; gated at the endpoint layer for
-# non-admin callers (see _strip_admin_only_fields_from_health_result).
-ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = ("api_base", "api_version")
+# Provider routing and workload identity federation fields. Allowed for proxy admins so they can
+# see which region/version a deployment is checking and which identity it federates as; gated at
+# the endpoint layer for non-admin callers (see _strip_admin_only_fields_from_health_result). Both
+# federation lists are derived from litellm.types.workload_identity rather than hand-copied, so a
+# new federation field is hidden from non-admins the day it is added and this shared health policy
+# never has to know which provider a field belongs to.
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS: Final = (
+    "api_base",
+    "api_version",
+    *(name for name in server_owned_wif_litellm_params if name not in ILLEGAL_DISPLAY_PARAMS),
+)
 
 MINIMAL_DISPLAY_PARAMS: Final = ["model", "mode_error"]
 

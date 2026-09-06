@@ -5,6 +5,7 @@ Utility functions for base LLM classes.
 import copy
 import json
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Any, Final
 
 from openai.lib import _parsing, _pydantic
@@ -56,6 +57,22 @@ class BaseLLMModelInfo(ABC):
         Returns a list of models supported by this provider.
         """
         return []
+
+    def discover_models(
+        self, litellm_params: Mapping[str, object] | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        """
+        Live model discovery for a configured deployment. Defaults to the api_key/api_base
+        facade every provider already implements via ``get_models``; a provider whose
+        discovery needs more of ``litellm_params`` (e.g. Anthropic's workload identity
+        federation) overrides this instead of widening ``get_models`` for every provider.
+        """
+        api_key: Final = litellm_params.get("api_key") if litellm_params is not None else None
+        api_base: Final = litellm_params.get("api_base") if litellm_params is not None else None
+        return self.get_models(
+            api_key=api_key if isinstance(api_key, str) else None,
+            api_base=api_base if isinstance(api_base, str) else None,
+        )
 
     @staticmethod
     @abstractmethod

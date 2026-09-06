@@ -20,6 +20,7 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -32,7 +33,8 @@ from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_me
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
+from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, server_owned_wif_fields_present
+from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
 from litellm.types.utils import CustomPricingLiteLLMParams
 
 
@@ -226,6 +228,63 @@ def _allow_model_level_clientside_configurable_parameters(
 # ``extra_body.aws_web_identity_token``) without re-validating, so the
 # banned-key check has to descend into it the same way it descends into
 # ``litellm_embedding_config``.
+# Re-exported from litellm.types.router, where it lives so the router can call it on a
+# post-authentication merge without core importing from the proxy package.
+reject_server_owned_wif_params = _reject_server_owned_wif_params
+
+_CREDENTIAL_VALUES: Final = TypeAdapter(dict[str, object])
+
+
+def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
+    """Raise ``ValueError`` if a request body picks the federated identity by credential name.
+
+    ``load_credentials_from_list`` merges a named credential's values into the call, so a body
+    naming a federated credential moves the token exchange onto that credential's federation rule
+    and organization exactly as sending the federation fields inline would, which
+    ``reject_server_owned_wif_params`` already refuses. Attaching one is a deployment decision, so
+    it is refused with no client-side opt-in to relax it, the same as the inline form.
+
+    Only credentials already loaded into memory can be resolved here, which is every credential the
+    proxy would resolve for the call itself: ``load_credentials_from_list`` reads the same list.
+    ``route_manages_deployments`` names the routes this is not applied to, where choosing the
+    credential a deployment federates through is the point of the call.
+    """
+    named: Final = body.get("litellm_credential_name")
+    if not isinstance(named, str) or not named:
+        return
+    wif_fields: Final = server_owned_wif_fields_present(
+        _CREDENTIAL_VALUES.validate_python(CredentialAccessor.get_credential_values(named))
+    )
+    if wif_fields:
+        raise ValueError(
+            f"Rejected Request: litellm_credential_name={named!r} names a credential configured for "
+            f"workload identity federation ({wif_fields[0]}), which a request body cannot choose. "
+            "A proxy admin attaches it to a deployment."
+        )
+
+
+_DEPLOYMENT_MANAGEMENT_ROUTES: Final[frozenset[str]] = frozenset(
+    ("/model/new", "/model/update", "/model/delete", "/health/test_connection")
+)
+_DEPLOYMENT_ID_UPDATE_ROUTE: Final = re.compile(r"^/model/[^/]+/update$")
+
+
+def route_manages_deployments(route: str | None) -> bool:
+    """Whether ``route`` configures a deployment instead of calling one.
+
+    These are the routes that reach ``ModelManagementAuthChecks.can_user_make_model_call``, where
+    a federated write is judged by ``_reject_non_admin_wif_write`` against what the write sets and
+    what the deployment already stores: a proxy admin goes through, anyone else is refused with a
+    403 naming the field. ``reject_federated_credential_reference`` runs ahead of that gate on
+    every route, so without this exemption a proxy admin could not attach a federated credential
+    to a deployment over the API or the Admin UI at all, leaving a static ``config.yaml`` entry as
+    the only way to configure the feature the rejection tells the caller to go configure.
+    """
+    return route is not None and (
+        route in _DEPLOYMENT_MANAGEMENT_ROUTES or _DEPLOYMENT_ID_UPDATE_ROUTE.fullmatch(route) is not None
+    )
+
+
 _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extra_body")
 
 # Metadata containers that carry per-request configuration consumed by the
@@ -373,12 +432,17 @@ def _check_banned_params(
     general_settings: dict,
     llm_router: Router | None,
     model: str,
+    *,
+    manages_deployments: bool = False,
 ) -> None:
     """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
 
     Shared between the root-level check and the nested-config check so a
     new banned param only needs to be added in one place.
     """
+    reject_server_owned_wif_params(body)
+    if not manages_deployments:
+        reject_federated_credential_reference(body)
     for param in _BANNED_REQUEST_BODY_PARAMS:
         if param not in body:
             continue
@@ -465,7 +529,14 @@ def _reject_url_valued_fallback_target(value: str) -> None:
         )
 
 
-def is_request_body_safe(request_body: dict, general_settings: dict, llm_router: Router | None, model: str) -> bool:
+def is_request_body_safe(
+    request_body: dict,
+    general_settings: dict,
+    llm_router: Router | None,
+    model: str,
+    *,
+    route: str | None = None,
+) -> bool:
     """
     Check if the request body is safe.
 
@@ -493,25 +564,27 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
     """
     if "model_list" in request_body:
         raise ValueError("Rejected Request: model_list is not allowed in the request body.")
-    _check_banned_params(request_body, general_settings, llm_router, model)
+    manages_deployments: Final = route_manages_deployments(route)
+    _check_banned_params(request_body, general_settings, llm_router, model, manages_deployments=manages_deployments)
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
-            _check_banned_params(nested, general_settings, llm_router, model)
+            _check_banned_params(nested, general_settings, llm_router, model, manages_deployments=manages_deployments)
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
-            _check_banned_params(metadata, general_settings, llm_router, model)
+            _check_banned_params(metadata, general_settings, llm_router, model, manages_deployments=manages_deployments)
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
                 extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
                 general_settings,
                 llm_router,
                 model,
+                manages_deployments=manages_deployments,
             )
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
-            _check_banned_params(target, general_settings, llm_router, model)
+            _check_banned_params(target, general_settings, llm_router, model, manages_deployments=manages_deployments)
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
@@ -519,6 +592,9 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
             _reject_url_valued_fallback_target(target)
     litellm_params: Final = _coerce_metadata_to_dict(request_body.get("litellm_params"))
     if litellm_params is not None:
+        reject_server_owned_wif_params(litellm_params)
+        if not manages_deployments:
+            reject_federated_credential_reference(litellm_params)
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(
@@ -526,6 +602,7 @@ def is_request_body_safe(request_body: dict, general_settings: dict, llm_router:
                 general_settings,
                 llm_router,
                 model,
+                manages_deployments=manages_deployments,
             )
     return True
 
@@ -578,6 +655,7 @@ async def pre_db_read_auth_checks(
         general_settings=general_settings,
         llm_router=llm_router,
         model=request_data.get("model", ""),  # [TODO] use model passed in url as well (azure openai routes)
+        route=route,
     )
 
     # Check 3. Check if IP address is allowed

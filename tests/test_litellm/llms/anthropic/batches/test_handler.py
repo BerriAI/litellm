@@ -14,6 +14,8 @@ asyncio.run) is exercised directly, mirroring the dispatch-contract discipline i
 tests/test_litellm/batches/test_main.py.
 """
 
+import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -35,9 +37,7 @@ def _ok_batch_response():
             "ended_at": "2024-09-24T11:00:00Z",
             "request_counts": {"succeeded": 2, "errored": 0},
         },
-        request=httpx.Request(
-            "GET", "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
-        ),
+        request=httpx.Request("GET", "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"),
     )
 
 
@@ -59,9 +59,7 @@ def patched_client():
 
 
 @pytest.mark.asyncio
-async def test_aretrieve_batch_fires_get_with_correct_url_and_headers(
-    handler, patched_client
-):
+async def test_aretrieve_batch_fires_get_with_correct_url_and_headers(handler, patched_client):
     fake_client, factory = patched_client
 
     batch = await handler.aretrieve_batch(
@@ -76,9 +74,7 @@ async def test_aretrieve_batch_fires_get_with_correct_url_and_headers(
     fake_client.get.assert_awaited_once()
     _, call_kwargs = fake_client.get.call_args
     # Exact URL built by get_retrieve_batch_url.
-    assert call_kwargs["url"] == (
-        "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
-    )
+    assert call_kwargs["url"] == ("https://api.anthropic.com/v1/messages/batches/msgbatch_abc")
     # Auth + version + beta headers built by validate_environment.
     headers = call_kwargs["headers"]
     assert headers["x-api-key"] == "sk-ant-test"
@@ -93,9 +89,7 @@ async def test_aretrieve_batch_fires_get_with_correct_url_and_headers(
 
 
 @pytest.mark.asyncio
-async def test_aretrieve_batch_uses_anthropic_provider_for_client(
-    handler, patched_client
-):
+async def test_aretrieve_batch_uses_anthropic_provider_for_client(handler, patched_client):
     from litellm.types.utils import LlmProviders
 
     _, factory = patched_client
@@ -111,14 +105,10 @@ async def test_aretrieve_batch_uses_anthropic_provider_for_client(
 
 
 @pytest.mark.asyncio
-async def test_aretrieve_batch_resolves_api_key_from_model_info(
-    handler, patched_client
-):
+async def test_aretrieve_batch_resolves_api_key_from_model_info(handler, patched_client):
     fake_client, _ = patched_client
     # api_key=None -> handler falls back to AnthropicModelInfo.get_api_key().
-    with patch.object(
-        handler.anthropic_model_info, "get_api_key", return_value="sk-from-env"
-    ):
+    with patch.object(handler.anthropic_model_info, "get_api_key", return_value="sk-from-env"):
         await handler.aretrieve_batch(
             batch_id="msgbatch_abc",
             api_base="https://api.anthropic.com",
@@ -134,9 +124,7 @@ async def test_aretrieve_batch_resolves_api_key_from_model_info(
 async def test_aretrieve_batch_missing_api_key_raises(handler, patched_client):
     fake_client, _ = patched_client
     # No api_key and resolver yields None -> hard error before any network call.
-    with patch.object(
-        handler.anthropic_model_info, "get_api_key", return_value=None
-    ):
+    with patch.object(handler.anthropic_model_info, "get_api_key", return_value=None):
         with pytest.raises(ValueError, match="Missing Anthropic API Key"):
             await handler.aretrieve_batch(
                 batch_id="msgbatch_abc",
@@ -165,9 +153,7 @@ async def test_aretrieve_batch_resolves_default_api_base(handler, patched_client
             max_retries=0,
         )
     _, call_kwargs = fake_client.get.call_args
-    assert call_kwargs["url"] == (
-        "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
-    )
+    assert call_kwargs["url"] == ("https://api.anthropic.com/v1/messages/batches/msgbatch_abc")
 
 
 @pytest.mark.asyncio
@@ -176,9 +162,7 @@ async def test_aretrieve_batch_raises_for_status(handler):
     error_response = httpx.Response(
         status_code=404,
         json={"error": "not found"},
-        request=httpx.Request(
-            "GET", "https://api.anthropic.com/v1/messages/batches/missing"
-        ),
+        request=httpx.Request("GET", "https://api.anthropic.com/v1/messages/batches/missing"),
     )
     fake_client = MagicMock()
     fake_client.get = AsyncMock(return_value=error_response)
@@ -213,21 +197,15 @@ async def test_aretrieve_batch_invokes_pre_call_logging(handler, patched_client)
     assert pre_kwargs["input"] == "msgbatch_abc"
     assert pre_kwargs["api_key"] == "sk-ant-test"
     # The logged api_base is the full retrieve URL, not the bare base.
-    assert pre_kwargs["additional_args"]["api_base"] == (
-        "https://api.anthropic.com/v1/messages/batches/msgbatch_abc"
-    )
+    assert pre_kwargs["additional_args"]["api_base"] == ("https://api.anthropic.com/v1/messages/batches/msgbatch_abc")
 
 
 @pytest.mark.asyncio
-async def test_aretrieve_batch_builds_default_logging_obj_when_absent(
-    handler, patched_client
-):
+async def test_aretrieve_batch_builds_default_logging_obj_when_absent(handler, patched_client):
     # logging_obj=None -> handler constructs a real Logging object; the call
     # must still complete (no AttributeError on a missing logger).
     _, _ = patched_client
-    with patch(
-        "litellm.litellm_core_utils.litellm_logging.Logging"
-    ) as logging_cls:
+    with patch("litellm.litellm_core_utils.litellm_logging.Logging") as logging_cls:
         logging_cls.return_value = MagicMock()
         batch = await handler.aretrieve_batch(
             batch_id="msgbatch_abc",
@@ -281,3 +259,99 @@ def test_retrieve_batch_sync_runs_to_result(handler, patched_client):
     assert isinstance(batch, LiteLLMBatch)
     assert batch.id == "msgbatch_abc"
     assert batch.status == "completed"
+
+
+# =========================================================================== #
+# aretrieve_batch must not block the event loop on a WIF token exchange
+# =========================================================================== #
+
+_WIF_ENV = {
+    "ANTHROPIC_FEDERATION_RULE_ID": "fdrl_batches_seam",
+    "ANTHROPIC_ORGANIZATION_ID": "org-batches-seam",
+    "ANTHROPIC_IDENTITY_TOKEN": "batches-seam-inline-jwt",
+}
+
+
+class _BlockingPoster:
+    """A token-endpoint poster that blocks until released, so the test can prove
+    the exchange ran off the event loop's own thread instead of freezing it."""
+
+    def __init__(self):
+        self.release = threading.Event()
+        self.thread_ids = []
+
+    def post(self, url, *, content, headers, timeout):
+        self.thread_ids.append(threading.get_ident())
+        self.release.wait(timeout=5)
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "sk-ant-oat01-batches-seam",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_aretrieve_batch_wif_exchange_does_not_block_event_loop(handler, patched_client, monkeypatch):
+    """Regression: aretrieve_batch called the synchronous validate_environment
+    directly, so a cold WIF mint ran inline on the event loop and froze every
+    other concurrent coroutine until the exchange finished."""
+    from litellm.llms.anthropic import common_utils as anthropic_common_utils
+    from litellm.llms.anthropic.wif import get_anthropic_wif_token
+    from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
+
+    fake_client, _ = patched_client
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_BASE",
+        "ANTHROPIC_BASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in _WIF_ENV.items():
+        monkeypatch.setenv(name, value)
+
+    poster = _BlockingPoster()
+    engine = JwtBearerTokenExchangeEngine(poster=poster)
+
+    def routed_through_injected_engine(litellm_params, api_base, model):
+        return get_anthropic_wif_token(litellm_params, api_base, model, engine)
+
+    monkeypatch.setattr(anthropic_common_utils, "get_anthropic_wif_token", routed_through_injected_engine)
+
+    ticks = []
+
+    async def ticker():
+        for i in range(20):
+            await asyncio.sleep(0.005)
+            ticks.append(i)
+
+    ticker_task = asyncio.create_task(ticker())
+    await asyncio.sleep(0.02)
+
+    retrieve_task = asyncio.create_task(
+        handler.aretrieve_batch(
+            batch_id="msgbatch_abc",
+            api_base="https://api.anthropic.com",
+            api_key=None,
+            timeout=60.0,
+            max_retries=0,
+        )
+    )
+    await asyncio.sleep(0.05)
+    # The ticker kept advancing while the token exchange was still blocked on
+    # poster.release, proving the exchange did not run on the event loop.
+    assert len(ticks) > 0
+    assert not retrieve_task.done()
+
+    poster.release.set()
+    batch = await retrieve_task
+    await ticker_task
+
+    assert batch.id == "msgbatch_abc"
+    assert poster.thread_ids
+    assert poster.thread_ids[0] != threading.get_ident()
+    sent_headers = fake_client.get.call_args.kwargs["headers"]
+    assert sent_headers["authorization"] == "Bearer sk-ant-oat01-batches-seam"

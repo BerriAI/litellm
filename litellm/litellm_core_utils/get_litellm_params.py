@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import Final
 
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
     {
@@ -27,7 +28,9 @@ RUST_KWARG_KEY: Final = "rust"
 # Keys `completion()` forwards from its own kwargs into `get_litellm_params`,
 # which are otherwise invisible to it because that call site passes explicit
 # named arguments rather than `**kwargs`.
-FORWARDED_KWARGS_KEYS: Final = AWS_CREDENTIAL_KWARGS_KEYS | frozenset({RUST_KWARG_KEY})
+FORWARDED_KWARGS_KEYS: Final = (
+    AWS_CREDENTIAL_KWARGS_KEYS | ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS | frozenset({RUST_KWARG_KEY})
+)
 
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
@@ -65,6 +68,8 @@ OPTIONAL_KWARGS_KEYS: Final = (
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
+    | ANTHROPIC_WIF_KWARGS_KEYS
+    | OPENAI_WIF_KWARGS_KEYS
 )
 
 # Backward-compatible alias for existing imports/tests.

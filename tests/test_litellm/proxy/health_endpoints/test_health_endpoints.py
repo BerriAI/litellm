@@ -29,6 +29,11 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.types.workload_identity import (
+    ANTHROPIC_WIF_KWARGS_KEYS,
+    OPENAI_WIF_KWARGS_KEYS,
+    WIF_SECRET_BEARING_KEYS,
+)
 
 # Import shared proxy test helpers from conftest
 from tests.test_litellm.proxy.conftest import create_proxy_test_client
@@ -886,6 +891,112 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
 
         passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
         assert passed_model_params.model_info.team_id == deployment_owner_team_id
+
+
+FEDERATED_DEPLOYMENT_ID = "federated-deployment-id"
+FEDERATED_DEPLOYMENT_TEAM_ID = "team-owning-the-federated-deployment"
+
+
+def _federated_deployment():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    return Deployment(
+        model_name="claude-federated",
+        litellm_params=LiteLLM_Params(
+            model="anthropic/claude-sonnet-4-5",
+            api_base="https://api.anthropic.com",
+            anthropic_federation_rule_id="rule-abc",
+            anthropic_organization_id="org-abc",
+            anthropic_identity_source="oidc/env/PROXY_OIDC_TOKEN",
+        ),
+        model_info=ModelInfo(id=FEDERATED_DEPLOYMENT_ID, team_id=FEDERATED_DEPLOYMENT_TEAM_ID),
+    )
+
+
+async def _probe_federated_deployment_as_team_admin(litellm_params):
+    """Run the Test Connection button against a federated deployment as an admin of its own team.
+
+    ``allow_client_side_credentials`` is on, which is what lets a request-supplied api_base keep
+    the configuration's credentials instead of dropping them, so the federation params are still
+    on the deployment being probed when the request redirects it.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = _federated_deployment()
+
+    async def fake_find_unique(*, where):
+        if where["team_id"] != FEDERATED_DEPLOYMENT_TEAM_ID:
+            return None
+        return SimpleNamespace(
+            model_dump=lambda: LiteLLM_TeamTable(
+                team_id=FEDERATED_DEPLOYMENT_TEAM_ID,
+                members_with_roles=[{"user_id": "team-admin-user", "role": "admin"}],
+            ).model_dump()
+        )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=fake_find_unique)
+    mock_ahealth_check = AsyncMock(return_value={"status": "healthy"})
+
+    with (
+        patch.multiple(  # test-quality-ok: proxy module globals, no injection seam
+            "litellm.proxy.proxy_server",
+            prisma_client=mock_prisma_client,
+            llm_router=mock_router,
+            premium_user=True,
+            general_settings={"allow_client_side_credentials": True},
+        ),
+        patch(  # test-quality-ok: the probe params handed to the health check are the assertion
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+    ):
+        response = await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params=litellm_params,
+            model_info={"id": FEDERATED_DEPLOYMENT_ID},
+            user_api_key_dict=UserAPIKeyAuth(
+                token="requester-token",
+                user_id="team-admin-user",
+                team_id=FEDERATED_DEPLOYMENT_TEAM_ID,
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+        )
+    return response, mock_ahealth_check
+
+
+@pytest.mark.asyncio
+async def test_test_connection_still_lets_a_team_admin_probe_a_federated_deployment():
+    """A probe that changes nothing about the deployment is not a credential change, so the team
+    admin who owns the deployment can still press Test Connection on it."""
+    response, mock_ahealth_check = await _probe_federated_deployment_as_team_admin(
+        {"model": "anthropic/claude-sonnet-4-5"}
+    )
+
+    assert response["status"] == "success"
+    assert mock_ahealth_check.await_count == 1
+    assert mock_ahealth_check.await_args.kwargs["model_params"]["anthropic_federation_rule_id"] == "rule-abc"
+
+
+@pytest.mark.asyncio
+async def test_test_connection_refuses_a_non_admin_pointing_a_federated_deployment_elsewhere():
+    """A probe carrying its own api_base sends the deployment's minted org-scoped token to a host
+    the caller chose, so it is a credential change and only a proxy admin may make it. The probe
+    used to authorize with nothing declared as incoming, which left this gate unreachable here."""
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _probe_federated_deployment_as_team_admin(
+            {
+                "model": "anthropic/claude-sonnet-4-5",
+                "api_base": "https://caller-chosen.invalid/v1",
+            }
+        )
+
+    assert exc_info.value.code == "403"
+    assert "workload identity federation" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -1863,6 +1974,127 @@ async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
 
 
 @pytest.mark.asyncio
+async def test_health_endpoint_keeps_federation_identity_admin_only():
+    """A federated deployment's health entry names the identity it mints as: the rule, the workspace,
+    the service account, the issuer it signs against. That is the same routing detail api_base is,
+    so a non-admin who can see the deployment is healthy must not learn which identity it borrows,
+    and an admin debugging a failing exchange must still see all of it.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    federation_fields = {
+        "anthropic_federation_rule_id": "fdrl_01H",
+        "anthropic_federation_workspace_id": "wrkspc_01H",
+        "anthropic_organization_id": "org-acme",
+        "anthropic_service_account_id": "svc_01H",
+        "anthropic_identity_source": "oidc/env/OIDC_TOKEN",
+        "anthropic_issuer_url": "https://issuer.internal",
+        "anthropic_keycloak_client_id": "litellm-proxy",
+        "openai_identity_provider_id": "idp_01H",
+        "openai_service_account_id": "sa_01H",
+    }
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "anthropic/claude-sonnet-5", **federation_fields},
+            "model_info": {"id": "id-a"},
+        },
+    ]
+    cached_results = {
+        "healthy_endpoints": [{"model": "anthropic/claude-sonnet-5", "model_id": "id-a", **federation_fields}],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+
+    admin_key = UserAPIKeyAuth(
+        api_key="hashed-admin-key",
+        models=["model-a"],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    non_admin_key = UserAPIKeyAuth(api_key="hashed-user-key", models=["model-a"])
+
+    with patch.multiple(  # test-quality-ok: proxy module globals, no injection seam
+        "litellm.proxy.proxy_server",
+        llm_model_list=full_model_list,
+        llm_router=None,
+        prisma_client=None,
+        use_background_health_checks=True,
+        user_model=None,
+        health_check_results=cached_results,
+        health_check_details=True,
+        health_check_concurrency=1,
+    ):
+        admin_result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=admin_key,
+            model=None,
+            model_id=None,
+        )
+        non_admin_result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=non_admin_key,
+            model=None,
+            model_id=None,
+        )
+
+    admin_endpoint = admin_result["healthy_endpoints"][0]
+    non_admin_endpoint = non_admin_result["healthy_endpoints"][0]
+
+    assert {key: admin_endpoint.get(key) for key in federation_fields} == federation_fields
+    assert [key for key in federation_fields if key in non_admin_endpoint] == []
+    assert non_admin_endpoint["model_id"] == "id-a"
+
+
+@pytest.mark.parametrize("federation_field", sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS))
+def test_no_federation_field_reaches_a_non_admin_health_entry(federation_field: str):
+    """Every key that configures workload identity federation either names the identity a
+    deployment mints as or carries the secret it mints with, and a non-admin who can see the
+    deployment is healthy must learn neither. Both lists that enforce that are derived from the
+    same key sets this runs over, so a field added to the funnel without joining either one shows
+    up here as a value a non-admin could read."""
+    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _strip_admin_only_fields_from_health_result,
+    )
+
+    canary = f"CANARY-{federation_field}-VALUE"
+    cleaned = _clean_endpoint_data(
+        {"model": "anthropic/claude-sonnet-5", "model_id": "id-a", federation_field: canary},
+        details=True,
+    )
+    stripped = _strip_admin_only_fields_from_health_result(
+        {"healthy_endpoints": [cleaned], "unhealthy_endpoints": []}
+    )
+
+    assert stripped["healthy_endpoints"][0]["model_id"] == "id-a"
+    assert federation_field not in stripped["healthy_endpoints"][0]
+    assert canary not in str(stripped)
+
+
+@pytest.mark.parametrize("secret_field", sorted(WIF_SECRET_BEARING_KEYS))
+def test_no_federation_secret_reaches_even_an_admin_health_entry(secret_field: str):
+    """A proxy admin is allowed to read which identity a deployment federates as, but never the
+    token, key, or reference it federates with, so these fields drop at the health-check layer
+    ahead of any per-caller stripping. Reading the same set the drop list is built from is what
+    catches a new secret-bearing field that was only ever added to the admin-gated half."""
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    canary = f"CANARY-{secret_field}-VALUE"
+    cleaned = _clean_endpoint_data(
+        {"model": "anthropic/claude-sonnet-5", "model_id": "id-a", secret_field: canary},
+        details=True,
+    )
+
+    assert cleaned["model_id"] == "id-a"
+    assert secret_field not in cleaned
+    assert canary not in str(cleaned)
+
+
+@pytest.mark.asyncio
 async def test_health_endpoint_warns_when_scoped_models_lack_model_id():
     """
     When a scoped key's accessible models exist on the proxy but none of the
@@ -2553,6 +2785,11 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
         "aws_secret_access_key",
         "aws_session_token",
         "aws_web_identity_token",
+        "anthropic_identity_token",
+        "anthropic_issuer_signing_key_ref",
+        "anthropic_keycloak_client_secret_ref",
+        "anthropic_identity_token_file",
+        "openai_identity_token_file",
         "vertex_credentials",
         "vertex_ai_credentials",
         "extra_headers",

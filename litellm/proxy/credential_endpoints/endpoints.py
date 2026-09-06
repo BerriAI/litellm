@@ -2,25 +2,131 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+from collections.abc import Mapping
 from typing import (
     Final,
     cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
 )
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.llms.anthropic.wif import (
+    ExportedJwks,
+    NotAnInternalIssuerCredential,
+    UnbuildableIdentitySource,
+    anthropic_internal_issuer_jwks,
+)
+from litellm.proxy._types import (
+    CommonProxyErrors,
+    LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.credential_hydration import (
+    hydrate_named_credential,
+    hydrate_named_credential_authoritative,
+    named_credential_wif_fields,
+    stored_credential_provider,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.types.router import server_owned_wif_fields_named
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router: Final = APIRouter()
+
+
+def _reject_non_admin_wif_fields(
+    wif_fields: tuple[str, ...],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """A credential referenced by ``litellm_credential_name`` feeds its values into the same
+    workload identity federation resolution as a deployment's own ``litellm_params``. Only proxy
+    admins may touch a server-owned WIF field, whether they write it, drop it, or edit a stored
+    credential that already carries one.
+    """
+    if not wif_fields or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    raise ProxyException(
+        message=(
+            f"Only proxy admins can change {wif_fields[0]!r}, a server-owned workload identity federation parameter."
+        ),
+        type=ProxyErrorTypes.auth_error.value,
+        code=status.HTTP_403_FORBIDDEN,
+        param=wif_fields[0],
+    )
+
+
+def _incoming_wif_fields(credential: CredentialItem) -> tuple[str, ...]:
+    """WIF fields the request payload itself touches: the ones it sets (to any value, ``None``
+    included, since the key alone is what the federation resolver reacts to), plus the ones it
+    names in ``credential_values_to_delete``, since dropping a federation field off the stored
+    credential breaks every deployment referencing it just as installing one would redirect them.
+    """
+    return server_owned_wif_fields_named(credential.credential_values) + server_owned_wif_fields_named(
+        credential.credential_values_to_delete or ()
+    )
+
+
+def _stored_wif_fields(stored_credential: CredentialItem) -> tuple[str, ...]:
+    return server_owned_wif_fields_named(stored_credential.credential_values)
+
+
+def _reject_overlapping_credential_values(credential: CredentialItem) -> None:
+    overlap: Final = frozenset(credential.credential_values) & frozenset(credential.credential_values_to_delete or ())
+    if overlap:
+        raise HTTPException(
+            status_code=400,
+            detail=f"credential_values_to_delete overlaps credential_values for key(s): {sorted(overlap)}",
+        )
+
+
+def _without_null_values(credential_values: Mapping[str, object]) -> dict[str, object]:
+    """A null carries no credential, and the federation resolver refuses a foreign variant's field by
+    KEY, so a stored ``{"anthropic_issuer_url": null}`` wedges every deployment that names this
+    credential. ``model_dump(exclude_none=True)`` cannot do this: it drops the model's own null
+    fields, and ``credential_values`` is a mapping inside one of them.
+    """
+    return {key: value for key, value in credential_values.items() if value is not None}
+
+
+def _sync_in_memory_credential(credential: CredentialItem, credential_name: str, new_name: str) -> None:
+    """Mirror a DB credential update into the in-memory ``credential_list`` used by request-time
+    resolution; a no-op if the credential isn't loaded in memory (e.g. proxy restarted since boot).
+    """
+    existing_in_memory: CredentialItem | None = None
+    for cred in litellm.credential_list:
+        if cred.credential_name == credential_name:
+            existing_in_memory = cred
+            break
+
+    if existing_in_memory is None:
+        return
+
+    in_memory_values: Final = dict(existing_in_memory.credential_values or {})
+    if credential.credential_values:
+        in_memory_values.update(_without_null_values(credential.credential_values))
+    for key in credential.credential_values_to_delete or ():
+        in_memory_values.pop(key, None)
+    in_memory_info: Final = dict(existing_in_memory.credential_info or {})
+    if credential.credential_info:
+        in_memory_info.update(credential.credential_info)
+    updated_in_memory: Final = CredentialItem(
+        credential_name=new_name,
+        credential_values=in_memory_values,
+        credential_info=in_memory_info,
+    )
+    # Remove old entry if renamed, then use upsert_credentials to handle duplicates
+    if new_name != credential_name:
+        litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
+    CredentialAccessor.upsert_credentials([updated_in_memory])
 
 
 class CredentialHelperUtils:
@@ -84,13 +190,17 @@ async def create_credential(
                 status_code=400,
                 detail="Credential values are required. Unable to infer credential values from model ID.",
             )
+        _reject_non_admin_wif_fields(server_owned_wif_fields_named(credential.credential_values), user_api_key_dict)
+        _reject_non_admin_wif_fields(
+            await named_credential_wif_fields(credential.credential_name, prisma_client), user_api_key_dict
+        )
         processed_credential: Final = CredentialItem(
             credential_name=credential.credential_name,
-            credential_values=credential.credential_values,
+            credential_values=_without_null_values(credential.credential_values),
             credential_info=credential.credential_info,
         )
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
-        credentials_dict: Final = encrypted_credential.model_dump()
+        credentials_dict: Final = encrypted_credential.model_dump(exclude_none=True)
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
             "dict[str, object]", jsonify_object(credentials_dict)
         )
@@ -176,6 +286,71 @@ async def get_credential_by_name(
 
 
 @router.get(
+    "/credentials/{credential_name:path}/jwks",
+    dependencies=(Depends(user_api_key_auth),),
+    tags=["credential management"],  # mutable-ok: FastAPI's include_router does self.tags.copy(), needs a real list
+)
+async def get_credential_internal_issuer_jwks(
+    credential_name: str = Path(..., description="The credential name, percent-decoded; may contain slashes"),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
+):
+    """
+    Export the public JWKS for an anthropic ``internal_issuer`` credential, so the operator can
+    register it on the Anthropic federation issuer from the UI. Never touches the private signing
+    key: only its derived public JWKS leaves this process. 404s for any other credential shape.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                "error": "Only proxy admins can export a credential's JWKS."
+            },
+        )
+
+    try:
+        credential: Final = await hydrate_named_credential_authoritative(credential_name, prisma_client)
+        credential_provider: Final = (
+            None
+            if credential is None
+            else stored_credential_provider(credential.credential_info.get("custom_llm_provider"))
+        )
+        if credential is None or credential_provider != "anthropic":
+            raise HTTPException(
+                status_code=404,
+                detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                    "error": f"No anthropic credential named {credential_name!r}."
+                },
+            )
+        match anthropic_internal_issuer_jwks(credential.credential_values):
+            case ExportedJwks(document):
+                return Response(content=document, media_type="application/json")
+            case NotAnInternalIssuerCredential(required_param, required_value):
+                raise HTTPException(
+                    status_code=404,
+                    detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                        "error": (
+                            f"Credential {credential_name!r} is not configured with "
+                            f"{required_param}={required_value!r}."
+                        )
+                    },
+                )
+            case UnbuildableIdentitySource(message):
+                raise HTTPException(
+                    status_code=400,
+                    detail={  # mutable-ok: starlette json.dumps()s HTTPException.detail raw, needs a real dict
+                        "error": message
+                    },
+                )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy's error contract
+        verbose_proxy_logger.exception(e)
+        raise handle_exception_on_proxy(e)
+
+
+@router.get(
     "/credentials/by_model/{model_id}",
     dependencies=[Depends(user_api_key_auth)],
     tags=["credential management"],
@@ -239,6 +414,9 @@ async def delete_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
+        _reject_non_admin_wif_fields(
+            await named_credential_wif_fields(credential_name, prisma_client), user_api_key_dict
+        )
         deleted: Final = await CredentialsRepository(prisma_client).delete_by_name(credential_name)
         if deleted is None:
             raise HTTPException(
@@ -278,9 +456,10 @@ def update_db_credential(
     # update litellm params
     if encrypted_credential.credential_values:
         # Encrypt any sensitive values
-        encrypted_params: Final = {k: v for k, v in encrypted_credential.credential_values.items()}
+        merged_credential.credential_values.update(_without_null_values(encrypted_credential.credential_values))
 
-        merged_credential.credential_values.update(encrypted_params)
+    for key in updated_patch.credential_values_to_delete or ():
+        merged_credential.credential_values.pop(key, None)
 
     # update model info
     if encrypted_credential.credential_info:
@@ -310,6 +489,8 @@ async def update_credential(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
+        _reject_overlapping_credential_values(credential)
+        _reject_non_admin_wif_fields(_incoming_wif_fields(credential), user_api_key_dict)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -319,9 +500,14 @@ async def update_credential(
         db_credential: Final = await credentials_repository.find_by_name(credential_name)
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
+        _reject_non_admin_wif_fields(_stored_wif_fields(db_credential), user_api_key_dict)
+        if credential.credential_name != credential_name:
+            shadowed_credential: Final = await hydrate_named_credential(credential.credential_name, prisma_client)
+            if shadowed_credential is not None:
+                _reject_non_admin_wif_fields(_stored_wif_fields(shadowed_credential), user_api_key_dict)
         merged_credential: Final = update_db_credential(db_credential, credential)
         credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
-            "dict[str, object]", jsonify_object(merged_credential.model_dump())
+            "dict[str, object]", jsonify_object(merged_credential.model_dump(exclude_none=True))
         )
         await credentials_repository.update_by_name(
             credential_name,
@@ -332,29 +518,7 @@ async def update_credential(
         )
 
         # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
-        new_name: Final = merged_credential.credential_name
-        existing_in_memory: CredentialItem | None = None
-        for cred in litellm.credential_list:
-            if cred.credential_name == credential_name:
-                existing_in_memory = cred
-                break
-
-        if existing_in_memory is not None:
-            in_memory_values: Final = dict(existing_in_memory.credential_values or {})
-            if credential.credential_values:
-                in_memory_values.update(credential.credential_values)
-            in_memory_info: Final = dict(existing_in_memory.credential_info or {})
-            if credential.credential_info:
-                in_memory_info.update(credential.credential_info)
-            updated_in_memory: Final = CredentialItem(
-                credential_name=new_name,
-                credential_values=in_memory_values,
-                credential_info=in_memory_info,
-            )
-            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
-            if new_name != credential_name:
-                litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
-            CredentialAccessor.upsert_credentials([updated_in_memory])
+        _sync_in_memory_credential(credential, credential_name, merged_credential.credential_name)
 
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:

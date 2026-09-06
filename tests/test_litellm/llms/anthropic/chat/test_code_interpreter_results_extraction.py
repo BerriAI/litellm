@@ -136,22 +136,14 @@ def test_in_place_substitution_preserves_ordering():
     responses_output = [msg_item, fc_exec1, fc_regular, fc_exec2]
 
     # Apply the same logic as _transform_chat_completion_choices_to_responses_output
-    tool_result_items = (
-        LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(resp)
-    )
+    tool_result_items = LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(resp)
     if tool_result_items:
-        result_by_id = {
-            (item.get("id") if isinstance(item, dict) else item.id): item
-            for item in tool_result_items
-        }
+        result_by_id = {(item.get("id") if isinstance(item, dict) else item.id): item for item in tool_result_items}
         replaced_ids = set(result_by_id.keys())
         responses_output = [
             (
                 result_by_id[getattr(item, "call_id", None)]
-                if (
-                    getattr(item, "type", None) == "function_call"
-                    and getattr(item, "call_id", None) in replaced_ids
-                )
+                if (getattr(item, "type", None) == "function_call" and getattr(item, "call_id", None) in replaced_ids)
                 else item
             )
             for item in responses_output
@@ -255,9 +247,7 @@ def test_end_to_end_streaming_chunks_to_code_interpreter_output():
     assert code_results[0]["code"] == "echo e2e_test"
 
     # Step 3: Extract via _extract_tool_result_output_items (Responses API layer)
-    tool_result_items = (
-        LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(assembled)
-    )
+    tool_result_items = LiteLLMCompletionResponsesConfig._extract_tool_result_output_items(assembled)
     assert len(tool_result_items) == 1
     item = tool_result_items[0]
     # Items are reconstructed as Pydantic OutputCodeInterpreterCall objects

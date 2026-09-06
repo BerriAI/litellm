@@ -1,0 +1,225 @@
+"""Fetches a fresh RFC 6749 client_credentials assertion for Anthropic's ``keycloak`` identity
+source: LiteLLM authenticates to Keycloak as its own confidential client and presents the
+resulting ``access_token`` as the workload assertion (Phase 1 decision 2).
+
+The client secret is the operator-supplied pointer at ``KeycloakSource.client_secret_ref``,
+resolved the same way every other WIF secret pointer already is (env, a Credential, or whatever
+secret manager ``litellm.secret_manager_client`` is globally configured to, Vault included).
+Every fetch is a fresh HTTP POST; nothing here caches a fetched token, since the outer
+token-exchange engine already caches the Anthropic token it buys with one -- see decision 2's
+"no Keycloak-side cache" ruling.
+"""
+
+import base64
+import threading
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, TypeAlias
+from urllib.parse import quote, quote_plus, urlencode
+
+import httpx
+from pydantic import BaseModel, SecretStr, ValidationError
+from typing_extensions import assert_never
+
+from litellm.llms.base_llm.auth.identity_source import KeycloakSource, ref_for_error_message
+from litellm.llms.base_llm.auth.token_exchange import (
+    MAX_RESPONSE_BYTES,
+    endpoint_url_for_error_message,
+    redact_oauth_error_body,
+    require_posted_response,
+    validate_token_endpoint_url,
+)
+from litellm.llms.base_llm.auth.types import InsecureTokenUrl, SyncTokenPoster
+
+if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+SecretReader: TypeAlias = Callable[[str], str | None]  # mutable-ok: Callable param-list syntax, not a list
+
+_GRANT_TYPE: Final = "client_credentials"
+_TIMEOUT_SECONDS: Final = 30.0
+_FORM_CONTENT_TYPE: Final = "application/x-www-form-urlencoded"
+
+
+class _ClientCredentialsResponse(BaseModel):
+    access_token: str
+
+
+def _default_secret_reader(ref: str) -> str | None:
+    from litellm.secret_managers.main import get_secret_str
+
+    return get_secret_str(ref)
+
+
+def _new_keycloak_handler() -> "HTTPHandler":
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    return HTTPHandler(timeout=httpx.Timeout(timeout=30.0, connect=5.0), follow_redirects=False)
+
+
+class _HttpxSyncKeycloakPoster:
+    """Dedicated HTTPHandler for the Keycloak token POST: no ``logging_obj`` (so litellm's
+    request/response logging never sees the client secret or the fetched token), redirects
+    disabled. A separate instance from the outer engine's own poster, since this is a genuinely
+    new HTTP call site whose no-logging guarantee must be built here, not assumed inherited."""
+
+    def __init__(self, handler_factory: Callable[[], "HTTPHandler"] = _new_keycloak_handler) -> None:
+        self._lock: Final = threading.Lock()
+        self._handler_factory: Final = handler_factory
+        self._handler: HTTPHandler | None = None
+
+    def _handler_instance(self) -> "HTTPHandler":
+        with self._lock:
+            if self._handler is None:
+                self._handler = self._handler_factory()
+            return self._handler
+
+    def post(self, url: str, *, content: bytes, headers: Mapping[str, str], timeout: float) -> httpx.Response:
+        try:
+            response: Final[httpx.Response | None] = self._handler_instance().post(  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.post is legacy-untyped; the result is validated below
+                url,
+                content=content,
+                headers=dict(headers),  # mutable-ok: HTTPHandler.post requires a concrete dict
+                timeout=timeout,
+            )
+        except httpx.HTTPStatusError as e:
+            return e.response
+        return require_posted_response(response, "keycloak token endpoint")
+
+
+_DEFAULT_POSTER: Final[SyncTokenPoster] = _HttpxSyncKeycloakPoster()
+
+
+def _form_encode(value: str) -> str:
+    """RFC 6749 Appendix B before RFC 6749 2.3.1's base64: application/x-www-form-urlencoded
+    with spaces as ``%20`` rather than ``+``, else a reserved character (":", "+", "%", " ") in
+    the id or secret corrupts the credential the far side decodes back out of Basic auth."""
+    return quote(value, safe="")
+
+
+def _basic_auth_header(client_id: str, client_secret: str) -> str:
+    encoded_pair: Final = f"{_form_encode(client_id)}:{_form_encode(client_secret)}"
+    return "Basic " + base64.b64encode(encoded_pair.encode()).decode("ascii")
+
+
+def _prepared_request(config: KeycloakSource, client_secret: str) -> tuple[bytes, Mapping[str, str]]:
+    scope_field: Final[Mapping[str, str]] = (
+        MappingProxyType({"scope": config.scope}) if config.scope else MappingProxyType({})
+    )
+    match config.auth_method:
+        case "client_secret_basic":
+            return (
+                urlencode(MappingProxyType({"grant_type": _GRANT_TYPE, **scope_field})).encode(),
+                MappingProxyType(
+                    {
+                        "content-type": _FORM_CONTENT_TYPE,
+                        "authorization": _basic_auth_header(config.client_id, client_secret),
+                    }
+                ),
+            )
+        case "client_secret_post":
+            return (
+                urlencode(
+                    MappingProxyType(
+                        {
+                            "grant_type": _GRANT_TYPE,
+                            "client_id": config.client_id,
+                            "client_secret": client_secret,
+                            **scope_field,
+                        }
+                    )
+                ).encode(),
+                MappingProxyType({"content-type": _FORM_CONTENT_TYPE}),
+            )
+        case _:
+            assert_never(config.auth_method)
+
+
+def _resolve_client_secret(config: KeycloakSource, secret_reader: SecretReader) -> str:
+    secret: Final = secret_reader(config.client_secret_ref)
+    if not secret:
+        raise ValueError(f"keycloak client secret {ref_for_error_message(config.client_secret_ref)} could not be read")
+    return secret
+
+
+def _wire_forms_of_secret(config: KeycloakSource, client_secret: str) -> tuple[SecretStr, ...]:
+    """Every shape the secret leaves this process in, so an echo of any of them is caught.
+
+    Neither grant sends the secret verbatim. client_secret_basic base64s ``id:secret``, which
+    decodes straight back to it, and client_secret_post percent-escapes it. An endpoint echoing
+    either shape hands over reversible material a raw comparison would miss.
+    """
+    raw: Final = SecretStr(client_secret)
+    match config.auth_method:
+        case "client_secret_basic":
+            encoded_pair: Final = f"{_form_encode(config.client_id)}:{_form_encode(client_secret)}"
+            return (raw, SecretStr(base64.b64encode(encoded_pair.encode()).decode("ascii")))
+        case "client_secret_post":
+            # urlencode escapes reserved characters and writes a space as "+", so a secret
+            # containing either leaves in a shape the raw comparison would not recognise coming
+            # back. quote_plus is what urlencode itself applies.
+            return (raw, SecretStr(quote_plus(client_secret)))
+        case _:
+            assert_never(config.auth_method)
+
+
+def _endpoint_error_message(config: KeycloakSource, response: httpx.Response, client_secret: str) -> str:
+    endpoint_error: Final = redact_oauth_error_body(
+        response.status_code, response.text, _wire_forms_of_secret(config, client_secret)
+    )
+    return (
+        f"keycloak token endpoint {endpoint_url_for_error_message(config.token_url)} "
+        f"returned HTTP {endpoint_error.status_code}: {endpoint_error.redacted_body}"
+    )
+
+
+def _parse_success_body(response: httpx.Response) -> str:
+    if len(response.content) > MAX_RESPONSE_BYTES:
+        raise ValueError("keycloak token response exceeded the size cap")
+    try:
+        parsed: Final = _ClientCredentialsResponse.model_validate_json(response.content)
+    except ValidationError as e:
+        raise ValueError("keycloak token response failed schema validation") from e
+    token: Final = parsed.access_token.strip()
+    if not token:
+        raise ValueError("keycloak token response carried an empty access_token")
+    return token
+
+
+def fetch_keycloak_assertion(
+    config: KeycloakSource,
+    *,
+    poster: SyncTokenPoster = _DEFAULT_POSTER,
+    secret_reader: SecretReader = _default_secret_reader,
+) -> str:
+    """POSTs one fresh client_credentials grant and returns the resulting ``access_token`` as the
+    workload assertion; the caller must not cache the result -- see the module docstring."""
+    match validate_token_endpoint_url(config.token_url):
+        case InsecureTokenUrl(host=host):
+            raise ValueError(f"keycloak token_url must use https; refusing to send the client secret to host {host!r}")
+        case _:
+            pass
+    client_secret: Final = _resolve_client_secret(config, secret_reader)
+    content, headers = _prepared_request(config, client_secret)
+    try:
+        response: Final = poster.post(config.token_url, content=content, headers=headers, timeout=_TIMEOUT_SECONDS)
+    except Exception as e:  # noqa: BLE001  # injected posters may raise beyond httpx; every failure becomes a ValueError
+        raise ValueError(
+            f"could not reach the keycloak token endpoint {endpoint_url_for_error_message(config.token_url)}: "
+            f"{type(e).__name__}"
+        ) from e
+    if not 200 <= response.status_code < 300:
+        raise ValueError(_endpoint_error_message(config, response, client_secret))
+    return _parse_success_body(response)
+
+
+def keycloak_assertion_source(
+    config: KeycloakSource,
+    *,
+    poster: SyncTokenPoster = _DEFAULT_POSTER,
+    secret_reader: SecretReader = _default_secret_reader,
+) -> Callable[[], str]:
+    """A zero-arg closure that fetches fresh on every call: the shape an ``oidc/keycloak/...``
+    ref dispatches to once wired into ``TokenExchangeSpec.assertion_source`` (Phase 1 decision 7)
+    -- the caller parses the config and closes this function over it, with no registry involved."""
+    return lambda: fetch_keycloak_assertion(config, poster=poster, secret_reader=secret_reader)
