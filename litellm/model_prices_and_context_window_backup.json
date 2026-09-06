@@ -45513,7 +45513,7 @@
     },
     "vertex_ai/lyria-002": {
         "litellm_provider": "vertex_ai",
-                    "mode": "audio_speech",
+        "mode": "audio_speech",
         "output_cost_per_image": 0.06,
         "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing#lyria",
         "supported_audio_formats": [
@@ -45549,8 +45549,7 @@
             "/v1/audio/speech"
         ],
         "supported_modalities": [
-            "text",
-            "image"
+            "text"
         ],
         "supported_output_modalities": [
             "audio"
@@ -45561,11 +45560,10 @@
         "supports_audio_input": false,
         "supports_audio_output": true,
         "supports_function_calling": false,
-        "supports_image_input": true,
         "supports_prompt_caching": false,
         "supports_response_schema": false,
         "supports_system_messages": false,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_web_search": false,
         "vertex_ai_audio_api": "lyria_interactions"
     },
@@ -45588,8 +45586,7 @@
             "/v1/audio/speech"
         ],
         "supported_modalities": [
-            "text",
-            "image"
+            "text"
         ],
         "supported_output_modalities": [
             "audio"
@@ -45600,11 +45597,10 @@
         "supports_audio_input": false,
         "supports_audio_output": true,
         "supports_function_calling": false,
-        "supports_image_input": true,
         "supports_prompt_caching": false,
         "supports_response_schema": false,
         "supports_system_messages": false,
-        "supports_vision": true,
+        "supports_vision": false,
         "supports_web_search": false,
         "vertex_ai_audio_api": "lyria_interactions"
     },
