@@ -370,7 +370,6 @@ fn provider_error() -> ProviderError {
         stage: "provider_response",
         committed: true,
         status_code: Some(429),
-        will_retry: true,
         ended_at: 2.0,
     }
 }

@@ -30,6 +30,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
+from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
 from litellm.rust_bridge.request import (
     NativeRequestCapabilities,
     NativeRequestOptions,
@@ -240,27 +241,8 @@ def _prepare_rust_ocr_call(
         api_base=prepared_request.api_base,
         litellm_params=prepared_request.litellm_params,
     )
-    resolved_complete_url: Final = provider_config.get_complete_url(
-        api_base=prepared_request.api_base,
-        model=prepared_request.model,
-        optional_params=prepared_request.optional_params,
-        litellm_params=prepared_request.litellm_params,
-    )
     rust_api_base: Final = _rust_bridge_api_base(prepared_request, resolve_api_key)
     rust_optional_params: Final = _rust_bridge_optional_params(prepared_request, resolve_api_key)
-    prepared_request.litellm_logging_obj.pre_call(
-        input="OCR document processing",
-        api_key=resolved_api_key,
-        additional_args={
-            "complete_input_dict": {
-                "model": prepared_request.model,
-                "document": prepared_request.document,
-                **rust_optional_params,
-            },
-            "api_base": resolved_complete_url,
-            "headers": resolved_headers,
-        },
-    )
     return PreparedNativeCall(
         request=rust_ocr_bridge.NativeOCRRequest(
             model=prepared_request.model,
@@ -291,6 +273,11 @@ def _prepare_rust_ocr_call(
                 ),
                 native_response_format=(prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native"),
             ),
+        ),
+        callback_adapter=ProviderLoggingAdapter(
+            prepared_request.litellm_logging_obj,
+            "OCR document processing",
+            resolved_api_key,
         ),
     )
 

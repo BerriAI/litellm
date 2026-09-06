@@ -79,7 +79,7 @@ async def exercise(asynchronous: bool, rust: bool, case: str, *, native_expected
             following: Final = tuple(event for event in await follower.wait() if native or event.name != "post")
             names: Final = tuple(event.name for event in events)
             prefix: Final = ("pre", "post") if native and status == 200 and case != "timeout" else ("pre",)
-            assert names[: len(prefix)] == prefix
+            assert names[: len(prefix)] == prefix, (asynchronous, rust, case, native, names, prefix)
             terminal: Final = "success" if successful else "failure"
             expected: Final = (
                 ("async_success",)
@@ -267,7 +267,7 @@ async def verify_foundation() -> None:
     assert_native_unavailable()
     native: Final = get_native_bridge()
     assert native is not None
-    with patch.object(native, "ready_endpoints", {"ocr": frozenset({"callbacks"})}):
+    with patch.object(native, "ready_endpoints", {"ocr": frozenset({"callbacks"})}, create=True):
         await verify_parity()
     assert_native_unavailable()
 
