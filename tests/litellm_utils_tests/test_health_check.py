@@ -832,3 +832,42 @@ async def test_health_check_with_custom_llm_provider():
         # Should succeed without "LLM Provider NOT provided" error
         assert "error" not in response
         assert isinstance(response, dict)
+
+
+def test_health_check_strips_model_capability_metadata():
+    """
+    Capability flags on litellm_params / health_check_params must not ride the probe.
+
+    Bedrock rejects them as request fields (#38941):
+    ``supports_max_reasoning_effort: Extra inputs are not permitted``.
+    Also ensure the shared deployment dict is not mutated.
+    """
+    from litellm.proxy.health_check import _update_litellm_params_for_health_check
+
+    original = {
+        "model": "bedrock/anthropic.claude-3-7-sonnet-20240620-v1:0",
+        "api_key": "fake_key",
+        "supports_max_reasoning_effort": True,
+        "supports_xhigh_reasoning_effort": None,
+        "bedrock_output_config_effort_ceiling": "xhigh",
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+    }
+    model_info = {
+        "health_check_params": {
+            "supports_max_reasoning_effort": True,
+            "mediaSource": {"s3Location": {"uri": "s3://bucket/key"}},
+        },
+    }
+
+    updated = _update_litellm_params_for_health_check(model_info, original)
+
+    assert "supports_max_reasoning_effort" not in updated
+    assert "supports_xhigh_reasoning_effort" not in updated
+    assert "bedrock_output_config_effort_ceiling" not in updated
+    # Legitimate probe / provider fields stay
+    assert "messages" in updated
+    assert updated["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert updated["mediaSource"] == {"s3Location": {"uri": "s3://bucket/key"}}
+    # Shared deployment dict must stay untouched
+    assert "messages" not in original
+    assert original["supports_max_reasoning_effort"] is True
