@@ -56,7 +56,6 @@ _STATE: Final = _RustTranscriptionState()
 
 
 def configure_rust_transcription(
-    enabled: bool = True,
     *,
     transcription: RustTranscription | None | _Unset = _UNSET,
     atranscription: RustAtranscription | None | _Unset = _UNSET,
