@@ -18,7 +18,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.rust_bridge import chat_completions as rust_chat_completions_bridge
 from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
-from litellm.rust_bridge.dispatch import anative_first, native_first
+from litellm.rust_bridge.dispatch import anative_first, native_first, provider_errors
 from litellm.rust_bridge.runtime import DispatchResult
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
@@ -458,7 +458,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         @anative_first(
             native=native_acompletion,
             route="chat_completions",
-            errors=lambda: rust_chat_completions_bridge.error_handling("bedrock", model),
+            errors=lambda: provider_errors("bedrock", model),
         )
         async def execute_async() -> ModelResponse | CustomStreamWrapper:
             python_client: Final = None if isinstance(client, HTTPHandler) else client
@@ -506,7 +506,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         @native_first(
             native=native_completion,
             route="chat_completions",
-            errors=lambda: rust_chat_completions_bridge.error_handling("bedrock", model),
+            errors=lambda: provider_errors("bedrock", model),
         )
         def execute_sync() -> ModelResponse | CustomStreamWrapper:
             ## TRANSFORMATION ##

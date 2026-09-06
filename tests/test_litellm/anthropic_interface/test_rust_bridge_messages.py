@@ -400,17 +400,54 @@ async def test_gate_falls_back_when_bridge_unavailable(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("selection", ("native", "disabled", "failed"))
-async def test_messages_handler_runs_selected_backend_once(selection: str) -> None:
+@pytest.mark.parametrize("selection", ("native", "disabled", "failed", "declined", "upstream"))
+async def test_messages_handler_runs_selected_backend_once(selection: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from datetime import datetime
+    from types import SimpleNamespace
 
     import httpx
 
+    from litellm.exceptions import RateLimitError
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.rust_bridge import bindings
 
-    bridge = RaisingAsyncMessages() if selection == "failed" else RecordingAsyncMessages()
+    class Declined(Exception):
+        pass
+
+    class Upstream(Exception):
+        pass
+
+    error = (
+        Upstream(429, "rate limited")
+        if selection == "upstream"
+        else Declined("unsupported")
+        if selection == "declined"
+        else RuntimeError("native failed")
+        if selection == "failed"
+        else None
+    )
+
+    class Native:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def __call__(self, **kwargs: object) -> dict[str, object]:
+            self.calls += 1
+            if error is not None:
+                raise error
+            return dict(FAKE_MESSAGES_RESPONSE)
+
+    bridge = Native()
+    monkeypatch.setattr(
+        bindings,
+        "get_native_bridge",
+        lambda: SimpleNamespace(
+            RustBridgeDeclined=Declined,
+            RustUpstreamError=Upstream,
+        ),
+    )
     rust_messages.set_rust_messages(amessages=bridge)
     litellm.rust(selection != "disabled")
     requests: list[httpx.Request] = []
@@ -432,20 +469,32 @@ async def test_messages_handler_runs_selected_backend_once(selection: str) -> No
     await client.client.aclose()
     async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
         client.client = transport
-        response = await BaseLLMHTTPHandler().async_anthropic_messages_handler(
-            model=FAKE_MESSAGES_RESPONSE["model"],
-            messages=[{"role": "user", "content": "hello"}],
-            anthropic_messages_provider_config=AnthropicMessagesConfig(),
-            anthropic_messages_optional_request_params={"max_tokens": 10},
-            custom_llm_provider="anthropic",
-            litellm_params=GenericLiteLLMParams(),
-            logging_obj=logging_obj,
-            api_key="sk-test",
-            api_base="https://example.test",
-            client=client,
-        )
-    assert response["id"] == FAKE_MESSAGES_RESPONSE["id"]
-    assert len(requests) == (0 if selection == "native" else 1)
-    assert (bridge.calls if isinstance(bridge, RaisingAsyncMessages) else len(bridge.calls)) == (
-        0 if selection == "disabled" else 1
-    )
+
+        async def run():
+            return await BaseLLMHTTPHandler().async_anthropic_messages_handler(
+                model=FAKE_MESSAGES_RESPONSE["model"],
+                messages=[{"role": "user", "content": "hello"}],
+                anthropic_messages_provider_config=AnthropicMessagesConfig(),
+                anthropic_messages_optional_request_params={"max_tokens": 10},
+                custom_llm_provider="anthropic",
+                litellm_params=GenericLiteLLMParams(),
+                logging_obj=logging_obj,
+                api_key="sk-test",
+                api_base="https://example.test",
+                client=client,
+            )
+
+        if selection in ("failed", "upstream"):
+            with pytest.raises(RateLimitError if selection == "upstream" else RuntimeError) as caught:
+                await run()
+            if selection == "upstream":
+                assert caught.value.__cause__ is error
+                assert caught.value.llm_provider == "anthropic"
+                assert caught.value.model == FAKE_MESSAGES_RESPONSE["model"]
+            else:
+                assert caught.value is error
+        else:
+            response = await run()
+            assert response["id"] == FAKE_MESSAGES_RESPONSE["id"]
+    assert len(requests) == (1 if selection in ("disabled", "declined") else 0)
+    assert bridge.calls == (0 if selection == "disabled" else 1)

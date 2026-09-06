@@ -25,7 +25,7 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
-from litellm.rust_bridge.dispatch import PROPAGATE, anative_first, native_first
+from litellm.rust_bridge.dispatch import anative_first, native_first, provider_errors
 from litellm.rust_bridge.runtime import DispatchResult
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
@@ -159,7 +159,9 @@ def _prepare_ocr_request(
 @anative_first(
     native=rust_ocr_bridge.aattempt_ocr,
     route="ocr",
-    errors=lambda prepared_request, resolve_api_key: PROPAGATE,
+    errors=lambda prepared_request, resolve_api_key: provider_errors(
+        prepared_request.custom_llm_provider, prepared_request.model
+    ),
 )
 async def _execute_aocr(
     prepared_request: rust_ocr_bridge.PreparedOCRRequest,
@@ -196,7 +198,9 @@ def _attempt_ocr(
 @native_first(
     native=_attempt_ocr,
     route="ocr",
-    errors=lambda prepared_request, resolve_api_key, is_async: PROPAGATE,
+    errors=lambda prepared_request, resolve_api_key, is_async: provider_errors(
+        prepared_request.custom_llm_provider, prepared_request.model
+    ),
 )
 def _execute_ocr(
     prepared_request: rust_ocr_bridge.PreparedOCRRequest,

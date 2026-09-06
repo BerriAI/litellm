@@ -142,3 +142,30 @@ async def test_managed_connection_closes_native_socket_on_consumer_failure() -> 
         await use_connection()
     assert socket.sent == ["hello"]
     assert socket.closed
+
+
+@pytest.mark.asyncio
+async def test_connection_failure_does_not_authorize_python_fallback() -> None:
+    from contextlib import AbstractAsyncContextManager
+
+    from litellm.rust_bridge.dispatch import anative_context, provider_errors
+
+    configuration.rust(True)
+    responses_websocket.set_rust_responses_websocket(connection=_FailingNativeBridge)
+
+    @anative_context(
+        native=lambda: responses_websocket.managed_connect(
+            url="wss://example.test/responses", headers={}, timeout=None
+        ),
+        route="responses_websocket",
+        errors=lambda: provider_errors("openai", "responses websocket"),
+    )
+    def execute() -> AbstractAsyncContextManager[object]:
+        pytest.fail("unknown native failures must not open a Python connection")
+
+    async def run() -> None:
+        async with execute():
+            pytest.fail("connection must fail before entering its body")
+
+    with pytest.raises(RuntimeError, match="connection failed"):
+        await run()
