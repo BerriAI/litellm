@@ -386,6 +386,27 @@ def get_external[R: BaseModel](
     return _classify(resp, response_type)
 
 
+def post_external[R: BaseModel](
+    url: str,
+    *,
+    json: BaseModel,
+    response_type: type[R],
+    timeout: float = 30.0,
+) -> Result[R]:
+    """POST an absolute URL outside the proxy (e.g. the e2e JWT issuer's mint
+    endpoint). Like get_external: no proxy base url, no proxy auth, and the same
+    tagged-union classification as every other call."""
+    try:
+        resp = requests.post(
+            url,
+            json=json.model_dump(by_alias=True, exclude_none=True),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return _classify(resp, response_type)
+
+
 def delete[R: BaseModel](
     url: URL,
     *,
