@@ -2,7 +2,6 @@
 #    This tests the router's ability to pick deployment with lowest latency
 
 import asyncio
-import os
 import random
 import sys
 import time
@@ -13,17 +12,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import copy
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import litellm
 from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
+
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 ### UNIT TESTS FOR LATENCY ROUTING ###
 
@@ -591,7 +588,7 @@ async def test_lowest_latency_routing_with_timeouts():
                 "model_name": "azure-model",
                 "litellm_params": {
                     "model": "openai/slow-endpoint",
-                    "api_base": "https://exampleopenaiendpoint-production-c715.up.railway.app/",  # If you are Krrish, this is OpenAI Endpoint3 on our Railway endpoint :)
+                    "api_base": FAKE_OPENAI_API_BASE,
                     "api_key": "fake-key",
                 },
                 "model_info": {"id": "slow-endpoint"},
@@ -600,7 +597,7 @@ async def test_lowest_latency_routing_with_timeouts():
                 "model_name": "azure-model",
                 "litellm_params": {
                     "model": "openai/fast-endpoint",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                     "api_key": "fake-key",
                 },
                 "model_info": {"id": "fast-endpoint"},
@@ -666,7 +663,7 @@ async def test_lowest_latency_routing_first_pick():
                 "model_name": "azure-model",
                 "litellm_params": {
                     "model": "openai/fast-endpoint",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                     "api_key": "fake-key",
                 },
                 "model_info": {"id": "fast-endpoint"},
@@ -675,7 +672,7 @@ async def test_lowest_latency_routing_first_pick():
                 "model_name": "azure-model",
                 "litellm_params": {
                     "model": "openai/fast-endpoint-2",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                     "api_key": "fake-key",
                 },
                 "model_info": {"id": "fast-endpoint-2"},
@@ -684,7 +681,7 @@ async def test_lowest_latency_routing_first_pick():
                 "model_name": "azure-model",
                 "litellm_params": {
                     "model": "openai/fast-endpoint-2",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                     "api_key": "fake-key",
                 },
                 "model_info": {"id": "fast-endpoint-3"},
@@ -693,7 +690,7 @@ async def test_lowest_latency_routing_first_pick():
                 "model_name": "azure-model",
                 "litellm_params": {
                     "model": "openai/fast-endpoint-2",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                     "api_key": "fake-key",
                 },
                 "model_info": {"id": "fast-endpoint-4"},

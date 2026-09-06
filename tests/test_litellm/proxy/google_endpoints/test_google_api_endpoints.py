@@ -2,15 +2,11 @@
 """
 Test to verify the Google GenAI proxy API endpoints
 """
-import os
-import sys
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 def _build_test_client():
@@ -88,6 +84,8 @@ def test_google_stream_generate_content_endpoint():
         # stream=True must be forced into the data the processor receives.
         init_kwargs = mock_init.call_args.kwargs
         assert init_kwargs["data"]["stream"] is True
+        assert init_kwargs["data"]["_litellm_raw_sse_stream"] is True
+        assert init_kwargs["data"]["_litellm_skip_openai_stream_done"] is True
         assert init_kwargs["data"]["model"] == "test-model"
         assert init_kwargs["data"]["contents"] == [
             {"role": "user", "parts": [{"text": "Hello"}]}

@@ -61,6 +61,137 @@ async def test_dual_cache_async_batch_get_cache_rolls_back_redis_reservation_on_
         assert "shared_b" not in dual_cache.last_redis_batch_access_time
 
 
+def _redis_mock_for_sync_batch(redis_result: dict) -> MagicMock:
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.batch_get_cache.return_value = redis_result
+    return mock_redis
+
+
+def _assert_sync_batch_used_blocking_client(dual_cache: DualCache, mock_redis: MagicMock) -> None:
+    with patch("asyncio.new_event_loop", side_effect=AssertionError("sync path must not create an event loop")):
+        result = dual_cache.batch_get_cache(keys=["lit6729_key"])
+
+    assert result == ["redis_value"]
+    mock_redis.batch_get_cache.assert_called_once_with(key_list=["lit6729_key"], parent_otel_span=None)
+    mock_redis.async_batch_get_cache.assert_not_called()
+    mock_redis.init_async_client.assert_not_called()
+    assert dual_cache.in_memory_cache.get_cache("lit6729_key") == "redis_value"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_batch_get_cache_uses_sync_redis_client_inside_running_loop():
+    """
+    Regression test for LIT-6729: sync batch_get_cache ran async_batch_get_cache on a
+    throwaway event loop, reusing an async Redis client created on another loop and
+    corrupting its connection pool. The sync path must use the blocking client, never
+    the async one, and never create an event loop, even when called from a coroutine
+    (e.g. async_raise_no_deployment_exception -> get_min_cooldown).
+    """
+    mock_redis = _redis_mock_for_sync_batch({"lit6729_key": "redis_value"})
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis)
+
+    _assert_sync_batch_used_blocking_client(dual_cache, mock_redis)
+
+
+def test_dual_cache_batch_get_cache_uses_sync_redis_client_without_running_loop():
+    mock_redis = _redis_mock_for_sync_batch({"lit6729_key": "redis_value"})
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis)
+
+    _assert_sync_batch_used_blocking_client(dual_cache, mock_redis)
+
+
+def test_dual_cache_batch_get_cache_only_reads_missing_keys_from_redis():
+    mock_redis = _redis_mock_for_sync_batch({"miss_key": "from_redis"})
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis)
+    dual_cache.in_memory_cache.set_cache("hit_key", "from_memory")
+
+    result = dual_cache.batch_get_cache(keys=["hit_key", "miss_key"])
+
+    assert result == ["from_memory", "from_redis"]
+    mock_redis.batch_get_cache.assert_called_once_with(key_list=["miss_key"], parent_otel_span=None)
+
+
+def test_dual_cache_batch_get_cache_throttles_repeat_redis_reads():
+    mock_redis = _redis_mock_for_sync_batch({"absent_key": None})
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
+    )
+
+    first = dual_cache.batch_get_cache(keys=["absent_key"])
+    second = dual_cache.batch_get_cache(keys=["absent_key"])
+
+    assert first == [None]
+    assert second == [None]
+    mock_redis.batch_get_cache.assert_called_once()
+
+
+def test_dual_cache_batch_get_cache_rolls_back_redis_reservation_on_error():
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.batch_get_cache.side_effect = RuntimeError("redis unavailable")
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
+    )
+
+    first_result = dual_cache.batch_get_cache(keys=["shared_a"])
+    second_result = dual_cache.batch_get_cache(keys=["shared_a"])
+
+    assert first_result is None
+    assert second_result is None
+    assert mock_redis.batch_get_cache.call_count == 2
+    assert "shared_a" not in dual_cache.last_redis_batch_access_time
+
+
+def test_dual_cache_batch_get_cache_returns_memory_only_when_redis_read_is_throttled():
+    mock_redis = _redis_mock_for_sync_batch({"throttled_key": "redis_value"})
+    dual_cache = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
+    )
+    dual_cache.last_redis_batch_access_time["throttled_key"] = time.time()
+
+    result = dual_cache.batch_get_cache(keys=["throttled_key"])
+
+    assert result == [None]
+    mock_redis.batch_get_cache.assert_not_called()
+
+
+def test_dual_cache_sync_batch_redis_backfill_injects_default_in_memory_ttl():
+    """Sync batch_get_cache's Redis-to-memory backfill must honor
+    default_in_memory_ttl, same as the async path."""
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = _redis_mock_for_sync_batch({"batch_backfill_key": "redis_value"})
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=mock_redis,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = dual_cache.batch_get_cache(keys=["batch_backfill_key"])
+    after = time.time()
+
+    assert result == ["redis_value"]
+    expiry = in_memory_cache.ttl_dict["batch_backfill_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+def test_dual_cache_batch_get_cache_forwards_explicit_ttl_to_backfill():
+    """An explicit ttl kwarg must reach the in-memory backfill flat, not nested
+    under a 'kwargs' key the way the old locals()-forwarding path sent it."""
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = _redis_mock_for_sync_batch({"explicit_ttl_key": "redis_value"})
+    dual_cache = DualCache(in_memory_cache=in_memory_cache, redis_cache=mock_redis)
+
+    before = time.time()
+    result = dual_cache.batch_get_cache(keys=["explicit_ttl_key"], ttl=5)
+    after = time.time()
+
+    assert result == ["redis_value"]
+    expiry = in_memory_cache.ttl_dict["explicit_ttl_key"]
+    assert expiry >= before + 5
+    assert expiry <= after + 5
+
+
 @pytest.mark.asyncio
 async def test_dual_cache_async_set_cache_injects_default_in_memory_ttl():
     """
@@ -84,6 +215,60 @@ async def test_dual_cache_async_set_cache_injects_default_in_memory_ttl():
     # The TTL stored should reflect default_in_memory_ttl (60s), not
     # InMemoryCache's default_ttl (600s)
     expiry = in_memory_cache.ttl_dict["test_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_redis_backfill_injects_default_in_memory_ttl():
+    """
+    A Redis-hit backfill into the in-memory tier must honor
+    default_in_memory_ttl the same way the write paths do. Without it, the
+    backfilled entry falls to InMemoryCache's own default_ttl (600s), so a
+    replica that primed a management object (e.g. a virtual key's auth blob)
+    from Redis keeps serving it for 10 minutes after the object was updated
+    and invalidated, instead of re-reading within the configured TTL.
+    """
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    redis_cache = MagicMock()
+    redis_cache.async_get_cache = AsyncMock(return_value="redis_value")
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=redis_cache,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = await dual_cache.async_get_cache(key="backfill_key")
+    after = time.time()
+
+    assert result == "redis_value"
+    expiry = in_memory_cache.ttl_dict["backfill_key"]
+    assert expiry >= before + 60
+    assert expiry <= after + 60
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_batch_redis_backfill_injects_default_in_memory_ttl():
+    """async_batch_get_cache's Redis-to-memory backfill must honor
+    default_in_memory_ttl, same as the single-key path."""
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = MagicMock(spec=RedisCache)
+    mock_redis.async_batch_get_cache = AsyncMock(
+        return_value={"batch_backfill_key": "redis_value"}
+    )
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=mock_redis,
+        default_in_memory_ttl=60,
+    )
+
+    before = time.time()
+    result = await dual_cache.async_batch_get_cache(keys=["batch_backfill_key"])
+    after = time.time()
+
+    assert result == ["redis_value"]
+    expiry = in_memory_cache.ttl_dict["batch_backfill_key"]
     assert expiry >= before + 60
     assert expiry <= after + 60
 
@@ -241,6 +426,67 @@ def test_circuit_breaker_half_open_concurrent_calls_are_fast_failed():
         assert (
             cb.is_open() is True
         ), "concurrent callers should be fast-failed in HALF_OPEN"
+
+
+def test_circuit_breaker_disabled_never_opens():
+    """When disabled, failures never open the circuit and is_open() stays False."""
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, enabled=False)
+
+    for _ in range(100):
+        cb.record_failure()
+
+    assert cb._state == "closed"
+    assert cb.is_open() is False
+
+
+def test_circuit_breaker_disabled_record_success_leaves_state_untouched():
+    """
+    A disabled breaker must not mutate state in any state-machine method. Force
+    a non-default (OPEN) state and assert record_success() returns without
+    resetting it — the same enabled-guard contract as is_open/record_failure.
+    """
+    from litellm.caching.redis_cache import RedisCircuitBreaker
+
+    cb = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60, enabled=False)
+    cb._state = "open"
+    cb._failure_count = 3
+
+    cb.record_success()
+
+    assert cb._state == "open"
+    assert cb._failure_count == 3
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_disabled_guard_always_calls_method():
+    """A disabled breaker lets every guarded call through, even after failures."""
+    from litellm.caching.redis_cache import (
+        RedisCircuitBreaker,
+        _redis_circuit_breaker_guard,
+    )
+
+    class FakeRedis:
+        def __init__(self):
+            self._circuit_breaker = RedisCircuitBreaker(
+                failure_threshold=1, recovery_timeout=60, enabled=False
+            )
+            self.call_count = 0
+
+        @_redis_circuit_breaker_guard
+        async def boom(self):
+            self.call_count += 1
+            raise RuntimeError("redis down")
+
+    fr = FakeRedis()
+    for _ in range(5):
+        with pytest.raises(RuntimeError, match="redis down"):
+            await fr.boom()
+
+    # Every call reached the method body; the breaker never short-circuited.
+    assert fr.call_count == 5
+    assert fr._circuit_breaker.is_open() is False
 
 
 @pytest.mark.asyncio

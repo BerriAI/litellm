@@ -3,7 +3,7 @@ This module is used to transform the request and response for the Voyage context
 This would be used for all the contextualized embeddings models in Voyage.
 """
 
-from typing import List, Optional, Union
+from typing import Final
 
 import httpx
 
@@ -20,13 +20,11 @@ class VoyageError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Union[dict, httpx.Headers] = {},
+        headers: dict | httpx.Headers = {},
     ):
         self.status_code = status_code
         self.message = message
-        self.request = httpx.Request(
-            method="POST", url="https://api.voyageai.com/v1/contextualizedembeddings"
-        )
+        self.request = httpx.Request(method="POST", url="https://api.voyageai.com/v1/contextualizedembeddings")
         self.response = httpx.Response(status_code=status_code, request=self.request)
         super().__init__(
             status_code=status_code,
@@ -45,12 +43,12 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base:
             if not api_base.endswith("/contextualizedembeddings"):
@@ -83,11 +81,11 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             api_key = (
@@ -102,7 +100,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
     def transform_embedding_request(
         self,
         model: str,
-        input: Union[AllEmbeddingInputValues, List[List[str]]],
+        input: AllEmbeddingInputValues | list[list[str]],
         optional_params: dict,
         headers: dict,
     ) -> dict:
@@ -118,36 +116,30 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
-            raise VoyageError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
 
         # model_response.usage
         model_response.model = raw_response_json.get("model")
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )
         model_response.usage = usage
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
-        return VoyageError(
-            message=error_message, status_code=status_code, headers=headers
-        )
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+        return VoyageError(message=error_message, status_code=status_code, headers=headers)
 
     @staticmethod
     def is_contextualized_embeddings(model: str) -> bool:

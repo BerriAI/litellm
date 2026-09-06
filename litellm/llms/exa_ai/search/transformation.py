@@ -4,7 +4,7 @@ Calls Exa AI's /search endpoint to search the web.
 Exa AI API Reference: https://docs.exa.ai/reference/search
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import Final, TypedDict
 
 import httpx
 
@@ -33,17 +33,15 @@ class ExaAISearchRequest(_ExaAISearchRequestRequired, total=False):
     category: str  # Optional - data category ('company', 'research paper', 'news', 'pdf', 'github', 'tweet', 'personal site', 'linkedin profile', 'financial report')
     userLocation: str  # Optional - two-letter ISO country code
     numResults: int  # Optional - number of results (max 100), default 10
-    includeDomains: List[str]  # Optional - list of domains to include
-    excludeDomains: List[str]  # Optional - list of domains to exclude
+    includeDomains: list[str]  # Optional - list of domains to include
+    excludeDomains: list[str]  # Optional - list of domains to exclude
     startCrawlDate: str  # Optional - crawl date filter (ISO 8601 format)
     endCrawlDate: str  # Optional - crawl date filter (ISO 8601 format)
     startPublishedDate: str  # Optional - published date filter (ISO 8601 format)
     endPublishedDate: str  # Optional - published date filter (ISO 8601 format)
-    includeText: List[str]  # Optional - strings that must be present in webpage text
-    excludeText: List[
-        str
-    ]  # Optional - strings that must not be present in webpage text
-    context: Union[bool, dict]  # Optional - format results for LLMs
+    includeText: list[str]  # Optional - strings that must be present in webpage text
+    excludeText: list[str]  # Optional - strings that must not be present in webpage text
+    context: bool | dict  # Optional - format results for LLMs
     moderation: bool  # Optional - enable content moderation, default false
     contents: dict  # Optional - content retrieval options
 
@@ -57,28 +55,32 @@ class ExaAISearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("EXA_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("EXA_API_KEY",),
+            base_env_var="EXA_API_BASE",
+            default_api_base=self.EXA_AI_API_BASE,
+        )
         if not api_key:
-            raise ValueError(
-                "EXA_API_KEY is not set. Set `EXA_API_KEY` environment variable."
-            )
+            raise ValueError("EXA_API_KEY is not set. Set `EXA_API_KEY` environment variable.")
         headers["x-api-key"] = api_key
         headers["Content-Type"] = "application/json"
         return headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -94,10 +96,10 @@ class ExaAISearchConfig(BaseSearchConfig):
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Exa AI API format.
 
@@ -121,7 +123,7 @@ class ExaAISearchConfig(BaseSearchConfig):
             # Exa AI only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: ExaAISearchRequest = {
+        request_data: Final[ExaAISearchRequest] = {
             "query": query,
         }
 
@@ -136,14 +138,11 @@ class ExaAISearchConfig(BaseSearchConfig):
             request_data["userLocation"] = optional_params["country"]
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # pass through all other parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # By default, request text content if not explicitly specified
@@ -176,10 +175,10 @@ class ExaAISearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
-        results = []
+        results: Final = []
         for result in response_json.get("results", []):
             search_result = SearchResult(
                 title=result.get("title", ""),

@@ -1,9 +1,12 @@
-from typing import Optional
+from typing import Final
 
 import httpx
 
 import litellm
-from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+from litellm.llms.azure_ai.common_utils import (
+    AzureFoundryModelInfo,
+    get_azure_ai_auth_headers,
+)
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.utils import _add_path_to_api_base
@@ -24,32 +27,27 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[dict] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        litellm_params: dict | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate Azure AI Foundry environment and set up authentication
-        Uses Api-Key header format
+        Uses the Api-Key header format, or an Entra ID / OAuth bearer token when no key is set
         """
-        api_key = AzureFoundryModelInfo.get_api_key(api_key)
-
-        if not api_key:
-            raise ValueError(
-                f"Azure AI API key is required for model {model}. Set AZURE_AI_API_KEY environment variable or pass api_key parameter."
-            )
-
         headers.update(
-            {
-                "Api-Key": api_key,  # Azure AI Foundry uses Api-Key header format
-            }
+            get_azure_ai_auth_headers(
+                api_key=AzureFoundryModelInfo.get_api_key(api_key),
+                litellm_params=litellm_params,
+                api_key_header="Api-Key",
+            )
         )
         return headers
 
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -73,11 +71,7 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
                 "Azure AI API base is required. Set AZURE_AI_API_BASE environment variable or pass api_base parameter."
             )
 
-        api_version = (
-            litellm_params.get("api_version")
-            or litellm.api_version
-            or get_secret_str("AZURE_AI_API_VERSION")
-        )
+        api_version = litellm_params.get("api_version") or litellm.api_version or get_secret_str("AZURE_AI_API_VERSION")
         if api_version is None:
             # API version is mandatory for Azure AI Foundry
             raise ValueError(
@@ -98,6 +92,6 @@ class AzureFoundryFluxImageEditConfig(OpenAIImageEditConfig):
             )
 
         # Use the new query_params dictionary
-        final_url = httpx.URL(new_url).copy_with(params={"api-version": api_version})
+        final_url: Final = httpx.URL(new_url).copy_with(params={"api-version": api_version})
 
         return str(final_url)

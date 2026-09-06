@@ -4,7 +4,8 @@ AgentOps integration for LiteLLM - Provides OpenTelemetry tracing for LLM calls
 
 import os
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Any, Final
+
 from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
@@ -12,9 +13,9 @@ from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 @dataclass
 class AgentOpsConfig:
     endpoint: str = "https://otlp.agentops.cloud/v1/traces"
-    api_key: Optional[str] = None
-    service_name: Optional[str] = None
-    deployment_environment: Optional[str] = None
+    api_key: str | None = None
+    service_name: str | None = None
+    deployment_environment: str | None = None
     auth_endpoint: str = "https://api.agentops.ai/v3/auth/token"
 
     @classmethod
@@ -47,7 +48,7 @@ class AgentOps(OpenTelemetry):
 
     def __init__(
         self,
-        config: Optional[AgentOpsConfig] = None,
+        config: AgentOpsConfig | None = None,
     ):
         if config is None:
             config = AgentOpsConfig.from_env()
@@ -57,23 +58,21 @@ class AgentOps(OpenTelemetry):
         project_id = None
         if config.api_key:
             try:
-                response = self._fetch_auth_token(config.api_key, config.auth_endpoint)
+                response: Final = self._fetch_auth_token(config.api_key, config.auth_endpoint)
                 jwt_token = response.get("token")
                 project_id = response.get("project_id")
             except Exception:
                 pass
 
-        headers = f"Authorization=Bearer {jwt_token}" if jwt_token else None
+        headers: Final = f"Authorization=Bearer {jwt_token}" if jwt_token else None
 
-        otel_config = OpenTelemetryConfig(
-            exporter="otlp_http", endpoint=config.endpoint, headers=headers
-        )
+        otel_config: Final = OpenTelemetryConfig(exporter="otlp_http", endpoint=config.endpoint, headers=headers)
 
         # Initialize OpenTelemetry with our config
         super().__init__(config=otel_config, callback_name="agentops")
 
         # Set AgentOps-specific resource attributes
-        resource_attrs = {
+        resource_attrs: Final = {
             "service.name": config.service_name or "litellm",
             "deployment.environment": config.deployment_environment or "production",
             "telemetry.sdk.name": "agentops",
@@ -84,7 +83,7 @@ class AgentOps(OpenTelemetry):
 
         self.resource_attributes = resource_attrs
 
-    def _fetch_auth_token(self, api_key: str, auth_endpoint: str) -> Dict[str, Any]:
+    def _fetch_auth_token(self, api_key: str, auth_endpoint: str) -> dict[str, Any]:
         """
         Fetch JWT authentication token from AgentOps API
 
@@ -95,14 +94,14 @@ class AgentOps(OpenTelemetry):
         Returns:
             Dict containing JWT token and project ID
         """
-        headers = {
+        headers: Final = {
             "Content-Type": "application/json",
             "Connection": "keep-alive",
         }
 
-        client = _get_httpx_client()
+        client: Final = _get_httpx_client()
         try:
-            response = client.post(
+            response: Final = client.post(
                 url=auth_endpoint,
                 headers=headers,
                 json={"api_key": api_key},

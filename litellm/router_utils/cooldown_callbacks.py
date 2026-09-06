@@ -3,7 +3,7 @@ Callbacks triggered on cooling down deployments
 """
 
 import copy
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm._logging import verbose_logger
@@ -21,8 +21,8 @@ else:
 async def router_cooldown_event_callback(
     litellm_router_instance: LitellmRouter,
     deployment_id: str,
-    exception_status: Union[str, int],
-    cooldown_time: Optional[float],
+    exception_status: str | int,
+    cooldown_time: float | None,
 ):
     """
     Callback triggered when a deployment is put into cooldown by litellm
@@ -31,24 +31,22 @@ async def router_cooldown_event_callback(
     - Increments cooldown metric for deployment on Prometheus
     """
     verbose_logger.debug("In router_cooldown_event_callback - updating prometheus")
-    _deployment = litellm_router_instance.get_deployment(model_id=deployment_id)
+    _deployment: Final = litellm_router_instance.get_deployment(model_id=deployment_id)
     if _deployment is None:
         verbose_logger.warning(
-            f"in router_cooldown_event_callback but _deployment is None for deployment_id={deployment_id}. Doing nothing"
+            "in router_cooldown_event_callback but _deployment is None for deployment_id=%s. Doing nothing",
+            deployment_id,
         )
         return
-    _litellm_params = _deployment["litellm_params"]
+    _litellm_params: Final = _deployment["litellm_params"]
     temp_litellm_params = copy.deepcopy(_litellm_params)
     temp_litellm_params = dict(temp_litellm_params)
-    _model_name = _deployment.get("model_name", None) or ""
-    _api_base = (
-        litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params)
-        or ""
-    )
-    model_info = _deployment["model_info"]
-    model_id = model_info.id
+    _model_name: Final = _deployment.get("model_name", None) or ""
+    _api_base: Final = litellm.get_api_base(model=_model_name, optional_params=temp_litellm_params) or ""
+    model_info: Final = _deployment["model_info"]
+    model_id: Final = model_info.id
 
-    litellm_model_name = temp_litellm_params.get("model") or ""
+    litellm_model_name: Final = temp_litellm_params.get("model") or ""
     llm_provider = ""
     try:
         _, llm_provider, _, _ = litellm.get_llm_provider(
@@ -59,9 +57,7 @@ async def router_cooldown_event_callback(
         pass
 
     # get the prometheus logger from in memory loggers
-    prometheusLogger: Optional[PrometheusLogger] = (
-        _get_prometheus_logger_from_callbacks()
-    )
+    prometheusLogger: Final[PrometheusLogger | None] = _get_prometheus_logger_from_callbacks()
 
     if prometheusLogger is not None:
         prometheusLogger.set_deployment_complete_outage(
@@ -82,7 +78,7 @@ async def router_cooldown_event_callback(
     return
 
 
-def _get_prometheus_logger_from_callbacks() -> Optional[PrometheusLogger]:
+def _get_prometheus_logger_from_callbacks() -> PrometheusLogger | None:
     """
     Checks if prometheus is a initalized callback, if yes returns it
     """

@@ -5,7 +5,7 @@ These helpers are used by agent and vector store endpoints to enforce
 proxy-admin-configurable toggles that restrict access for internal users.
 """
 
-from typing import Literal
+from typing import Final, Literal
 
 from fastapi import HTTPException
 
@@ -41,8 +41,8 @@ async def check_feature_access_for_user(
         user_api_key_cache,
     )
 
-    disable_flag = f"disable_{feature_name}_for_internal_users"
-    allow_team_admins_flag = f"allow_{feature_name}_for_team_admins"
+    disable_flag: Final = f"disable_{feature_name}_for_internal_users"
+    allow_team_admins_flag: Final = f"allow_{feature_name}_for_team_admins"
 
     if not general_settings.get(disable_flag, False):
         # Feature is not disabled — allow all authenticated users.
@@ -54,7 +54,7 @@ async def check_feature_access_for_user(
             _user_has_admin_privileges,
         )
 
-        is_admin = await _user_has_admin_privileges(
+        is_admin: Final = await _user_has_admin_privileges(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -64,9 +64,7 @@ async def check_feature_access_for_user(
 
     raise HTTPException(
         status_code=403,
-        detail={
-            "error": f"Access to {feature_name} is disabled for your role. Contact your proxy admin."
-        },
+        detail={"error": f"Access to {feature_name} is disabled for your role. Contact your proxy admin."},
     )
 
 
@@ -94,7 +92,5 @@ async def check_org_admin_can_generate_keys(
 
     raise HTTPException(
         status_code=403,
-        detail={
-            "error": "key generation is disabled for org admins. Contact your proxy admin."
-        },
+        detail={"error": "key generation is disabled for org admins. Contact your proxy admin."},
     )

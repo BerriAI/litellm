@@ -174,21 +174,13 @@ def make_redis_persister(
                 _log.warning(msg)
                 warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
                 raise CassetteNotFoundError() from exc
-            # Slide the expiry forward on every successful read. A plain GET
-            # does not touch the key's TTL, so a cassette that is only ever
-            # replayed (HIT/NOOP, never re-recorded) expires exactly
-            # ``ttl_seconds`` after its last *write* no matter how often it is
-            # read — and whichever CI run happens to cross that boundary
-            # re-records it live, surfacing as a spurious VCR MISS that no
-            # amount of matcher tolerance can prevent. Refreshing the TTL on
-            # read keeps any cassette used at least once per TTL window alive
-            # indefinitely, so the second/third run of a day replays cleanly.
-            # Best-effort: a failed refresh must never turn a successful load
-            # into a miss.
-            try:
-                redis_client.expire(key, ttl_seconds)
-            except RedisError:
-                pass
+            # TTL is intentionally not refreshed on read. The cassette must
+            # lapse ``ttl_seconds`` after its last *write*, so the next run
+            # past that point re-records live and catches provider request or
+            # response contract drift instead of replaying a frozen response
+            # forever. Sliding the expiry forward on read would keep an
+            # actively-used cassette alive indefinitely and that drift check
+            # would never run.
             return result
 
         @staticmethod

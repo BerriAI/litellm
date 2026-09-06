@@ -12,7 +12,7 @@ Hot path: thompson_sample() — pure function, no I/O.
 
 import random
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Final
 
 from litellm.router_strategy.adaptive_router.config import (
     BASE_TIER_WEIGHT,
@@ -34,7 +34,7 @@ class BanditCell:
 
     @property
     def mean(self) -> float:
-        total = self.alpha + self.beta
+        total: Final = self.alpha + self.beta
         return self.alpha / total if total > 0 else 0.5
 
     @property
@@ -42,9 +42,7 @@ class BanditCell:
         return max(0, int(self.alpha + self.beta - COLD_START_MASS))
 
 
-def initial_cell(
-    prefs: AdaptiveRouterPreferences, request_type: RequestType
-) -> BanditCell:
+def initial_cell(prefs: AdaptiveRouterPreferences, request_type: RequestType) -> BanditCell:
     """
     Cold-start prior for a (model, request_type) cell.
 
@@ -53,16 +51,13 @@ def initial_cell(
     Total mass = COLD_START_MASS so that ~10 real observations can move it noticeably.
     """
     if prefs.quality_tier not in BASE_TIER_WEIGHT:
-        valid = sorted(BASE_TIER_WEIGHT)
-        raise ValueError(
-            f"quality_tier={prefs.quality_tier} is not supported; "
-            f"valid tiers are {valid}"
-        )
-    base = BASE_TIER_WEIGHT[prefs.quality_tier]
-    bonus = STRENGTH_BONUS if request_type in prefs.strengths else 0.0
-    mean = min(0.95, base + bonus)
-    alpha = mean * COLD_START_MASS
-    beta = (1.0 - mean) * COLD_START_MASS
+        valid: Final = sorted(BASE_TIER_WEIGHT)
+        raise ValueError(f"quality_tier={prefs.quality_tier} is not supported; valid tiers are {valid}")
+    base: Final = BASE_TIER_WEIGHT[prefs.quality_tier]
+    bonus: Final = STRENGTH_BONUS if request_type in prefs.strengths else 0.0
+    mean: Final = min(0.95, base + bonus)
+    alpha: Final = mean * COLD_START_MASS
+    beta: Final = (1.0 - mean) * COLD_START_MASS
     return BanditCell(alpha=alpha, beta=beta)
 
 
@@ -73,20 +68,20 @@ def apply_delta(cell: BanditCell, delta_alpha: float, delta_beta: float) -> Band
     SAMPLE_CAP is a HARD cap on (alpha + beta). When the cap would be exceeded,
     we drop the update. (D5: hard cap, no rescaling — keep v0 simple.)
     """
-    new_alpha = cell.alpha + delta_alpha
-    new_beta = cell.beta + delta_beta
+    new_alpha: Final = cell.alpha + delta_alpha
+    new_beta: Final = cell.beta + delta_beta
     if new_alpha + new_beta > SAMPLE_CAP:
         return cell
     return BanditCell(alpha=new_alpha, beta=new_beta)
 
 
-def thompson_sample(cell: BanditCell, rng: Optional[random.Random] = None) -> float:
+def thompson_sample(cell: BanditCell, rng: random.Random | None = None) -> float:
     """Draw a sample from Beta(alpha, beta). Returns a quality estimate in [0, 1]."""
-    r = rng if rng is not None else random
+    r: Final = rng if rng is not None else random
     return r.betavariate(cell.alpha, cell.beta)
 
 
-def normalized_cost(model_cost: float, all_costs: List[float]) -> float:
+def normalized_cost(model_cost: float, all_costs: list[float]) -> float:
     """
     Map a raw $/1k-token cost into [0, 1] where 0 = most expensive, 1 = cheapest.
     Returns 0.5 when there's no spread.
@@ -102,7 +97,7 @@ def normalized_cost(model_cost: float, all_costs: List[float]) -> float:
 def score(
     quality_sample: float,
     model_cost: float,
-    all_costs: List[float],
+    all_costs: list[float],
     quality_weight: float = DEFAULT_QUALITY_WEIGHT,
     cost_weight: float = DEFAULT_COST_WEIGHT,
 ) -> float:
@@ -110,16 +105,16 @@ def score(
     Multi-objective score. V0 is a weighted linear sum of (quality, normalized_cost).
     Higher is better. Both inputs are in [0, 1].
     """
-    cost_score = normalized_cost(model_cost, all_costs)
+    cost_score: Final = normalized_cost(model_cost, all_costs)
     return quality_weight * quality_sample + cost_weight * cost_score
 
 
 def pick_best(
-    cells: Dict[str, BanditCell],
-    model_costs: Dict[str, float],
+    cells: dict[str, BanditCell],
+    model_costs: dict[str, float],
     quality_weight: float = DEFAULT_QUALITY_WEIGHT,
     cost_weight: float = DEFAULT_COST_WEIGHT,
-    rng: Optional[random.Random] = None,
+    rng: random.Random | None = None,
 ) -> str:
     """
     Sample once per model, score each, return the model with highest score.
@@ -129,8 +124,8 @@ def pick_best(
     """
     if not cells:
         raise ValueError("pick_best called with no models")
-    all_costs = list(model_costs.values())
-    best_model: Optional[str] = None
+    all_costs: Final = list(model_costs.values())
+    best_model: str | None = None
     best_score = float("-inf")
     for model, cell in cells.items():
         q = thompson_sample(cell, rng=rng)

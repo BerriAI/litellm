@@ -1,10 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { ProjectResponse, projectKeys } from "./useProjects";
 
@@ -21,6 +16,8 @@ export interface ProjectUpdateParams {
   metadata?: Record<string, unknown>;
   model_rpm_limit?: Record<string, number>;
   model_tpm_limit?: Record<string, number>;
+  model_itpm_limit?: Record<string, number>;
+  model_otpm_limit?: Record<string, number>;
 }
 
 // ── Fetch function ───────────────────────────────────────────────────────────
@@ -58,11 +55,7 @@ export const useUpdateProject = () => {
   const { accessToken } = useAuthorized();
   const queryClient = useQueryClient();
 
-  return useMutation<
-    ProjectResponse,
-    Error,
-    { projectId: string; params: ProjectUpdateParams }
-  >({
+  return useMutation<ProjectResponse, Error, { projectId: string; params: ProjectUpdateParams }>({
     mutationFn: async ({ projectId, params }) => {
       if (!accessToken) {
         throw new Error("Access token is required");

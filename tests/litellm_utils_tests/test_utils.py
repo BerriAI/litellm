@@ -1,6 +1,5 @@
 import copy
 import logging
-import sys
 import time
 from datetime import datetime
 from unittest import mock
@@ -12,9 +11,6 @@ from litellm.types.utils import StandardCallbackDynamicParams
 load_dotenv()
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system-path
 import pytest
 
 import litellm
@@ -332,34 +328,23 @@ def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> 
 
 
 def test_aget_valid_models():
-    old_environ = os.environ
-    os.environ = {"OPENAI_API_KEY": "temp"}  # mock set only openai key in environ
+    with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "temp"}, clear=True):
+        valid_models = get_valid_models()
+        print(valid_models)
 
-    valid_models = get_valid_models()
-    print(valid_models)
+        # list of openai supported llms on litellm
+        expected_models = (
+            litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
+        )
 
-    # list of openai supported llms on litellm
-    expected_models = (
-        litellm.open_ai_chat_completion_models | litellm.open_ai_text_completion_models
-    )
-
-    assert set(valid_models) == set(expected_models)
-
-    # reset replicate env key
-    os.environ = old_environ
+        assert set(valid_models) == set(expected_models)
 
     # GEMINI
-    expected_models = litellm.gemini_models
-    old_environ = os.environ
-    os.environ = {"GEMINI_API_KEY": "temp"}  # mock set only openai key in environ
+    with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "temp"}, clear=True):
+        valid_models = get_valid_models()
 
-    valid_models = get_valid_models()
-
-    print(valid_models)
-    assert set(valid_models) == set(expected_models)
-
-    # reset replicate env key
-    os.environ = old_environ
+        print(valid_models)
+        assert set(valid_models) == set(litellm.gemini_models)
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["anthropic", "xai"])
@@ -1022,17 +1007,14 @@ def test_convert_model_response_object():
         "hidden_params": None,
     }
 
-    try:
+    with pytest.raises(Exception) as exc_info:  # noqa: PT011  # bare Exception() with attributes, so str(e) is empty
         litellm.convert_to_model_response_object(**args)
-        pytest.fail("Expected this to fail")
-    except Exception as e:
-        assert hasattr(e, "status_code")
-        assert e.status_code == 400
-        assert hasattr(e, "message")
-        assert (
-            e.message
-            == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
-        )
+    e = exc_info.value
+    assert e.status_code == 400
+    assert (
+        e.message
+        == '{"type":"error","error":{"type":"invalid_request_error","message":"Output blocked by content filtering policy"}}'
+    )
 
 
 @pytest.mark.parametrize(
@@ -1334,7 +1316,7 @@ def test_validate_chat_completion_user_messages(messages, expected_bool):
         validate_chat_completion_user_messages(messages=messages)
     else:
         ## Invalid message
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid user message at index 0"):
             validate_chat_completion_user_messages(messages=messages)
 
 
@@ -1354,7 +1336,7 @@ def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
     if expected_bool:
         validate_chat_completion_tool_choice(tool_choice=tool_choice)
     else:
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="Invalid tool choice"):
             validate_chat_completion_tool_choice(tool_choice=tool_choice)
 
 
@@ -1588,18 +1570,21 @@ def test_token_counter_with_image_url_with_detail_high():
     assert _tokens == DEFAULT_IMAGE_TOKEN_COUNT + 7
 
 
-def test_fireworks_ai_document_inlining():
+def test_fireworks_ai_vision_capability_from_cost_map(monkeypatch):
     """
-    With document inlining, all fireworks ai models are now:
-    - supports_pdf
-    - supports_vision
+    Fireworks deprecated document inlining on 2025-06-30, so vision/PDF support is
+    no longer hardcoded to True for every Fireworks model. Capabilities are read
+    from the model cost map: unmapped models no longer advertise vision or PDF
+    support, while mapped VLMs still do.
     """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
     from litellm.utils import supports_pdf_input, supports_vision
 
-    litellm._turn_on_debug()
+    assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is False
+    assert supports_pdf_input("fireworks_ai/llama-3.1-8b-instruct") is False
 
-    assert supports_pdf_input("fireworks_ai/llama-3.1-8b-instruct") is True
-    assert supports_vision("fireworks_ai/llama-3.1-8b-instruct") is True
+    assert supports_vision("fireworks_ai/minimax-m3") is True
 
 
 def test_logprobs_type():
@@ -2144,7 +2129,7 @@ def test_validate_user_messages_invalid_content_type():
 
     messages = [{"content": [{"type": "invalid_type", "text": "Hello"}]}]
 
-    with pytest.raises(Exception) as e:
+    with pytest.raises(Exception, match='Please ensure all messages are valid OpenAI chat completion') as e:
         validate_chat_completion_user_messages(messages)
 
     assert "Invalid message" in str(e)

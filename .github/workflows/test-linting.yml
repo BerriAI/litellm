@@ -5,54 +5,123 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    # actions: read lets scripts/type_check_gate.py download the base-counts
+    # artifact published by publish-basedpyright-base-counts.yml instead of
+    # re-running basedpyright over the merge-base tree.
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        # Check out the PR head, not the default refs/pull/N/merge: the merge ref
+        # folds in newer base commits, which the diff-based gates (ruff delta,
+        # Any-discipline) would otherwise blame on this branch.
         with:
-          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
           clean: true
           persist-credentials: false
 
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-changes
+
+      - name: Fetch gate base (merge-base with target branch)
+        if: steps.changes.outputs.decision != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+          MERGE_BASE=$(retry gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          test -n "$MERGE_BASE"
+          retry git fetch --no-tags --depth=1 origin "$MERGE_BASE"
+          echo "GATE_BASE_SHA=$MERGE_BASE" >> "$GITHUB_ENV"
+
       - name: Set up Python
+        if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
+      - name: Cache uv dependencies
+        if: steps.changes.outputs.decision != 'skip'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-lint-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-lint-
+
       - name: Clean Python cache
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           find . -type d -name "__pycache__" -exec rm -rf {} + || true
           find . -name "*.pyc" -delete || true
 
       - name: Check uv.lock is up to date
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv lock --check || (echo "❌ uv.lock is out of sync with pyproject.toml. Run 'uv lock' locally and commit the result." && exit 1)
 
-      - name: Install dependencies
-        run: |
-          uv sync --frozen
+      - name: Cache the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-cargo-build
 
-      - name: Check Black formatting
+      - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
         run: |
-          cd litellm
-          uv run --no-sync black --check --exclude '/enterprise/' .
-          cd ..
+          uv sync --frozen --group proxy-dev --group e2e-dev
+
+      - name: Cache Prisma binaries
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-prisma-binaries
+
+      # basedpyright resolves Prisma's generated client (litellm/proxy/schema.prisma)
+      # only after `prisma generate` writes prisma/client.py et al. Without this the
+      # DB wrappers typed against the generated client would degrade to Unknown.
+      - name: Generate Prisma client
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Check ruff format
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          git diff --name-only --diff-filter=ACMR "$GATE_BASE_SHA" HEAD -- 'litellm/**/*.py' | grep -v '^litellm/enterprise/' > "$RUNNER_TEMP/ruff_format_files.txt" || true
+          if [ ! -s "$RUNNER_TEMP/ruff_format_files.txt" ]; then
+            echo "No changed litellm Python files to check with ruff format."
+            exit 0
+          fi
+          xargs uv run --no-sync ruff format --check --exclude '/enterprise/' < "$RUNNER_TEMP/ruff_format_files.txt"
 
       - name: Debug - Check file state
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           echo "Current branch:"
           git branch --show-current
@@ -62,30 +131,98 @@ jobs:
           head -50 litellm/litellm_core_utils/custom_logger_registry.py | tail -10
 
       - name: Run Ruff linting
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           cd litellm
           uv run --no-sync ruff check .
           cd ..
 
+      - name: Run Ruff linting (test tree)
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync ruff check --config ruff-tests.toml tests
+
+      - name: Check strict-rule budget (delta vs base)
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync python scripts/ruff_strict_gate.py --base "$GATE_BASE_SHA"
+
+      - name: Check type-discipline budget (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs base)
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync python scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
+
+      - name: Check test-quality budget (zero-assert / mock-echo tests, sys.path.insert, raw env writes, litellm global mutation, credential-gated skips, conftest snapshot inventory, delta vs base)
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync python scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
+
       - name: Print OpenAI version
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
-      - name: Run MyPy type checking
+      - name: Check basedpyright budget (delta vs base)
+        if: steps.changes.outputs.decision != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cd litellm
-          uv run --no-sync mypy .
-          cd ..
+          uv run --no-sync python scripts/type_check_gate.py --base "$GATE_BASE_SHA"
+
+      - name: Check tests/e2e basedpyright (zero errors)
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- 'tests/e2e/**/*.py' | grep -q .; then
+            uv run --no-sync basedpyright tests/e2e
+          else
+            echo "No changed tests/e2e Python files; skipping."
+          fi
 
       - name: Check for circular imports
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           cd litellm
           uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py
           cd ..
 
       - name: Check import safety
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+
+  # Intentionally NON-GATING. This job turns red when a *-budget.json ceiling is
+  # raised (or a rule/budget is dropped) so a loosening is obvious in review, but it
+  # must be kept OUT of the branch-protection required-checks list so a justified
+  # bump can still be merged by a human who has seen and accepted the red.
+  budget-ratchet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch ratchet base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+          retry git fetch --no-tags --depth=1 origin "$BASE_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Ratchet check (budgets may only decrease; non-gating)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python scripts/budget_ratchet_check.py --base "$BASE_SHA"
 
   secret-scan:
     runs-on: ubuntu-latest
@@ -96,7 +233,7 @@ jobs:
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Set up Python
@@ -105,19 +242,21 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Run secret scan test
         run: |
-          uv run --frozen --with 'pytest==9.0.2' pytest tests/litellm/test_no_hardcoded_secrets.py -v
+          uv run --no-project --with 'pytest==9.0.2' pytest tests/code_coverage_tests/test_no_hardcoded_secrets.py -v
 
       - name: Run ggshield secret scan
         env:
           GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}
         run: |
           if [ -n "$GITGUARDIAN_API_KEY" ]; then
+            retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
+            retry git fetch --no-tags --unshallow origin
             uv tool run --from 'ggshield==1.48.0' ggshield secret scan repo .
           else
             echo "GITGUARDIAN_API_KEY not set, skipping ggshield scan"

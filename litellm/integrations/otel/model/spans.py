@@ -10,6 +10,8 @@ Canonical hierarchy::
     │   └── DB_CALL (CLIENT)          #   its key/user/team lookups nest here
     ├── GUARDRAIL  (INTERNAL)         # request-lifecycle hook, sibling of LLM_CALL
     ├── LLM_CALL   (CLIENT)
+    ├── MCP_TOOL_CALL  (CLIENT)       # nests under the POST carrying the message
+    ├── MCP_LIST_TOOLS (CLIENT)       #   (client-propagated context is a span link)
     └── DB_CALL    (CLIENT)           # e.g. the spend-log write
 
 Guardrails parent to PROXY_REQUEST, not LLM_CALL: pre/during/post-call guardrail
@@ -17,6 +19,15 @@ hooks are orchestrated by the request lifecycle (a pre-call guardrail runs
 before the LLM call even starts), so a guardrail is a sibling of the LLM call,
 not a child of it. The emitter parents every span to the ambient OTel context
 (the active server span), which matches this.
+
+MCP spans (``MCP_TOOL_CALL``, ``MCP_LIST_TOOLS``) are parented at emit time by
+:func:`resolve_mcp_span_context`: they nest under the ``PROXY_REQUEST`` transport
+span of the request carrying that message, so the tool call stays in one trace.
+Trace context the client propagated in ``params._meta`` (SEP-414) is recorded as
+a span *link*, never the parent — a remote parent would root the span in a trace
+whose root never reaches the gateway's tracing backend. Links always target that
+remote client context, never a registry role, so ``SpanSpec`` declares no link
+field; the concrete transport parent is resolved per message at emit time.
 
 Not every service call becomes a span — :func:`span_role_for_service` decides:
 
@@ -40,12 +51,13 @@ owned by the instrumentor too, so they don't appear as a role here.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.payloads import (
         GuardrailSpanData,
         LLMCallSpanData,
+        MCPListToolsSpanData,
         MCPToolCallSpanData,
         ProxyRequestSpanData,
         ServiceSpanData,
@@ -56,6 +68,7 @@ class SpanRole(str, Enum):
     PROXY_REQUEST = "proxy_request"
     LLM_CALL = "llm_call"
     MCP_TOOL_CALL = "mcp_tool_call"
+    MCP_LIST_TOOLS = "mcp_list_tools"
     GUARDRAIL = "guardrail"
     DB_CALL = "db_call"
     SERVICE = "service"
@@ -76,27 +89,20 @@ class SpanSpec:
     parent: SpanRole | None
 
 
-SPAN_REGISTRY: dict[SpanRole, SpanSpec] = {
-    SpanRole.PROXY_REQUEST: SpanSpec(
-        SpanRole.PROXY_REQUEST, LiteLLMSpanKind.SERVER, parent=None
-    ),
-    SpanRole.LLM_CALL: SpanSpec(
-        SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-    ),
-    # The proxy is an MCP client to the upstream server it dispatches the tool
-    # call to, so this is a CLIENT span, sibling of the LLM call under the request.
-    SpanRole.MCP_TOOL_CALL: SpanSpec(
-        SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-    ),
-    SpanRole.GUARDRAIL: SpanSpec(
-        SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST
-    ),
-    SpanRole.DB_CALL: SpanSpec(
-        SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST
-    ),
-    SpanRole.SERVICE: SpanSpec(
-        SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST
-    ),
+SPAN_REGISTRY: Final[dict[SpanRole, SpanSpec]] = {
+    SpanRole.PROXY_REQUEST: SpanSpec(SpanRole.PROXY_REQUEST, LiteLLMSpanKind.SERVER, parent=None),
+    SpanRole.LLM_CALL: SpanSpec(SpanRole.LLM_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
+    # The proxy is an MCP client to the upstream server, so MCP spans are CLIENT
+    # spans. ``resolve_mcp_span_context`` nests them under the PROXY_REQUEST
+    # transport span of the request carrying that message (resolved per message at
+    # emit time), keeping the call in one trace. Trace context the client
+    # propagated in ``params._meta`` becomes a span *link* to that remote context,
+    # which is not a registry role, so ``SpanSpec`` has no link field.
+    SpanRole.MCP_TOOL_CALL: SpanSpec(SpanRole.MCP_TOOL_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.MCP_LIST_TOOLS: SpanSpec(SpanRole.MCP_LIST_TOOLS, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.GUARDRAIL: SpanSpec(SpanRole.GUARDRAIL, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.DB_CALL: SpanSpec(SpanRole.DB_CALL, LiteLLMSpanKind.CLIENT, parent=SpanRole.PROXY_REQUEST),
+    SpanRole.SERVICE: SpanSpec(SpanRole.SERVICE, LiteLLMSpanKind.INTERNAL, parent=SpanRole.PROXY_REQUEST),
 }
 
 
@@ -105,10 +111,12 @@ SPAN_REGISTRY: dict[SpanRole, SpanSpec] = {
 # redis-backed spend queues. Any service not mapped here is litellm-internal work
 # and stays an INTERNAL ``SERVICE`` span. This table is the single source of
 # datastore knowledge — both the role classifier and the mapper read it.
-_DB_SYSTEM_BY_SERVICE: dict[str, str] = {
+POSTGRESQL: Final = "postgresql"
+
+_DB_SYSTEM_BY_SERVICE: Final[dict[str, str]] = {
     "redis": "redis",
-    "postgres": "postgresql",
-    "batch_write_to_db": "postgresql",
+    "postgres": POSTGRESQL,
+    "batch_write_to_db": POSTGRESQL,
 }
 
 
@@ -138,9 +146,7 @@ def db_system(service_name: str) -> str | None:
 #   - ``auth``           — emitted instead as a live phase span (see
 #                          ``logger.phase_span``) so its DB lookups nest under it,
 #                          not as a flat post-hoc service span.
-_METRICS_ONLY_SERVICES: frozenset[str] = frozenset(
-    {"self", "router", "proxy_pre_call", "auth"}
-)
+_METRICS_ONLY_SERVICES: Final[frozenset[str]] = frozenset({"self", "router", "proxy_pre_call", "auth"})
 
 
 def span_role_for_service(service_name: str) -> SpanRole | None:
@@ -163,18 +169,24 @@ def span_role_for_service(service_name: str) -> SpanRole | None:
 # this span (the instrumentor owns it), but it anchors request-level spans to it
 # and tests assert against it by name, so the literal lives here with the rest of
 # the span vocabulary rather than being duplicated at each call site.
-LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
+LITELLM_PROXY_REQUEST_SPAN_NAME: Final = "Received Proxy Server Request"
 
 
 def llm_call_span_name(data: "LLMCallSpanData") -> str:
     """``"{operation} {model}"`` e.g. ``"chat gpt-4o"`` (GenAI semconv)."""
-    model = data.request_model or ""
+    model: Final = data.request_model or ""
     return f"{data.operation.value} {model}".strip()
 
 
 def mcp_tool_call_span_name(data: "MCPToolCallSpanData") -> str:
     """``"{mcp.method.name} {tool}"`` e.g. ``"tools/call get-weather"`` (MCP semconv)."""
     return f"{data.method} {data.tool_name}".strip()
+
+
+def mcp_list_tools_span_name(data: "MCPListToolsSpanData") -> str:
+    """``"{mcp.method.name}"`` i.e. ``"tools/list"`` — no low-cardinality target, so
+    the method name alone names the span (MCP semconv)."""
+    return data.method
 
 
 def proxy_request_span_name(data: "ProxyRequestSpanData") -> str:
@@ -193,7 +205,8 @@ def service_span_name(data: "ServiceSpanData") -> str:
 
 
 def root_roles() -> list[SpanRole]:
-    """Roles that start a new trace (no in-process parent)."""
+    """Roles with no in-process parent, i.e. they start a new trace (only the
+    instrumentor-owned ``PROXY_REQUEST`` server span today)."""
     return [role for role, spec in SPAN_REGISTRY.items() if spec.parent is None]
 
 
@@ -204,12 +217,12 @@ def child_roles(parent: SpanRole) -> list[SpanRole]:
 def validate_registry(
     registry: dict[SpanRole, SpanSpec] | None = None,
 ) -> None:
-    reg = registry if registry is not None else SPAN_REGISTRY
+    reg: Final = registry if registry is not None else SPAN_REGISTRY
     for role, spec in reg.items():
         if spec.role is not role:
             raise ValueError(f"SPAN_REGISTRY[{role}] has mismatched role {spec.role}")
         if spec.parent is not None and spec.parent not in reg:
             raise ValueError(f"span role {role} declares unknown parent {spec.parent}")
-    missing = [role for role in SpanRole if role not in reg]
+    missing: Final = [role for role in SpanRole if role not in reg]
     if missing:
         raise ValueError(f"SPAN_REGISTRY is missing roles: {missing}")

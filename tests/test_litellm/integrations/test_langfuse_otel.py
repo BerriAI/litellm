@@ -114,6 +114,9 @@ class TestLangfuseOtelIntegration:
             mock_set_attributes.assert_called_once_with(
                 mock_span, mock_kwargs, mock_response, LangfuseLLMObsOTELAttributes
             )
+            mock_span.set_attribute.assert_any_call(
+                "langfuse.observation.type", "generation"
+            )
 
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""
@@ -133,6 +136,32 @@ class TestLangfuseOtelIntegration:
                 mock_safe_set_attribute.assert_called_once_with(
                     mock_span, "langfuse.environment", test_env
                 )
+
+    def test_set_langfuse_environment_attribute_prefers_dynamic_param(self):
+        """Per-key/team langfuse_environment beats the deployment env var."""
+
+        class _RecordingSpan:
+            def __init__(self):
+                self.attributes = {}
+
+            def set_attribute(self, key, value):
+                self.attributes[key] = value
+
+        span = _RecordingSpan()
+        mock_kwargs = {
+            "standard_callback_dynamic_params": {
+                "langfuse_environment": "team-a-env"
+            }
+        }
+
+        with patch.dict(
+            os.environ, {"LANGFUSE_TRACING_ENVIRONMENT": "deployment-wide"}
+        ):
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                span, mock_kwargs, {}
+            )
+
+        assert span.attributes["langfuse.environment"] == "team-a-env"
 
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
@@ -208,7 +237,7 @@ class TestLangfuseOtelIntegration:
                 LangfuseSpanAttributes.GENERATION_NAME.value: "gen-name",
                 LangfuseSpanAttributes.GENERATION_ID.value: "gen-id",
                 LangfuseSpanAttributes.PARENT_OBSERVATION_ID.value: "parent-id",
-                LangfuseSpanAttributes.GENERATION_VERSION.value: "v1",
+                LangfuseSpanAttributes.VERSION.value: "t-ver",
                 LangfuseSpanAttributes.MASK_INPUT.value: True,
                 LangfuseSpanAttributes.MASK_OUTPUT.value: False,
                 LangfuseSpanAttributes.TRACE_USER_ID.value: "user-123",
@@ -218,8 +247,7 @@ class TestLangfuseOtelIntegration:
                 LangfuseSpanAttributes.TRACE_NAME.value: "trace-name",
                 LangfuseSpanAttributes.TRACE_ID.value: "traceid",  # stripped dashes
                 LangfuseSpanAttributes.TRACE_METADATA.value: json.dumps({"k": "v"}),
-                LangfuseSpanAttributes.TRACE_VERSION.value: "t-ver",
-                LangfuseSpanAttributes.TRACE_RELEASE.value: "rel-1",
+                LangfuseSpanAttributes.RELEASE.value: "rel-1",
                 LangfuseSpanAttributes.EXISTING_TRACE_ID.value: "existing-id",
                 LangfuseSpanAttributes.UPDATE_TRACE_KEYS.value: json.dumps(
                     ["key1", "key2"]
@@ -236,6 +264,52 @@ class TestLangfuseOtelIntegration:
             assert (
                 actual == expected
             ), "Mismatch between expected and actual OTEL attribute mapping."
+
+    @pytest.mark.parametrize(
+        "metadata, expected_version",
+        [
+            (
+                {"version": "v-observation", "trace_version": "v-trace"},
+                "v-trace",
+            ),
+            ({"trace_version": "v-trace"}, "v-trace"),
+            ({"version": "v-observation"}, "v-observation"),
+            ({"version": "v-observation", "trace_version": ""}, ""),
+            ({}, None),
+        ],
+        ids=[
+            "trace-version-wins-as-documented",
+            "trace-only",
+            "observation-version-is-the-fallback",
+            "empty-trace-version-is-not-absent",
+            "neither-key-emits-nothing",
+        ],
+    )
+    def test_version_emitted_on_langfuse_v4_key(self, metadata, expected_version):
+        kwargs = {"litellm_params": {"metadata": {"trace_release": "rel-9", **metadata}}}
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                MagicMock(), kwargs, None
+            )
+
+        emitted = {
+            call.args[1]: call.args[2] for call in mock_safe_set_attribute.call_args_list
+        }
+
+        if expected_version is None:
+            assert "langfuse.version" not in emitted
+        else:
+            assert emitted["langfuse.version"] == expected_version
+        assert emitted["langfuse.release"] == "rel-9"
+        for retired_key in (
+            "langfuse.generation.version",
+            "langfuse.trace.version",
+            "langfuse.trace.release",
+        ):
+            assert retired_key not in emitted
 
     def test_set_langfuse_specific_attributes_with_content(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with regular content response."""
@@ -407,6 +481,177 @@ class TestLangfuseOtelIntegration:
             config = LangfuseOtelLogger.get_langfuse_otel_config()
             assert isinstance(config, OpenTelemetryConfig)
             # Endpoint assertion removed as side effect is gone
+
+
+class TestLangfuseOtelKeyDynamicConfig:
+    """Key/team-scoped Langfuse credentials must define the full export target
+    (OTLP endpoint + auth), not just auth headers on the init-time exporter."""
+
+    CLEAN_ENV_VARS = [
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+        "LANGFUSE_OTEL_HOST",
+        "OTEL_EXPORTER",
+        "OTEL_EXPORTER_OTLP_PROTOCOL",
+        "OTEL_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_HEADERS",
+        "OTEL_EXPORTER_OTLP_HEADERS",
+    ]
+
+    def _clean_env(self):
+        cleaned = {k: v for k, v in os.environ.items() if k not in self.CLEAN_ENV_VARS}
+        return patch.dict(os.environ, cleaned, clear=True)
+
+    def _dynamic_params(self, **overrides):
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        params = {
+            "langfuse_public_key": "key_public",
+            "langfuse_secret_key": "key_secret",
+            "langfuse_host": "https://langfuse.example.com",
+        }
+        params.update(overrides)
+        return StandardCallbackDynamicParams(**{k: v for k, v in params.items() if v is not None})
+
+    def test_construct_dynamic_otel_config_with_key_credentials(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            config = logger.construct_dynamic_otel_config(self._dynamic_params())
+
+        assert config is not None
+        assert config.exporter == "otlp_http"
+        assert config.endpoint == "https://langfuse.example.com/api/public/otel"
+
+        import base64
+
+        expected_auth = base64.b64encode(b"key_public:key_secret").decode()
+        assert config.headers == f"Authorization=Basic {expected_auth},x-langfuse-ingestion-version=4"
+
+    def test_construct_dynamic_otel_config_host_without_protocol(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            config = logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_host="langfuse.example.com"))
+
+        assert config is not None
+        assert config.endpoint == "https://langfuse.example.com/api/public/otel"
+
+    def test_construct_dynamic_otel_config_defaults_to_us_cloud(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            config = logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_host=None))
+
+        assert config is not None
+        assert config.endpoint == "https://us.cloud.langfuse.com/api/public/otel"
+
+    def test_construct_dynamic_otel_config_falls_back_to_env_host(self):
+        with self._clean_env():
+            with patch.dict(os.environ, {"LANGFUSE_HOST": "https://env-host.example.com"}):
+                logger = LangfuseOtelLogger()
+                config = logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_host=None))
+
+        assert config is not None
+        assert config.endpoint == "https://env-host.example.com/api/public/otel"
+
+    def test_construct_dynamic_otel_config_requires_both_keys(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+
+            assert logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_secret_key=None)) is None
+            assert logger.construct_dynamic_otel_config(self._dynamic_params(langfuse_public_key=None)) is None
+
+    def test_key_dynamic_params_create_otlp_exporter_without_global_env(self):
+        """Without global LANGFUSE_* env vars, a request carrying key-scoped Langfuse
+        credentials must get a tracer exporting via OTLP HTTP to that key's host."""
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            assert logger.OTEL_EXPORTER == "console"
+
+            tracer = logger.get_tracer_to_use_for_request(
+                {"standard_callback_dynamic_params": self._dynamic_params()}
+            )
+
+        assert tracer is not logger.tracer
+        assert len(logger._tracer_provider_cache) == 1
+
+        provider = next(iter(logger._tracer_provider_cache.values())).provider
+        span_processors = provider._active_span_processor._span_processors
+        assert len(span_processors) == 1
+        assert isinstance(span_processors[0], BatchSpanProcessor)
+
+        exporter = span_processors[0].span_exporter
+        assert isinstance(exporter, OTLPSpanExporter)
+        assert exporter._endpoint == "https://langfuse.example.com/api/public/otel/v1/traces"
+
+        import base64
+
+        expected_auth = base64.b64encode(b"key_public:key_secret").decode()
+        assert exporter._headers == {
+            "Authorization": f"Basic {expected_auth}",
+            "x-langfuse-ingestion-version": "4",
+        }
+
+    def test_key_dynamic_params_reuse_cached_provider(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            kwargs = {"standard_callback_dynamic_params": self._dynamic_params()}
+            logger.get_tracer_to_use_for_request(kwargs)
+            logger.get_tracer_to_use_for_request(kwargs)
+
+        assert len(logger._tracer_provider_cache) == 1
+
+    def test_no_dynamic_params_keeps_default_tracer(self):
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            tracer = logger.get_tracer_to_use_for_request({})
+
+        assert tracer is logger.tracer
+        assert logger._tracer_provider_cache == {}
+
+    def test_key_credentials_never_passed_to_debug_logger(self):
+        """The span-processor debug logs must receive a redacted header value, so the
+        key-scoped Langfuse secret never enters a log record regardless of downstream
+        handler configuration, while the exporter still gets the real header."""
+        import base64
+
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+
+        from litellm.integrations import opentelemetry as otel_module
+
+        secret = base64.b64encode(b"key_public:key_secret").decode()
+
+        recorded_arguments = []
+
+        def _spy(message, *args, **kwargs):
+            recorded_arguments.append(" ".join(str(part) for part in (message, *args)))
+
+        with self._clean_env():
+            logger = LangfuseOtelLogger()
+            with patch.object(otel_module.verbose_logger, "debug", side_effect=_spy):
+                logger.get_tracer_to_use_for_request(
+                    {"standard_callback_dynamic_params": self._dynamic_params()}
+                )
+
+        logged = "\n".join(recorded_arguments)
+        assert "initializing span processor" in logged
+        assert secret not in logged
+        assert f"Basic {secret}" not in logged
+
+        provider = next(iter(logger._tracer_provider_cache.values())).provider
+        exporter = provider._active_span_processor._span_processors[0].span_exporter
+        assert isinstance(exporter, OTLPSpanExporter)
+        assert exporter._headers == {
+            "Authorization": f"Basic {secret}",
+            "x-langfuse-ingestion-version": "4",
+        }
 
 
 class TestLangfuseOtelResponsesAPI:
@@ -713,6 +958,52 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["call_id"] == "call-abc"
             assert output_data[0]["arguments"]["location"] == "San Francisco"
             assert output_data[0]["arguments"]["unit"] == "celsius"
+
+    def test_responses_api_function_call_with_redacted_arguments(self):
+        """Sentinel arguments (invalid JSON) must not kill the whole observation output."""
+        from openai.types.responses import ResponseFunctionToolCall
+
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+
+        response_obj = ResponsesAPIResponse(
+            id="response-redacted",
+            created_at=1625247700,
+            output=[
+                ResponseFunctionToolCall(
+                    id="fc-redacted",
+                    type="function_call",
+                    name="get_weather",
+                    call_id="call-redacted",
+                    arguments="redacted-by-litellm",
+                    status="completed",
+                )
+            ],
+        )
+
+        kwargs = {
+            "call_type": "responses",
+            "messages": [{"role": "user", "content": "What's the weather?"}],
+            "model": "gpt-4o",
+            "optional_params": {},
+        }
+
+        mock_span = MagicMock()
+
+        with patch(  # test-quality-ok: the span attribute sink is the observable boundary; sibling tests in this class stub the same seam
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(mock_span, kwargs, response_obj)
+
+            output_calls = [
+                call
+                for call in mock_safe_set_attribute.call_args_list
+                if call.args[1] == LangfuseSpanAttributes.OBSERVATION_OUTPUT.value
+            ]
+
+            assert len(output_calls) > 0, "observation.output should still be set"
+            output_data = json.loads(output_calls[0].args[2])
+            assert output_data[0]["name"] == "get_weather"
+            assert output_data[0]["arguments"] == {}
 
 
 if __name__ == "__main__":

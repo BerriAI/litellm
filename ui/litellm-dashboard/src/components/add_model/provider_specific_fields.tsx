@@ -1,16 +1,35 @@
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
-import { UploadOutlined } from "@ant-design/icons";
-import { Text, TextInput } from "@tremor/react";
-import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, UploadProps } from "antd";
+import { PasswordInput } from "@/components/shared/PasswordInput";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Upload as UploadIcon } from "lucide-react";
 import React from "react";
+import { useFormContext } from "react-hook-form";
+import { requiredRule } from "../common_components/formRules";
+import {
+  MountedFormField,
+  type MountedFieldControlProps,
+  type MountedFormValues,
+} from "../common_components/MountedFormField";
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
-const { Link } = Typography;
+import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 
 interface ProviderSpecificFieldsProps {
   selectedProvider: Providers;
-  uploadProps?: UploadProps;
 }
+
+const readTextFile = (file: File, onLoaded: (contents: string) => void) => {
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    if (event.target) {
+      onLoaded(event.target.result as string);
+    }
+  };
+  reader.readAsText(file);
+};
 
 interface ProviderCredentialField {
   key: string;
@@ -27,6 +46,18 @@ export interface CredentialValues {
   key: string;
   value: string;
 }
+
+const getApiVersionFromApiBase = (apiBase: string): string | null => {
+  const queryStartIndex = apiBase.indexOf("?");
+  if (queryStartIndex === -1) {
+    return null;
+  }
+
+  const queryString = apiBase.slice(queryStartIndex + 1).split("#")[0];
+  const searchParams = new URLSearchParams(queryString);
+
+  return searchParams.get("api_version") || searchParams.get("api-version");
+};
 
 const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): ProviderCredentialField => {
   const type: ProviderCredentialField["type"] =
@@ -58,8 +89,6 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
 const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
 
 export const createCredentialFromModel = (provider: string, modelData: any): CredentialItem => {
-  console.log("provider", provider);
-  console.log("modelData", modelData);
   const enumKey = Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === provider.toLowerCase());
   if (!enumKey) {
     throw new Error(`Provider ${provider} not found in provider_map`);
@@ -68,13 +97,9 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   const providerFields = providerFieldsByDisplayName[providerDisplayName] || [];
   const credentialValues: object = {};
 
-  console.log("providerFields", providerFields);
-
   // Go through each field defined for this provider
   providerFields.forEach((field) => {
     const value = modelData.litellm_params[field.key];
-    console.log("field", field);
-    console.log("value", value);
     if (value !== undefined) {
       (credentialValues as Record<string, string>)[field.key] = value.toString();
     }
@@ -92,9 +117,18 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
   return credential;
 };
 
-const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
+const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
-  const form = Form.useFormInstance(); // Get form instance from context
+  const form = useFormContext<MountedFormValues>();
+  const credentialsFileRef = React.useRef<HTMLInputElement>(null);
+  const pickCredentialsFile =
+    (onLoaded: (contents: string) => void) => (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (file?.type === "application/json") {
+        readTextFile(file, onLoaded);
+      }
+    };
 
   const { data: providerMetadata, isLoading, error: loadError } = useProviderFields();
 
@@ -167,129 +201,158 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
     return mapped;
   }, [selectedProviderEnum, selectedProvider, providerMetadata]);
 
-  const handleUpload = {
-    name: "file",
-    accept: ".json",
-    beforeUpload: (file: any) => {
-      if (file.type === "application/json") {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          if (e.target) {
-            const jsonStr = e.target.result as string;
-            console.log(`Setting field value from JSON, length: ${jsonStr.length}`);
-            form.setFieldsValue({ vertex_credentials: jsonStr });
-            console.log("Form values after setting:", form.getFieldsValue());
-          }
-        };
-        reader.readAsText(file);
-      }
-      // Prevent upload
-      return false;
-    },
-    onChange(info: any) {
-      console.log("Upload onChange triggered in ProviderSpecificFields");
-      console.log("Current form values:", form.getFieldsValue());
+  const hasApiVersionField = React.useMemo(() => allFields.some((field) => field.key === "api_version"), [allFields]);
+  const lastInferredApiVersionRef = React.useRef<string | null>(null);
 
-      if (info.file.status !== "uploading") {
-        console.log(info.file, info.fileList);
+  const handleApiBaseChange = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      if (!hasApiVersionField) {
+        return;
       }
+
+      const apiVersion = getApiVersionFromApiBase(event.target.value);
+      if (apiVersion) {
+        lastInferredApiVersionRef.current = apiVersion;
+        form.setValue("api_version", apiVersion);
+        return;
+      }
+
+      if (form.getValues("api_version") === lastInferredApiVersionRef.current) {
+        form.setValue("api_version", "");
+      }
+      lastInferredApiVersionRef.current = null;
     },
+    [form, hasApiVersionField],
+  );
+
+  const renderFieldControl = (field: ProviderCredentialField, control: MountedFieldControlProps) => {
+    if (field.type === "select") {
+      return (
+        <Select
+          items={(field.options ?? []).map((option) => ({ value: option, label: option }))}
+          value={(control.value as string | undefined) ?? field.defaultValue ?? null}
+          onValueChange={control.onChange}
+        >
+          <SelectTrigger id={control.id} onBlur={control.onBlur} className="w-full">
+            <SelectValue placeholder={field.placeholder} />
+          </SelectTrigger>
+          <SelectContent>
+            {field.options?.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    }
+
+    if (field.type === "upload") {
+      return (
+        <>
+          <Button type="button" variant="outline" className="w-fit" onClick={() => credentialsFileRef.current?.click()}>
+            <UploadIcon />
+            Click to Upload
+          </Button>
+          <input
+            ref={credentialsFileRef}
+            id={control.id}
+            type="file"
+            accept=".json"
+            className="sr-only"
+            onBlur={control.onBlur}
+            onChange={pickCredentialsFile(control.onChange)}
+          />
+        </>
+      );
+    }
+
+    if (field.type === "textarea") {
+      return (
+        <Textarea
+          id={control.id}
+          value={control.value as string | undefined}
+          onChange={control.onChange}
+          onBlur={control.onBlur}
+          placeholder={field.placeholder}
+          defaultValue={field.defaultValue}
+          rows={6}
+          className="font-mono text-xs"
+        />
+      );
+    }
+
+    if (field.type === "password") {
+      return (
+        <PasswordInput
+          id={control.id}
+          value={control.value as string | undefined}
+          onChange={control.onChange}
+          onBlur={control.onBlur}
+          placeholder={field.placeholder}
+          defaultValue={field.defaultValue}
+        />
+      );
+    }
+
+    return (
+      <Input
+        id={control.id}
+        value={(control.value as string | undefined) ?? undefined}
+        onBlur={control.onBlur}
+        placeholder={field.placeholder}
+        type="text"
+        defaultValue={field.defaultValue}
+        onChange={(event) => {
+          control.onChange(event);
+          if (field.key === "api_base") {
+            handleApiBaseChange(event);
+          }
+        }}
+      />
+    );
   };
 
   return (
     <>
-      {isLoading && allFields.length === 0 && (
-        <Row>
-          <Col span={24}>
-            <Text className="mb-2">Loading provider fields...</Text>
-          </Col>
-        </Row>
-      )}
+      {isLoading && allFields.length === 0 && <p className="text-sm mb-2">Loading provider fields...</p>}
       {loadError && allFields.length === 0 && (
-        <Row>
-          <Col span={24}>
-            <Text className="mb-2 text-red-500">
-              {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
-            </Text>
-          </Col>
-        </Row>
+        <p className="text-sm mb-2 text-destructive">
+          {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
+        </p>
       )}
       {allFields.map((field) => (
         <React.Fragment key={field.key}>
-          <Form.Item
-            label={field.label}
+          <MountedFormField
+            label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
             name={field.key}
-            rules={field.required ? [{ required: true, message: "Required" }] : undefined}
-            tooltip={field.tooltip}
-            className={field.key === "vertex_credentials" ? "mb-0" : undefined}
+            required={field.required}
+            rules={field.required ? { validate: { required: requiredRule("Required") } } : undefined}
+            className={field.key === "vertex_credentials" ? "mb-0" : "mb-4"}
           >
-            {field.type === "select" ? (
-              <Select placeholder={field.placeholder} defaultValue={field.defaultValue}>
-                {field.options?.map((option) => (
-                  <Select.Option key={option} value={option}>
-                    {option}
-                  </Select.Option>
-                ))}
-              </Select>
-            ) : field.type === "upload" ? (
-              <Upload
-                {...handleUpload}
-                onChange={(info) => {
-                  // First call the original onChange
-                  if (uploadProps?.onChange) {
-                    uploadProps.onChange(info);
-                  }
-
-                  // Check the field value after a short delay
-                  setTimeout(() => {
-                    const value = form.getFieldValue(field.key);
-                    console.log(`${field.key} value after upload:`, JSON.stringify(value));
-                  }, 500);
-                }}
-              >
-                <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
-              </Upload>
-            ) : field.type === "textarea" ? (
-              <Input.TextArea
-                placeholder={field.placeholder}
-                defaultValue={field.defaultValue}
-                rows={6}
-                style={{ fontFamily: "monospace", fontSize: "12px" }}
-              />
-            ) : (
-              <TextInput
-                placeholder={field.placeholder}
-                type={field.type === "password" ? "password" : "text"}
-                defaultValue={field.defaultValue}
-              />
-            )}
-          </Form.Item>
+            {(control) => renderFieldControl(field, control)}
+          </MountedFormField>
 
           {/* Special case for Vertex Credentials help text */}
           {field.key === "vertex_credentials" && (
-            <Row>
-              <Col>
-                <Text className="mb-3 mt-1">Give a gcp service account(.json file)</Text>
-              </Col>
-            </Row>
+            <p className="text-sm mb-3 mt-1">Give a gcp service account(.json file)</p>
           )}
 
           {/* Special case for Azure Base Model help text */}
           {field.key === "base_model" && (
-            <Row>
-              <Col span={10}></Col>
-              <Col span={10}>
-                <Text className="mb-2">
-                  The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
-                  <Link
-                    href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
-                    target="_blank"
-                  >
-                    here
-                  </Link>
-                </Text>
-              </Col>
-            </Row>
+            <div className="grid grid-cols-24">
+              <p className="col-start-11 col-span-10 text-sm mb-2">
+                The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
+                <a
+                  href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline-offset-4 hover:underline"
+                >
+                  here
+                </a>
+              </p>
+            </div>
           )}
         </React.Fragment>
       ))}

@@ -1,12 +1,8 @@
 import json
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
 class TestMCPRegistryFile:
@@ -84,6 +80,15 @@ class TestMCPRegistryFile:
                 assert (
                     "url" in server and server["url"]
                 ), f"HTTP/SSE server {server['name']} missing 'url'"
+
+    def test_linear_uses_streamable_http(self, registry_path):
+        """Linear's MCP server should default to streamable HTTP at /mcp, not SSE at /sse."""
+        with open(registry_path, "r") as f:
+            data = json.load(f)
+        linear = next(s for s in data["servers"] if s["name"] == "linear")
+        assert linear["transport"] == "http"
+        assert linear["url"] == "https://mcp.linear.app/mcp"
+        assert "/sse" not in linear["url"]
 
     def test_well_known_servers_present(self, registry_path):
         """Ensure key well-known MCPs are in the registry."""

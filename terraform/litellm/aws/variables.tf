@@ -24,7 +24,7 @@ variable "env" {
 }
 
 variable "tags" {
-  description = "Additional tags merged into the provider default_tags."
+  description = "Per-deployment tags applied to every taggable resource the module creates, on top of the module's own `litellm:stack` / `managed-by` tags. Caller-level provider `default_tags` (if any) merge with these."
   type        = map(string)
   default     = {}
 }
@@ -74,20 +74,63 @@ variable "ui_password" {
 }
 
 # ---------- Networking ----------
+#
+# Two modes:
+#
+#   1. Module-owned (default, `vpc_id = ""`): the stack creates a VPC, public
+#      and private subnets per AZ, an internet gateway, a NAT gateway, and
+#      the route tables wiring them together. `vpc_cidr` + `azs` drive it.
+#   2. Bring-your-own (`vpc_id` set): the stack creates no networking and
+#      places the ALB in `public_subnet_ids` and every task, plus the Aurora
+#      and ElastiCache subnet groups, in `private_subnet_ids`. `vpc_cidr` and
+#      `azs` are then unused.
+
+variable "vpc_id" {
+  description = <<-EOT
+    Existing VPC to deploy into. Leave empty ("") to have the module create
+    its own VPC, subnets, NAT gateway, and route tables. When set,
+    `public_subnet_ids` and `private_subnet_ids` are required and no
+    networking is created: the private subnets must already have egress
+    (NAT gateway or equivalent) so tasks can reach LLM providers, ECR/GHCR,
+    and Secrets Manager.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  description = "Existing public subnets for the ALB, in at least 2 AZs. Required when `vpc_id` is set, ignored otherwise."
+  type        = list(string)
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  description = "Existing private subnets for the ECS tasks, Aurora, and ElastiCache. Required when `vpc_id` is set, ignored otherwise."
+  type        = list(string)
+  default     = []
+}
+
+variable "additional_task_security_group_ids" {
+  description = <<-EOT
+    Extra security groups to attach to the ECS tasks, on top of the one the
+    module creates. Useful with `vpc_id`: attach a group your existing
+    database or cache already allows inbound from, instead of editing their
+    ingress rules.
+  EOT
+  type        = list(string)
+  default     = []
+}
 
 variable "vpc_cidr" {
-  description = "CIDR block for the VPC."
+  description = "CIDR block for the VPC the module creates. Unused when `vpc_id` is set."
   type        = string
   default     = "10.40.0.0/16"
 }
 
 variable "azs" {
-  description = "Availability zones to spread subnets across. At least 2 required for RDS and ALB."
+  description = "Availability zones to spread the module-created subnets across. At least 2 required for Aurora and the ALB. Unused when `vpc_id` is set."
   type        = list(string)
-  validation {
-    condition     = length(var.azs) >= 2
-    error_message = "Provide at least 2 availability zones."
-  }
+  default     = []
 }
 
 # ---------- Component images ----------
@@ -279,6 +322,34 @@ variable "ui_cpu_target" {
 
 # ---------- RDS ----------
 
+variable "create_database" {
+  description = <<-EOT
+    Create the Aurora Postgres cluster (default). Set false to skip it and
+    either point the stack at an existing database via `database_url`, or
+    run without a database at all when `database_url` is also empty. The
+    DB-less mode drops key management, spend tracking, and the admin UI's
+    persistence: the proxy then serves traffic authenticated by
+    LITELLM_MASTER_KEY only.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "database_url" {
+  description = <<-EOT
+    Postgres connection string for an existing database, e.g.
+    `postgresql://user:pass@host:5432/litellm`. Only read when
+    `create_database = false`. Stored in a
+    `<tenant>-litellm-<env>-database-url` Secrets Manager entry and injected
+    into gateway, backend, and the migration task as DATABASE_URL, so the
+    value never lands in a task definition. The schema migration still runs
+    against it on every apply.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "db_instance_class" {
   description = "Aurora instance class for both writer and reader."
   type        = string
@@ -310,6 +381,31 @@ variable "db_username" {
 }
 
 # ---------- Redis ----------
+
+variable "create_redis" {
+  description = <<-EOT
+    Create the ElastiCache Redis replication group (default). Set false to
+    skip it and either point the stack at an existing cache via `redis_url`,
+    or run with no Redis at all when `redis_url` is also empty. Without
+    Redis the proxy loses cross-task state: rate limits, budgets, and the
+    router's cooldowns become per-task instead of cluster-wide.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "redis_url" {
+  description = <<-EOT
+    Connection string for an existing Redis, e.g.
+    `rediss://:password@host:6379`. Only read when `create_redis = false`.
+    Stored in a `<tenant>-litellm-<env>-redis-url` Secrets Manager entry and
+    injected as REDIS_URL, which takes precedence over REDIS_HOST/REDIS_PORT
+    in the proxy.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
 
 variable "redis_node_type" {
   description = "ElastiCache node type."
@@ -420,10 +516,12 @@ variable "backend_extra_secrets" {
 variable "proxy_config" {
   description = <<-EOT
     LiteLLM proxy config (the contents of config.yaml). Mirrors the helm
-    chart's `gateway.config.proxy_config` value. Passed to gateway, backend,
-    and the migration task as a base64-encoded env var and decoded to
-    /tmp/litellm-config.yaml at container start; CONFIG_FILE_PATH is set
-    automatically.
+    chart's `gateway.config.proxy_config` value. Uploaded to S3 under
+    `config/litellm-config.yaml` in the stack's bucket; gateway and backend
+    container entrypoints download it to /tmp/litellm-config.yaml at task
+    start (CONFIG_FILE_PATH is set automatically). The S3 object's etag is
+    wired into the task definition, so editing this value produces a new
+    task-def revision and a rolling redeploy.
 
     Example:
       proxy_config = {
@@ -455,4 +553,141 @@ variable "log_retention_days" {
   description = "CloudWatch log retention for the three services."
   type        = number
   default     = 30
+}
+
+# ---------- OpenTelemetry v2 ----------
+#
+# https://docs.litellm.ai/docs/observability/opentelemetry_v2
+#
+# OTel v2 is opt-in and gated entirely on otel_endpoint, matching the GCP
+# stack. Leave otel_endpoint = "" and nothing OTel-related lands in the
+# container env. Set it and the gateway and backend gain LITELLM_OTEL_V2=true
+# plus the OTEL_* block (per-component OTEL_SERVICE_NAME, exporter, endpoint,
+# environment name, capture-content), with OTEL_HEADERS sourced from
+# otel_headers_secret_arn when provided.
+
+variable "otel_endpoint" {
+  description = <<-EOT
+    OTLP collector endpoint (sets OTEL_ENDPOINT). Empty disables OTel
+    entirely (no LITELLM_OTEL_V2, no OTEL_* env). Point at any
+    OTLP-compatible backend (self-hosted collector, Grafana Tempo,
+    Honeycomb, Datadog). Example: "http://otel-collector.internal:4318"
+    for OTLP/HTTP.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_exporter" {
+  description = <<-EOT
+    OTLP exporter protocol. One of "otlp_http", "otlp_grpc", or "console"
+    (stdout, useful for verifying instrumentation against CloudWatch logs).
+    Ignored when otel_endpoint is empty.
+  EOT
+  type        = string
+  default     = "otlp_http"
+
+  validation {
+    condition     = contains(["otlp_http", "otlp_grpc", "console"], var.otel_exporter)
+    error_message = "otel_exporter must be one of: otlp_http, otlp_grpc, console."
+  }
+}
+
+variable "otel_environment_name" {
+  description = <<-EOT
+    Value for OTEL_ENVIRONMENT_NAME (becomes `deployment.environment` on
+    every span). Defaults to var.env when empty so spans land tagged with
+    the deployment env without extra wiring.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_capture_message_content" {
+  description = <<-EOT
+    Value for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT. Default
+    `no_content` matches the litellm default; flip to `prompt_and_completion`
+    only when you've audited what's about to land in your observability
+    backend, because raw prompts/completions are typically sensitive.
+  EOT
+  type        = string
+  default     = "no_content"
+
+  validation {
+    condition     = contains(["no_content", "prompt_and_completion"], var.otel_capture_message_content)
+    error_message = "otel_capture_message_content must be one of: no_content, prompt_and_completion."
+  }
+}
+
+variable "otel_headers_secret_arn" {
+  description = <<-EOT
+    Secrets Manager ARN whose plaintext value becomes OTEL_HEADERS
+    (comma-separated `key=value` pairs, typically used to pass an API key
+    header to a managed collector). The execution role auto-gains
+    secretsmanager:GetSecretValue on this ARN. Empty omits OTEL_HEADERS.
+  EOT
+  type        = string
+  default     = ""
+}
+
+# ---------- Enterprise billing metrics ----------
+#
+# License-gated request metering. Opt-in and gated entirely on
+# billing_metrics_endpoint: leave it empty (the default) and nothing
+# metering-related lands in the container env. Set it and gateway + backend
+# export billable-request counts over OTLP/HTTP, authenticating to the
+# collector with an mTLS client cert. The proxy accepts the cert, key, and CA
+# as either a file path or literal PEM content, so on Fargate they are
+# injected straight from Secrets Manager as env vars and no volume is needed.
+
+variable "billing_metrics_endpoint" {
+  description = <<-EOT
+    OTLP/HTTP endpoint for enterprise billing metrics (sets
+    LITELLM_BILLING_METRICS_ENDPOINT). Non-empty enables request metering;
+    empty (default) disables it and adds no billing env to the container.
+    Requires an enterprise license. Example:
+    "https://telemetry.litellm.ai/v1/metrics"
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "billing_metrics_client_cert_pem" {
+  description = <<-EOT
+    PEM content of the mTLS client certificate issued for this deployment.
+    When billing_metrics_endpoint is set, the stack stores this in a
+    `<tenant>-litellm-<env>-billing-metrics-client-cert` Secrets Manager
+    entry, grants the task-execution role GetSecretValue on it, and exposes
+    it to gateway + backend as LITELLM_BILLING_METRICS_CLIENT_CERT. Required
+    whenever metering is enabled.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "billing_metrics_client_key_pem" {
+  description = <<-EOT
+    PEM content of the private key matching
+    billing_metrics_client_cert_pem. Stored in a
+    `<tenant>-litellm-<env>-billing-metrics-client-key` Secrets Manager
+    entry and exposed as LITELLM_BILLING_METRICS_CLIENT_KEY. Required
+    whenever metering is enabled.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "billing_metrics_ca_cert_pem" {
+  description = <<-EOT
+    PEM content of the CA bundle used to verify the metering collector.
+    Only needed for private or test collectors whose CA is not in the
+    system trust store; telemetry.litellm.ai is publicly trusted, so leave
+    this empty for production. When set, it is exposed as
+    LITELLM_BILLING_METRICS_CA_CERT.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
 }

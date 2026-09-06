@@ -1,7 +1,4 @@
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import logging
@@ -41,6 +38,24 @@ def prometheus_logger() -> PrometheusLogger:
     for collector in collectors:
         REGISTRY.unregister(collector)
     return PrometheusLogger()
+
+
+@pytest.fixture
+def known_model_router():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "fake-key"},
+            },
+            {
+                "model_name": "us/azure/openai/gpt-5-mini",
+                "litellm_params": {"model": "openai/gpt-5-mini", "api_key": "fake-key"},
+            },
+        ]
+    )
+    with patch("litellm.proxy.proxy_server.llm_router", router, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        yield router
 
 
 def create_standard_logging_payload() -> StandardLoggingPayload:
@@ -228,6 +243,7 @@ def test_increment_token_metrics(prometheus_logger):
         requested_model=None,
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
     )
     prometheus_logger.litellm_tokens_metric.labels().inc.assert_called_once_with(100)
 
@@ -244,6 +260,7 @@ def test_increment_token_metrics(prometheus_logger):
         requested_model=None,
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
     )
     prometheus_logger.litellm_input_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -262,6 +279,7 @@ def test_increment_token_metrics(prometheus_logger):
         requested_model=None,
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
     )
     prometheus_logger.litellm_output_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -424,6 +442,8 @@ def test_set_latency_metrics(prometheus_logger):
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
+        service_tier=None,
     )
     prometheus_logger.litellm_llm_api_time_to_first_token_metric.labels().observe.assert_called_once_with(
         0.5
@@ -442,6 +462,8 @@ def test_set_latency_metrics(prometheus_logger):
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
+        service_tier=None,
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
         1.5
@@ -460,6 +482,8 @@ def test_set_latency_metrics(prometheus_logger):
         requested_model="openai-gpt",
         model="gpt-5-mini",
         model_id="model-123",
+        api_provider="openai",
+        service_tier=None,
     )
     prometheus_logger.litellm_request_total_latency_metric.labels().observe.assert_called_once_with(
         2.0
@@ -607,6 +631,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         api_provider="openai",
         client_ip=None,
         user_agent=None,
+        requested_model=None,
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
@@ -626,6 +651,8 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         api_provider="openai",
         client_ip=None,
         user_agent=None,
+        requested_model=None,
+        service_tier=None,
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
 
@@ -732,7 +759,7 @@ async def test_async_log_failure_event(prometheus_logger):
 
 
 @pytest.mark.asyncio
-async def test_async_log_failure_event_litellm_side_rate_limit(prometheus_logger):
+async def test_async_log_failure_event_litellm_side_rate_limit(prometheus_logger, known_model_router):
     """LiteLLM-side reject (no deployment picked) routes the requested model
     into `requested_model` and skips the partial-outage flag."""
     standard_logging_object = create_standard_logging_payload()
@@ -777,12 +804,22 @@ async def test_async_log_failure_event_litellm_side_rate_limit(prometheus_logger
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_failure_hook(prometheus_logger):
+async def test_async_post_call_failure_hook(prometheus_logger, known_model_router):
     """
     Test for the async_post_call_failure_hook method
 
     it should increment the litellm_proxy_failed_requests_metric and litellm_proxy_total_requests_metric
     """
+    # Opt into the unified rate-limit labels so this test exercises the
+    # full label set surfaced when `prometheus_emit_rate_limit_labels` is on.
+    # The logger caches each metric's label set at construction time (so the
+    # labels passed to ``counter.labels(...)`` stay in lock step with the
+    # labels used to register the metric), so we must invalidate the cache
+    # after flipping the toggle for the cache to pick up the new label set.
+    original_emit = litellm.prometheus_emit_rate_limit_labels
+    litellm.prometheus_emit_rate_limit_labels = True
+    prometheus_logger._cached_metric_labels.clear()
+
     # Mock the prometheus metrics
     prometheus_logger.litellm_proxy_failed_requests_metric = MagicMock()
     prometheus_logger.litellm_proxy_total_requests_metric = MagicMock()
@@ -804,32 +841,39 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         request_route="/chat/completions",
     )
 
-    # Call the function
-    await prometheus_logger.async_post_call_failure_hook(
-        request_data=request_data,
-        original_exception=original_exception,
-        user_api_key_dict=user_api_key_dict,
-    )
+    try:
+        # Call the function
+        await prometheus_logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=user_api_key_dict,
+        )
 
-    # Assert failed requests metric was incremented with correct labels
-    prometheus_logger.litellm_proxy_failed_requests_metric.labels.assert_called_once_with(
-        end_user=None,
-        user="test_user",
-        user_email=None,
-        hashed_api_key="test_key",
-        api_key_alias="test_alias",
-        team="test_team",
-        team_alias="test_team_alias",
-        org_id=None,
-        org_alias=None,
-        requested_model="gpt-5-mini",
-        exception_status="429",
-        exception_class="Openai.RateLimitError",
-        route=user_api_key_dict.request_route,
-        model_id=None,
-        client_ip=None,
-        user_agent=None,
-    )
+        # Assert failed requests metric was incremented with correct labels
+        prometheus_logger.litellm_proxy_failed_requests_metric.labels.assert_called_once_with(
+            end_user=None,
+            user="test_user",
+            user_email=None,
+            hashed_api_key="test_key",
+            api_key_alias="test_alias",
+            team="test_team",
+            team_alias="test_team_alias",
+            org_id=None,
+            org_alias=None,
+            requested_model="gpt-5-mini",
+            exception_status="429",
+            exception_class="Openai.RateLimitError",
+            rate_limit_category="vendor_rate_limit",
+            rate_limit_type=None,
+            route=user_api_key_dict.request_route,
+            model_id=None,
+            client_ip=None,
+            user_agent=None,
+            api_provider="openai",
+        )
+    finally:
+        litellm.prometheus_emit_rate_limit_labels = original_emit
+        prometheus_logger._cached_metric_labels.clear()
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
 
     # Assert total requests metric was incremented with correct labels
@@ -849,6 +893,7 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         model_id=None,
         client_ip=None,
         user_agent=None,
+        api_provider="openai",
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
 
@@ -1042,7 +1087,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
 
 
 @pytest.mark.asyncio
-async def test_log_success_fallback_event(prometheus_logger):
+async def test_log_success_fallback_event(prometheus_logger, known_model_router):
     prometheus_logger.litellm_deployment_successful_fallbacks = MagicMock()
 
     original_model_group = "gpt-5-mini"
@@ -1080,7 +1125,7 @@ async def test_log_success_fallback_event(prometheus_logger):
 
 
 @pytest.mark.asyncio
-async def test_log_failure_fallback_event(prometheus_logger):
+async def test_log_failure_fallback_event(prometheus_logger, known_model_router):
     prometheus_logger.litellm_deployment_failed_fallbacks = MagicMock()
 
     original_model_group = "gpt-5-mini"
@@ -1711,26 +1756,16 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
 
             # Verify all five errors were logged (teams, keys, users, orgs, and user/team count)
             assert mock_logger.call_count == 5
-            assert (
-                "Error initializing teams budget metrics"
-                in mock_logger.call_args_list[0][0][0]
-            )
-            assert (
-                "Error initializing keys budget metrics"
-                in mock_logger.call_args_list[1][0][0]
-            )
-            assert (
-                "Error initializing users budget metrics"
-                in mock_logger.call_args_list[2][0][0]
-            )
-            assert (
-                "Error initializing orgs budget metrics"
-                in mock_logger.call_args_list[3][0][0]
-            )
-            assert (
-                "Error initializing user/team count metrics"
-                in mock_logger.call_args_list[4][0][0]
-            )
+            logged = [
+                call.args[0] % call.args[1:] for call in mock_logger.call_args_list
+            ]
+            assert logged == [
+                "Error initializing teams budget metrics: Database error",
+                "Error initializing keys budget metrics: Key listing error",
+                "Error initializing users budget metrics: User database error",
+                "Error initializing orgs budget metrics: Org database error",
+                "Error initializing user/team count metrics: User count error",
+            ]
 
         # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()
@@ -1962,6 +1997,10 @@ def test_set_team_budget_metrics_with_custom_labels(prometheus_logger, monkeypat
     # Set custom prometheus labels
     custom_labels = ["metadata.organization", "metadata.environment"]
     monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", custom_labels)
+    # Logger caches each metric's label set at construction time (fixture
+    # runs before this monkeypatch), so invalidate so the cached label set
+    # picks up the freshly-configured custom metadata labels.
+    prometheus_logger._cached_metric_labels.clear()
 
     # Create test team with custom metadata
     team = MagicMock(

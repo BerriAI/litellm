@@ -1,6 +1,4 @@
 import datetime
-import os
-import sys
 import httpx
 import pytest
 import json
@@ -8,9 +6,9 @@ import json
 import litellm
 
 # Adds the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm import ModelResponse
+from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.llms.oci.chat.transformation import (
     OCIChatConfig,
     OCIRequestWrapper,
@@ -46,6 +44,30 @@ def supplied_params(request):
     return request.param
 
 
+
+_AMBIENT_OCI_ENV: tuple[str, ...] = (
+    "OCI_REGION",
+    "OCI_USER",
+    "OCI_FINGERPRINT",
+    "OCI_TENANCY",
+    "OCI_KEY_FILE",
+    "OCI_KEY",
+    "OCI_COMPARTMENT_ID",
+)
+
+
+@pytest.fixture
+def without_ambient_oci_env(monkeypatch):
+    """Drop OCI credentials the environment may supply.
+
+    validate_environment falls back to os.environ for every credential and to a
+    default region only when OCI_REGION is unset, so a developer or runner with
+    OCI configured would see these tests find credentials they never passed.
+    """
+    for variable in _AMBIENT_OCI_ENV:
+        monkeypatch.delenv(variable, raising=False)
+
+@pytest.mark.usefixtures("without_ambient_oci_env")
 class TestOCIChatConfig:
     def test_validate_environment_with_oci_region(self, supplied_params):
         config = OCIChatConfig()
@@ -70,10 +92,10 @@ class TestOCIChatConfig:
             modified_params = params.copy()
             del modified_params[key]
 
-            with pytest.raises(Exception) as excinfo:
-                config = OCIChatConfig()
-                headers = {}
+            config = OCIChatConfig()
+            headers = {}
 
+            with pytest.raises(Exception, match='Missing required parameters: oci_user, oci_fingerprint') as excinfo:
                 config.validate_environment(
                     headers=headers,
                     model=TEST_MODEL,
@@ -104,6 +126,7 @@ class TestOCIChatConfig:
             "chatRequest": {
                 "apiFormat": "GENERIC",
                 "isStream": False,
+                "maxTokens": DEFAULT_OCI_CHAT_MAX_TOKENS,
                 "messages": [
                     {
                         "role": "USER",
@@ -246,7 +269,7 @@ class TestOCIChatConfig:
             "oci_serving_mode": "INVALID_MODE",
         }
 
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match="kwarg `oci_serving_mode` must be either 'ON_DEMAND' or") as excinfo:
             config.transform_request(
                 model=TEST_MODEL_NAME,
                 messages=TEST_MESSAGES,  # type: ignore
@@ -361,6 +384,137 @@ class TestOCIChatConfig:
         )
         rf = transformed_request["chatRequest"]["responseFormat"]
         assert rf["type"] == "JSON_OBJECT"
+
+    def test_transform_request_response_format_json_schema_generic(self):
+        """A GENERIC json_schema must become OCI's JSON_SCHEMA shape with the
+        OpenAI ``strict`` key renamed to ``isStrict``.
+
+        OCI's ResponseJsonSchema rejects ``strict`` (and any other extra key)
+        with HTTP 400 "Please pass in correct format of request", so the raw
+        OpenAI body must not be forwarded.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "judgment",
+                    "description": "a score and rationale",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"score": {"type": "integer"}},
+                        "required": ["score"],
+                    },
+                },
+            },
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,  # xai.grok-4 -> GENERIC
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_SCHEMA"
+        assert "strict" not in rf["jsonSchema"]
+        assert rf["jsonSchema"]["isStrict"] is True
+        assert rf["jsonSchema"]["name"] == "judgment"
+        assert rf["jsonSchema"]["description"] == "a score and rationale"
+        assert rf["jsonSchema"]["schema"]["properties"]["score"]["type"] == "integer"
+
+    def test_transform_request_response_format_json_schema_generic_no_strict(self):
+        """A GENERIC json_schema without ``strict`` must omit ``isStrict``."""
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "j", "schema": {"type": "object"}},
+            },
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_SCHEMA"
+        assert "isStrict" not in rf["jsonSchema"]
+
+    def test_transform_request_response_format_json_schema_cohere(self):
+        """A Cohere json_schema must fold the schema onto JSON_OBJECT.
+
+        OCI Cohere has no JSON_SCHEMA type; sending one yields HTTP 400.
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "judgment",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"score": {"type": "integer"}},
+                    },
+                },
+            },
+        }
+        transformed_request = config.transform_request(
+            model="cohere.command-latest",
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf["type"] == "JSON_OBJECT"
+        assert "jsonSchema" not in rf
+        assert rf["schema"]["properties"]["score"]["type"] == "integer"
+
+    def test_transform_request_response_format_cohere_json_object(self):
+        """Cohere json_object without a schema stays a bare JSON_OBJECT."""
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json_object"},
+        }
+        transformed_request = config.transform_request(
+            model="cohere.command-latest",
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        rf = transformed_request["chatRequest"]["responseFormat"]
+        assert rf == {"type": "JSON_OBJECT"}
+
+    def test_transform_request_json_schema_without_body_raises_generic(self):
+        """A GENERIC json_schema with no ``json_schema`` body must raise an early
+        400, not silently emit {"type": "JSON_SCHEMA"} (which OCI rejects)."""
+        from litellm.llms.oci.common_utils import OCIError
+
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "response_format": {"type": "json_schema"},
+        }
+        with pytest.raises(OCIError) as exc_info:
+            config.transform_request(
+                model=TEST_MODEL_NAME,  # GENERIC
+                messages=TEST_MESSAGES,  # type: ignore
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+        assert exc_info.value.status_code == 400
+        assert "json_schema" in str(exc_info.value)
 
     def test_transform_response_without_token_details(self):
         """
@@ -735,7 +889,7 @@ class TestOCISignerSupport:
 
         optional_params = {"oci_signer": MockSigner(), "method": "INVALID"}
 
-        with pytest.raises(ValueError) as excinfo:
+        with pytest.raises(ValueError, match='Unsupported HTTP method: INVALID') as excinfo:
             config.sign_request(
                 headers={},
                 optional_params=optional_params,
@@ -956,6 +1110,44 @@ class TestOCICohereParamMapping:
         assert result.get("temperature") == 0.5
 
 
+class TestOCIDefaultMaxTokens:
+    """Regression for OCI's tiny server-side token cap (~20 tokens), which
+    silently truncated responses mid-string whenever the caller omitted
+    max_tokens (MLflow judges never send it, so their JSON came back cut off).
+    transform_request injects DEFAULT_OCI_CHAT_MAX_TOKENS when no limit is
+    supplied, and leaves an explicit limit untouched."""
+
+    def _chat_request(self, model: str, optional_params: dict) -> dict:
+        config = OCIChatConfig()
+        body = config.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={**BASE_OCI_PARAMS, **optional_params},
+            litellm_params={},
+            headers={},
+        )
+        return body["chatRequest"]
+
+    @pytest.mark.parametrize(
+        "model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"]
+    )
+    def test_default_injected_when_max_tokens_omitted(self, model):
+        chat_request = self._chat_request(model, {})
+        assert chat_request["maxTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
+
+    @pytest.mark.parametrize(
+        "model", ["cohere.command-latest", "meta.llama-3.3-70b-instruct"]
+    )
+    def test_explicit_max_tokens_not_overridden(self, model):
+        chat_request = self._chat_request(model, {"max_tokens": 256})
+        assert chat_request["maxTokens"] == 256
+
+    def test_reasoning_model_defaults_max_completion_tokens(self):
+        chat_request = self._chat_request("openai.gpt-5", {})
+        assert chat_request["maxCompletionTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
+        assert "maxTokens" not in chat_request
+
+
 class TestOCIReasoningEffort:
     """
     Reasoning-effort handling for GENERIC reasoning models:
@@ -1133,8 +1325,7 @@ class TestOCIStreamingSignedBody:
         When signed_json_body is provided, the POST must use that exact bytes object,
         not json.dumps(data) — otherwise the RSA-SHA256 signature is invalid.
         """
-        import httpx
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         config = OCIChatConfig()
         signed_bytes = b'{"signed": true}'
@@ -1293,6 +1484,68 @@ class TestOCIChatConfigErrorPaths:
         )
         assert "audio" not in result
 
+    @pytest.mark.parametrize("model", ["cohere.command-latest", "xai.grok-4"])
+    def test_map_openai_params_max_retries_dropped_without_drop_params(self, model):
+        """max_retries is a litellm control param, not a generation param. It
+        must be dropped silently (no raise) even when drop_params is False, so
+        the litellm proxy (which injects max_retries on every request) does not
+        500 every OCI call.
+        """
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"max_retries": 3},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert "max_retries" not in result
+    def test_map_openai_params_cohere_n_default_dropped(self):
+        """Cohere has no numGenerations field, but n=1 (and None) is the OpenAI
+        default single-generation request. It must be dropped silently rather
+        than raising, so standard clients that always send n=1 (e.g. the MLflow
+        gateway) are not rejected."""
+        config = OCIChatConfig()
+        for n in (1, None):
+            result = config.map_openai_params(
+                non_default_params={"n": n},
+                optional_params={},
+                model="cohere.command-latest",
+                drop_params=False,
+            )
+            assert "n" not in result and "numGenerations" not in result
+
+    def test_map_openai_params_cohere_n_gt_1_raises_without_drop(self):
+        """n>1 is genuinely unsupported on Cohere and must raise without drop."""
+        config = OCIChatConfig()
+        with pytest.raises(Exception, match="not supported on OCI"):
+            config.map_openai_params(
+                non_default_params={"n": 3},
+                optional_params={},
+                model="cohere.command-latest",
+                drop_params=False,
+            )
+
+    def test_map_openai_params_cohere_n_gt_1_dropped_with_drop(self):
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"n": 3},
+            optional_params={},
+            model="cohere.command-latest",
+            drop_params=True,
+        )
+        assert "n" not in result and "numGenerations" not in result
+
+    def test_map_openai_params_generic_n_maps_to_num_generations(self):
+        """Generic models keep numGenerations, including n>1."""
+        config = OCIChatConfig()
+        result = config.map_openai_params(
+            non_default_params={"n": 2},
+            optional_params={},
+            model=TEST_MODEL_NAME,
+            drop_params=False,
+        )
+        assert result["numGenerations"] == 2
+
     def test_transform_request_tool_choice_string_mapped(self):
         config = OCIChatConfig()
         result = config.transform_request(
@@ -1320,3 +1573,330 @@ class TestOCIChatConfigErrorPaths:
 
 import pytest
 from unittest.mock import MagicMock
+from litellm.llms.oci.common_utils import OCIError, sign_with_manual_credentials
+
+
+
+@pytest.fixture
+def config():
+    return OCIChatConfig()
+
+
+@pytest.mark.usefixtures("without_ambient_oci_env")
+class TestOCIKeyNormalization:
+    """Tests for OCI private key content normalization."""
+
+    def test_oci_key_with_escaped_newlines(self, config):
+        """Test that escaped newlines (\\n) are converted to actual newlines."""
+        # Simulate PEM content with escaped newlines (as would come from JSON/UI input)
+        escaped_pem = "-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEA...\\n-----END RSA PRIVATE KEY-----"
+
+        optional_params = {
+            "oci_user": "ocid1.user.oc1..test",
+            "oci_fingerprint": "aa:bb:cc:dd",
+            "oci_tenancy": "ocid1.tenancy.oc1..test",
+            "oci_region": "us-ashburn-1",
+            "oci_key": escaped_pem,
+        }
+
+        # We can't fully test signing without a real key, but we can verify
+        # the error message indicates the key was processed (not a type error)
+        with pytest.raises(Exception, match='why-can-t-i-import-my-pem-file for more details\\.') as exc_info:
+            sign_with_manual_credentials(
+                headers={},
+                optional_params=optional_params,
+                request_data={"test": "data"},
+                api_base="https://test.oci.oraclecloud.com/api",
+            )
+
+        # The error should be about key format/loading, not about type
+        # This confirms the string was processed and newlines were normalized
+        error_message = str(exc_info.value)
+        assert "must be a string" not in error_message.lower()
+
+    def test_oci_key_with_crlf_newlines(self, config):
+        """Test that Windows-style CRLF newlines are normalized to LF."""
+        # Simulate PEM content with CRLF newlines
+        crlf_pem = "-----BEGIN RSA PRIVATE KEY-----\r\nMIIEowIBAAKCAQEA...\r\n-----END RSA PRIVATE KEY-----"
+
+        optional_params = {
+            "oci_user": "ocid1.user.oc1..test",
+            "oci_fingerprint": "aa:bb:cc:dd",
+            "oci_tenancy": "ocid1.tenancy.oc1..test",
+            "oci_region": "us-ashburn-1",
+            "oci_key": crlf_pem,
+        }
+
+        with pytest.raises(Exception, match='why-can-t-i-import-my-pem-file for more details\\.') as exc_info:
+            sign_with_manual_credentials(
+                headers={},
+                optional_params=optional_params,
+                request_data={"test": "data"},
+                api_base="https://test.oci.oraclecloud.com/api",
+            )
+
+        error_message = str(exc_info.value)
+        assert "must be a string" not in error_message.lower()
+
+    def test_oci_key_rejects_non_string_type(self, config):
+        """Test that non-string oci_key values raise OCIError."""
+        optional_params = {
+            "oci_user": "ocid1.user.oc1..test",
+            "oci_fingerprint": "aa:bb:cc:dd",
+            "oci_tenancy": "ocid1.tenancy.oc1..test",
+            "oci_region": "us-ashburn-1",
+            "oci_key": {"invalid": "dict"},  # Wrong type
+        }
+
+        with pytest.raises(OCIError) as exc_info:
+            sign_with_manual_credentials(
+                headers={},
+                optional_params=optional_params,
+                request_data={"test": "data"},
+                api_base="https://test.oci.oraclecloud.com/api",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "must be a string" in str(exc_info.value.message)
+        assert "dict" in str(exc_info.value.message)
+
+    def test_oci_key_rejects_list_type(self, config):
+        """Test that list oci_key values raise OCIError."""
+        optional_params = {
+            "oci_user": "ocid1.user.oc1..test",
+            "oci_fingerprint": "aa:bb:cc:dd",
+            "oci_tenancy": "ocid1.tenancy.oc1..test",
+            "oci_region": "us-ashburn-1",
+            "oci_key": ["invalid", "list"],  # Wrong type
+        }
+
+        with pytest.raises(OCIError) as exc_info:
+            sign_with_manual_credentials(
+                headers={},
+                optional_params=optional_params,
+                request_data={"test": "data"},
+                api_base="https://test.oci.oraclecloud.com/api",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "must be a string" in str(exc_info.value.message)
+        assert "list" in str(exc_info.value.message)
+
+
+@pytest.mark.usefixtures("without_ambient_oci_env")
+class TestOCIValidateEnvironment:
+    """Tests for OCI environment validation."""
+
+    def test_missing_required_credentials_raises_error(self, config):
+        """Test that missing required credentials raise an error."""
+        with pytest.raises(Exception, match='Missing required parameters: oci_user, oci_fingerprint') as exc_info:
+            config.validate_environment(
+                headers={},
+                model="oci/xai.grok-3",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},  # No credentials provided
+                litellm_params={},
+                api_key=None,
+                api_base=None,
+            )
+
+        error_message = str(exc_info.value)
+        assert "oci_user" in error_message
+        assert "oci_fingerprint" in error_message
+        assert "oci_tenancy" in error_message
+
+    def test_validate_environment_with_all_credentials(self, config):
+        """Test that validation passes with all required credentials."""
+        headers = config.validate_environment(
+            headers={},
+            model="oci/xai.grok-3",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={
+                "oci_user": "ocid1.user.oc1..test",
+                "oci_fingerprint": "aa:bb:cc:dd",
+                "oci_tenancy": "ocid1.tenancy.oc1..test",
+                "oci_region": "us-ashburn-1",
+                "oci_compartment_id": "ocid1.compartment.oc1..test",
+                "oci_key": "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----",
+            },
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+
+        assert headers["content-type"] == "application/json"
+        assert "user-agent" in headers
+
+
+@pytest.mark.usefixtures("without_ambient_oci_env")
+class TestOCIGetCompleteUrl:
+    """Tests for OCI URL generation."""
+
+    def test_get_complete_url_default_region(self, config):
+        """Test URL generation with default region."""
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="oci/xai.grok-3",
+            optional_params={},
+            litellm_params={},
+            stream=False,
+        )
+
+        assert "us-ashburn-1" in url
+        assert "inference.generativeai" in url
+        assert "/20231130/actions/chat" in url
+
+    def test_get_complete_url_custom_region(self, config):
+        """Test URL generation with custom region."""
+        url = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="oci/xai.grok-3",
+            optional_params={"oci_region": "eu-frankfurt-1"},
+            litellm_params={},
+            stream=False,
+        )
+
+        assert "eu-frankfurt-1" in url
+        assert "inference.generativeai" in url
+
+
+@pytest.mark.usefixtures("without_ambient_oci_env")
+class TestOCIImageUrlTransformation:
+    """Tests for OCI image_url format handling in multimodal messages.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/18270
+    Fixes: https://github.com/BerriAI/litellm/issues/19589
+    """
+
+    def test_image_url_as_string(self):
+        """Test that image_url as a plain string works."""
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url", "image_url": "https://example.com/image.png"},
+                ],
+            }
+        ]
+
+        result = adapt_messages_to_generic_oci_standard(messages)
+
+        assert len(result) == 1
+        assert result[0].role == "USER"
+        assert len(result[0].content) == 2
+        # imageUrl is now an OCIImageUrl object with a 'url' property
+        assert result[0].content[1].imageUrl.url == "https://example.com/image.png"
+
+    def test_image_url_as_openai_object(self):
+        """Test that image_url as OpenAI-style object {"url": "..."} works."""
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/image.png"},
+                    },
+                ],
+            }
+        ]
+
+        result = adapt_messages_to_generic_oci_standard(messages)
+
+        assert len(result) == 1
+        assert result[0].role == "USER"
+        assert len(result[0].content) == 2
+        # imageUrl is now an OCIImageUrl object with a 'url' property
+        assert result[0].content[1].imageUrl.url == "https://example.com/image.png"
+
+    def test_image_url_serializes_as_object(self):
+        """Test that imageUrl serializes as {"url": "..."} for OCI API.
+
+        Fixes: https://github.com/BerriAI/litellm/issues/19589
+        OCI expects imageUrl to be an object with a 'url' property, not a plain string.
+        """
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,ABC123"},
+                    },
+                ],
+            }
+        ]
+
+        result = adapt_messages_to_generic_oci_standard(messages)
+        image_part = result[0].content[1]
+
+        # Serialize as OCI would receive it (with exclude_none=True)
+        serialized = image_part.model_dump(exclude_none=True)
+
+        # Verify the structure matches OCI's expected format
+        assert serialized == {
+            "type": "IMAGE",
+            "imageUrl": {"url": "data:image/png;base64,ABC123"},
+        }
+
+    def test_image_url_invalid_type_raises_error(self):
+        """Test that invalid image_url type raises an error."""
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {"type": "image_url", "image_url": 12345},  # Invalid type
+                ],
+            }
+        ]
+
+        with pytest.raises(Exception, match='Prop `image_url` must be a string or an object with a `url`') as exc_info:
+            adapt_messages_to_generic_oci_standard(messages)
+
+        assert "image_url" in str(exc_info.value)
+
+    def test_image_url_object_missing_url_raises_error(self):
+        """Test that object without 'url' property raises an error."""
+        from litellm.llms.oci.chat.transformation import (
+            adapt_messages_to_generic_oci_standard,
+        )
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this image?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"detail": "high"},
+                    },  # Missing 'url'
+                ],
+            }
+        ]
+
+        with pytest.raises(Exception, match='Prop `image_url` must be a string or an object with a `url`') as exc_info:
+            adapt_messages_to_generic_oci_standard(messages)
+
+        assert "image_url" in str(exc_info.value)

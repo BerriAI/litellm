@@ -1,12 +1,16 @@
 """
-Calls Parallel AI's /search endpoint to search the web.
+Calls Parallel AI's /v1/search endpoint to search the web.
 
-Parallel AI API Reference: https://docs.parallel.ai/api-reference/search-and-extract-api-beta/search
+Parallel AI API Reference: https://docs.parallel.ai/api-reference/search/search
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final, TypedDict
 
 import httpx
+from pydantic import BaseModel, ConfigDict
+from typing_extensions import ReadOnly
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.search.transformation import (
@@ -14,40 +18,73 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResponse,
     SearchResult,
 )
+from litellm.llms.parallel_ai.search.cost_calculator import PARALLEL_AI_USAGE_PARAM
 from litellm.secret_managers.main import get_secret_str
 
 
+class _ParallelAIV1SearchResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    url: str | None = None
+    title: str | None = None
+    publish_date: str | None = None
+    excerpts: Sequence[str] | None = None
+
+
+class _ParallelAIV1SearchResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    search_id: str | None = None
+    session_id: str | None = None
+    results: Sequence[_ParallelAIV1SearchResult] = ()
+    usage: Sequence[Mapping[str, object]] | None = None
+    warnings: Sequence[Mapping[str, object]] | None = None
+
+
 class _ParallelAISourcePolicy(TypedDict, total=False):
-    """Source policy for Parallel AI search results."""
-
-    allowed_domains: List[str]  # Optional - list of allowed domains
-    disallowed_domains: List[str]  # Optional - list of disallowed domains
-
-
-class _ParallelAISearchRequestRequired(TypedDict):
-    """Required fields for Parallel AI Search API request."""
-
-    # Note: At least one of objective or search_queries must be provided
-    pass
+    include_domains: list[str]
+    exclude_domains: list[str]
+    after_date: str
 
 
-class ParallelAISearchRequest(_ParallelAISearchRequestRequired, total=False):
+class _ParallelAIExcerptSettings(TypedDict, total=False):
+    max_chars_per_result: int
+
+
+class _ParallelAIFetchPolicy(TypedDict, total=False):
+    max_age_seconds: ReadOnly[int]
+    timeout_seconds: ReadOnly[float]
+    disable_cache_fallback: ReadOnly[bool]
+
+
+class _ParallelAIAdvancedSettings(TypedDict, total=False):
+    source_policy: _ParallelAISourcePolicy
+    excerpt_settings: _ParallelAIExcerptSettings
+    fetch_policy: _ParallelAIFetchPolicy
+    location: str
+    max_results: int
+
+
+class ParallelAISearchRequest(TypedDict, total=False):
     """
-    Parallel AI Search API request format.
-    Based on: https://docs.parallel.ai/api-reference/search-and-extract-api-beta/search
+    Parallel AI v1 Search API request format.
+    Based on: https://docs.parallel.ai/api-reference/search/search
     """
 
+    search_queries: list[str]  # Required - at least one keyword search query
     objective: str  # Optional - natural-language description of search goal
-    search_queries: List[str]  # Optional - list of keyword search queries
-    processor: str  # Optional - search processor ('base', 'pro'), default 'base'
-    max_results: int  # Optional - maximum number of results, default 10
-    max_chars_per_result: int  # Optional - max characters per result excerpt
-    source_policy: _ParallelAISourcePolicy  # Optional - source policy for allowed/disallowed domains
+    mode: str  # Optional - 'turbo', 'fast', 'basic', or 'advanced' (default 'advanced')
+    max_chars_total: int  # Optional - upper bound on total excerpt characters
+    session_id: str  # Optional - tracks calls across search/extract requests
+    client_model: str  # Optional - model consuming the results
+    advanced_settings: _ParallelAIAdvancedSettings
+
+
+LEGACY_PROCESSOR_TO_MODE: Final = MappingProxyType({"base": "basic", "pro": "advanced"})
 
 
 class ParallelAISearchConfig(BaseSearchConfig):
     PARALLEL_AI_API_BASE = "https://api.parallel.ai"
-    PARALLEL_HEADER_SEARCH_EXTRACT_VALUE = "search-extract-2025-10-10"
 
     @staticmethod
     def ui_friendly_name() -> str:
@@ -55,120 +92,133 @@ class ParallelAISearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
-        """
-        Validate environment and return headers.
-        """
-        api_key = (
-            api_key
-            or get_secret_str("PARALLEL_AI_API_KEY")
-            or get_secret_str("PARALLEL_API_KEY")
+    ) -> dict:
+        resolved_api_key: Final = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("PARALLEL_AI_API_KEY", "PARALLEL_API_KEY"),
+            base_env_var="PARALLEL_AI_API_BASE",
+            default_api_base=self.PARALLEL_AI_API_BASE,
         )
-        if not api_key:
-            raise ValueError(
-                "PARALLEL_API_KEY is not set. Set `PARALLEL_API_KEY` environment variable."
-            )
-        headers["x-api-key"] = api_key
+        if not resolved_api_key:
+            raise ValueError("PARALLEL_API_KEY is not set. Set `PARALLEL_API_KEY` environment variable.")
+        headers["x-api-key"] = resolved_api_key
         headers["Content-Type"] = "application/json"
-        headers["parallel-beta"] = self.PARALLEL_HEADER_SEARCH_EXTRACT_VALUE
         return headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
-        """
-        Get complete URL for Search endpoint.
-        """
-        api_base = (
-            api_base
-            or get_secret_str("PARALLEL_AI_API_BASE")
-            or self.PARALLEL_AI_API_BASE
-        )
+        resolved_api_base: Final = api_base or get_secret_str("PARALLEL_AI_API_BASE") or self.PARALLEL_AI_API_BASE
 
-        # Parallel AI search endpoint is at /v1beta/search
-        if not api_base.endswith("/v1beta/search"):
-            if api_base.endswith("/"):
-                api_base = f"{api_base}v1beta/search"
-            else:
-                api_base = f"{api_base}/v1beta/search"
-
-        return api_base
-
-    def _transform_query_to_objective(self, query: Union[str, List[str]]) -> str:
-        """
-        Transform query to objective.
-        """
-        if isinstance(query, list):
-            return " ".join(query)
-        return query
+        trimmed: Final = resolved_api_base.rstrip("/")
+        if trimmed.endswith("/v1/search"):
+            return trimmed
+        return f"{trimmed.removesuffix('/v1')}/v1/search"
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
-        Transform Search request to Parallel AI API format.
+        Transform Search request to Parallel AI v1 API format.
 
         Args:
             query: Search query (string or list of strings)
-                - If string: maps to `objective` (natural language)
+                - If string: maps to `search_queries` (single item) and `objective`
                 - If list: maps to `search_queries` (keyword queries)
             optional_params: Optional parameters for the request
-                - max_results: Maximum number of search results (default 10)
-                - search_domain_filter: List of domains to include -> maps to `source_policy.allowed_domains`
-                - exclude_domains: List of domains to exclude -> maps to `source_policy.disallowed_domains`
-                - processor: Search processor ('base', 'pro')
-                - max_chars_per_result: Max characters per result excerpt
+                - mode: Search mode ('turbo', 'fast', 'basic', 'advanced'); defaults to 'basic'
+                - processor: Legacy v1beta param; 'base' maps to mode 'basic', 'pro' to 'advanced'
+                - max_results: Maximum number of search results -> `advanced_settings.max_results`
+                - search_domain_filter / include_domains: Domains to include -> `advanced_settings.source_policy.include_domains`
+                - exclude_domains: Domains to exclude -> `advanced_settings.source_policy.exclude_domains`
+                - after_date: RFC 3339 date (YYYY-MM-DD) -> `advanced_settings.source_policy.after_date`
+                - country / location: ISO 3166-1 alpha-2 code -> `advanced_settings.location`
+                - max_chars_per_result: -> `advanced_settings.excerpt_settings.max_chars_per_result`
+                - fetch_policy: Cache vs live-fetch policy -> `advanced_settings.fetch_policy`
+                - Any other params (objective, max_chars_total, session_id, client_model, ...)
+                  are passed through to the request body as-is
 
         Returns:
-            Dict with typed request data following ParallelAISearchRequest spec
+            Dict with request data following the v1 search request spec
         """
-        request_data: ParallelAISearchRequest = {}
+        params: Final = dict(optional_params)
 
-        # Map query to objective (string or list both become objective)
+        request_data: Final[ParallelAISearchRequest] = {}
+
         if isinstance(query, list):
-            request_data["objective"] = self._transform_query_to_objective(query)
+            request_data["search_queries"] = query
         else:
+            request_data["search_queries"] = [query]
             request_data["objective"] = query
 
-        # Transform Perplexity unified spec parameters to Parallel AI format
-        if "max_results" in optional_params:
-            request_data["max_results"] = optional_params["max_results"]
+        mode = params.pop("mode", None)
+        processor: Final = params.pop("processor", None)
+        if mode is None and processor is not None:
+            mode = LEGACY_PROCESSOR_TO_MODE.get(processor, processor)
+        # the v1 API defaults to 'advanced' when mode is omitted; default to 'basic'
+        # instead to keep v1beta's default tier (processor 'base') and litellm's
+        # cost map entry for `parallel_ai/search` accurate
+        request_data["mode"] = mode or "basic"
 
-        # Map domain filters to source_policy
-        source_policy: _ParallelAISourcePolicy = {}
+        advanced_settings: Final[_ParallelAIAdvancedSettings] = {}
 
-        if "search_domain_filter" in optional_params:
-            source_policy["allowed_domains"] = optional_params["search_domain_filter"]
+        if "max_results" in params:
+            advanced_settings["max_results"] = params.pop("max_results")
 
-        if "exclude_domains" in optional_params:
-            source_policy["disallowed_domains"] = optional_params["exclude_domains"]
+        if "country" in params:
+            advanced_settings["location"] = params.pop("country")
+
+        if "location" in params:
+            advanced_settings["location"] = params.pop("location")
+
+        if "max_chars_per_result" in params:
+            advanced_settings["excerpt_settings"] = {"max_chars_per_result": params.pop("max_chars_per_result")}
+
+        if "fetch_policy" in params:
+            advanced_settings["fetch_policy"] = params.pop("fetch_policy")
+
+        source_policy: Final[_ParallelAISourcePolicy] = {}
+
+        if "search_domain_filter" in params:
+            source_policy["include_domains"] = params.pop("search_domain_filter")
+
+        if "include_domains" in params:
+            source_policy["include_domains"] = params.pop("include_domains")
+
+        if "exclude_domains" in params:
+            source_policy["exclude_domains"] = params.pop("exclude_domains")
+
+        if "after_date" in params:
+            source_policy["after_date"] = params.pop("after_date")
 
         if source_policy:
-            request_data["source_policy"] = source_policy
+            advanced_settings["source_policy"] = source_policy
 
-        # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        advanced_settings.update(params.pop("advanced_settings", {}))
 
-        # pass through all other parameters as-is
-        for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
-                result_data[param] = value
+        if advanced_settings:
+            request_data["advanced_settings"] = advanced_settings
 
-        return result_data
+        # unified-spec param with no v1 equivalent
+        params.pop("max_tokens_per_page", None)
+
+        # reserved for the provider's own reported usage, which prices the request;
+        # a caller-supplied value would otherwise set its own cost
+        params.pop(PARALLEL_AI_USAGE_PARAM, None)
+
+        return {**request_data, **params}
 
     def transform_search_response(
         self,
@@ -177,40 +227,54 @@ class ParallelAISearchConfig(BaseSearchConfig):
         **kwargs,
     ) -> SearchResponse:
         """
-        Transform Parallel AI API response to LiteLLM unified SearchResponse format.
+        Transform Parallel AI v1 API response to LiteLLM unified SearchResponse format.
 
-        Parallel AI → LiteLLM mappings:
-        - results[].title → SearchResult.title
-        - results[].url → SearchResult.url
-        - results[].excerpts (array) → SearchResult.snippet (joined string)
-        - No date/last_updated fields in Parallel AI response (set to None)
-
-        Args:
-            raw_response: Raw httpx response from Parallel AI API
-            logging_obj: Logging object for tracking
-
-        Returns:
-            SearchResponse with standardized format
+        Parallel AI -> LiteLLM mappings:
+        - results[].title -> SearchResult.title
+        - results[].url -> SearchResult.url
+        - results[].excerpts (array) -> SearchResult.snippet (joined string); the raw
+          array is preserved as an extra `excerpts` field on each result
+        - results[].publish_date -> SearchResult.date
+        - search_id / session_id / warnings are preserved as extra fields on the
+          response; usage is preserved as `parallel_usage` (the `usage` name is
+          reserved for LiteLLM's token-usage object)
         """
-        response_json = raw_response.json()
+        parsed: Final = _ParallelAIV1SearchResponse.model_validate(raw_response.json())
 
-        # Transform results to SearchResult objects
-        results = []
-        for result in response_json.get("results", []):
-            # Join excerpts array into a single snippet string
-            excerpts = result.get("excerpts", [])
-            snippet = " ... ".join(excerpts) if excerpts else ""
+        # written unconditionally: leaving a caller-supplied value in place when the
+        # provider reports no usage would let the caller price its own request
+        logging_obj.optional_params = {
+            **logging_obj.optional_params,
+            PARALLEL_AI_USAGE_PARAM: parsed.usage,
+        }
 
-            search_result = SearchResult(
-                title=result.get("title", ""),
-                url=result.get("url", ""),
-                snippet=snippet,
-                date=None,  # Parallel AI doesn't provide date in response
-                last_updated=None,  # Parallel AI doesn't provide last_updated in response
+        results: Final = tuple(
+            SearchResult.model_validate(
+                MappingProxyType(
+                    {
+                        "title": result.title or "",
+                        "url": result.url or "",
+                        "snippet": " ... ".join(result.excerpts or ()),
+                        "date": result.publish_date,
+                        "last_updated": None,
+                        "excerpts": result.excerpts or (),
+                    }
+                )
             )
-            results.append(search_result)
-
-        return SearchResponse(
-            results=results,
-            object="search",
+            for result in parsed.results
         )
+
+        extra_fields: Final = MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("search_id", parsed.search_id),
+                    ("session_id", parsed.session_id),
+                    ("parallel_usage", parsed.usage),
+                    ("warnings", parsed.warnings),
+                )
+                if value is not None
+            }
+        )
+
+        return SearchResponse.model_validate(MappingProxyType({"results": results, "object": "search", **extra_fields}))

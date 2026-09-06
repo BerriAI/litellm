@@ -331,16 +331,18 @@ sequenceDiagram
     
     CLI->>Proxy: Poll /sso/cli/poll/login_id with poll_secret header
     Proxy->>CLI: Return {"status": "ready", "key": "jwt"}
-    CLI->>CLI: Save key to ~/.litellm/token.json
+    CLI->>CLI: Save the secret to the OS keychain (metadata to ~/.litellm/token.json)
 ```
 
 ### Authentication Commands
 
-The CLI provides three authentication commands:
+The CLI provides these authentication commands:
 
-- **`litellm-proxy login`** - Start SSO authentication flow
-- **`litellm-proxy logout`** - Clear stored authentication token
-- **`litellm-proxy whoami`** - Show current authentication status
+- **`lite login`** - Start SSO authentication flow
+- **`lite login --pkce`** - Sign in through the system browser with OAuth authorization code + PKCE; the key renews itself with a refresh token
+- **`lite logout`** - Clear stored authentication token (and revoke a `--pkce` refresh token on the proxy)
+- **`lite whoami`** - Show current authentication status
+- **`lite auth print-token`** - Print the cached token (used as Claude Code's `apiKeyHelper`); renews a `--pkce` key first and fails once a classic token has expired
 
 ### Authentication Flow Steps
 
@@ -351,7 +353,7 @@ The CLI provides three authentication commands:
 5. **Callback Processing**: SSO provider redirects back to proxy with state parameter
 6. **User Code Verification**: Browser confirms the verification code shown in the CLI
 7. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the JWT is ready. When `CLI_SSO_CLAIM_MAP` is configured on the proxy, the poll response may include `attribution_metadata` (allowlisted scalar OIDC claims for client attribution).
-8. **Token Storage**: CLI saves the authentication token to `~/.litellm/token.json`
+8. **Token Storage**: CLI saves the key to the OS keychain and the non-secret session metadata to `~/.litellm/token.json`
 
 ### Benefits of This Approach
 
@@ -363,11 +365,11 @@ The CLI provides three authentication commands:
 
 ### Token Storage
 
-Authentication tokens are stored in `~/.litellm/token.json` with restricted file permissions (600). The stored token includes:
+The key itself, together with the refresh token that renews a `--pkce` credential, goes into the OS keychain (macOS Keychain, Windows Credential Manager, or the Linux Secret Service) under service `litellm-cli`, account `credential`. Only the non-secret session metadata is written to `~/.litellm/token.json`, in a `0700` directory with `0600` file permissions:
 
 ```json
 {
-  "key": "sk-...",
+  "base_url": "https://your-proxy.com",
   "user_id": "cli-user",
   "user_email": "user@example.com",
   "user_role": "cli",
@@ -376,20 +378,26 @@ Authentication tokens are stored in `~/.litellm/token.json` with restricted file
 }
 ```
 
+Keychain storage needs the `keyring` package, which ships with `pip install 'litellm[cli]'`. Headless boxes and CI runners usually have no keychain either. In all of those cases the key and the refresh token stay in the same `0600` file alongside the metadata, exactly as they did before, and `lite login` names which one applies: the package is missing, the machine has no keychain, or you set `LITELLM_CLI_DISABLE_KEYRING=1` to force the file even where a keychain exists. A `token.json` written by an older `lite` keeps working and is moved into the keychain, and scrubbed from the file, the first time a keychain-capable `lite` reads it. That includes a refresh token left behind by the release that moved only the key.
+
+`lite logout` clears both stores. If the keychain is locked at that moment it says so, and re-running it once the keychain is unlocked finishes the job.
+
+The stored credential is a short-lived, per-session agent token, not a managed virtual key. It is scoped to the user and team you logged in as and inherits their models and budgets; spend is tracked against the shared team and user budgets rather than a separate per-session cap, so multiple logins or several concurrent agents all draw down the same allowance. It is short-lived by design (default 24h, configurable via `LITELLM_CLI_JWT_EXPIRATION_HOURS`); re-run `lite login` to refresh it and pick up your latest team and user settings. `lite auth print-token` (usable as Claude Code's `apiKeyHelper`) prints it while fresh and fails once it expires -- there is no silent renewal. It is accepted on a default deployment without `EXPERIMENTAL_UI_LOGIN`, does not appear in the Keys UI, and cannot be rotated or revoked mid-session. A credential from `lite login --pkce` is the exception: it carries a refresh token, so the CLI renews the key shortly before it expires and `lite logout` revokes the refresh token on the proxy (see [Browser sign-in with PKCE](https://docs.litellm.ai/docs/proxy/cli_sso#browser-sign-in-with-pkce)). Only the holder can end a `--pkce` session early, with `lite logout`; an admin has no button for it, but every renewal re-reads the user on the proxy, so deactivating the user or removing them from the team makes the next renewal fail and the key runs out within `LITELLM_CLI_JWT_EXPIRATION_HOURS`. On a proxy with more than one worker or replica, configure Redis (`litellm_settings.cache` with Redis `cache_params`, or `general_settings.coordination_redis`) so a refresh token stays single-use and `lite logout` holds on every worker; without Redis each worker keeps its own record. For a long-lived, rotatable, Keys-UI-visible credential, create a dedicated virtual key in the dashboard and pass it via `--api-key` or `LITELLM_PROXY_API_KEY`.
+
 ### Usage
 
 Once authenticated, the CLI will automatically use the stored token for all requests. You no longer need to specify `--api-key` for subsequent commands.
 
 ```bash
 # Login
-litellm-proxy login
+lite login
 
 # Use CLI without specifying API key
-litellm-proxy models list
+lite models list
 
 # Check authentication status
-litellm-proxy whoami
+lite whoami
 
 # Logout
-litellm-proxy logout
+lite logout
 ``` 

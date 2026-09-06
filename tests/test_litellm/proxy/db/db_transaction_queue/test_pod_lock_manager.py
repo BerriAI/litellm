@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
@@ -310,9 +305,7 @@ async def test_lock_takeover_race_condition(mock_redis):
 
 
 @pytest.mark.asyncio
-async def test_release_lock_uses_atomic_compare_delete_script_when_available(
-    pod_lock_manager, mock_redis
-):
+async def test_release_lock_uses_atomic_compare_delete_script_when_available(pod_lock_manager, mock_redis):
     """
     Test that release_lock prefers atomic compare-and-delete Lua script when
     redis cache exposes script registration.
@@ -323,12 +316,8 @@ async def test_release_lock_uses_atomic_compare_delete_script_when_available(
     await pod_lock_manager.release_lock(cronjob_id="test_job")
 
     lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
-    mock_redis.async_register_script.assert_called_once_with(
-        PodLockManager._COMPARE_AND_DELETE_LOCK_SCRIPT
-    )
-    script_callable.assert_called_once_with(
-        keys=[lock_key], args=[pod_lock_manager.pod_id]
-    )
+    mock_redis.async_register_script.assert_called_once_with(PodLockManager._COMPARE_AND_DELETE_LOCK_SCRIPT)
+    script_callable.assert_called_once_with(keys=[lock_key], args=[json.dumps(pod_lock_manager.pod_id)])
     mock_redis.async_get_cache.assert_not_called()
     mock_redis.async_delete_cache.assert_not_called()
 
@@ -359,15 +348,83 @@ async def test_release_lock_lua_path_emits_released_event(pod_lock_manager, mock
     with patch.object(pod_lock_manager, "_emit_released_lock_event") as mock_emit:
         await pod_lock_manager.release_lock(cronjob_id="test_job")
 
-    mock_emit.assert_called_once_with(
-        cronjob_id="test_job", pod_id=pod_lock_manager.pod_id
-    )
+    mock_emit.assert_called_once_with(cronjob_id="test_job", pod_id=pod_lock_manager.pod_id)
+
+
+class FakeRedisLockStore:
+    """
+    Minimal stand-in that mirrors how RedisCache actually stores values:
+    async_set_cache JSON-encodes the value, and the compare-and-delete Lua
+    script compares against the raw stored bytes. This is what exposes the
+    quoted-vs-raw mismatch that a value-agnostic mock cannot catch.
+    """
+
+    def __init__(self):
+        self.store: dict = {}
+
+    async def async_set_cache(self, key, value, nx=False, ttl=None, **kwargs):
+        if nx and key in self.store:
+            return None
+        self.store[key] = json.dumps(value)
+        return True
+
+    async def async_get_cache(self, key, **kwargs):
+        raw = self.store.get(key)
+        return json.loads(raw) if raw is not None else None
+
+    async def async_delete_cache(self, key, **kwargs):
+        return 1 if self.store.pop(key, None) is not None else 0
+
+    def async_register_script(self, script):
+        async def _run(keys, args):
+            key = keys[0]
+            if self.store.get(key) == args[0]:
+                del self.store[key]
+                return 1
+            return 0
+
+        return _run
 
 
 @pytest.mark.asyncio
-async def test_release_lock_falls_back_to_get_del_when_lua_execution_fails(
-    pod_lock_manager, mock_redis
-):
+async def test_release_lock_deletes_lock_held_by_same_pod():
+    """
+    Regression: acquire_lock stores the pod_id JSON-encoded, so release_lock's
+    Lua compare-and-delete must use the same encoding or the comparison never
+    matches and the lock leaks until its TTL expires (stalling the spend-update
+    drain and growing the Redis transaction buffers).
+    """
+    redis = FakeRedisLockStore()
+    pod = PodLockManager(redis_cache=redis)
+    lock_key = PodLockManager.get_redis_lock_key("db_spend_update_job")
+
+    acquired = await pod.acquire_lock(cronjob_id="db_spend_update_job")
+    assert acquired is True
+    assert lock_key in redis.store
+
+    await pod.release_lock(cronjob_id="db_spend_update_job")
+    assert lock_key not in redis.store
+
+
+@pytest.mark.asyncio
+async def test_release_lock_preserves_lock_held_by_other_pod():
+    """
+    A pod must not release a lock currently held by a different pod, even with
+    the encoding fix in place.
+    """
+    redis = FakeRedisLockStore()
+    holder = PodLockManager(redis_cache=redis)
+    other = PodLockManager(redis_cache=redis)
+    lock_key = PodLockManager.get_redis_lock_key("db_spend_update_job")
+
+    assert await holder.acquire_lock(cronjob_id="db_spend_update_job") is True
+
+    await other.release_lock(cronjob_id="db_spend_update_job")
+    assert redis.store.get(lock_key) == json.dumps(holder.pod_id)
+
+
+@pytest.mark.asyncio
+async def test_release_lock_falls_back_to_get_del_when_lua_execution_fails(pod_lock_manager, mock_redis):
     """
     Test that release_lock falls back to GET+DEL when Lua script execution
     raises (e.g. Redis restart cleared loaded scripts).
@@ -385,3 +442,14 @@ async def test_release_lock_falls_back_to_get_del_when_lua_execution_fails(
     mock_redis.async_delete_cache.assert_called_once_with(lock_key)
     # Cached script handle should be reset so next call re-registers
     assert pod_lock_manager._release_lock_script is None
+
+
+@pytest.mark.asyncio
+async def test_acquire_lock_own_lock_not_reentrant(pod_lock_manager, mock_redis):
+    """With allow_reentrant=False a live lock means the window's work is done, so even
+    the holder gets False; the default stays reentrant for leader-election callers."""
+    mock_redis.async_set_cache.return_value = False
+    mock_redis.async_get_cache.return_value = pod_lock_manager.pod_id
+
+    assert await pod_lock_manager.acquire_lock(cronjob_id="test_job", allow_reentrant=False) is False
+    assert await pod_lock_manager.acquire_lock(cronjob_id="test_job") is True

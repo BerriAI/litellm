@@ -1,7 +1,7 @@
 import copy
 import os
 import types
-from typing import List, Optional
+from typing import Final
 
 from openai.types.image import Image
 
@@ -38,21 +38,21 @@ class AmazonStabilityConfig:
         - SD v1.6: must be between 320x320 and 1536x1536
     """
 
-    cfg_scale: Optional[int] = None
-    seed: Optional[float] = None
-    steps: Optional[List[str]] = None
-    width: Optional[int] = None
-    height: Optional[int] = None
+    cfg_scale: int | None = None
+    seed: float | None = None
+    steps: list[str] | None = None
+    width: int | None = None
+    height: int | None = None
 
     def __init__(
         self,
-        cfg_scale: Optional[int] = None,
-        seed: Optional[float] = None,
-        steps: Optional[List[str]] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
+        cfg_scale: int | None = None,
+        seed: float | None = None,
+        steps: list[str] | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -76,7 +76,7 @@ class AmazonStabilityConfig:
         }
 
     @classmethod
-    def get_supported_openai_params(cls, model: Optional[str] = None) -> List:
+    def get_supported_openai_params(cls, model: str | None = None) -> list:
         return ["size"]
 
     @classmethod
@@ -85,7 +85,7 @@ class AmazonStabilityConfig:
         non_default_params: dict,
         optional_params: dict,
     ):
-        _size = non_default_params.get("size")
+        _size: Final = non_default_params.get("size")
         if _size is not None:
             width, height = _size.split("x")
             optional_params["width"] = int(width)
@@ -99,14 +99,12 @@ class AmazonStabilityConfig:
         text: str,
         optional_params: dict,
     ) -> dict:
-        inference_params = copy.deepcopy(optional_params)
-        inference_params.pop(
-            "user", None
-        )  # make sure user is not passed in for bedrock call
+        inference_params: Final = copy.deepcopy(optional_params)
+        inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
 
-        prompt = text.replace(os.linesep, " ")
+        prompt: Final = text.replace(os.linesep, " ")
         ## LOAD CONFIG
-        config = cls.get_config()
+        config: Final = cls.get_config()
         for k, v in config.items():
             if (
                 k not in inference_params
@@ -122,7 +120,7 @@ class AmazonStabilityConfig:
     def transform_response_dict_to_openai_response(
         cls, model_response: ImageResponse, response_dict: dict
     ) -> ImageResponse:
-        image_list: List[Image] = []
+        image_list: Final[list[Image]] = []
         for artifact in response_dict["artifacts"]:
             _image = Image(b64_json=artifact["base64"])
             image_list.append(_image)
@@ -136,28 +134,28 @@ class AmazonStabilityConfig:
         cls,
         model: str,
         image_response: ImageResponse,
-        size: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        size: str | None = None,
+        optional_params: dict | None = None,
     ) -> float:
         optional_params = optional_params or {}
 
         # see model_prices_and_context_window.json for details on how steps is used
         # Reference pricing by steps for stability 1: https://aws.amazon.com/bedrock/pricing/
-        _steps = optional_params.get("steps", 50)
-        steps = "max-steps" if _steps > 50 else "50-steps"
+        _steps: Final = optional_params.get("steps", 50)
+        steps: Final = "max-steps" if _steps > 50 else "50-steps"
 
         # size is stored in model_prices_and_context_window.json as 1024-x-1024
         # current size has 1024x1024
         size = size or "1024-x-1024"
         model = f"{size}/{steps}/{model}"
 
-        get_model_info = get_cached_model_info()
-        model_info = get_model_info(
+        get_model_info: Final = get_cached_model_info()
+        model_info: Final = get_model_info(
             model=model,
             custom_llm_provider="bedrock",
         )
 
-        output_cost_per_image: float = model_info.get("output_cost_per_image") or 0.0
+        output_cost_per_image: Final[float] = model_info.get("output_cost_per_image") or 0.0
         num_images: int = 0
         if image_response.data:
             num_images = len(image_response.data)

@@ -1,8 +1,11 @@
-import React, { useState, useEffect, useRef } from "react";
-import { TextInput, Text } from "@tremor/react";
-import { Select } from "antd";
-import { RobotOutlined } from "@ant-design/icons";
-import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
+import React, { useState, useEffect } from "react";
+import { Bot } from "lucide-react";
+import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { Input } from "@/components/ui/input";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
+
+const MODEL_SELECT_DEBOUNCE_MS = 500;
 
 interface ModelSelectorProps {
   accessToken: string;
@@ -30,7 +33,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [selectedModel, setSelectedModel] = useState<string | undefined>(value);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
-  const customModelTimeout = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setSelectedModel(value);
@@ -42,7 +44,6 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     const loadModels = async () => {
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
-        console.log("Fetched models for selector:", uniqueModels);
 
         if (uniqueModels.length > 0) {
           setModelInfo(uniqueModels);
@@ -68,49 +69,41 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
   };
 
-  const handleCustomModelChange = (value: string) => {
-    // Using setTimeout to create a simple debounce effect
-    if (customModelTimeout.current) {
-      clearTimeout(customModelTimeout.current);
-    }
-
-    customModelTimeout.current = setTimeout(() => {
+  const debouncedSelect = useDebouncedCallback(
+    (value: string) => {
       setSelectedModel(value);
-      if (onChange) {
-        onChange(value);
-      }
-    }, 500); // 500ms delay after typing stops
-  };
+      onChange?.(value);
+    },
+    { wait: MODEL_SELECT_DEBOUNCE_MS },
+  );
 
   return (
     <div>
       {showLabel && (
-        <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-          <RobotOutlined className="mr-2" /> {labelText}
-        </Text>
+        <p className="font-medium block mb-2 text-foreground flex items-center">
+          <Bot className="mr-2 size-3.5" /> {labelText}
+        </p>
       )}
-      <Select
-        value={selectedModel}
-        placeholder={placeholder}
-        onChange={onModelChange}
-        options={[
-          ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group, index) => ({
-            value: model_group,
-            label: model_group,
-            key: index,
-          })),
-          { value: "custom", label: "Enter custom model", key: "custom" },
-        ]}
-        style={{ width: "100%", ...style }}
-        showSearch={true}
-        className={`rounded-md ${className || ""}`}
-        disabled={disabled}
-      />
+      <div style={{ width: "100%", ...style }} className={`rounded-md ${className || ""}`}>
+        <SearchSelect
+          options={[
+            ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
+              value: model_group,
+              label: model_group,
+            })),
+            { value: "custom", label: "Enter custom model" },
+          ]}
+          value={selectedModel}
+          placeholder={placeholder}
+          onValueChange={onModelChange}
+          disabled={disabled}
+        />
+      </div>
       {showCustomModelInput && (
-        <TextInput
+        <Input
           className="mt-2"
           placeholder="Enter custom model name"
-          onValueChange={handleCustomModelChange}
+          onChange={(e) => debouncedSelect(e.target.value)}
           disabled={disabled}
         />
       )}

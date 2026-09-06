@@ -6,12 +6,11 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useEffect, useState } from "react";
 
 interface SidebarProviderProps {
-  setPage: (page: string) => void;
-  defaultSelectedKey: string;
   sidebarCollapsed: boolean;
+  onToggleCollapsed?: () => void;
 }
 
-const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: SidebarProviderProps) => {
+const SidebarProvider = ({ sidebarCollapsed, onToggleCollapsed }: SidebarProviderProps) => {
   const { accessToken } = useAuthorized();
   const [enabledPagesInternalUsers, setEnabledPagesInternalUsers] = useState<string[] | null>(null);
   const [enableProjectsUI, setEnableProjectsUI] = useState<boolean>(false);
@@ -23,21 +22,16 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
   useEffect(() => {
     const fetchUISettings = async () => {
       if (!accessToken) {
-        console.log("[SidebarProvider] No access token, skipping UI settings fetch");
         return;
       }
 
       try {
-        console.log("[SidebarProvider] Fetching UI settings from /get/ui_settings");
         const settings = await getUISettings(accessToken);
-        console.log("[SidebarProvider] UI settings response:", settings);
-        
+
         // API returns 'values' not 'settings'
         if (settings?.values?.enabled_ui_pages_internal_users !== undefined) {
-          console.log("[SidebarProvider] Setting enabled pages:", settings.values.enabled_ui_pages_internal_users);
           setEnabledPagesInternalUsers(settings.values.enabled_ui_pages_internal_users);
         } else {
-          console.log("[SidebarProvider] No enabled_ui_pages_internal_users in response (all pages visible by default)");
         }
 
         if (settings?.values?.enable_projects_ui !== undefined) {
@@ -69,9 +63,8 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
 
   return (
     <Sidebar
-      setPage={setPage}
-      defaultSelectedKey={defaultSelectedKey}
       collapsed={sidebarCollapsed}
+      onToggleCollapsed={onToggleCollapsed}
       enabledPagesInternalUsers={enabledPagesInternalUsers}
       enableProjectsUI={enableProjectsUI}
       disableAgentsForInternalUsers={disableAgentsForInternalUsers}

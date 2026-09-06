@@ -1,18 +1,8 @@
 import React from "react";
-import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { RealtimePrettyView, isRealtimeResponse } from "./RealtimePrettyView";
-
-vi.mock("antd", async () => {
-  const actual = await vi.importActual<typeof import("antd")>("antd");
-  return {
-    ...actual,
-    message: {
-      success: vi.fn(),
-    },
-  };
-});
 
 const sampleRealtimeResponse = {
   usage: {
@@ -102,8 +92,7 @@ const sampleRealtimeResponse = {
             content: [
               {
                 type: "audio",
-                transcript:
-                  "I'm here to help with information and general questions.",
+                transcript: "I'm here to help with information and general questions.",
               },
             ],
           },
@@ -237,14 +226,8 @@ describe("RealtimePrettyView", () => {
 
   it("should display transcript text from response turns", () => {
     render(<RealtimePrettyView response={sampleRealtimeResponse} />);
-    expect(
-      screen.getByText("Hello! How's your day going?")
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "I'm here to help with information and general questions."
-      )
-    ).toBeInTheDocument();
+    expect(screen.getByText("Hello! How's your day going?")).toBeInTheDocument();
+    expect(screen.getByText("I'm here to help with information and general questions.")).toBeInTheDocument();
   });
 
   it("should display completed status tags for response turns", () => {
@@ -278,9 +261,7 @@ describe("RealtimePrettyView", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Instructions")).toBeInTheDocument();
-      expect(
-        screen.getByText("You are a helpful assistant.")
-      ).toBeInTheDocument();
+      expect(screen.getByText("You are a helpful assistant.")).toBeInTheDocument();
     });
   });
 
@@ -307,9 +288,7 @@ describe("RealtimePrettyView", () => {
       results: [{ type: "unknown.event" }],
     };
     render(<RealtimePrettyView response={emptyResponse} />);
-    expect(
-      screen.getByText("No recognized realtime events found")
-    ).toBeInTheDocument();
+    expect(screen.getByText("No recognized realtime events found")).toBeInTheDocument();
   });
 
   it("should handle response with no output items gracefully", () => {
@@ -331,10 +310,7 @@ describe("RealtimePrettyView", () => {
 
   it("should display metrics tokens when provided", () => {
     render(
-      <RealtimePrettyView
-        response={sampleRealtimeResponse}
-        metrics={{ completion_tokens: 500, output_cost: 0.005 }}
-      />
+      <RealtimePrettyView response={sampleRealtimeResponse} metrics={{ completion_tokens: 500, output_cost: 0.005 }} />,
     );
     expect(screen.getByText(/Tokens: 500/)).toBeInTheDocument();
     expect(screen.getByText(/Cost: \$0\.005000/)).toBeInTheDocument();

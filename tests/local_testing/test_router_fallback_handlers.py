@@ -1,14 +1,10 @@
 import asyncio
 import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
@@ -21,6 +17,8 @@ from litellm.router_utils.fallback_event_handlers import (
     log_success_fallback_event,
     log_failure_fallback_event,
 )
+
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 
 # Helper function to create a Router instance
@@ -68,7 +66,7 @@ def create_test_router_2():
                 "litellm_params": {
                     "model": "openai/fake-openai-endpoint-2",
                     "api_key": "working-key-since-this-is-fake-endpoint",
-                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "api_base": FAKE_OPENAI_API_BASE,
                 },
             },
         ],
@@ -308,7 +306,4 @@ async def test_multiple_fallbacks(function_name):
 
     print(result._hidden_params)
 
-    assert (
-        result._hidden_params["api_base"]
-        == "https://exampleopenaiendpoint-production.up.railway.app/"
-    )
+    assert result._hidden_params["api_base"] == FAKE_OPENAI_API_BASE

@@ -1,15 +1,11 @@
 import json
 import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
 import pytest
 import base64
 import httpx
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
@@ -34,6 +30,11 @@ img_base_64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIh
             "text",
             titan_embedding_response,
         ),  # V2 text model
+        (
+            "bedrock/amazon.titan-embed-g1-text-02",
+            "text",
+            titan_embedding_response,
+        ),  # G1 text model
         (
             "bedrock/amazon.titan-embed-image-v1",
             "image",
@@ -442,9 +443,7 @@ def test_bedrock_embedding_region_bug_reproduction():
                 print(
                     "❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter"
                 )
-                assert (
-                    False
-                ), f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}"
+                pytest.fail(f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}")
             else:
                 print(
                     "✓ Bug NOT reproduced: Using correct region from explicit parameter"
@@ -459,3 +458,13 @@ def test_bedrock_embedding_region_bug_reproduction():
             os.environ["AWS_REGION_NAME"] = original_region_name
         else:
             os.environ.pop("AWS_REGION_NAME", None)
+
+
+def test_bedrock_titan_g1_text_02_model_info():
+    """Test that amazon.titan-embed-g1-text-02 has correct pricing metadata"""
+    model_info = litellm.get_model_info("amazon.titan-embed-g1-text-02")
+    assert model_info is not None, "Model info should not be None"
+    assert model_info["litellm_provider"] == "bedrock"
+    assert model_info["mode"] == "embedding"
+    assert model_info["input_cost_per_token"] == 1e-07
+    assert model_info["max_input_tokens"] == 8192

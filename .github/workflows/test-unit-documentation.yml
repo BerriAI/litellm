@@ -5,27 +5,39 @@ on:
     branches:
       - main
       - litellm_internal_staging
-      - litellm_oss_branch
+      - litellm_oss_staging
       - "litellm_**"
+  push:
+    branches:
+      - main
+      - litellm_internal_staging
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   documentation:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
 
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-changes
+
       - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
+        if: steps.changes.outputs.decision != 'skip'
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           repository: BerriAI/litellm-docs
@@ -33,16 +45,19 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
+        if: steps.changes.outputs.decision != 'skip'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache uv dependencies
+        if: steps.changes.outputs.decision != 'skip'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
@@ -52,18 +67,27 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-uv-
 
+      - name: Cache the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv sync --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+
+      - name: Cache Prisma binaries
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-prisma-binaries
 
       - name: Generate Prisma client
-        env:
-          PRISMA_BINARY_CACHE_DIR: ${{ runner.temp }}/prisma-cache
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       # Run the same documentation tests that CircleCI ran (as direct Python scripts)
       - name: Run documentation validation tests
+        if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
           uv run --no-sync python ./tests/documentation_tests/test_router_settings.py

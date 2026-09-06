@@ -9,6 +9,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import (
     create_model_info_response,
     get_available_models_for_user,
+    hash_token,
     is_known_model,
     is_known_vector_store_index,
     model_dump_with_preserved_fields,
@@ -103,18 +104,16 @@ def test_is_known_vector_store_index_error_path_no_registry(monkeypatch):
 
 def test_create_model_info_response_happy_path_no_metadata():
     result = create_model_info_response(model_id="gpt-4o", provider="openai")
-    assert result == {
-        "id": "gpt-4o",
-        "object": "model",
-        "created": result["created"],
-        "owned_by": "openai",
-    }
     snapshot = {
         "id": result["id"],
         "object": result["object"],
         "owned_by": result["owned_by"],
         "created_is_int": isinstance(result["created"], int),
         "metadata_absent": "metadata" not in result,
+        "max_input_tokens_positive_int": isinstance(result["max_input_tokens"], int)
+        and result["max_input_tokens"] > 0,
+        "max_output_tokens_positive_int": isinstance(result["max_output_tokens"], int)
+        and result["max_output_tokens"] > 0,
     }
     assert snapshot == {
         "id": "gpt-4o",
@@ -122,6 +121,8 @@ def test_create_model_info_response_happy_path_no_metadata():
         "owned_by": "openai",
         "created_is_int": True,
         "metadata_absent": True,
+        "max_input_tokens_positive_int": True,
+        "max_output_tokens_positive_int": True,
     }
 
 
@@ -404,3 +405,119 @@ async def test_get_available_models_for_user_error_path_complete_list_raises(
             general_settings={},
             user_model=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_resolves_team_access_group_models(
+    monkeypatch,
+):
+    from litellm.models.access_group import LiteLLM_AccessGroupTable
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+
+    team = LiteLLM_TeamTableCachedObj(
+        team_id="team-1",
+        models=["no-default-models"],
+        access_group_ids=["ag-1"],
+    )
+    access_group = LiteLLM_AccessGroupTable(
+        access_group_id="ag-1",
+        access_group_name="repro-group",
+        access_model_names=["model-a", "model-b"],
+        assigned_team_ids=["team-1"],
+    )
+
+    async def _get_team_object(**_kwargs):
+        return team
+
+    async def _get_access_object(**_kwargs):
+        return access_group
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object)
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_access_object", _get_access_object)
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-1",
+            team_id="team-1",
+            models=["all-team-models"],
+            team_models=["no-default-models"],
+        ),
+        llm_router=_router_with_models(["model-a", "model-b", "model-c"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+    assert sorted(result) == ["model-a", "model-b"]
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_without_access_groups_grants_nothing(
+    monkeypatch,
+):
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+
+    async def _get_team_object(**_kwargs):
+        return LiteLLM_TeamTableCachedObj(team_id="team-1", models=["no-default-models"])
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object)
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-1",
+            team_id="team-1",
+            models=["all-team-models"],
+            team_models=["no-default-models"],
+        ),
+        llm_router=_router_with_models(["model-a", "model-b"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+    assert result == []
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_resolves_key_access_group_models(
+    monkeypatch,
+):
+    from litellm.models.access_group import LiteLLM_AccessGroupTable
+    from litellm.models.team import LiteLLM_TeamTableCachedObj
+
+    async def _get_team_object(**_kwargs):
+        return LiteLLM_TeamTableCachedObj(team_id="team-1", models=["no-default-models"])
+
+    async def _get_access_object(**_kwargs):
+        return LiteLLM_AccessGroupTable(
+            access_group_id="ag-1",
+            access_group_name="key-group",
+            access_model_names=["model-b"],
+            assigned_key_ids=[hash_token("sk-test-key")],
+        )
+
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_team_object", _get_team_object)
+    monkeypatch.setattr("litellm.proxy.auth.auth_checks.get_access_object", _get_access_object)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="user-1",
+            team_id="team-1",
+            models=["no-default-models"],
+            team_models=["no-default-models"],
+            access_group_ids=["ag-1"],
+        ),
+        llm_router=_router_with_models(["model-a", "model-b"]),
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+    assert result == ["model-b"]

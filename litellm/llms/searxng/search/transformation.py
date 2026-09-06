@@ -4,7 +4,7 @@ Calls SearXNG's /search endpoint to search the web.
 SearXNG API Reference: https://docs.searxng.org/dev/search_api.html
 """
 
-from typing import Dict, List, Optional, TypedDict, Union
+from typing import Final, TypedDict
 
 import httpx
 
@@ -50,18 +50,24 @@ class SearXNGSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         SearXNG is open-source and doesn't require an API key by default.
         Some instances may require authentication via headers.
         """
         # SearXNG typically doesn't require API keys, but support optional auth
-        api_key = api_key or get_secret_str("SEARXNG_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("SEARXNG_API_KEY",),
+            base_env_var="SEARXNG_API_BASE",
+            default_api_base=None,
+        )
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         headers["Content-Type"] = "application/json"
@@ -69,9 +75,9 @@ class SearXNGSearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
@@ -99,18 +105,18 @@ class SearXNGSearchConfig(BaseSearchConfig):
 
         # Build query parameters from the transformed request body
         if data and isinstance(data, dict) and "_searxng_params" in data:
-            params = data["_searxng_params"]
-            query_string = urlencode(params)
+            params: Final = data["_searxng_params"]
+            query_string: Final = urlencode(params)
             return f"{api_base}?{query_string}"
 
         return api_base
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to SearXNG API format.
 
@@ -134,7 +140,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
             # SearXNG only supports single string queries, join with spaces
             query = " ".join(query)
 
-        request_data: SearXNGSearchRequest = {
+        request_data: Final[SearXNGSearchRequest] = {
             "q": query,
             "format": "json",  # Always request JSON format
         }
@@ -142,7 +148,7 @@ class SearXNGSearchConfig(BaseSearchConfig):
         # Transform Perplexity unified spec parameters to SearXNG format
         if "country" in optional_params:
             # Map country code to language (approximate)
-            country = optional_params["country"].lower()
+            country: Final = optional_params["country"].lower()
             if country == "us" or country == "uk":
                 request_data["language"] = "en"
             elif country == "de":
@@ -164,14 +170,11 @@ class SearXNGSearchConfig(BaseSearchConfig):
             pass
 
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
+        result_data: Final = dict(request_data)
 
         # Pass through all other SearXNG-specific parameters as-is
         for param, value in optional_params.items():
-            if (
-                param not in self.get_supported_perplexity_optional_params()
-                and param not in result_data
-            ):
+            if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
 
         # Store params in special key for GET request URL building
@@ -201,12 +204,12 @@ class SearXNGSearchConfig(BaseSearchConfig):
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         # Transform results to SearchResult objects
         # Note: SearXNG doesn't natively support limiting results via API params
         # It returns ~20 results per page by default
-        results = []
+        results: Final = []
         for result in response_json.get("results", []):
             # Get date from either publishedDate or pubdate field
             date = result.get("publishedDate") or result.get("pubdate")

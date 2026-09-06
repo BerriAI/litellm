@@ -4,7 +4,8 @@ Wrapper around router cache. Meant to handle model cooldown logic
 
 import functools
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 from typing_extensions import TypedDict
 
@@ -16,7 +17,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = Union[_Span, Any]
+    Span = _Span | Any
 else:
     Span = Any
 
@@ -26,6 +27,12 @@ class CooldownCacheValue(TypedDict):
     status_code: str
     timestamp: float
     cooldown_time: float
+
+
+# Cap on the corrected in-memory TTL set in `_corrected_active_cooldown`: re-checks the
+# real remaining cooldown against Redis at least this often, so an entry that later gets
+# deleted or extended in Redis before its original deadline is still noticed promptly.
+_MAX_CORRECTED_IN_MEMORY_TTL_SECONDS: Final = 60.0
 
 
 class CooldownCache:
@@ -38,20 +45,19 @@ class CooldownCache:
             visible_prefix=50,  # Show first 50 characters
             visible_suffix=0,  # Show last 0 characters
             mask_char="*",  # Use * for masking
+            mask_short_values=False,  # Truncate long messages only; keep short ones readable
         )
 
     def _common_add_cooldown_logic(
         self, model_id: str, original_exception, exception_status, cooldown_time: float
-    ) -> Tuple[str, CooldownCacheValue]:
+    ) -> tuple[str, CooldownCacheValue]:
         try:
-            current_time = time.time()
-            cooldown_key = CooldownCache.get_cooldown_cache_key(model_id)
+            current_time: Final = time.time()
+            cooldown_key: Final = CooldownCache.get_cooldown_cache_key(model_id)
 
             # Store the cooldown information for the deployment separately
-            cooldown_data = CooldownCacheValue(
-                exception_received=self.exception_masker._mask_value(
-                    str(original_exception)
-                ),
+            cooldown_data: Final = CooldownCacheValue(
+                exception_received=self.exception_masker._mask_value(str(original_exception)),
                 status_code=str(exception_status),
                 timestamp=current_time,
                 cooldown_time=cooldown_time,
@@ -59,11 +65,7 @@ class CooldownCache:
 
             return cooldown_key, cooldown_data
         except Exception as e:
-            verbose_logger.error(
-                "CooldownCache::_common_add_cooldown_logic - Exception occurred - {}".format(
-                    str(e)
-                )
-            )
+            verbose_logger.error("CooldownCache::_common_add_cooldown_logic - Exception occurred - %s", e)
             raise e
 
     def add_deployment_to_cooldown(
@@ -71,7 +73,7 @@ class CooldownCache:
         model_id: str,
         original_exception: Exception,
         exception_status: int,
-        cooldown_time: Optional[float],
+        cooldown_time: float | None,
     ):
         try:
             #########################################################
@@ -97,11 +99,7 @@ class CooldownCache:
                 ttl=_cooldown_time,
             )
         except Exception as e:
-            verbose_logger.error(
-                "CooldownCache::add_deployment_to_cooldown - Exception occurred - {}".format(
-                    str(e)
-                )
-            )
+            verbose_logger.error("CooldownCache::add_deployment_to_cooldown - Exception occurred - %s", e)
             raise e
 
     @staticmethod
@@ -109,79 +107,91 @@ class CooldownCache:
     def get_cooldown_cache_key(model_id: str) -> str:
         return "deployment:" + model_id + ":cooldown"
 
+    def _corrected_active_cooldown(
+        self,
+        key: str,
+        result: Mapping[str, Any],
+        current_time: float,
+    ) -> CooldownCacheValue | None:
+        """
+        Return a CooldownCacheValue if the cooldown is still active, or None if it has expired.
+
+        Also corrects the in-memory TTL when DualCache promotes a Redis entry using the
+        default 600s TTL instead of the true remaining cooldown time.
+        """
+        cooldown_cache_value: Final = CooldownCacheValue(**result)  # pyright: ignore[reportUnknownArgumentType] - result comes from an untyped cache read, not from our own code
+        remaining: Final = (cooldown_cache_value["timestamp"] + cooldown_cache_value["cooldown_time"]) - current_time
+        if remaining <= 0:
+            self.cache.in_memory_cache.delete_cache(key)
+            return None
+        current_expiry: Final = self.cache.in_memory_cache.ttl_dict.get(key)
+        if current_expiry is not None and current_expiry > current_time + remaining + 5:
+            corrected_ttl: Final = min(remaining, _MAX_CORRECTED_IN_MEMORY_TTL_SECONDS)
+            self.cache.in_memory_cache.delete_cache(key)
+            self.cache.in_memory_cache.set_cache(key, result, ttl=corrected_ttl)
+        return cooldown_cache_value
+
     async def async_get_active_cooldowns(
-        self, model_ids: List[str], parent_otel_span: Optional[Span]
-    ) -> List[Tuple[str, CooldownCacheValue]]:
+        self, model_ids: list[str], parent_otel_span: Span | None
+    ) -> list[tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
-        keys = [
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids
-        ]
+        keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
         ## more likely to be none if no models ratelimited. So just check redis every 1s
         ## each redis call adds ~100ms latency.
 
         ## check in memory cache first
-        results = await self.cache.async_batch_get_cache(
-            keys=keys, parent_otel_span=parent_otel_span
-        )
-        active_cooldowns: List[Tuple[str, CooldownCacheValue]] = []
+        results: Final = await self.cache.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
+        active_cooldowns: Final[list[tuple[str, CooldownCacheValue]]] = []
 
         if results is None or all(v is None for v in results):
             return active_cooldowns
 
-        # Process the results
+        current_time: Final = time.time()
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
-                active_cooldowns.append((model_id, cooldown_cache_value))
+                key = CooldownCache.get_cooldown_cache_key(model_id)
+                cooldown_cache_value = self._corrected_active_cooldown(key, result, current_time)
+                if cooldown_cache_value is not None:
+                    active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
 
     def get_active_cooldowns(
-        self, model_ids: List[str], parent_otel_span: Optional[Span]
-    ) -> List[Tuple[str, CooldownCacheValue]]:
+        self, model_ids: list[str], parent_otel_span: Span | None
+    ) -> list[tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
-        keys = [
-            CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids
-        ]
+        keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         # Retrieve the values for the keys using mget
-        results = (
-            self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
-            or []
-        )
+        results: Final = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
-        active_cooldowns = []
-        # Process the results
+        active_cooldowns: Final = []
+        current_time: Final = time.time()
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
-                active_cooldowns.append((model_id, cooldown_cache_value))
+                key = CooldownCache.get_cooldown_cache_key(model_id)
+                cooldown_cache_value = self._corrected_active_cooldown(key, result, current_time)
+                if cooldown_cache_value is not None:
+                    active_cooldowns.append((model_id, cooldown_cache_value))
 
         return active_cooldowns
 
-    def get_min_cooldown(
-        self, model_ids: List[str], parent_otel_span: Optional[Span]
-    ) -> float:
+    def get_min_cooldown(self, model_ids: list[str], parent_otel_span: Span | None) -> float:
         """Return min cooldown time required for a group of model id's."""
 
         # Generate the keys for the deployments
-        keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
+        keys: Final = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results = (
-            self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
-            or []
-        )
+        results: Final = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
-        min_cooldown_time: Optional[float] = None
+        min_cooldown_time: float | None = None
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
-                cooldown_cache_value = CooldownCacheValue(**result)  # type: ignore
-                if min_cooldown_time is None:
-                    min_cooldown_time = cooldown_cache_value["cooldown_time"]
-                elif cooldown_cache_value["cooldown_time"] < min_cooldown_time:
+                cooldown_cache_value = CooldownCacheValue(**result)
+                if min_cooldown_time is None or cooldown_cache_value["cooldown_time"] < min_cooldown_time:
                     min_cooldown_time = cooldown_cache_value["cooldown_time"]
 
         return min_cooldown_time or self.default_cooldown_time

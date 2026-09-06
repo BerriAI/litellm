@@ -13,11 +13,7 @@ describe("createQueryKeys", () => {
   });
 
   it("should generate a list key with params", () => {
-    expect(keys.list({ page: 1, limit: 10 })).toEqual([
-      "books",
-      "list",
-      { params: { page: 1, limit: 10 } },
-    ]);
+    expect(keys.list({ page: 1, limit: 10 })).toEqual(["books", "list", { params: { page: 1, limit: 10 } }]);
   });
 
   it("should generate a list key with undefined params when none provided", () => {

@@ -1,26 +1,33 @@
 #### OCR Endpoints #####
 
 import json
-from typing import Any, Dict, Optional, cast
+from collections.abc import Mapping
+from typing import Any, Final, cast
 
 import orjson
-from fastapi import APIRouter, Depends, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.base_llm.ocr.transformation import (
+    OCR_REQUEST_FORMAT_HEADER,
+    OCR_REQUEST_FORMAT_PARAM,
+    OCRResponse,
+    parse_ocr_request_format,
+)
 from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-router = APIRouter()
+router: Final = APIRouter()
 
 
 def _build_document_from_upload(
     file_content: bytes,
-    filename: Optional[str],
-    content_type: Optional[str],
-) -> Dict[str, str]:
+    filename: str | None,
+    content_type: str | None,
+) -> dict[str, str]:
     """
     Convert uploaded file bytes into a Mistral-format document dict with base64 data URI.
 
@@ -41,7 +48,49 @@ def _build_document_from_upload(
     )
 
 
-async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
+def _with_request_format(data: Mapping[str, Any], request: Request) -> Mapping[str, Any]:
+    """
+    Resolve the requested response format from the body or the `x-req-format` header.
+
+    An explicit `req_format` in the body wins over the header.
+    """
+    body_value: Final = data.get(OCR_REQUEST_FORMAT_PARAM)
+    header_value: Final = request.headers.get(OCR_REQUEST_FORMAT_HEADER)
+    raw_value: Final = body_value if body_value is not None else header_value
+    if raw_value is None:
+        return data
+    try:
+        request_format: Final = parse_ocr_request_format(
+            raw_value.strip().lower() if isinstance(raw_value, str) else raw_value
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": f"{e}"})
+    return {**data, OCR_REQUEST_FORMAT_PARAM: request_format}
+
+
+def _native_response(response: object, fastapi_response: Response) -> Response | None:
+    """
+    Return the provider's native payload when the caller asked for
+    `req_format=native` and the provider config captured it, carrying over the
+    LiteLLM response headers (cost, call id, etc.) built for the normalized response.
+    """
+    if not isinstance(response, OCRResponse):
+        return None
+    native_payload: Final = response.get_provider_native_response()
+    if native_payload is None:
+        return None
+    return Response(
+        content=orjson.dumps(native_payload),
+        media_type="application/json",
+        headers={
+            key: value
+            for key, value in fastapi_response.headers.items()
+            if key.lower() not in ("content-length", "content-type")
+        },
+    )
+
+
+async def _parse_multipart_form(request: Request) -> dict[str, Any]:
     """
     Extract OCR data from a multipart form request.
 
@@ -52,10 +101,10 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
         A dict with 'document', 'model', and any other OCR params.
     """
     try:
-        form = await request.form()
+        form: Final = await request.form()
     except Exception as e:
         raise ValueError(
-            f"Failed to parse multipart form data: {str(e)}. "
+            f"Failed to parse multipart form data: {e}. "
             "When using curl with --form/-F, do NOT set the Content-Type header "
             "manually — curl will set it automatically with the required boundary."
         )
@@ -64,28 +113,24 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
     # request.form() may return either a FastAPI or Starlette UploadFile
     # depending on middleware; check both via isinstance (FastAPI's UploadFile
     # is a subclass of Starlette's) and fall back to duck-type check.
-    if uploaded_file is None or (
-        not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")
-    ):
-        raise ValueError(
-            "Multipart OCR request must include a 'file' field with the document to process"
-        )
+    if uploaded_file is None or (not isinstance(uploaded_file, UploadFile) and not hasattr(uploaded_file, "read")):
+        raise ValueError("Multipart OCR request must include a 'file' field with the document to process")
 
     uploaded_file = cast(UploadFile, uploaded_file)
 
     # Seek to start in case the file was already partially read by middleware
     await uploaded_file.seek(0)
-    file_content = await uploaded_file.read()
+    file_content: Final = await uploaded_file.read()
     if not file_content:
         raise ValueError("Uploaded file is empty")
 
-    document = _build_document_from_upload(
+    document: Final = _build_document_from_upload(
         file_content=file_content,
         filename=uploaded_file.filename,
         content_type=uploaded_file.content_type,
     )
 
-    data: Dict[str, Any] = {"document": document}
+    data: Final[dict[str, Any]] = {"document": document}
 
     for field_name, field_value in form.items():
         if field_name in ("file", "document"):
@@ -100,15 +145,21 @@ async def _parse_multipart_form(request: Request) -> Dict[str, Any]:
             data[field_name] = field_value
 
     verbose_proxy_logger.debug(
-        f"OCR multipart form request parsed - model: {data.get('model')}, "
-        f"document_type: {document['type']}, "
-        f"filename: {uploaded_file.filename}"
+        "OCR multipart form request parsed - model: %s, document_type: %s, filename: %s",
+        data.get("model"),
+        document["type"],
+        uploaded_file.filename,
     )
 
     return data
 
 
-async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
+async def _parse_ocr_request(request: Request) -> Mapping[str, Any]:
+    """Parse an OCR request and apply the `x-req-format` header, if any."""
+    return _with_request_format(await _parse_ocr_request_body(request), request)
+
+
+async def _parse_ocr_request_body(request: Request) -> dict[str, Any]:
     """
     Parse an OCR request, supporting both JSON and multipart form data.
 
@@ -126,7 +177,7 @@ async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
     Returns:
         A dict suitable for passing to the OCR processing pipeline.
     """
-    content_type = request.headers.get("content-type", "")
+    content_type: Final = request.headers.get("content-type", "")
 
     if "multipart/form-data" in content_type.lower():
         return await _parse_multipart_form(request)
@@ -144,8 +195,7 @@ async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
         # Check if form data is available.
         if getattr(request, "_form", None) is not None:
             verbose_proxy_logger.debug(
-                "OCR request body is empty but form data is available from middleware — "
-                "processing as multipart form."
+                "OCR request body is empty but form data is available from middleware — processing as multipart form."
             )
             return await _parse_multipart_form(request)
 
@@ -156,7 +206,7 @@ async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
         )
 
     try:
-        data = orjson.loads(body)
+        data: Final = orjson.loads(body)
     except orjson.JSONDecodeError as e:
         raise ValueError(
             f"Invalid JSON in request body: {e}. "
@@ -170,7 +220,7 @@ async def _parse_ocr_request(request: Request) -> Dict[str, Any]:
     # caller is remote, so allowing a file-path string would let an
     # authenticated user read arbitrary files from the server's filesystem.
     # File uploads must go through multipart/form-data instead.
-    doc = data.get("document") if isinstance(data, dict) else None
+    doc: Final = data.get("document") if isinstance(data, dict) else None
     if isinstance(doc, dict) and doc.get("type") == "file":
         raise ValueError(
             "document type 'file' is not supported through the JSON API. "
@@ -242,6 +292,11 @@ async def ocr(
         -F "model=mistral-ocr" \
         -F "file=@document.pdf"
     ```
+
+    Response format is normalized to the LiteLLM OCR schema by default. Providers
+    that support it (Azure Document Intelligence) can return their own payload
+    instead, with cost tracking unchanged, via `x-req-format: native` (or
+    `"req_format": "native"` in the body).
     """
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -260,12 +315,12 @@ async def ocr(
     data: dict = {}
     try:
         # Parse request body (JSON or multipart form)
-        data = await _parse_ocr_request(request)
+        data = dict(await _parse_ocr_request(request))
 
         # Process request using ProxyBaseLLMRequestProcessing
         processor = ProxyBaseLLMRequestProcessing(data=data)
 
-        return await processor.base_process_llm_request(
+        response: Final = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -283,6 +338,8 @@ async def ocr(
             user_api_base=user_api_base,
             version=version,
         )
+
+        return _native_response(response, fastapi_response) or response
     except Exception as e:
         processor = ProxyBaseLLMRequestProcessing(data=data)
         raise await processor._handle_llm_api_exception(

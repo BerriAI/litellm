@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Union
+from collections.abc import Callable
+from typing import Final
 
 import httpx
 
-from litellm.constants import (
-    COMPLETION_HTTP_FALLBACK_SECONDS,
-    DEFAULT_REQUEST_TIMEOUT_SECONDS,
-)
+from litellm.constants import COMPLETION_HTTP_FALLBACK_SECONDS
 
 
 class CompletionTimeout:
@@ -17,46 +15,41 @@ class CompletionTimeout:
 
     @staticmethod
     def _fallback_when_no_explicit_timeout(
-        global_timeout: Optional[Union[float, str]],
+        global_timeout: float | str | None,
     ) -> float:
         """
         Used when ``model_timeout`` and kwargs timeouts are all unset.
 
-        ``global_timeout`` is :attr:`litellm.request_timeout` (numeric / string), not
-        :class:`httpx.Timeout`.
-
-        If it equals :data:`~litellm.constants.DEFAULT_REQUEST_TIMEOUT_SECONDS` (6000),
-        return :data:`~litellm.constants.COMPLETION_HTTP_FALLBACK_SECONDS`. Same if
-        ``None``. Otherwise return ``float(global_timeout)``.
+        ``global_timeout`` is the explicitly-configured ``litellm.request_timeout``
+        (numeric / string) or ``None`` when it was never set. ``None`` falls back to
+        :data:`~litellm.constants.COMPLETION_HTTP_FALLBACK_SECONDS`; any explicit value
+        (including ``6000``) is honored.
         """
         if global_timeout is None:
-            return COMPLETION_HTTP_FALLBACK_SECONDS
-        if float(global_timeout) == float(DEFAULT_REQUEST_TIMEOUT_SECONDS):
             return COMPLETION_HTTP_FALLBACK_SECONDS
         return float(global_timeout)
 
     @staticmethod
     def resolve(
-        model_timeout: Optional[Union[float, str, httpx.Timeout]],
+        model_timeout: float | str | httpx.Timeout | None,
         kwargs: dict,
         custom_llm_provider: str,
         *,
-        global_timeout: Optional[Union[float, str]],
+        global_timeout: float | str | None,
         supports_httpx_timeout: Callable[[str], bool],
-    ) -> Union[float, httpx.Timeout]:
+    ) -> float | httpx.Timeout:
         """
         Resolution order (first non-None wins):
 
         1. ``model_timeout`` (call argument / merged ``litellm_params``)
         2. ``kwargs["timeout"]``
         3. ``kwargs["request_timeout"]``
-        4. Fallback from ``global_timeout`` (:attr:`litellm.request_timeout`) — if it is
-           the package default (6000), use 600 instead.
+        4. ``global_timeout`` (the explicitly-configured ``litellm.request_timeout``),
+           or 600 when nothing was configured.
 
         Coerce :class:`httpx.Timeout` when the provider does not support it.
-        Explicit ``6000`` on the model or in kwargs is kept as ``6000``.
         """
-        resolved: Union[float, str, httpx.Timeout]
+        resolved: float | str | httpx.Timeout
         if model_timeout is not None:
             resolved = model_timeout
         elif kwargs.get("timeout") is not None:
@@ -64,20 +57,14 @@ class CompletionTimeout:
         elif kwargs.get("request_timeout") is not None:
             resolved = kwargs["request_timeout"]
         else:
-            resolved = CompletionTimeout._fallback_when_no_explicit_timeout(
-                global_timeout
-            )
+            resolved = CompletionTimeout._fallback_when_no_explicit_timeout(global_timeout)
 
-        if isinstance(resolved, httpx.Timeout) and not supports_httpx_timeout(
-            custom_llm_provider
-        ):
-            read_timeout = resolved.read
+        if isinstance(resolved, httpx.Timeout) and not supports_httpx_timeout(custom_llm_provider):
+            read_timeout: Final = resolved.read
             resolved = (
-                float(read_timeout)
-                if read_timeout is not None
-                else COMPLETION_HTTP_FALLBACK_SECONDS
+                float(read_timeout) if read_timeout is not None else COMPLETION_HTTP_FALLBACK_SECONDS
             )  # default 10 min timeout
         elif not isinstance(resolved, httpx.Timeout):
-            resolved = float(resolved)  # type: ignore
+            resolved = float(resolved)
 
         return resolved

@@ -26,6 +26,8 @@ resource "google_sql_database_instance" "writer" {
     disk_size         = 20
     disk_autoresize   = true
 
+    user_labels = local.labels
+
     backup_configuration {
       enabled                        = true
       point_in_time_recovery_enabled = true
@@ -34,7 +36,7 @@ resource "google_sql_database_instance" "writer" {
 
     ip_configuration {
       ipv4_enabled    = false
-      private_network = google_compute_network.this.id
+      private_network = local.network_id
     }
 
     insights_config {
@@ -45,6 +47,20 @@ resource "google_sql_database_instance" "writer" {
   }
 
   deletion_protection = var.cloudsql_deletion_protection
+
+  lifecycle {
+    # disk_autoresize grows storage but never shrinks it. Without this,
+    # the first plan after any auto-grow reads disk_size as a shrink, which
+    # is an immutable change and forces a destroy/recreate of the instance
+    # (full data loss). Set the initial size only; let Cloud SQL own it
+    # thereafter.
+    ignore_changes = [settings[0].disk_size]
+
+    precondition {
+      condition     = var.create_psa_connection || var.network_id != ""
+      error_message = "create_psa_connection must be true unless network_id references an existing VPC with Private Services Access configured."
+    }
+  }
 }
 
 resource "google_sql_database_instance" "reader" {
@@ -61,18 +77,28 @@ resource "google_sql_database_instance" "reader" {
     availability_type = "ZONAL"
     disk_autoresize   = true
 
+    user_labels = local.labels
+
     ip_configuration {
       ipv4_enabled    = false
-      private_network = google_compute_network.this.id
+      private_network = local.network_id
     }
   }
 
   deletion_protection = var.cloudsql_deletion_protection
+
+  lifecycle {
+    # Same autoresize footgun as the writer — the replica grows its disk
+    # independently. Never let a perceived shrink replace the instance.
+    ignore_changes = [settings[0].disk_size]
+  }
 }
 
 resource "google_sql_database" "this" {
   name     = var.db_name
   instance = google_sql_database_instance.writer.name
+
+  deletion_policy = "ABANDON"
 }
 
 resource "random_password" "db_password" {
@@ -87,10 +113,13 @@ resource "google_sql_user" "app" {
   name     = var.db_username
   instance = google_sql_database_instance.writer.name
   password = random_password.db_password.result
+
+  deletion_policy = "ABANDON"
 }
 
 resource "google_secret_manager_secret" "db_password" {
   secret_id = "${local.name}-db-password"
+  labels    = local.labels
   replication {
     auto {}
   }

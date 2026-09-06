@@ -5,19 +5,13 @@ These tests validate the MoonshotChatConfig class which extends OpenAIGPTConfig.
 Moonshot AI is an OpenAI-compatible provider with minor customizations.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 
 import litellm
 import litellm.utils
-from litellm import completion
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 
@@ -208,6 +202,42 @@ class TestMoonshotConfig:
             # Temperature should be preserved
             assert result.get("temperature") == temp
 
+    def test_temperature_dropped_for_reasoning_models(self):
+        """Reasoning models (kimi-k2.5, kimi-k2.6) reject any temperature except 1,
+        so the param is dropped rather than clamped. A clamp to 0.3/1 would still
+        400 when the caller passes e.g. 0.5."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            for temp in [0.0, 0.5, 1.0, 1.5]:
+                result = config.map_openai_params(
+                    non_default_params={"temperature": temp},
+                    optional_params={},
+                    model="kimi-k2.5",
+                    drop_params=False,
+                )
+                assert "temperature" not in result
+
+    def test_temperature_clamped_for_non_reasoning_models(self):
+        """Non-reasoning models keep the [0.3, 1] clamp behaviour."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=False,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"temperature": 1.5},
+                optional_params={},
+                model="moonshot-v1-8k",
+                drop_params=False,
+            )
+
+        assert result.get("temperature") == 1
+
     def test_tool_choice_required_adds_message(self):
         """Test that tool_choice='required' adds a special message and removes tool_choice"""
         config = MoonshotChatConfig()
@@ -232,10 +262,7 @@ class TestMoonshotConfig:
         assert result["messages"][0]["role"] == "user"
         assert result["messages"][0]["content"] == "What's the weather like?"
         assert result["messages"][1]["role"] == "user"
-        assert (
-            result["messages"][1]["content"]
-            == "Please select a tool to handle the current issue."
-        )
+        assert result["messages"][1]["content"] == "Please select a tool to handle the current issue."
 
         # Check that tool_choice was removed but tools are preserved
         assert "tool_choice" not in result
@@ -273,10 +300,35 @@ class TestMoonshotConfig:
 
         # Check that the message was added
         assert len(result["messages"]) == 2
-        assert (
-            result["messages"][1]["content"]
-            == "Please select a tool to handle the current issue."
-        )
+        assert result["messages"][1]["content"] == "Please select a tool to handle the current issue."
+
+    def test_tool_choice_required_does_not_mutate_input_messages(self):
+        """tool_choice='required' must not mutate the caller's messages list.
+
+        The handling appends a "select a tool" user message; building it in
+        place corrupts the caller's conversation history and makes
+        transform_request non-idempotent across retries.
+        """
+        config = MoonshotChatConfig()
+
+        messages = [{"role": "user", "content": "What's the weather like?"}]
+
+        for _ in range(2):
+            optional_params = {
+                "tool_choice": "required",
+                "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+            }
+            result = config.transform_request(
+                model="moonshot-v1-8k",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params={},
+                headers={},
+            )
+            # The returned request carries the extra message.
+            assert len(result["messages"]) == 2
+            # The caller's list is untouched, so repeated calls stay idempotent.
+            assert messages == [{"role": "user", "content": "What's the weather like?"}]
 
     def test_tool_choice_non_required_preserved(self):
         """Test that non-'required' tool_choice values are preserved"""
@@ -501,9 +553,7 @@ class TestMoonshotConfig:
         assert result[0].get("reasoning_content") == "stored thinking"
         # The promoted key must be removed from provider_specific_fields to
         # avoid sending the value twice in the serialised request body
-        assert "reasoning_content" not in (
-            result[0].get("provider_specific_fields") or {}
-        )
+        assert "reasoning_content" not in (result[0].get("provider_specific_fields") or {})
 
     def test_reasoning_model_fill_called_from_transform_request(self):
         """transform_request injects reasoning_content end-to-end for reasoning models."""
@@ -603,10 +653,7 @@ class TestMoonshotConfig:
         result = config.fill_reasoning_content(messages)
 
         # reasoning_content should be preserved, not replaced with placeholder
-        assert (
-            result[0].get("reasoning_content")
-            == "<thinking>User wants weather</thinking>"
-        )
+        assert result[0].get("reasoning_content") == "<thinking>User wants weather</thinking>"
 
     def test_reasoning_content_preserved_in_multi_turn_flow(self):
         """reasoning_content is preserved through multi-turn conversation flow.
@@ -650,10 +697,7 @@ class TestMoonshotConfig:
         result = config.fill_reasoning_content(messages)
 
         # reasoning_content should be preserved in the assistant message
-        assert (
-            result[1].get("reasoning_content")
-            == "<thinking>Planning to call weather tool</thinking>"
-        )
+        assert result[1].get("reasoning_content") == "<thinking>Planning to call weather tool</thinking>"
 
 
 class TestKimiK26ModelRegistry:
@@ -695,3 +739,92 @@ class TestKimiK26ModelRegistry:
         """kimi-k2.6 should be assigned to the moonshot provider."""
         model_info = model_cost_map["moonshot/kimi-k2.6"]
         assert model_info["litellm_provider"] == "moonshot"
+
+
+class TestMoonshotResponseSchemaSupport:
+    """Every model currently live on api.moonshot.ai supports json_schema
+    response_format, which gates discovery via litellm.responses(). The flag
+    must be true so the capability is advertised honestly."""
+
+    LIVE_MODELS = [
+        "moonshot/kimi-k2.5",
+        "moonshot/kimi-k2.6",
+        "moonshot/moonshot-v1-8k",
+        "moonshot/moonshot-v1-32k",
+        "moonshot/moonshot-v1-128k",
+        "moonshot/moonshot-v1-8k-vision-preview",
+        "moonshot/moonshot-v1-32k-vision-preview",
+        "moonshot/moonshot-v1-128k-vision-preview",
+        "moonshot/moonshot-v1-auto",
+    ]
+
+    @pytest.fixture(autouse=True)
+    def model_cost_map(self):
+        return GetModelCostMap.load_local_model_cost_map()
+
+    @pytest.mark.parametrize("model", LIVE_MODELS)
+    def test_live_model_supports_response_schema(self, model, model_cost_map):
+        assert model_cost_map[model].get("supports_response_schema") is True
+
+    def test_supports_response_schema_utility_reports_true(self, model_cost_map, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", model_cost_map)
+        assert litellm.utils.supports_response_schema(model="moonshot/kimi-k2.5") is True
+
+
+class TestMoonshotReasoningEffort:
+    """Moonshot documents reasoning_effort as a top-level chat completions field for its reasoning
+    models, defaulting to max, but the OpenAI base list this config subtracts from never carried it,
+    so an explicit level raised UnsupportedParamsError before it reached the wire."""
+
+    @pytest.fixture(autouse=True)
+    def force_local_model_cost(self, monkeypatch):
+        monkeypatch.setattr(litellm, "model_cost", GetModelCostMap.load_local_model_cost_map())
+
+    @pytest.mark.parametrize("model", ["kimi-k3", "kimi-k2.5", "kimi-k2.6", "kimi-k2-thinking"])
+    def test_reasoning_model_supports_reasoning_effort(self, model):
+        assert "reasoning_effort" in MoonshotChatConfig().get_supported_openai_params(model)
+
+    @pytest.mark.parametrize("model", ["moonshot-v1-8k", "kimi-latest", "kimi-k2-turbo-preview"])
+    def test_non_reasoning_model_does_not_support_reasoning_effort(self, model):
+        assert "reasoning_effort" not in MoonshotChatConfig().get_supported_openai_params(model)
+
+    @pytest.mark.parametrize("effort", ["low", "high", "max"])
+    def test_declared_effort_reaches_optional_params(self, effort):
+        optional_params = litellm.get_optional_params(
+            model="kimi-k3",
+            custom_llm_provider="moonshot",
+            reasoning_effort=effort,
+            drop_params=False,
+        )
+
+        assert optional_params["reasoning_effort"] == effort
+
+    def test_non_reasoning_model_still_rejects_reasoning_effort(self):
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.get_optional_params(
+                model="moonshot-v1-8k",
+                custom_llm_provider="moonshot",
+                reasoning_effort="high",
+                drop_params=False,
+            )
+
+    def test_bridge_effort_dict_is_unwrapped_to_the_level_string(self):
+        optional_params = MoonshotChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": {"effort": "high", "summary": "detailed"}},
+            optional_params={},
+            model="kimi-k3",
+            drop_params=False,
+        )
+
+        assert optional_params["reasoning_effort"] == "high"
+
+    @pytest.mark.parametrize("value", [{"summary": "detailed"}, {"effort": 3}, 7])
+    def test_effort_without_a_level_string_is_omitted(self, value):
+        optional_params = MoonshotChatConfig().map_openai_params(
+            non_default_params={"reasoning_effort": value},
+            optional_params={},
+            model="kimi-k3",
+            drop_params=False,
+        )
+
+        assert "reasoning_effort" not in optional_params

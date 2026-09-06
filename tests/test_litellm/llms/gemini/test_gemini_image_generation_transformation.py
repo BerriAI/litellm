@@ -196,6 +196,100 @@ def test_gemini_image_generation_usage_includes_chat_token_details():
     assert logging_usage["completion_tokens_details"]["image_tokens"] == 1120
 
 
+def test_gemini_image_generation_web_search_options_maps_to_google_search_tool():
+    config = GoogleImageGenConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={"web_search_options": {}},
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+
+    assert "tools" in mapped
+    assert mapped["tools"] == [{"googleSearch": {}}]
+
+    request = config.transform_image_generation_request(
+        model="gemini-3.1-flash-image-preview",
+        prompt="Generate an image of the latest iPhone",
+        optional_params=mapped,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [{"googleSearch": {}}]
+
+
+def test_gemini_image_generation_openai_web_search_tool_maps_to_google_search():
+    config = GoogleImageGenConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={"tools": [{"type": "web_search"}]},
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped["tools"] == [{"googleSearch": {}}]
+
+    request = config.transform_image_generation_request(
+        model="gemini-3.1-flash-image-preview",
+        prompt="Generate an image of the latest iPhone",
+        optional_params=mapped,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [{"googleSearch": {}}]
+
+
+def test_gemini_image_generation_dedupes_search_tools_from_tools_and_web_search_options():
+    config = GoogleImageGenConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={
+            "tools": [{"type": "web_search"}],
+            "web_search_options": {},
+        },
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped["tools"] == [{"googleSearch": {}}]
+
+
+def test_gemini_image_generation_preserves_tool_config_side_effect():
+    config = GoogleImageGenConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={
+            "tools": [{"googleMaps": {"latitude": 37.7, "longitude": -122.4}}]
+        },
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped["tools"] == [{"googleMaps": {}}]
+    assert mapped["toolConfig"] == {
+        "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
+    }
+
+    request = config.transform_image_generation_request(
+        model="gemini-3.1-flash-image-preview",
+        prompt="Generate an image of a coffee shop nearby",
+        optional_params=mapped,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [{"googleMaps": {}}]
+    assert request["toolConfig"] == {
+        "retrievalConfig": {"latLng": {"latitude": 37.7, "longitude": -122.4}}
+    }
+
+
 def test_gemini_image_generation_usage_without_output_details_treats_output_as_image():
     config = GoogleImageGenConfig()
     raw_response = httpx.Response(
@@ -238,3 +332,90 @@ def test_gemini_image_generation_usage_without_output_details_treats_output_as_i
     usage = result.model_dump()["usage"]
     assert usage["completion_tokens_details"]["text_tokens"] == 0
     assert usage["completion_tokens_details"]["image_tokens"] == 1716
+
+
+def test_gemini_image_generation_response_tracks_web_search_requests():
+    config = GoogleImageGenConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "fake-image",
+                                }
+                            }
+                        ]
+                    },
+                    "groundingMetadata": {
+                        "webSearchQueries": ["latest iphone", "iphone colors"]
+                    },
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 35,
+                "candidatesTokenCount": 1716,
+                "totalTokenCount": 1751,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 35}],
+            },
+        },
+    )
+
+    result = config.transform_image_generation_response(
+        model="gemini-3.1-flash-image-preview",
+        raw_response=raw_response,
+        model_response=ImageResponse(data=[]),
+        logging_obj=None,
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.usage.web_search_requests == 2
+
+
+def test_gemini_image_generation_response_without_grounding_has_no_web_search_requests():
+    config = GoogleImageGenConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/png",
+                                    "data": "fake-image",
+                                }
+                            }
+                        ]
+                    }
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 35,
+                "candidatesTokenCount": 1716,
+                "totalTokenCount": 1751,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 35}],
+            },
+        },
+    )
+
+    result = config.transform_image_generation_response(
+        model="gemini-3.1-flash-image-preview",
+        raw_response=raw_response,
+        model_response=ImageResponse(data=[]),
+        logging_obj=None,
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert getattr(result.usage, "web_search_requests", None) is None

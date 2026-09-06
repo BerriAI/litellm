@@ -1,14 +1,13 @@
 import types
-from typing import List, Optional
+from typing import Final
 
 from openai.types.image import Image
 
-from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.common_utils import BedrockError, get_cached_model_info
 from litellm.types.llms.bedrock import (
     AmazonStability3TextToImageRequest,
     AmazonStability3TextToImageResponse,
 )
-from litellm.llms.bedrock.common_utils import get_cached_model_info
 from litellm.types.utils import ImageResponse
 
 
@@ -38,14 +37,14 @@ class AmazonStability3Config:
         }
 
     @classmethod
-    def get_supported_openai_params(cls, model: Optional[str] = None) -> List:
+    def get_supported_openai_params(cls, model: str | None = None) -> list:
         """
         No additional OpenAI params are mapped for stability 3
         """
         return []
 
     @classmethod
-    def _is_stability_3_model(cls, model: Optional[str] = None) -> bool:
+    def _is_stability_3_model(cls, model: str | None = None) -> bool:
         """
         Returns True if the model is a Stability 3 model
 
@@ -67,13 +66,11 @@ class AmazonStability3Config:
         return False
 
     @classmethod
-    def transform_request_body(
-        cls, text: str, optional_params: dict
-    ) -> AmazonStability3TextToImageRequest:
+    def transform_request_body(cls, text: str, optional_params: dict) -> AmazonStability3TextToImageRequest:
         """
         Transform the request body for the Stability 3 models
         """
-        data = AmazonStability3TextToImageRequest(prompt=text, **optional_params)
+        data: Final = AmazonStability3TextToImageRequest(prompt=text, **optional_params)
         return data
 
     @classmethod
@@ -93,14 +90,14 @@ class AmazonStability3Config:
         Transform the response dict to the OpenAI response
         """
 
-        stability_3_response = AmazonStability3TextToImageResponse(**response_dict)
+        stability_3_response: Final = AmazonStability3TextToImageResponse(**response_dict)
 
         finish_reasons = stability_3_response.get("finish_reasons", [])
         finish_reasons = [reason for reason in finish_reasons if reason]
         if len(finish_reasons) > 0:
             raise BedrockError(status_code=400, message="; ".join(finish_reasons))
 
-        openai_images: List[Image] = []
+        openai_images: Final[list[Image]] = []
         for _img in stability_3_response.get("images", []):
             openai_images.append(Image(b64_json=_img))
 
@@ -112,16 +109,16 @@ class AmazonStability3Config:
         cls,
         model: str,
         image_response: ImageResponse,
-        size: Optional[str] = None,
-        optional_params: Optional[dict] = None,
+        size: str | None = None,
+        optional_params: dict | None = None,
     ) -> float:
-        get_model_info = get_cached_model_info()
-        model_info = get_model_info(
+        get_model_info: Final = get_cached_model_info()
+        model_info: Final = get_model_info(
             model=model,
             custom_llm_provider="bedrock",
         )
 
-        output_cost_per_image: float = model_info.get("output_cost_per_image") or 0.0
+        output_cost_per_image: Final[float] = model_info.get("output_cost_per_image") or 0.0
         num_images: int = 0
         if image_response.data:
             num_images = len(image_response.data)

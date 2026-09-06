@@ -2,15 +2,12 @@
 ## Tests /key endpoints.
 
 import pytest
-import asyncio, time, uuid
+import asyncio, uuid
 import aiohttp
 from openai import AsyncOpenAI
 import sys, os
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy._types import LitellmUserRoles
 
@@ -22,7 +19,7 @@ async def generate_team(
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     if team_id is None:
         team_id = "litellm-dashboard"
-    data = {"team_id": team_id, "models": models}
+    data = {"team_id": team_id, **({"models": models} if models is not None else {})}
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -272,7 +269,7 @@ async def chat_completion_streaming(session, key, model="gpt-4"):
     client = AsyncOpenAI(api_key=key, base_url="http://0.0.0.0:4000")
     messages = [
         {"role": "system", "content": "You are a helpful assistant"},
-        {"role": "user", "content": f"Hello! {time.time()}"},
+        {"role": "user", "content": "Hello!"},
     ]
     prompt_tokens = litellm.token_counter(model="gpt-35-turbo", messages=messages)
     data = {
@@ -620,6 +617,26 @@ async def test_key_info_spend_values_image_generation():
         spend = key_info["info"]["spend"]
         assert spend > 0
 
+        # The record/replay proxy serves this identical second call from its
+        # cassette (free), but the proxy must still bill it. Spend logging is
+        # async/batched, so poll for the increase rather than reading once after a
+        # fixed sleep; a spend that never grows means the repeat was not billed
+        # (e.g. the proxy response cache is on), which this still catches.
+        await image_generation(session=session, key=key)
+        spend_after = spend
+        for _ in range(12):
+            await asyncio.sleep(5)
+            key_info = await retry_request(
+                get_key_info, session=session, get_key=key, call_key=key
+            )
+            spend_after = key_info["info"]["spend"]
+            if spend_after > spend:
+                break
+        assert spend_after > spend, (
+            "spend did not increase on an identical repeat image call; the repeat "
+            "was not billed (the proxy response cache may be on)"
+        )
+
 
 @pytest.mark.skip(reason="Frequent check on ci/cd leads to read timeout issue.")
 @pytest.mark.asyncio
@@ -688,11 +705,10 @@ async def test_key_crossing_budget():
         response = await chat_completion(session=session, key=key)
         print("response 1: ", response)
         await asyncio.sleep(10)
-        try:
+        with pytest.raises(Exception, match="Budget has been exceeded!") as exc_info:
             response = await chat_completion(session=session, key=key)
-            pytest.fail("Should have failed - Key crossed it's budget")
-        except Exception as e:
-            assert "Budget has been exceeded!" in str(e)
+        e = exc_info.value
+        assert "Budget has been exceeded!" in str(e)
 
 
 @pytest.mark.skip(reason="AWS Suspended Account")
@@ -794,6 +810,7 @@ async def test_key_model_list(model_access, model_access_level, model_endpoint):
             models=_models if model_access_level == "team" else None,
             team_id=team_id,
         )
+        assert new_team["team_id"] == team_id
         key_gen = await generate_key(
             session=session,
             i=0,
@@ -864,8 +881,7 @@ async def test_key_over_budget():
         ## CALL `/models` - expect to work
         model_list = await get_key_info(session=session, get_key=key, call_key=key)
         ## CALL `/chat/completions` - expect to fail
-        try:
+        with pytest.raises(Exception, match="Budget has been exceeded!") as exc_info:
             await chat_completion(session=session, key=key)
-            pytest.fail("Expected this call to fail")
-        except Exception as e:
-            assert "Budget has been exceeded!" in str(e)
+        e = exc_info.value
+        assert "Budget has been exceeded!" in str(e)

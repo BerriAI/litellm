@@ -22,11 +22,7 @@ describe("team_info_tabs", () => {
   describe("getTeamInfoVisibleTabs", () => {
     it("returns overview, my user, and virtual keys when user cannot edit team", () => {
       const tabs = getTeamInfoVisibleTabs(false);
-      expect(tabs).toEqual([
-        TEAM_INFO_TAB_KEYS.OVERVIEW,
-        TEAM_INFO_TAB_KEYS.MY_USER,
-        TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
-      ]);
+      expect(tabs).toEqual([TEAM_INFO_TAB_KEYS.OVERVIEW, TEAM_INFO_TAB_KEYS.MY_USER, TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS]);
     });
 
     it("returns all tabs when user can edit team", () => {

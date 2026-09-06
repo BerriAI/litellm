@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import threading
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 from pathlib import Path
@@ -128,6 +129,9 @@ def mock_prisma_client() -> MagicMock:
     client.proxy_logging_obj.failure_handler = AsyncMock()
     client.spend_log_transactions = []
     client._spend_log_transactions_lock = asyncio.Lock()
+    client.spend_logs_queue_monitor_task = None
+    client.tool_usage_transactions = []
+    client._tool_usage_transactions_lock = asyncio.Lock()
     client.jsonify_object = lambda data: dict(data)
     client.db.is_connected = MagicMock(return_value=False)
     client.db.connect = AsyncMock()
@@ -317,6 +321,7 @@ class _SentMessage:
     body: Optional[str]
     starttls_called: bool
     login_args: Optional[tuple]
+    thread_ident: int
 
 
 @dataclass
@@ -325,6 +330,7 @@ class InMemorySMTP:
 
     sent: List[_SentMessage] = field(default_factory=list)
     raise_on_send: Optional[Exception] = None
+    connection_kwargs: List[Dict[str, Any]] = field(default_factory=list)
 
     def server_factory(self) -> Callable[..., Any]:
         outer = self
@@ -340,7 +346,7 @@ class InMemorySMTP:
             def __exit__(self, *exc: Any) -> None:
                 return None
 
-            def starttls(self) -> None:
+            def starttls(self, **kwargs: Any) -> None:
                 self._starttls_called = True
 
             def login(self, user: str, password: str) -> None:
@@ -367,10 +373,12 @@ class InMemorySMTP:
                         body=body,
                         starttls_called=self._starttls_called,
                         login_args=self._login_args,
+                        thread_ident=threading.get_ident(),
                     )
                 )
 
         def _factory(*args: Any, **kwargs: Any) -> _Conn:
+            outer.connection_kwargs.append(dict(kwargs))
             return _Conn()
 
         return _factory
@@ -378,10 +386,12 @@ class InMemorySMTP:
 
 @pytest.fixture
 def in_memory_smtp(monkeypatch: pytest.MonkeyPatch) -> InMemorySMTP:
-    """Patch ``smtplib.SMTP`` to capture sends in memory.
+    """Patch ``smtplib.SMTP`` and ``smtplib.SMTP_SSL`` to capture sends in memory.
 
     Override ``smtp.raise_on_send`` to test the SMTP error path.
     """
     smtp = InMemorySMTP()
-    monkeypatch.setattr("smtplib.SMTP", smtp.server_factory())
+    factory = smtp.server_factory()
+    monkeypatch.setattr("smtplib.SMTP", factory)
+    monkeypatch.setattr("smtplib.SMTP_SSL", factory)
     return smtp

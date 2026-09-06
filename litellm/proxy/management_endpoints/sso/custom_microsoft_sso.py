@@ -14,7 +14,7 @@ If these are not set, the default Microsoft endpoints are used.
 """
 
 import os
-from typing import List, Optional, Union
+from typing import Final
 
 import pydantic
 from fastapi_sso.sso.base import DiscoveryDocument
@@ -37,10 +37,10 @@ class CustomMicrosoftSSO(MicrosoftSSO):
         self,
         client_id: str,
         client_secret: str,
-        redirect_uri: Optional[Union[pydantic.AnyHttpUrl, str]] = None,
+        redirect_uri: pydantic.AnyHttpUrl | str | None = None,
         allow_insecure_http: bool = False,
-        scope: Optional[List[str]] = None,
-        tenant: Optional[str] = None,
+        scope: list[str] | None = None,
+        tenant: str | None = None,
     ):
         super().__init__(
             client_id=client_id,
@@ -56,35 +56,23 @@ class CustomMicrosoftSSO(MicrosoftSSO):
         Override to support custom endpoints via environment variables.
         Falls back to default Microsoft endpoints if not set.
         """
-        custom_authorization_endpoint = os.getenv(
-            "MICROSOFT_AUTHORIZATION_ENDPOINT", None
-        )
-        custom_token_endpoint = os.getenv("MICROSOFT_TOKEN_ENDPOINT", None)
-        custom_userinfo_endpoint = os.getenv("MICROSOFT_USERINFO_ENDPOINT", None)
+        custom_authorization_endpoint: Final = os.getenv("MICROSOFT_AUTHORIZATION_ENDPOINT", None)
+        custom_token_endpoint: Final = os.getenv("MICROSOFT_TOKEN_ENDPOINT", None)
+        custom_userinfo_endpoint: Final = os.getenv("MICROSOFT_USERINFO_ENDPOINT", None)
 
         # Use custom endpoints if set, otherwise use defaults
-        authorization_endpoint = (
-            custom_authorization_endpoint
-            or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/authorize"
+        authorization_endpoint: Final = (
+            custom_authorization_endpoint or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/authorize"
         )
-        token_endpoint = (
-            custom_token_endpoint
-            or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token"
-        )
-        userinfo_endpoint = (
-            custom_userinfo_endpoint or f"https://graph.microsoft.com/{self.version}/me"
-        )
+        token_endpoint = custom_token_endpoint or f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/token"
+        userinfo_endpoint: Final = custom_userinfo_endpoint or f"https://graph.microsoft.com/{self.version}/me"
 
-        if (
-            custom_authorization_endpoint
-            or custom_token_endpoint
-            or custom_userinfo_endpoint
-        ):
+        if custom_authorization_endpoint or custom_token_endpoint or custom_userinfo_endpoint:
             verbose_proxy_logger.debug(
-                f"Using custom Microsoft SSO endpoints - "
-                f"authorization: {authorization_endpoint}, "
-                f"token: {token_endpoint}, "
-                f"userinfo: {userinfo_endpoint}"
+                "Using custom Microsoft SSO endpoints - authorization: %s, token: %s, userinfo: %s",
+                authorization_endpoint,
+                token_endpoint,
+                userinfo_endpoint,
             )
 
         return DiscoveryDocument(

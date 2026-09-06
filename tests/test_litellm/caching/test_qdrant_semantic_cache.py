@@ -1,12 +1,9 @@
-import os
 import sys
+import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 def test_qdrant_semantic_cache_initialization(monkeypatch):
@@ -42,6 +39,7 @@ def test_qdrant_semantic_cache_initialization(monkeypatch):
             qdrant_api_base="http://test.qdrant.local",
             qdrant_api_key="test_key",
             similarity_threshold=0.8,
+            embedding_max_input_tokens=512,
         )
 
         # Verify the cache was initialized with correct parameters
@@ -49,6 +47,7 @@ def test_qdrant_semantic_cache_initialization(monkeypatch):
         assert qdrant_cache.qdrant_api_base == "http://test.qdrant.local"
         assert qdrant_cache.qdrant_api_key == "test_key"
         assert qdrant_cache.similarity_threshold == 0.8
+        assert qdrant_cache.embedding_max_input_tokens == 512
         mock_sync_client_instance.put.assert_called_once_with(
             url="http://test.qdrant.local/collections/test_collection/index",
             headers={
@@ -806,3 +805,224 @@ def test_qdrant_semantic_cache_large_vector_size():
         )
         create_payload = put_call.kwargs["json"]
         assert create_payload["vectors"]["size"] == 4096
+
+
+def _router_proxy_module(router, model_name):
+    mod = types.ModuleType("litellm.proxy.proxy_server")
+    mod.llm_router = router
+    mod.llm_model_list = [{"model_name": model_name}]
+    return mod
+
+
+def test_qdrant_sync_get_cache_routes_through_router(monkeypatch):
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    cache.embedding_model = "sem-embed"
+    cache.qdrant_api_base = "http://test.qdrant.local"
+    cache.collection_name = "test_collection"
+    cache.headers = {"Content-Type": "application/json", "api-key": "test_key"}
+    cache.similarity_threshold = 0.8
+    cache.sync_client = MagicMock()
+    search_response = MagicMock()
+    search_response.status_code = 200
+    search_response.json.return_value = {"result": []}
+    cache.sync_client.post.return_value = search_response
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
+    router.embedding = MagicMock(
+        return_value={"data": [{"embedding": [0.3, 0.3, 0.3]}]}
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        _router_proxy_module(router, "sem-embed"),
+    )
+
+    with patch("litellm.embedding") as direct_embed:
+        result = cache.get_cache(
+            key="test_key",
+            messages=[{"content": "What is the capital of France?"}],
+            metadata={},
+        )
+
+    assert result is None
+    router.embedding.assert_called_once()
+    assert router.embedding.call_args.kwargs["model"] == "sem-embed"
+    direct_embed.assert_not_called()
+
+
+def test_qdrant_sync_set_cache_falls_back_to_direct(monkeypatch):
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    cache.embedding_model = "text-embedding-ada-002"
+    cache.qdrant_api_base = "http://test.qdrant.local"
+    cache.collection_name = "test_collection"
+    cache.headers = {"Content-Type": "application/json", "api-key": "test_key"}
+    cache.sync_client = MagicMock()
+    put_response = MagicMock()
+    put_response.status_code = 200
+    cache.sync_client.put.return_value = put_response
+
+    fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
+    fake_proxy.llm_router = None
+    fake_proxy.llm_model_list = None
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_proxy)
+
+    with patch(
+        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.1, 0.1]}]}
+    ) as direct_embed:
+        cache.set_cache(
+            key="test_key",
+            value={"content": "Paris"},
+            messages=[{"content": "What is the capital of France?"}],
+        )
+
+    direct_embed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_qdrant_async_embedding_forwards_full_metadata(monkeypatch):
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    cache.embedding_model = "sem-embed"
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
+    router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        _router_proxy_module(router, "sem-embed"),
+    )
+
+    await cache._get_async_embedding(
+        "hello",
+        metadata={"user_api_key": "sk-x", "user_api_key_team_id": "team-1"},
+    )
+
+    md = router.aembedding.call_args.kwargs["metadata"]
+    assert md["user_api_key"] == "sk-x"
+    assert md["user_api_key_team_id"] == "team-1"
+    assert md["semantic-cache-embedding"] is True
+
+
+LONG_PROMPT = " ".join(f"token{i}" for i in range(300))
+
+
+def _token_count(model, text):
+    import litellm
+
+    return len(litellm.encode(model=model, text=text))
+
+
+def test_qdrant_get_embedding_truncates_to_deployment_max_input_tokens(monkeypatch):
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    cache.embedding_model = "sem-embed"
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (5, None)
+    router.embedding = MagicMock(return_value={"data": [{"embedding": [0.5, 0.6]}]})
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        _router_proxy_module(router, "sem-embed"),
+    )
+
+    cache._get_embedding(LONG_PROMPT)
+
+    sent_input = router.embedding.call_args.kwargs["input"]
+    assert LONG_PROMPT.startswith(sent_input)
+    assert _token_count("sem-embed", sent_input) == 5
+
+
+@pytest.mark.asyncio
+async def test_qdrant_async_embedding_explicit_limit_beats_deployment_limit(monkeypatch):
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    cache.embedding_model = "sem-embed"
+    cache.embedding_max_input_tokens = 3
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (8191, None)
+    router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        _router_proxy_module(router, "sem-embed"),
+    )
+
+    await cache._get_async_embedding(LONG_PROMPT)
+
+    sent_input = router.aembedding.call_args.kwargs["input"]
+    assert _token_count("sem-embed", sent_input) == 3
+
+
+@pytest.mark.asyncio
+async def test_qdrant_async_embedding_call_is_bounded(monkeypatch):
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    cache.embedding_model = "sem-embed"
+    cache.embedding_max_input_tokens = None
+    cache.embedding_timeout = 1.5
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
+    router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        _router_proxy_module(router, "sem-embed"),
+    )
+
+    await cache._get_async_embedding("What is the capital of France?")
+
+    assert router.aembedding.call_args.kwargs["timeout"] == 1.5
+    assert router.aembedding.call_args.kwargs["num_retries"] == 0
+
+
+@pytest.mark.asyncio
+async def test_qdrant_async_embedding_gives_up_on_unresponsive_endpoint(monkeypatch):
+    import asyncio
+    import time
+
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    cache.embedding_model = "sem-embed"
+    cache.embedding_max_input_tokens = None
+    cache.embedding_timeout = 0.05
+
+    async def never_responds(**kwargs):
+        await asyncio.sleep(3)
+        return {"data": [{"embedding": [0.1, 0.2]}]}
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (None, None)
+    router.aembedding = never_responds
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        _router_proxy_module(router, "sem-embed"),
+    )
+
+    started = time.monotonic()
+    with pytest.raises(asyncio.TimeoutError):
+        await cache._get_async_embedding("What is the capital of France?")
+    assert time.monotonic() - started < 1.0
+
+
+def test_qdrant_semantic_cache_defaults_embedding_timeout():
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+    from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+
+    cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    assert cache.embedding_timeout == SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+    assert SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS < 60

@@ -11,17 +11,13 @@ async function expandCostBreakdown() {
 
 describe("CostBreakdownViewer", () => {
   it("renders nothing when costBreakdown is null", () => {
-    const { container } = renderWithProviders(
-      <CostBreakdownViewer costBreakdown={null} totalSpend={0} />
-    );
+    const { container } = renderWithProviders(<CostBreakdownViewer costBreakdown={null} totalSpend={0} />);
 
     expect(container).toBeEmptyDOMElement();
   });
 
   it("renders nothing when costBreakdown is undefined", () => {
-    const { container } = renderWithProviders(
-      <CostBreakdownViewer costBreakdown={undefined} totalSpend={0} />
-    );
+    const { container } = renderWithProviders(<CostBreakdownViewer costBreakdown={undefined} totalSpend={0} />);
 
     expect(container).toBeEmptyDOMElement();
   });
@@ -38,7 +34,7 @@ describe("CostBreakdownViewer", () => {
         totalSpend={0.003}
         promptTokens={100}
         completionTokens={200}
-      />
+      />,
     );
 
     expect(screen.getByText("Cost Breakdown")).toBeInTheDocument();
@@ -58,7 +54,7 @@ describe("CostBreakdownViewer", () => {
         totalSpend={0.003}
         promptTokens={500}
         completionTokens={200}
-      />
+      />,
     );
 
     await expandCostBreakdown();
@@ -85,7 +81,7 @@ describe("CostBreakdownViewer", () => {
         totalSpend={0.00312}
         promptTokens={100}
         completionTokens={200}
-      />
+      />,
     );
 
     await expandCostBreakdown();
@@ -110,7 +106,7 @@ describe("CostBreakdownViewer", () => {
         totalSpend={0.00312}
         promptTokens={100}
         completionTokens={200}
-      />
+      />,
     );
 
     await expandCostBreakdown();
@@ -130,7 +126,7 @@ describe("CostBreakdownViewer", () => {
           },
         }}
         totalSpend={0.00012}
-      />
+      />,
     );
 
     expect(screen.getByText("Cost Breakdown")).toBeInTheDocument();
@@ -144,12 +140,12 @@ describe("CostBreakdownViewer", () => {
       <CostBreakdownViewer
         costBreakdown={{
           additional_costs: {
-            "Zero": 0,
-            "Null": null as unknown as number,
+            Zero: 0,
+            Null: null as unknown as number,
           },
         }}
         totalSpend={0}
-      />
+      />,
     );
 
     expect(container).toBeEmptyDOMElement();
@@ -170,12 +166,33 @@ describe("CostBreakdownViewer", () => {
         totalSpend={0.00312}
         promptTokens={100}
         completionTokens={200}
-      />
+      />,
     );
 
     expect(screen.queryByText("Azure Model Router Flat Cost:")).not.toBeInTheDocument();
     await expandCostBreakdown();
     expect(screen.getByText("Azure Model Router Flat Cost:")).toBeInTheDocument();
+  });
+
+  it("labels provider prompt cache line items as Prompt Cache Read/Write Cost", async () => {
+    renderWithProviders(
+      <CostBreakdownViewer
+        costBreakdown={{
+          input_cost: 0.01,
+          output_cost: 0.02,
+          cache_read_cost: 0.001,
+          cache_creation_cost: 0.002,
+        }}
+        totalSpend={0.03}
+        cacheReadTokens={100}
+        cacheCreationTokens={50}
+      />,
+    );
+
+    await expandCostBreakdown();
+
+    expect(screen.getByText("Prompt Cache Read Cost:")).toBeInTheDocument();
+    expect(screen.getByText("Prompt Cache Write Cost:")).toBeInTheDocument();
   });
 
   it("shows '(Cached)' in the header when cacheHit is true", () => {
@@ -185,13 +202,7 @@ describe("CostBreakdownViewer", () => {
       total_cost: 0.003,
     };
 
-    renderWithProviders(
-      <CostBreakdownViewer
-        costBreakdown={breakdown}
-        totalSpend={0}
-        cacheHit="true"
-      />
-    );
+    renderWithProviders(<CostBreakdownViewer costBreakdown={breakdown} totalSpend={0} cacheHit="true" />);
 
     expect(screen.getByText(/\(Cached\)/)).toBeInTheDocument();
   });
@@ -204,9 +215,7 @@ describe("CostBreakdownViewer", () => {
       discount_amount: 0.003,
     };
 
-    renderWithProviders(
-      <CostBreakdownViewer costBreakdown={breakdown} totalSpend={0.027} />
-    );
+    renderWithProviders(<CostBreakdownViewer costBreakdown={breakdown} totalSpend={0.027} />);
 
     await expandCostBreakdown();
 
@@ -221,9 +230,7 @@ describe("CostBreakdownViewer", () => {
       margin_total_amount: 0.005,
     };
 
-    renderWithProviders(
-      <CostBreakdownViewer costBreakdown={breakdown} totalSpend={0.035} />
-    );
+    renderWithProviders(<CostBreakdownViewer costBreakdown={breakdown} totalSpend={0.035} />);
 
     await expandCostBreakdown();
 

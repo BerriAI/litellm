@@ -1,11 +1,10 @@
-import NotificationManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Model, modelCreateCall } from "../networking";
 import { provider_map } from "../provider_info_helpers";
+import { ptuPickerToUtcIso } from "../../utils/ptuDatetime";
 
 export const prepareModelAddRequest = async (formValues: Record<string, any>, accessToken: string, form: any) => {
   try {
-    console.log("handling submit for formValues:", formValues);
-
     // Get model mappings and safely remove from formValues
     const modelMappings = formValues["model_mappings"] || [];
     if ("model_mappings" in formValues) {
@@ -39,10 +38,18 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
       // Handle pricing conversion before processing other fields
       // Use explicit checks to allow 0 (zero cost models for budget bypass)
-      if (formValues.input_cost_per_token !== undefined && formValues.input_cost_per_token !== null && formValues.input_cost_per_token !== "") {
+      if (
+        formValues.input_cost_per_token !== undefined &&
+        formValues.input_cost_per_token !== null &&
+        formValues.input_cost_per_token !== ""
+      ) {
         formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1000000;
       }
-      if (formValues.output_cost_per_token !== undefined && formValues.output_cost_per_token !== null && formValues.output_cost_per_token !== "") {
+      if (
+        formValues.output_cost_per_token !== undefined &&
+        formValues.output_cost_per_token !== null &&
+        formValues.output_cost_per_token !== ""
+      ) {
         formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1000000;
       }
 
@@ -52,8 +59,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         formValues.cache_read_input_token_cost !== null &&
         formValues.cache_read_input_token_cost !== ""
       ) {
-        formValues.cache_read_input_token_cost =
-          Number(formValues.cache_read_input_token_cost) / 1000000;
+        formValues.cache_read_input_token_cost = Number(formValues.cache_read_input_token_cost) / 1000000;
       } else if (
         formValues.input_cost_per_token !== undefined &&
         formValues.input_cost_per_token !== null &&
@@ -73,8 +79,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         formValues.cache_creation_input_token_cost !== null &&
         formValues.cache_creation_input_token_cost !== ""
       ) {
-        formValues.cache_creation_input_token_cost =
-          Number(formValues.cache_creation_input_token_cost) / 1000000;
+        formValues.cache_creation_input_token_cost = Number(formValues.cache_creation_input_token_cost) / 1000000;
       } else {
         delete formValues.cache_creation_input_token_cost;
       }
@@ -82,9 +87,11 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
       // Iterate through the key-value pairs in formValues
       litellmParamsObj["model"] = mapping.litellm_model;
-      console.log("formValues add deployment:", formValues);
       for (const [key, value] of Object.entries(formValues)) {
         if (value === "") {
+          continue;
+        }
+        if (key === "litellm_credential_name" && value == null) {
           continue;
         }
         // Skip the custom_pricing and pricing_model fields as they're only used for UI control
@@ -94,11 +101,9 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         if (key == "model_name") {
           litellmParamsObj["model"] = value;
         } else if (key == "custom_llm_provider") {
-          console.log("custom_llm_provider:", value);
           const providerKey = value as string;
           const mappingResult = provider_map[providerKey as keyof typeof provider_map] ?? providerKey.toLowerCase();
           litellmParamsObj["custom_llm_provider"] = mappingResult;
-          console.log("custom_llm_provider mappingResult:", mappingResult);
         } else if (key == "model") {
           continue;
         }
@@ -111,7 +116,6 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         } else if (key === "model_access_group") {
           modelInfoObj["access_groups"] = value;
         } else if (key == "mode") {
-          console.log("placing mode in modelInfo");
           modelInfoObj["mode"] = value;
 
           // remove "mode" from litellmParams
@@ -119,30 +123,28 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         } else if (key === "custom_model_name") {
           litellmParamsObj["model"] = value;
         } else if (key == "litellm_extra_params") {
-          console.log("litellm_extra_params:", value);
           let litellmExtraParams = {};
           if (value && value != undefined) {
             try {
               litellmExtraParams = JSON.parse(value);
-              if ("litellm_credential_name" in litellmExtraParams) {
-                delete litellmExtraParams.litellm_credential_name;
-              }
             } catch (error) {
-              NotificationManager.fromBackend("Failed to parse LiteLLM Extra Params: " + error);
+              toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
+            }
+            if ("litellm_credential_name" in litellmExtraParams && formValues.litellm_credential_name) {
+              delete litellmExtraParams.litellm_credential_name;
             }
             for (const [key, value] of Object.entries(litellmExtraParams)) {
               litellmParamsObj[key] = value;
             }
           }
         } else if (key == "model_info_params") {
-          console.log("model_info_params:", value);
           let modelInfoParams = {};
           if (value && value != undefined) {
             try {
               modelInfoParams = JSON.parse(value);
             } catch (error) {
-              NotificationManager.fromBackend("Failed to parse LiteLLM Extra Params: " + error);
+              toast.fromError("Failed to parse LiteLLM Extra Params: " + error);
               throw new Error("Failed to parse litellm_extra_params: " + error);
             }
             for (const [key, value] of Object.entries(modelInfoParams)) {
@@ -165,6 +167,23 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
           continue;
         }
 
+        // Handle the PTU flat-cost fields (attributed to the team via model_info)
+        else if (key === "ptu_count" || key === "cost_per_ptu_per_hour") {
+          if (value !== undefined && value !== null && value !== "") {
+            modelInfoObj[key] = Number(value);
+          }
+          continue;
+        }
+
+        // Handle the PTU effective window (DatePicker dayjs value -> ISO 8601 UTC string)
+        else if (key === "ptu_effective_from" || key === "ptu_effective_to") {
+          const iso = ptuPickerToUtcIso(value);
+          if (iso !== null) {
+            modelInfoObj[key] = iso;
+          }
+          continue;
+        }
+
         // Check if key is any of the specified API related keys
         else {
           // Add key-value pair to litellm_params dictionary
@@ -177,7 +196,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
     return deployments;
   } catch (error) {
-    NotificationManager.fromBackend("Failed to create model: " + error);
+    toast.fromError("Failed to create model: " + error);
   }
 };
 
@@ -199,13 +218,12 @@ export const handleAddModelSubmit = async (values: any, accessToken: string, for
         model_info: modelInfoObj,
       };
 
-      const response: any = await modelCreateCall(accessToken, new_model);
-      console.log(`response for model create call: ${response["data"]}`);
+      await modelCreateCall(accessToken, new_model);
     }
 
     callback && callback();
     form.resetFields();
   } catch (error) {
-    NotificationManager.fromBackend("Failed to add model: " + error);
+    toast.fromError("Failed to add model: " + error);
   }
 };

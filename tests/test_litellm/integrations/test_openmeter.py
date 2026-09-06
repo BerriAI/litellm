@@ -23,6 +23,7 @@ class TestOpenMeterIntegration:
         os.environ.pop("OPENMETER_API_KEY", None)
         os.environ.pop("OPENMETER_API_ENDPOINT", None)
         os.environ.pop("OPENMETER_EVENT_TYPE", None)
+        os.environ.pop("OPENMETER_TRUST_REQUEST_USER", None)
 
     def test_openmeter_logger_initialization(self):
         """Test that OpenMeterLogger initializes correctly with required env vars"""
@@ -32,7 +33,7 @@ class TestOpenMeterIntegration:
     def test_openmeter_logger_missing_api_key(self):
         """Test that OpenMeterLogger raises exception when API key is missing"""
         os.environ.pop("OPENMETER_API_KEY", None)
-        with pytest.raises(Exception, match="Missing keys.*OPENMETER_API_KEY"):
+        with pytest.raises(Exception, match=r"Missing keys.*OPENMETER_API_KEY"):
             OpenMeterLogger()
 
     def test_common_logic_with_string_user(self):
@@ -235,9 +236,9 @@ class TestOpenMeterIntegration:
         assert result["data"]["completion_tokens"] == 8
         assert result["data"]["total_tokens"] == 23
 
-    def test_custom_event_type(self):
+    def test_custom_event_type(self, monkeypatch):
         """Test that custom event type is used when set"""
-        os.environ["OPENMETER_EVENT_TYPE"] = "custom_event_type"
+        monkeypatch.setenv("OPENMETER_EVENT_TYPE", "custom_event_type")
 
         logger = OpenMeterLogger()
 
@@ -348,21 +349,6 @@ class TestOpenMeterIntegration:
         with pytest.raises(Exception, match="OpenMeter: user is required"):
             logger._common_logic(kwargs, response_obj)
 
-    def test_common_logic_no_metadata(self):
-        """Test that exception is raised when no metadata is available"""
-        logger = OpenMeterLogger()
-
-        kwargs = {
-            "model": "gpt-3.5-turbo",
-            "response_cost": 0.001,
-            "litellm_call_id": "test-call-id",
-            # No litellm_params at all
-        }
-
-        response_obj = {"id": "test-response-id"}
-
-        with pytest.raises(Exception, match="OpenMeter: user is required"):
-            logger._common_logic(kwargs, response_obj)
 
     def test_common_logic_integer_token_user_id(self):
         """Test that integer token user_id is converted to string"""
@@ -387,6 +373,75 @@ class TestOpenMeterIntegration:
         # Verify integer user_id is converted to string
         assert isinstance(result["subject"], str)
         assert result["subject"] == "12345"
+
+    def test_common_logic_trust_request_user_false_ignores_request_user(self, monkeypatch):
+        """OPENMETER_TRUST_REQUEST_USER=false makes the key-bound user_id win
+        over a request-supplied `user` (forge-attribution mitigation)."""
+        monkeypatch.setenv("OPENMETER_TRUST_REQUEST_USER", "false")
+        logger = OpenMeterLogger()
+
+        kwargs = {
+            "user": "forged-by-client",
+            "model": "gpt-4",
+            "response_cost": 0.002,
+            "litellm_call_id": "test-call-id",
+            "litellm_params": {
+                "metadata": {"user_api_key_user_id": "real-tenant-id"}
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+        }
+
+        result = logger._common_logic(kwargs, response_obj)
+
+        assert result["subject"] == "real-tenant-id"
+        assert result["subject"] != "forged-by-client"
+
+    def test_common_logic_trust_request_user_false_still_raises_without_key_user(self, monkeypatch):
+        """OPENMETER_TRUST_REQUEST_USER=false still raises when no
+        user_api_key_user_id is available — the request `user` is not a
+        fallback in this mode."""
+        monkeypatch.setenv("OPENMETER_TRUST_REQUEST_USER", "false")
+        logger = OpenMeterLogger()
+
+        kwargs = {
+            "user": "would-have-worked-without-the-flag",
+            "model": "gpt-3.5-turbo",
+            "response_cost": 0.001,
+            "litellm_call_id": "test-call-id",
+        }
+
+        response_obj = {"id": "test-response-id"}
+
+        with pytest.raises(Exception, match="OpenMeter: user is required"):
+            logger._common_logic(kwargs, response_obj)
+
+    def test_common_logic_trust_request_user_default_preserves_behavior(self):
+        """Default (unset OPENMETER_TRUST_REQUEST_USER) keeps request `user`
+        taking priority — backward compatibility."""
+        # OPENMETER_TRUST_REQUEST_USER intentionally unset
+        logger = OpenMeterLogger()
+
+        kwargs = {
+            "user": "request-user",
+            "model": "gpt-4",
+            "response_cost": 0.002,
+            "litellm_call_id": "test-call-id",
+            "litellm_params": {
+                "metadata": {"user_api_key_user_id": "key-user"}
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+        }
+
+        result = logger._common_logic(kwargs, response_obj)
+        assert result["subject"] == "request-user"
 
     @patch("litellm.integrations.openmeter.HTTPHandler")
     def test_integration_token_user_id_scenario(self, mock_http_handler):

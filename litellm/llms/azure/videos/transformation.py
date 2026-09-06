@@ -1,15 +1,15 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
-from litellm.types.videos.main import VideoCreateOptionalRequestParams
-from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.types.router import GenericLiteLLMParams
+from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
+    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseVideoConfig = _BaseVideoConfig
@@ -47,7 +47,7 @@ class AzureVideoConfig(OpenAIVideoConfig):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(video_create_optional_params)
 
@@ -55,8 +55,8 @@ class AzureVideoConfig(OpenAIVideoConfig):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
         """
         Validate Azure environment and set up authentication headers.
@@ -72,14 +72,12 @@ class AzureVideoConfig(OpenAIVideoConfig):
         # Use the base Azure validation method which properly handles:
         # 1. Credentials from litellm_credential_name via litellm_params
         # 2. Sets the correct "api-key" header (not "Authorization: Bearer")
-        return BaseAzureLLM._base_validate_azure_environment(
-            headers=headers, litellm_params=litellm_params
-        )
+        return BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params)
 
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """

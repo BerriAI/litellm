@@ -28,6 +28,8 @@ async def available_enterprise_users(
         premium_user_data,
         prisma_client,
     )
+    from litellm.repositories.team_repository import TeamRepository
+    from litellm.repositories.user_repository import UserRepository
 
     if prisma_client is None:
         raise HTTPException(
@@ -37,16 +39,15 @@ async def available_enterprise_users(
 
     if not premium_user:
         # check if SSO is enabled - show 5 user limit
-        from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+        from litellm.proxy.auth.auth_utils import has_user_setup_sso
 
-        if _has_user_setup_sso():
+        if has_user_setup_sso():
             premium_user_data = EnterpriseLicenseData(
                 max_users=5,
             )
 
-    # Count number of rows in LiteLLM_UserTable
-    user_count = await prisma_client.db.litellm_usertable.count()
-    team_count = await prisma_client.db.litellm_teamtable.count()
+    user_count = await UserRepository(prisma_client).count_billable_users()
+    team_count = await TeamRepository(prisma_client).count()
 
     if (
         not premium_user_data

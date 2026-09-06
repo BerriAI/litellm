@@ -6,7 +6,7 @@ OpenInference's vocabulary — compose ``["genai", "openinference", "weave"]``
 to feed a Weave backend.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import collect, json_or_none
@@ -19,18 +19,14 @@ class WeaveMapper:
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         # ``display_name`` has the form ``"{operation} {model}"``. The span
         # name already covers that, but Weave reads this attribute too.
-        "weave.display_name": lambda d: (
-            f"{d.operation.value} {d.request_model}" if d.request_model else None
-        ),
+        "weave.display_name": lambda d: f"{d.operation.value} {d.request_model}" if d.request_model else None,
         "weave.call_id": lambda d: d.identity.call_id or None,
     }
 
     # JSON-payload attributes: each builder returns the serialized blob or None.
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
         # Weave treats the response choices as the "output" payload.
-        "weave.output": lambda d: (
-            json_or_none(list(d.choices_out)) if d.choices_out else None
-        ),
+        "weave.output": lambda d: json_or_none(list(d.choices_out)) if d.choices_out else None,
     }
 
     def map(self, data: SpanData) -> AttributeMap:

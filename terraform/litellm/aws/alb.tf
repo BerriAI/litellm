@@ -3,9 +3,18 @@ resource "aws_lb" "this" {
   load_balancer_type = "application"
   internal           = false
   security_groups    = [aws_security_group.alb.id]
-  subnets            = aws_subnet.public[*].id
+  subnets            = local.public_subnet_ids
 
   idle_timeout = 120
+
+  lifecycle {
+    precondition {
+      condition     = length(local.public_subnet_ids) >= 2
+      error_message = "The ALB needs at least 2 public subnets in different AZs. Set `public_subnet_ids` when using `vpc_id`, or list at least 2 `azs` when the module creates the VPC."
+    }
+  }
+
+  tags = local.tags
 }
 
 locals {
@@ -23,7 +32,7 @@ resource "aws_lb_target_group" "gateway" {
   port        = 4000
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   health_check {
     path                = "/health/readiness"
@@ -35,6 +44,8 @@ resource "aws_lb_target_group" "gateway" {
   }
 
   deregistration_delay = 30
+
+  tags = local.tags
 }
 
 resource "aws_lb_target_group" "backend" {
@@ -42,7 +53,7 @@ resource "aws_lb_target_group" "backend" {
   port        = 4001
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   health_check {
     path                = "/health/readiness"
@@ -54,6 +65,8 @@ resource "aws_lb_target_group" "backend" {
   }
 
   deregistration_delay = 30
+
+  tags = local.tags
 }
 
 resource "aws_lb_target_group" "ui" {
@@ -61,7 +74,7 @@ resource "aws_lb_target_group" "ui" {
   port        = 3000
   protocol    = "HTTP"
   target_type = "ip"
-  vpc_id      = aws_vpc.this.id
+  vpc_id      = local.vpc_id
 
   health_check {
     path                = "/healthz"
@@ -73,6 +86,8 @@ resource "aws_lb_target_group" "ui" {
   }
 
   deregistration_delay = 30
+
+  tags = local.tags
 }
 
 # HTTP listener. When TLS is enabled this only serves a permanent
@@ -106,6 +121,8 @@ resource "aws_lb_listener" "http" {
       error_message = "ALB has no HTTPS listener. Either set `acm_certificate_arn` to enable TLS, or set `allow_plaintext_alb = true` to opt into HTTP-only (trial / dev only)."
     }
   }
+
+  tags = local.tags
 }
 
 # HTTPS listener. Only created when an ACM cert ARN is supplied — terminates
@@ -122,6 +139,8 @@ resource "aws_lb_listener" "https" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.backend.arn
   }
+
+  tags = local.tags
 }
 
 # UI exact paths (/, /favicon.ico, /ui) — priority 10.
@@ -139,6 +158,8 @@ resource "aws_lb_listener_rule" "ui_exact" {
       values = local.ui_exact_paths
     }
   }
+
+  tags = local.tags
 }
 
 # UI prefix paths (/_next/*, /litellm-asset-prefix/*, /assets/*, /ui/*) — priority 20.
@@ -156,6 +177,8 @@ resource "aws_lb_listener_rule" "ui_prefix" {
       values = local.ui_path_prefixes
     }
   }
+
+  tags = local.tags
 }
 
 # Gateway prefix rules — one per chunk-of-5 because ALB caps a path-pattern
@@ -176,4 +199,6 @@ resource "aws_lb_listener_rule" "gateway" {
       values = each.value
     }
   }
+
+  tags = local.tags
 }

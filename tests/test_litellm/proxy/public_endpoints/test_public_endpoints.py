@@ -1,11 +1,9 @@
-import os
-import sys
+import re
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -199,6 +197,186 @@ def test_anthropic_provider_fields_support_byok():
     assert field_order.index("api_base") < field_order.index(
         "api_key"
     ), "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
+
+
+def test_bedrock_mantle_provider_fields():
+    """Amazon Bedrock Mantle must be a selectable provider in the Add Model flow.
+
+    The dropdown is driven entirely by /public/providers/fields, so a missing
+    entry means Mantle cannot be added through the UI at all (regression guard
+    for LIT-3885). The credential fields must match what the backend actually
+    honors: an optional bearer api_key (BYOK), the AWS SigV4 chain, a region,
+    and an api_base override.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    mantle = next((p for p in providers if p["provider"] == "BedrockMantle"), None)
+    assert mantle is not None, "Bedrock Mantle provider entry not found"
+
+    # provider must equal the UI provider_map key so the model dropdown resolves
+    # bedrock_mantle models; litellm_provider must be the backend slug.
+    assert mantle["provider_display_name"] == "Amazon Bedrock Mantle"
+    assert mantle["litellm_provider"] == "bedrock_mantle"
+    assert mantle["default_model_placeholder"].startswith("bedrock_mantle/")
+
+    fields_by_key = {f["key"]: f for f in mantle["credential_fields"]}
+
+    # Bearer-token auth is BYOK: optional and masked.
+    assert "api_key" in fields_by_key
+    assert fields_by_key["api_key"]["required"] is False
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    # AWS SigV4 fallback credentials.
+    assert fields_by_key["aws_access_key_id"]["field_type"] == "password"
+    assert fields_by_key["aws_secret_access_key"]["field_type"] == "password"
+    assert "aws_region_name" in fields_by_key
+
+    # api_base override so admins can target a custom Mantle host without env access.
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+
+def test_vllm_provider_display_names_are_distinct():
+    """Hosted and local vLLM must not share a dropdown label.
+
+    The Add Model provider dropdown is driven by /public/providers/fields.
+    Both entries previously rendered as near-identical "vllm"/"Vllm" rows
+    with the same logo, so admins could not tell them apart.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    hosted = next((p for p in providers if p["provider"] == "Hosted_Vllm"), None)
+    local = next((p for p in providers if p["provider"] == "VLLM"), None)
+    assert hosted is not None, "Hosted vLLM provider entry not found"
+    assert local is not None, "Local vLLM provider entry not found"
+
+    assert hosted["provider_display_name"] == "Hosted vLLM"
+    assert local["provider_display_name"] == "Local vLLM"
+    assert hosted["provider_display_name"].casefold() != local["provider_display_name"].casefold()
+    assert hosted["litellm_provider"] == "hosted_vllm"
+    assert local["litellm_provider"] == "vllm"
+
+
+def test_nvidia_riva_provider_fields():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    riva = next((p for p in providers if p["provider"] == "NVIDIA_RIVA"), None)
+    assert riva is not None, "NVIDIA Riva provider entry not found"
+
+    assert riva["provider_display_name"] == "Nvidia Riva"
+    assert riva["litellm_provider"] == LlmProviders.NVIDIA_RIVA.value
+    assert riva["default_model_placeholder"].startswith("nvidia_riva/")
+
+    fields_by_key = {f["key"]: f for f in riva["credential_fields"]}
+
+    assert fields_by_key["api_base"]["required"] is True
+    assert fields_by_key["api_base"]["field_type"] == "text"
+
+    assert fields_by_key["api_key"]["required"] is False
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert "nvcf_function_id" in fields_by_key
+    assert fields_by_key["nvcf_function_id"]["required"] is False
+
+
+def test_cognition_provider_fields():
+    """Cognition must be selectable in the Add Model flow (LIT-5348).
+
+    The dropdown is driven entirely by /public/providers/fields, so without an
+    entry here admins have to fall back to the generic OpenAI-compatible route,
+    which is exactly the provider identity mix-up this feature removes.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    cognition = next((p for p in providers if p["provider"] == "Cognition"), None)
+    assert cognition is not None, "Cognition provider entry not found"
+
+    assert cognition["provider_display_name"] == "Cognition"
+    assert cognition["litellm_provider"] == "cognition"
+    assert cognition["default_model_placeholder"].startswith("cognition/")
+
+    fields_by_key = {f["key"]: f for f in cognition["credential_fields"]}
+
+    assert fields_by_key["api_key"]["required"] is True
+    assert fields_by_key["api_key"]["field_type"] == "password"
+
+    assert fields_by_key["api_base"]["field_type"] == "text"
+    assert fields_by_key["api_base"]["required"] is False
+
+
+def test_google_ai_studio_provider_fields_expose_api_base():
+    """The Google AI Studio (gemini) credential form must let admins set a custom
+    api_base so they can point at a Gemini-compatible gateway (e.g. a self-hosted
+    proxy at /v1beta) without env var access.
+
+    The runtime gemini provider already supports custom api_base via
+    `vertex_llm_base._check_custom_proxy`; the UI just needs to expose the field.
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    google_ai = next(
+        (p for p in providers if p["provider"] == "Google_AI_Studio"), None
+    )
+    assert google_ai is not None, "Google_AI_Studio provider entry not found"
+    assert google_ai["litellm_provider"] == "gemini"
+
+    fields_by_key = {f["key"]: f for f in google_ai["credential_fields"]}
+    assert "api_key" in fields_by_key
+    assert "api_base" in fields_by_key, (
+        "Google_AI_Studio provider form must expose api_base so admins can "
+        "point at a Gemini-compatible gateway without env var access."
+    )
+
+    api_base_field = fields_by_key["api_base"]
+    assert api_base_field["required"] is False
+    assert api_base_field["field_type"] == "text"
+    # default_value MUST be null (not the canonical URL): saving it as the
+    # default would persist v1beta into every credential record and bypass
+    # `_get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
+    # placeholder shows the canonical URL so users still get the visual hint.
+    # (See greptileai threads on PR #30419.)
+    assert api_base_field["default_value"] is None
+    assert (
+        api_base_field["placeholder"]
+        == "https://generativelanguage.googleapis.com/v1beta"
+    )
+
+    # UI forms render fields in credential_fields order; api_base should come
+    # first so an admin sees the URL override before the key field (matches
+    # OpenAI and Anthropic conventions).
+    field_order = [f["key"] for f in google_ai["credential_fields"]]
+    assert field_order.index("api_base") < field_order.index(
+        "api_key"
+    ), "api_base must appear before api_key in credential_fields."
 
 
 def test_public_model_hub_with_healthy_model():
@@ -488,6 +666,7 @@ def test_public_agent_hub_rewrites_upstream_url_to_proxy():
 
     mock_registry = MagicMock()
     mock_registry.get_public_agent_list.return_value = [agent]
+    mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
 
     with (
         patch("litellm.public_agent_groups", ["agent-123"]),
@@ -504,6 +683,57 @@ def test_public_agent_hub_rewrites_upstream_url_to_proxy():
     card = payload[0]
     assert upstream_url not in card.get("url", "")
     assert card["url"].endswith("/a2a/agent-123")
+
+
+def test_public_agent_hub_serializes_http_security_scheme_without_bearer_format():
+    """Regression: agents created through the UI carry an auto-generated
+    ``securitySchemes.LiteLLMKey`` of ``{"type": "http", "scheme": "bearer"}``
+    with no ``bearerFormat``. The endpoint response_model must accept this
+    optional-field-omitted scheme; otherwise response validation raises and
+    /public/agent_hub returns 500, which the frontend swallows into an empty
+    list and hides the Agent Hub tab."""
+    from litellm.types.agents import AgentResponse
+
+    agent = AgentResponse(
+        agent_id="agent-123",
+        agent_name="public-agent",
+        agent_card_params={
+            "name": "public-agent",
+            "url": "https://upstream.internal.example.com/a2a",
+            "securitySchemes": {
+                "LiteLLMKey": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "LiteLLM virtual key",
+                }
+            },
+        },
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    mock_registry = MagicMock()
+    mock_registry.get_public_agent_list.return_value = [agent]
+    mock_registry.ids_for_agent = MagicMock(side_effect=lambda agent_id: frozenset({agent_id}))
+
+    with (
+        patch("litellm.public_agent_groups", ["agent-123"]),
+        patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+            mock_registry,
+        ),
+    ):
+        response = client.get("/public/agent_hub")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert len(payload) == 1
+    scheme = payload[0]["securitySchemes"]["LiteLLMKey"]
+    assert scheme["type"] == "http"
+    assert scheme["scheme"] == "bearer"
+    assert "bearerFormat" not in scheme
 
 
 def test_public_agent_hub_returns_empty_when_no_public_groups():
@@ -525,6 +755,45 @@ def test_public_agent_hub_returns_empty_when_no_public_groups():
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+# ---------------------------------------------------------------------------
+# /public/agents/fields
+# ---------------------------------------------------------------------------
+
+
+def test_bedrock_agentcore_runtime_arn_validation_pattern_accepts_full_resource_path():
+    """Regression for LIT-6737: the AgentCore agent_runtime_arn field's
+    validation_pattern must accept a complete runtime ARN whose resource part
+    is itself multi-segment (``runtime/<runtime-id>``), and reject the exact
+    truncated shape a naive split("/")-by-position parse used to produce (the
+    ARN cut off right after the ``runtime`` resource type).
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/agents/fields")
+    assert response.status_code == 200
+    agents = response.json()
+
+    bedrock_agentcore = next((a for a in agents if a["agent_type"] == "bedrock_agentcore"), None)
+    assert bedrock_agentcore is not None, "bedrock_agentcore agent type not found"
+    assert bedrock_agentcore["model_template"] == "bedrock/agentcore/{agent_runtime_arn}"
+
+    fields_by_key = {f["key"]: f for f in bedrock_agentcore["credential_fields"]}
+    arn_field = fields_by_key["agent_runtime_arn"]
+    assert arn_field["required"] is True
+    assert arn_field["include_in_litellm_params"] is False
+
+    pattern = arn_field.get("validation_pattern")
+    assert pattern, "agent_runtime_arn must ship a validation_pattern so the UI can reject a truncated ARN"
+
+    full_arn = "arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime/hosted_agent_4vm3i-BaTdfOELAs"
+    truncated_arn = "arn:aws:bedrock-agentcore:eu-central-1:123456789012:runtime"
+
+    assert re.match(pattern, full_arn), "the validator must accept a complete runtime ARN"
+    assert not re.match(pattern, truncated_arn), "the validator must reject the truncated ARN"
 
 
 # ---------------------------------------------------------------------------
@@ -767,3 +1036,294 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
     assert response.status_code == 200
     assert response.json() == []
     app.dependency_overrides.clear()
+
+
+def test_public_mcp_hub_does_not_expose_upstream_url():
+    """Regression: /public/mcp_hub is unauthenticated, so the gateway-internal
+    upstream url must never appear in its response even when the server has one."""
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    from litellm.proxy._types import MCPTransport
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+    client = TestClient(app)
+
+    secret_url = "https://internal-only.example.com/mcp"
+    server = MCPServer(
+        server_id="listed",
+        name="listed",
+        server_name="listed",
+        url=secret_url,
+        transport=MCPTransport.http,
+        available_on_public_internet=True,
+    )
+
+    mock_manager = MagicMock()
+    mock_manager.get_public_mcp_servers.return_value = [server]
+
+    with (
+        patch("litellm.public_mcp_servers", ["listed"]),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        response = client.get("/public/mcp_hub")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [item["server_id"] for item in data] == ["listed"]
+    assert all("url" not in item for item in data)
+    assert secret_url not in response.text
+    app.dependency_overrides.clear()
+
+
+
+@pytest.fixture
+def reset_autorouter_presets_cache():
+    from litellm.proxy.public_endpoints.public_endpoints import _AutoRouterPresetsCache
+
+    _AutoRouterPresetsCache.presets = None
+    _AutoRouterPresetsCache.lock = None
+    yield
+    _AutoRouterPresetsCache.presets = None
+    _AutoRouterPresetsCache.lock = None
+
+
+def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    monkeypatch.setenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", "True")
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/autorouter_presets")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "anthropic_family" in payload
+    assert payload["1m_context"]["complexity_router_config"]["classifier_type"] == "heuristic_v2"
+    assert payload["1m_context"]["complexity_router_config"]["tiers"] == {
+        "SIMPLE": ["gpt-5.6-luna"],
+        "MEDIUM": ["gpt-5.6-terra"],
+        "COMPLEX": ["gpt-5.6-sol"],
+        "REASONING": ["claude-opus-5"],
+    }
+    assert payload["1m_context"]["complexity_router_config"]["tier_model_configs"] == {
+        "REASONING": [{"model_name": "claude-opus-5", "litellm_params": {"reasoning_effort": "high"}}]
+    }
+    for preset in payload.values():
+        assert isinstance(preset["label"], str)
+        assert isinstance(preset["description"], str)
+        assert "tiers" in preset["complexity_router_config"]
+
+
+@pytest.mark.asyncio
+async def test_get_autorouter_presets_fetches_once_per_process(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    from litellm.proxy.public_endpoints.public_endpoints import (
+        _AUTOROUTER_PRESETS_ADAPTER,
+        get_autorouter_presets,
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    remote = _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+        {
+            "remote_only": {
+                "label": "Remote Only",
+                "description": "from the remote catalog",
+                "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}},
+            }
+        }
+    )
+    calls = []
+
+    async def fake_fetch(url):
+        calls.append(url)
+        return remote
+
+    first = await get_autorouter_presets(url="https://example.test/presets.json", fetch=fake_fetch)
+    second = await get_autorouter_presets(url="https://example.test/presets.json", fetch=fake_fetch)
+
+    assert first == remote
+    assert second == remote
+    assert calls == ["https://example.test/presets.json"]
+
+
+@pytest.mark.asyncio
+async def test_get_autorouter_presets_single_flight_on_concurrent_cold_start(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    import asyncio
+
+    from litellm.proxy.public_endpoints.public_endpoints import (
+        _AUTOROUTER_PRESETS_ADAPTER,
+        get_autorouter_presets,
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    remote = _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+        {
+            "remote_only": {
+                "label": "Remote Only",
+                "description": "from the remote catalog",
+                "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}},
+            }
+        }
+    )
+    calls = []
+
+    async def slow_fetch(url):
+        calls.append(url)
+        await asyncio.sleep(0.05)
+        return remote
+
+    results = await asyncio.gather(
+        get_autorouter_presets(url="https://example.test/presets.json", fetch=slow_fetch),
+        get_autorouter_presets(url="https://example.test/presets.json", fetch=slow_fetch),
+        get_autorouter_presets(url="https://example.test/presets.json", fetch=slow_fetch),
+    )
+
+    assert all(result == remote for result in results)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_autorouter_presets_caches_bundled_fallback_on_remote_failure(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    from litellm.proxy.public_endpoints.public_endpoints import get_autorouter_presets
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    calls = []
+
+    async def broken_fetch(url):
+        calls.append(url)
+        raise ValueError("remote catalog unavailable")
+
+    first = await get_autorouter_presets(url="https://example.test/presets.json", fetch=broken_fetch)
+    second = await get_autorouter_presets(url="https://example.test/presets.json", fetch=broken_fetch)
+
+    assert "anthropic_family" in first
+    assert second == first
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_autorouter_presets_adapter_rejects_wrong_shapes():
+    from pydantic import ValidationError
+
+    from litellm.proxy.public_endpoints.public_endpoints import _AUTOROUTER_PRESETS_ADAPTER
+
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python({"bad": {"label": "no description or config"}})
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(["not", "a", "mapping"])
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+            {"no_tiers": {"label": "L", "description": "D", "complexity_router_config": {}}}
+        )
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+            {
+                "missing_builtin_tier": {
+                    "label": "L",
+                    "description": "D",
+                    "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"]}},
+                }
+            }
+        )
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+            {
+                "unknown_tier_name": {
+                    "label": "L",
+                    "description": "D",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": ["m1"],
+                            "MEDIUM": ["m2"],
+                            "COMPLEX": ["m3"],
+                            "REASONING": ["m4"],
+                            "ULTRA": ["m5"],
+                        }
+                    },
+                }
+            }
+        )
+    with pytest.raises(ValidationError):
+        _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+            {
+                "bad_tiers": {
+                    "label": "L",
+                    "description": "D",
+                    "complexity_router_config": {"tiers": "not-a-mapping"},
+                }
+            }
+        )
+
+
+def test_get_autorouter_presets_passes_unknown_catalog_fields_through(
+    monkeypatch, reset_autorouter_presets_cache
+):
+    from litellm.proxy.public_endpoints.public_endpoints import (
+        _AUTOROUTER_PRESETS_ADAPTER,
+        _AutoRouterPresetsCache,
+    )
+
+    monkeypatch.delenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", raising=False)
+    _AutoRouterPresetsCache.presets = _AUTOROUTER_PRESETS_ADAPTER.validate_python(
+        {
+            "future_preset": {
+                "label": "Future",
+                "description": "carries fields this proxy version does not know",
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]},
+                    "future_config_knob": 3,
+                },
+                "icon": "sparkles",
+            }
+        }
+    )
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/autorouter_presets")
+
+    assert response.status_code == 200
+    served = response.json()["future_preset"]
+    assert served["icon"] == "sparkles"
+    assert served["complexity_router_config"]["future_config_knob"] == 3
+    assert served["complexity_router_config"]["tiers"]["SIMPLE"] == ["m1"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypatch):
+    import litellm.llms.custom_httpx.http_handler as http_handler_module
+    from litellm.proxy.public_endpoints.public_endpoints import _fetch_remote_autorouter_presets
+
+    catalog = {
+        "remote_only": {
+            "label": "Remote Only",
+            "description": "from the remote catalog",
+            "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}},
+        }
+    }
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(return_value=catalog)
+    client = MagicMock()
+    client.get = AsyncMock(return_value=response)
+    monkeypatch.setattr(http_handler_module, "get_async_httpx_client", lambda llm_provider: client)
+
+    presets = await _fetch_remote_autorouter_presets("https://example.test/presets.json")
+    assert presets["remote_only"].label == "Remote Only"
+    response.raise_for_status.assert_called_once()
+
+    response.json = MagicMock(return_value={})
+    with pytest.raises(ValueError, match="empty"):
+        await _fetch_remote_autorouter_presets("https://example.test/presets.json")

@@ -15,7 +15,7 @@ fetcher dispatches by ``discovery_mode``:
 """
 
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Final
 from urllib.parse import urlencode
 
 from litellm._logging import verbose_proxy_logger
@@ -37,13 +37,13 @@ class DiscoveryMode(str, Enum):
 # Paths the pure-A2A fetcher tries in order. The first two are the current and
 # previous A2A spec locations; ``/agent.json`` is a non-standard root fallback
 # some agents still serve.
-AGENT_CARD_WELL_KNOWN_PATHS: Tuple[str, ...] = (
+AGENT_CARD_WELL_KNOWN_PATHS: Final[tuple[str, ...]] = (
     "/.well-known/agent-card.json",
     "/.well-known/agent.json",
     "/agent.json",
 )
 
-DEFAULT_DISCOVERY_TIMEOUT_SECONDS = 10.0
+DEFAULT_DISCOVERY_TIMEOUT_SECONDS: Final = 10.0
 
 
 class AgentCardDiscoveryError(Exception):
@@ -55,8 +55,8 @@ def _normalize_base_url(base_url: str) -> str:
 
 
 def _build_langgraph_platform_paths(
-    params: Optional[Dict[str, Any]],
-) -> Tuple[str, ...]:
+    params: dict[str, Any] | None,
+) -> tuple[str, ...]:
     """Build the paths to try for LangGraph Platform discovery.
 
     LangGraph serves the card at ``/.well-known/agent-card.json`` with the
@@ -64,18 +64,14 @@ def _build_langgraph_platform_paths(
     A2A path variants (with the same query string appended) so we degrade
     gracefully if a deployment uses an older spec name.
     """
-    assistant_id = (params or {}).get("assistant_id")
+    assistant_id: Final = (params or {}).get("assistant_id")
     if not assistant_id:
-        raise AgentCardDiscoveryError(
-            "langgraph_platform discovery requires params.assistant_id"
-        )
-    query = urlencode({"assistant_id": str(assistant_id)})
+        raise AgentCardDiscoveryError("langgraph_platform discovery requires params.assistant_id")
+    query: Final = urlencode({"assistant_id": str(assistant_id)})
     return tuple(f"{path}?{query}" for path in AGENT_CARD_WELL_KNOWN_PATHS)
 
 
-def _paths_for_mode(
-    mode: DiscoveryMode, params: Optional[Dict[str, Any]]
-) -> Tuple[str, ...]:
+def _paths_for_mode(mode: DiscoveryMode, params: dict[str, Any] | None) -> tuple[str, ...]:
     if mode == DiscoveryMode.WELL_KNOWN_FALLBACK:
         return AGENT_CARD_WELL_KNOWN_PATHS
     if mode == DiscoveryMode.LANGGRAPH_PLATFORM:
@@ -87,10 +83,10 @@ async def fetch_well_known_card(
     base_url: str,
     *,
     discovery_mode: DiscoveryMode = DiscoveryMode.WELL_KNOWN_FALLBACK,
-    params: Optional[Dict[str, Any]] = None,
+    params: dict[str, Any] | None = None,
     timeout: float = DEFAULT_DISCOVERY_TIMEOUT_SECONDS,
-    headers: Optional[Dict[str, str]] = None,
-) -> Dict[str, Any]:
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """
     Fetch an agent card from ``base_url`` using the strategy chosen by
     ``discovery_mode``. Returns the parsed JSON from the first path that
@@ -103,14 +99,14 @@ async def fetch_well_known_card(
     if not base_url:
         raise AgentCardDiscoveryError("base_url is required")
 
-    normalized = _normalize_base_url(base_url)
-    paths = _paths_for_mode(discovery_mode, params)
-    client = get_async_httpx_client(
+    normalized: Final = _normalize_base_url(base_url)
+    paths: Final = _paths_for_mode(discovery_mode, params)
+    client: Final = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.A2A,
         params={"timeout": timeout},
     )
 
-    last_error: Optional[str] = None
+    last_error: str | None = None
     for path in paths:
         url = f"{normalized}{path}"
         try:
@@ -126,27 +122,23 @@ async def fetch_well_known_card(
             # dict so production (``user_url_validation=True``) doesn't 500.
             response = await async_safe_get(client, url, headers=headers or {})
         except SSRFError as exc:
-            last_error = f"{url}: {exc!s}"
-            verbose_proxy_logger.debug(
-                "A2A discovery blocked by SSRF guard for %s: %s", url, exc
-            )
+            last_error = f"{url}: {exc}"
+            verbose_proxy_logger.debug("A2A discovery blocked by SSRF guard for %s: %s", url, exc)
             continue
         except Exception as exc:
-            last_error = f"{url}: {exc!s}"
+            last_error = f"{url}: {exc}"
             verbose_proxy_logger.debug("A2A discovery failed for %s: %s", url, exc)
             continue
 
         if response.status_code >= 400:
             last_error = f"{url}: HTTP {response.status_code}"
-            verbose_proxy_logger.debug(
-                "A2A discovery HTTP %s for %s", response.status_code, url
-            )
+            verbose_proxy_logger.debug("A2A discovery HTTP %s for %s", response.status_code, url)
             continue
 
         try:
             card = response.json()
         except Exception as exc:
-            last_error = f"{url}: invalid JSON ({exc!s})"
+            last_error = f"{url}: invalid JSON ({exc})"
             continue
 
         if not isinstance(card, dict):
@@ -157,6 +149,5 @@ async def fetch_well_known_card(
         return card
 
     raise AgentCardDiscoveryError(
-        f"Could not fetch agent card from {base_url} (mode={discovery_mode.value}). "
-        f"Last error: {last_error}"
+        f"Could not fetch agent card from {base_url} (mode={discovery_mode.value}). Last error: {last_error}"
     )

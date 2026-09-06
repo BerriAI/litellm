@@ -7,7 +7,7 @@ apply to a given request based on team alias, key alias, and model.
 Policies are matched via policy_attachments which define WHERE each policy applies.
 """
 
-from typing import Dict, List, Optional
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -26,11 +26,11 @@ class PolicyMatcher:
     """
 
     @staticmethod
-    def matches_pattern(value: Optional[str], patterns: List[str]) -> bool:
+    def matches_pattern(value: str | None, patterns: list[str]) -> bool:
         """
         Check if a value matches any of the given patterns.
 
-        Uses the existing RouteChecks._route_matches_wildcard_pattern helper.
+        Uses the existing RouteChecks.route_matches_wildcard_pattern helper.
 
         Args:
             value: The value to check (e.g., team alias, key alias, model)
@@ -45,9 +45,7 @@ class PolicyMatcher:
 
         for pattern in patterns:
             # Use existing wildcard pattern matching helper
-            if RouteChecks._route_matches_wildcard_pattern(
-                route=value, pattern=pattern
-            ):
+            if RouteChecks.route_matches_wildcard_pattern(route=value, pattern=pattern):
                 return True
 
         return False
@@ -83,14 +81,12 @@ class PolicyMatcher:
 
         # Check tags (only if scope specifies tags)
         # Unlike teams/keys/models, empty tags means "do not check" rather than "match all"
-        scope_tags = scope.get_tags()
+        scope_tags: Final = scope.get_tags()
         if scope_tags:
             if not context.tags:
                 return False
             # Match if ANY context tag matches ANY scope tag pattern
-            if not any(
-                PolicyMatcher.matches_pattern(tag, scope_tags) for tag in context.tags
-            ):
+            if not any(PolicyMatcher.matches_pattern(tag, scope_tags) for tag in context.tags):
                 return False
 
         return True
@@ -98,7 +94,7 @@ class PolicyMatcher:
     @staticmethod
     def get_matching_policies(
         context: PolicyMatchContext,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get list of policy names that match the given context via attachments.
 
@@ -112,11 +108,9 @@ class PolicyMatcher:
             get_attachment_registry,
         )
 
-        registry = get_attachment_registry()
+        registry: Final = get_attachment_registry()
         if not registry.is_initialized():
-            verbose_proxy_logger.debug(
-                "AttachmentRegistry not initialized, returning empty list"
-            )
+            verbose_proxy_logger.debug("AttachmentRegistry not initialized, returning empty list")
             return []
 
         return registry.get_attached_policies(context)
@@ -124,7 +118,7 @@ class PolicyMatcher:
     @staticmethod
     def get_matching_policies_from_registry(
         context: PolicyMatchContext,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get list of policy names that match the given context from the global registry.
 
@@ -138,10 +132,10 @@ class PolicyMatcher:
 
     @staticmethod
     def get_policies_with_matching_conditions(
-        policy_names: List[str],
+        policy_names: list[str],
         context: PolicyMatchContext,
-        policies: Optional[Dict[str, Policy]] = None,
-    ) -> List[str]:
+        policies: dict[str, Policy] | None = None,
+    ) -> list[str]:
         """
         Filter policies to only those whose conditions match the context.
 
@@ -161,20 +155,18 @@ class PolicyMatcher:
         from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
         if policies is None:
-            registry = get_policy_registry()
+            registry: Final = get_policy_registry()
             if not registry.is_initialized():
                 return []
             policies = registry.get_all_policies()
 
-        matching_policies = []
+        matching_policies: Final = []
         for policy_name in policy_names:
             policy = policies.get(policy_name)
             if policy is None:
                 continue
             # Policy matches if it has no condition OR condition evaluates to True
-            if policy.condition is None or ConditionEvaluator.evaluate(
-                policy.condition, context
-            ):
+            if policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context):
                 matching_policies.append(policy_name)
 
         return matching_policies

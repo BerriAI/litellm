@@ -5,11 +5,11 @@ Handles routing for A2A agents (models with "a2a/<agent-name>" prefix).
 Looks up agents in the registry and injects their API base URL.
 """
 
-from typing import Any, Optional
+from typing import Any, Final
 
-import litellm
 from fastapi import HTTPException
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
@@ -17,46 +17,48 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 async def route_a2a_agent_request(
     data: dict,
     route_type: str,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
-) -> Optional[Any]:
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+) -> Any | None:
     """
     Route A2A agent requests directly to litellm with injected API base.
 
     Returns None if not an A2A request (allows normal routing to continue).
     """
     # Import here to avoid circular imports
-    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
+    )
+    from litellm.proxy.common_utils.registry_read_through import (
+        get_agent_with_read_through,
     )
     from litellm.proxy.route_llm_request import (
         ROUTE_ENDPOINT_MAPPING,
         ProxyModelNotFoundError,
     )
 
-    model_name = data.get("model", "")
+    model_name: Final = data.get("model", "")
 
     # Check if this is an A2A agent request
     if not isinstance(model_name, str) or not model_name.startswith("a2a/"):
         return None
 
     # Extract agent name (e.g., "a2a/my-agent" -> "my-agent")
-    agent_name = model_name[4:]
+    agent_name: Final = model_name[4:]
 
     # Look up agent in registry
-    agent = global_agent_registry.get_agent_by_name(agent_name)
+    agent: Final = await get_agent_with_read_through(agent_name)
     if agent is None:
-        verbose_proxy_logger.error(f"[A2A] Agent '{agent_name}' not found in registry")
+        verbose_proxy_logger.error("[A2A] Agent '%s' not found in registry", agent_name)
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
-        raise ProxyModelNotFoundError(route=route_name, model_name=model_name)
+        raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
     # Verify the caller is permitted to use this agent (admins bypass the check)
-    is_admin = user_api_key_dict is not None and (
+    is_admin: Final = user_api_key_dict is not None and (
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
     )
     if not is_admin:
-        is_allowed = await AgentRequestHandler.is_agent_allowed(
+        is_allowed: Final = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
             user_api_key_auth=user_api_key_dict,
         )
@@ -68,12 +70,12 @@ async def route_a2a_agent_request(
 
     # Get API base URL from agent config
     if not agent.agent_card_params or "url" not in agent.agent_card_params:
-        verbose_proxy_logger.error(f"[A2A] Agent '{agent_name}' has no URL configured")
+        verbose_proxy_logger.error("[A2A] Agent '%s' has no URL configured", agent_name)
         route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
-        raise ProxyModelNotFoundError(route=route_name, model_name=model_name)
+        raise ProxyModelNotFoundError(route=route_name, model_name=model_name, retryable_with_model_read_through=False)
 
     # Inject API base and route to litellm
     data["api_base"] = agent.agent_card_params["url"]
-    verbose_proxy_logger.debug(f"[A2A] Routing {model_name} to {data['api_base']}")
+    verbose_proxy_logger.debug("[A2A] Routing %s to %s", model_name, data["api_base"])
 
     return getattr(litellm, f"{route_type}")(**data)

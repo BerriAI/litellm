@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -9,15 +7,12 @@ load_dotenv()
 import io
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 
-import pytest
 from litellm.llms.triton.embedding.transformation import TritonEmbeddingConfig
-import litellm
+
+from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 
 def test_split_embedding_by_shape_passes():
@@ -43,7 +38,7 @@ def test_split_embedding_by_shape_fails_with_shape_value_error():
             "data": [1, 2, 3, 4, 5, 6],
         }
     ]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='Shape must be of length'):
         TritonEmbeddingConfig.split_embedding_by_shape(
             data[0]["data"], data[0]["shape"]
         )
@@ -360,7 +355,7 @@ async def test_triton_embeddings():
         litellm.set_verbose = True
         response = await litellm.aembedding(
             model="triton/my-triton-model",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings",
+            api_base=f"{FAKE_OPENAI_API_BASE}/triton/embeddings",
             input=["good morning from litellm"],
         )
         print(f"response: {response}")

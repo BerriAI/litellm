@@ -1,15 +1,11 @@
-import os
-import sys
 from typing import List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.types.llms.openai import AllMessageValues
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
@@ -719,3 +715,132 @@ class TestMistralFileHandling:
         # Check that file_ids are modified to match Mistral's expected format
         assert result[0]["content"][1]["file_id"] == "file-12345"  # type: ignore
         assert result[0]["content"][2]["file_id"] == "file-67890"  # type: ignore
+
+
+class TestMistralStripsOutputOnlyFields:
+    """Mistral rejects unknown input fields with a 422 ``extra_forbidden``.
+
+    LiteLLM attaches ``reasoning_content`` / ``thinking_blocks`` to assistant
+    responses, so replaying an assistant turn verbatim must not forward them.
+    Regression for https://github.com/BerriAI/litellm/issues/30835.
+    """
+
+    def test_assistant_reasoning_content_is_dropped(self):
+        messages = cast(
+            List[AllMessageValues],
+            [
+                {"role": "user", "content": "Question?"},
+                {
+                    "role": "assistant",
+                    "content": "Follow-up",
+                    "reasoning_content": "Some internal reasoning text.",
+                    "thinking_blocks": [
+                        {"type": "thinking", "thinking": "step", "signature": "mistral"}
+                    ],
+                },
+            ],
+        )
+
+        result = cast(
+            List[AllMessageValues],
+            MistralConfig()._transform_messages(
+                messages=messages, model="mistral-medium-3-5"
+            ),
+        )
+
+        assistant_message = result[-1]
+        assert "reasoning_content" not in assistant_message
+        assert "thinking_blocks" not in assistant_message
+        assert assistant_message["content"] == "Follow-up"
+        assert assistant_message["role"] == "assistant"
+
+    def test_non_assistant_messages_are_untouched(self):
+        messages = cast(
+            List[AllMessageValues],
+            [{"role": "user", "content": "Question?", "reasoning_content": "noise"}],
+        )
+
+        result = cast(
+            List[AllMessageValues],
+            MistralConfig()._transform_messages(
+                messages=messages, model="mistral-medium-3-5"
+            ),
+        )
+
+        assert result[0].get("reasoning_content") == "noise"
+
+    def test_reasoning_content_dropped_when_image_present(self):
+        """The image branch returns early, so stripping must run before it."""
+        messages = cast(
+            List[AllMessageValues],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/cat.png"},
+                        },
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": "A cat.",
+                    "reasoning_content": "leaked reasoning",
+                },
+            ],
+        )
+
+        with patch.object(
+            MistralConfig,
+            "_transform_messages_sync",
+            side_effect=lambda transformed, model: transformed,
+        ):
+            result = cast(
+                List[AllMessageValues],
+                MistralConfig()._transform_messages(
+                    messages=messages, model="mistral-medium-3-5", is_async=False
+                ),
+            )
+
+        assert "reasoning_content" not in result[-1]
+
+
+def test_mistral_transform_request_hoists_tool_message_image():
+    """Images inside role:"tool" messages must be moved to a following user
+    message (Mistral rejects/ignores non-text tool content), including when
+    Mistral's own _transform_messages override takes its image handling path."""
+    data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the screenshot"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "image_url", "image_url": {"url": data_uri}}],
+            },
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-medium-2508", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    result = request["messages"]
+    assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+    tool_message = result[2]
+    assert tool_message.get("tool_call_id") == "call_1"
+    assert isinstance(tool_message.get("content"), str)
+    assert result[3].get("content") == [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": data_uri}},
+    ]

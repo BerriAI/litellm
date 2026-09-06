@@ -11,27 +11,21 @@ describe("SimpleMessageBlock", () => {
   });
 
   it("should return null when content is empty and no tool calls", () => {
-    const { container } = render(
-      <SimpleMessageBlock label="USER" content="" />
-    );
-    expect(container.innerHTML).toBe("");
+    const { container } = render(<SimpleMessageBlock label="USER" content="" />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it('should return null when content is "null" string and no tool calls', () => {
-    const { container } = render(
-      <SimpleMessageBlock label="USER" content="null" />
-    );
-    expect(container.innerHTML).toBe("");
+    const { container } = render(<SimpleMessageBlock label="USER" content="null" />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render tool calls when present", () => {
     render(
       <SimpleMessageBlock
         label="ASSISTANT"
-        toolCalls={[
-          { id: "tc1", name: "get_weather", arguments: { city: "Paris" } },
-        ]}
-      />
+        toolCalls={[{ id: "tc1", name: "get_weather", arguments: { city: "Paris" } }]}
+      />,
     );
     expect(screen.getByText("ASSISTANT")).toBeInTheDocument();
     expect(screen.getByText("get_weather")).toBeInTheDocument();
@@ -42,14 +36,10 @@ describe("SimpleMessageBlock", () => {
       <SimpleMessageBlock
         label="ASSISTANT"
         content="Let me check the weather."
-        toolCalls={[
-          { id: "tc1", name: "get_weather", arguments: { city: "Paris" } },
-        ]}
-      />
+        toolCalls={[{ id: "tc1", name: "get_weather", arguments: { city: "Paris" } }]}
+      />,
     );
-    expect(
-      screen.getByText("Let me check the weather.")
-    ).toBeInTheDocument();
+    expect(screen.getByText("Let me check the weather.")).toBeInTheDocument();
     expect(screen.getByText("get_weather")).toBeInTheDocument();
   });
 });

@@ -1,8 +1,9 @@
 # tests/test_budget_endpoints.py
 
-import os
-import sys
+import json
 import types
+from datetime import datetime, timedelta, timezone
+from typing import Final
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from fastapi.testclient import TestClient
@@ -11,10 +12,6 @@ import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import app
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, CommonProxyErrors
 
-
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
 
 
 @pytest.fixture
@@ -70,6 +67,39 @@ async def test_new_budget_success(client_and_mocks):
     assert body["updated_by"] == "test_user"
 
     mock_table.create.assert_awaited_once()
+
+
+@pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
+@pytest.mark.asyncio
+async def test_new_budget_rejects_a_duration_that_never_advances(
+    client_and_mocks, bad_duration
+):
+    """A zero-length window resets to "now", so the row is due again the moment
+    it is written and the reset job re-reads it on every tick forever."""
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(
+        "/budget/new",
+        json={"budget_id": "budget_bad", "max_budget": 10.0, "budget_duration": bad_duration},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "Invalid budget_duration" in resp.json()["detail"]["error"]
+    mock_table.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_budget_rejects_a_duration_that_never_advances(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+
+    resp = client.post(
+        "/budget/update",
+        json={"budget_id": "budget_456", "budget_duration": "0s"},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "Invalid budget_duration" in resp.json()["detail"]["error"]
+    mock_table.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -265,3 +295,129 @@ async def test_new_budget_invalid_model_max_budget(client_and_mocks, monkeypatch
     assert resp.status_code in (400, 422), resp.text
     detail = resp.json()["detail"]
     assert "model_max_budget" in str(detail) or "dictionary" in str(detail).lower()
+
+
+def _capture_update_data(mock_table):
+    captured = {}
+
+    async def capture(*, where, data):
+        captured.update(data)
+        return {**where, **data}
+
+    mock_table.update = AsyncMock(side_effect=capture)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_update_budget_recomputes_reset_at_when_duration_changes(
+    client_and_mocks,
+):
+    """
+    Regression for LIT-3362: shortening budget_duration without an explicit
+    budget_reset_at must bring the reset forward instead of leaving it pinned
+    to the previous (longer) schedule.
+    """
+    client, _, mock_table = client_and_mocks
+    captured = _capture_update_data(mock_table)
+
+    before = datetime.now(timezone.utc)
+    resp = client.post(
+        "/budget/update",
+        json={"budget_id": "budget_reset_recompute", "budget_duration": "1d"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert (
+        "budget_reset_at" in captured
+    ), "duration change must recompute budget_reset_at"
+    reset_at = captured["budget_reset_at"]
+    assert isinstance(reset_at, datetime)
+    assert reset_at > before, "recomputed reset must be in the future"
+    # "1d" resets at the next standardized day boundary, always within ~24h
+    assert reset_at <= before + timedelta(days=1, hours=1), reset_at
+    # and it must be far closer than a stale 30d schedule would have left it
+    assert reset_at < before + timedelta(days=29)
+
+
+@pytest.mark.asyncio
+async def test_update_budget_preserves_explicit_reset_at(client_and_mocks):
+    """An explicit budget_reset_at from the caller always wins over recompute."""
+    client, _, mock_table = client_and_mocks
+    captured = _capture_update_data(mock_table)
+
+    explicit = datetime(2027, 1, 1, tzinfo=timezone.utc)
+    resp = client.post(
+        "/budget/update",
+        json={
+            "budget_id": "budget_explicit_reset",
+            "budget_duration": "1d",
+            "budget_reset_at": explicit.isoformat(),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert captured["budget_reset_at"] == explicit
+
+
+@pytest.mark.asyncio
+async def test_update_budget_without_duration_leaves_reset_at_untouched(
+    client_and_mocks,
+):
+    """Updates that do not touch budget_duration must not introduce budget_reset_at."""
+    client, _, mock_table = client_and_mocks
+    captured = _capture_update_data(mock_table)
+
+    resp = client.post(
+        "/budget/update",
+        json={"budget_id": "budget_other_field", "max_budget": 200.0},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert "budget_reset_at" not in captured
+
+
+@pytest.mark.asyncio
+async def test_update_budget_duration_none_does_not_recompute(client_and_mocks):
+    """Clearing budget_duration (explicit null) must not recompute against a None duration."""
+    client, _, mock_table = client_and_mocks
+    captured = _capture_update_data(mock_table)
+
+    resp = client.post(
+        "/budget/update",
+        json={"budget_id": "budget_clear_duration", "budget_duration": None},
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert "budget_duration" in captured and captured["budget_duration"] is None
+    assert "budget_reset_at" not in captured
+
+
+@pytest.mark.asyncio
+async def test_update_budget_serializes_model_max_budget_for_prisma(
+    client_and_mocks, monkeypatch
+):
+    monkeypatch.setattr(ps, "premium_user", True)
+
+    client, _, mock_table = client_and_mocks
+    captured: Final = _capture_update_data(mock_table)
+
+    resp: Final = client.post(
+        "/budget/update",
+        json={
+            "budget_id": "budget_per_model",
+            "model_max_budget": {
+                "gpt4o": {"budget_limit": 5.0, "time_period": "1d"},
+                "glm-5.2": {"budget_limit": 7.5, "time_period": "30d"},
+            },
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    stored: Final = captured["model_max_budget"]
+    assert isinstance(stored, str), (
+        f"model_max_budget must reach prisma as a JSON string, got {type(stored).__name__}"
+    )
+    assert json.loads(stored) == {
+        "gpt4o": {"max_budget": 5.0, "budget_duration": "1d"},
+        "glm-5.2": {"max_budget": 7.5, "budget_duration": "30d"},
+    }

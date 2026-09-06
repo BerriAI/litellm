@@ -1,15 +1,13 @@
 import asyncio
 import contextlib
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, patch, call
 
 import pytest
-from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
 from litellm import DualCache
+from litellm.proxy._types import ProxyException
 from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
     AimGuardrail,
     AimGuardrailMissingSecrets,
@@ -17,9 +15,6 @@ from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
 from litellm.proxy.proxy_server import StreamingCallbackError, UserAPIKeyAuth
 from litellm.types.utils import ModelResponseStream, ModelResponse
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
@@ -101,26 +96,26 @@ async def test_block_callback(mode: str):
         ],
     }
 
-    with pytest.raises(HTTPException, match="Jailbreak detected"):
-        with patch(
-            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-            return_value=Response(
-                json={
-                    "analysis_result": {
-                        "analysis_time_ms": 212,
-                        "policy_drill_down": {},
-                        "session_entities": [],
-                    },
-                    "required_action": {
-                        "action_type": "block_action",
-                        "detection_message": "Jailbreak detected",
-                        "policy_name": "blocking policy",
-                    },
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=Response(
+            json={
+                "analysis_result": {
+                    "analysis_time_ms": 212,
+                    "policy_drill_down": {},
+                    "session_entities": [],
                 },
-                status_code=200,
-                request=Request(method="POST", url="http://aim"),
-            ),
-        ):
+                "required_action": {
+                    "action_type": "block_action",
+                    "detection_message": "Jailbreak detected",
+                    "policy_name": "blocking policy",
+                },
+            },
+            status_code=200,
+            request=Request(method="POST", url="http://aim"),
+        ),
+    ):
+        async def _call_guardrail():
             if mode == "pre_call":
                 await aim_guardrail.async_pre_call_hook(
                     data=data,
@@ -134,6 +129,140 @@ async def test_block_callback(mode: str):
                     user_api_key_dict=UserAPIKeyAuth(),
                     call_type="completion",
                 )
+
+        with pytest.raises(ProxyException, match="Jailbreak detected") as exc_info:
+            await _call_guardrail()
+
+    exc = exc_info.value
+    assert exc.code == "400"
+    assert exc.type == "invalid_request_error"
+    assert exc.param is None
+    assert exc.openai_code == "content_policy_violation"
+
+
+@pytest.mark.asyncio
+async def test_output_block_raises_proxy_exception():
+    """An output-side block is a content-policy violation, like the input block:
+    it must surface a conformant ProxyException, not a bare HTTPException whose
+    type/param serialize as the literal string "None". Regression for LIT-3751."""
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "gibberish-guard",
+                "litellm_params": {
+                    "guardrail": "aim",
+                    "mode": "post_call",
+                    "api_key": "hs-aim-key",
+                },
+            },
+        ],
+        config_file_path="",
+    )
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
+    assert len(aim_guardrails) == 1
+    aim_guardrail = aim_guardrails[0]
+
+    block_on_output = Response(
+        json={
+            "analysis_result": {"policy_drill_down": {"PII": {}}},
+            "required_action": {
+                "action_type": "block_action",
+                "detection_message": "Output blocked: leaked secret",
+                "policy_name": "blocking policy",
+            },
+        },
+        status_code=200,
+        request=Request(method="POST", url="http://aim"),
+    )
+    response = ModelResponse(
+        choices=[
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {"content": "here is the secret", "role": "assistant"},
+            }
+        ]
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=block_on_output,
+    ):
+        with pytest.raises(ProxyException, match="Output blocked") as exc_info:
+            await aim_guardrail.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "tell me a secret"}]},
+                response=response,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    exc = exc_info.value
+    assert exc.code == "400"
+    assert exc.type == "invalid_request_error"
+    assert exc.param is None
+    assert exc.openai_code == "content_policy_violation"
+
+
+@pytest.mark.asyncio
+async def test_anonymize_multimodal_rejection_raises_proxy_exception():
+    """Anonymize on multimodal input degrades to a 400 because mask-in-place would
+    drop non-text parts. That is a usage error, not a content-policy violation, so
+    it must raise a conformant ProxyException WITHOUT the content_policy_violation
+    code. Regression for LIT-3751."""
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "gibberish-guard",
+                "litellm_params": {
+                    "guardrail": "aim",
+                    "mode": "pre_call",
+                    "api_key": "hs-aim-key",
+                },
+            },
+        ],
+        config_file_path="",
+    )
+    aim_guardrails = [
+        callback for callback in litellm.callbacks if isinstance(callback, AimGuardrail)
+    ]
+    assert len(aim_guardrails) == 1
+    aim_guardrail = aim_guardrails[0]
+
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Hi my name is Brian"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                    },
+                ],
+            },
+        ],
+    }
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=response_with_detections,
+    ):
+        with pytest.raises(
+            ProxyException, match="anonymize action requested for multimodal"
+        ) as exc_info:
+            await aim_guardrail.async_pre_call_hook(
+                data=data,
+                cache=DualCache(),
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+
+    exc = exc_info.value
+    assert exc.code == "400"
+    assert exc.type == "invalid_request_error"
+    assert exc.param is None
+    assert exc.openai_code != "content_policy_violation"
 
 
 @pytest.mark.asyncio
@@ -329,7 +458,6 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
 
 @pytest.mark.asyncio
 async def test_post_call_stream__blocked_chunks(monkeypatch):
-    from litellm.proxy.proxy_server import StreamingCallbackError
 
     init_guardrails_v2(
         all_guardrails=[

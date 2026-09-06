@@ -1,4 +1,4 @@
-from typing import List
+from typing import Final
 
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -10,9 +10,7 @@ from .whisper_transformation import OpenAIWhisperAudioTranscriptionConfig
 
 
 class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         """
         Get the supported OpenAI params for the `gpt-4o-transcribe` models
         """
@@ -34,7 +32,7 @@ class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         """
         Transform the audio transcription request
         """
-        data = {"model": model, "file": audio_file, **optional_params}
+        data: Final = {"model": model, "file": audio_file, **optional_params}
 
         return AudioTranscriptionRequestData(
             data=data,

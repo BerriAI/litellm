@@ -128,9 +128,7 @@ describe("useInfiniteKeyAliases", () => {
   });
 
   it("should fetch the next page when fetchNextPage is called", async () => {
-    mockKeyAliasesCall
-      .mockResolvedValueOnce(mockPage1)
-      .mockResolvedValueOnce(mockPage2);
+    mockKeyAliasesCall.mockResolvedValueOnce(mockPage1).mockResolvedValueOnce(mockPage2);
 
     const wrapper = createWrapper();
     const { result } = renderHook(() => useInfiniteKeyAliases(2), { wrapper });
@@ -151,10 +149,10 @@ describe("useInfiniteKeyAliases", () => {
 
   it("should include search in query key so search changes refetch from page 1", async () => {
     const wrapper = createWrapper();
-    const { result, rerender } = renderHook(
-      ({ search }: { search?: string }) => useInfiniteKeyAliases(50, search),
-      { wrapper, initialProps: { search: undefined } },
-    );
+    const { result, rerender } = renderHook(({ search }: { search?: string }) => useInfiniteKeyAliases(50, search), {
+      wrapper,
+      initialProps: { search: undefined },
+    });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);

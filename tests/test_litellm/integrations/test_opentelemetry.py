@@ -1,15 +1,19 @@
 import asyncio
+import concurrent.futures
+import gc
 import json
 import os
 import sys
+import threading
 import time
 import unittest
+import weakref
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from parameterized import parameterized
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
 from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
@@ -19,13 +23,17 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+import litellm
+from litellm.integrations import opentelemetry as otel_module
 from litellm.integrations.opentelemetry import (
     OpenTelemetry,
     OpenTelemetryConfig,
+    OTELMetricAttributeFilter,
     OTELSemconvCategory,
     _normalize_team_metadata_keys,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 
 
 class TestOpenTelemetryGuardrails(unittest.TestCase):
@@ -409,6 +417,40 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
         assert (
             current_provider is existing_provider
         ), "Existing TracerProvider should be respected and not overridden"
+
+    @patch.dict(
+        os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True
+    )
+    def test_init_metrics_creates_instruments_under_their_published_names(self):
+        """
+        The v1 engine's instrument names are a public contract.
+
+        Every name here is what a backend queries: four are GenAI semantic
+        conventions and gen_ai.usage.cost is the name backends query for spend.
+        A rename is breaking for anyone charting them, so it has to be a
+        deliberate edit to the shared Metric constants and to this list, never
+        a silent drift between the v1 and v2 engines.
+        """
+        from opentelemetry import metrics
+
+        metrics.set_meter_provider(MeterProvider(metric_readers=[InMemoryMetricReader()]))
+        otel_integration = OpenTelemetry(config=OpenTelemetryConfig.from_env())
+
+        assert {
+            otel_integration._operation_duration_histogram.name,
+            otel_integration._token_usage_histogram.name,
+            otel_integration._cost_histogram.name,
+            otel_integration._time_to_first_token_histogram.name,
+            otel_integration._time_per_output_token_histogram.name,
+            otel_integration._response_duration_histogram.name,
+        } == {
+            "gen_ai.client.operation.duration",
+            "gen_ai.client.token.usage",
+            "gen_ai.usage.cost",
+            "gen_ai.server.time_to_first_token",
+            "gen_ai.server.time_per_output_token",
+            "gen_ai.client.response.duration",
+        }
 
     @patch.dict(
         os.environ, {"LITELLM_OTEL_INTEGRATION_ENABLE_METRICS": "true"}, clear=True
@@ -1803,6 +1845,22 @@ class TestOpenTelemetryHeaderSplitting(unittest.TestCase):
         self.assertEqual(
             result, {"api-key": "value1=part2", "config": "setting=enabled"}
         )
+
+    def test_accepts_any_mapping_not_only_dict(self):
+        """The parameter is typed Mapping, so a non-dict Mapping must not silently drop
+        every header and leave the exporter unauthenticated."""
+        otel = OpenTelemetry()
+        headers = MappingProxyType({"authorization": "Basic abc"})
+        self.assertEqual(otel._get_headers_dictionary(headers), {"authorization": "Basic abc"})
+
+    def test_returns_a_copy_so_the_exporter_never_aliases_the_caller(self):
+        """The result is handed to a long-lived exporter, so it must not be the caller's
+        own dict."""
+        otel = OpenTelemetry()
+        headers = {"authorization": "Basic abc"}
+        result = otel._get_headers_dictionary(headers)
+        self.assertIsNot(result, headers)
+        self.assertEqual(result, headers)
 
 
 class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
@@ -4688,6 +4746,109 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
         self.assertTrue(otel._emit_once(kwargs, "success"))
         self.assertFalse(otel._emit_once(kwargs, "success"))
 
+    def test_emit_once_accepts_list_valued_scope_part(self):
+        """Regression for LIT-3428 / LIT-3764: a list-valued ``guardrail_mode``
+        (the shape Presidio expands to with ``output_parse_pii: true``) must
+        not raise ``TypeError: unhashable type: 'list'`` when building the
+        dedupe key. Pre-fix, this call crashed inside ``dict.get``."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"])
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"]),
+            "Same list scope must dedupe to False on the second call",
+        )
+
+    def test_emit_once_distinct_list_scopes_dont_collide(self):
+        """Two different list-valued scopes on the same handler/kwargs must
+        each emit exactly once. Catches a regression where every list collapses
+        to the same key (e.g. ``str(list)`` collisions on near-identical input)."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call"]))
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"]),
+            "Distinct list scopes must produce distinct dedupe keys",
+        )
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call"]))
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, ["pre_call", "post_call"])
+        )
+
+    def test_emit_once_accepts_dict_and_set_scope_parts(self):
+        """``guardrail_mode`` can also arrive as a ``GuardrailMode`` TypedDict
+        (i.e. a plain dict at runtime). Sets are not produced today but flow
+        through the same normalization. Both must hash without raising."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        self.assertTrue(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]})
+        )
+        self.assertFalse(
+            otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"tags": ["pre", "post"]})
+        )
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, {"a", "b"}))
+
+    def test_emit_once_handles_self_referential_scope_without_recursion_error(self):
+        """``_freeze_for_dedupe`` caps recursion at ``_FREEZE_MAX_DEPTH`` and
+        falls back to ``repr`` past the cap, so a self-referential container
+        in scope must not crash ``_emit_once``. ``guardrail_mode`` cannot
+        construct such input today, but the cap is the bound that justifies
+        recursion on the logging hot path."""
+        otel = OpenTelemetry()
+        kwargs = self._build_kwargs()
+        cyclic: list = []
+        cyclic.append(cyclic)
+        self.assertTrue(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
+        self.assertFalse(otel._emit_once(kwargs, "guardrail", "pii", 1.0, cyclic))
+
+    def test_create_guardrail_span_does_not_raise_on_list_mode(self):
+        """End-to-end regression for LIT-3428: ``_create_guardrail_span``
+        must produce exactly one span (not raise ``TypeError``) when the
+        guardrail entry's ``guardrail_mode`` is a list."""
+        span_exporter = InMemorySpanExporter()
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
+
+        otel = OpenTelemetry(tracer_provider=tracer_provider)
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "litellm_params": {"custom_llm_provider": "openai", "metadata": {}},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "hidden_params": {},
+                "guardrail_information": [
+                    {
+                        "guardrail_name": "presidio-pii",
+                        "guardrail_mode": ["pre_call", "post_call"],
+                        "guardrail_response": "ok",
+                        "start_time": 1.0,
+                        "end_time": 2.0,
+                    }
+                ],
+            },
+        }
+
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+        otel._create_guardrail_span(kwargs=kwargs, context=None)
+
+        guardrail_spans = [
+            s for s in span_exporter.get_finished_spans() if s.name == "guardrail"
+        ]
+        self.assertEqual(
+            len(guardrail_spans),
+            1,
+            "List-valued guardrail_mode must emit exactly one guardrail span "
+            "across repeated lifecycle entrypoints",
+        )
+
     def test_handle_success_emits_single_litellm_request_span_on_double_call(self):
         """Sync + async callback paths firing for the same kwargs must
         result in exactly one litellm_request span."""
@@ -5301,6 +5462,8 @@ class TestEndProxySpanLitellmMetadataFallback(unittest.TestCase):
 
         otel._end_proxy_span_from_kwargs(kwargs, end_time=datetime.now())
         mock_span.end.assert_called_once()
+
+
 class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
     """team_metadata, http.route, and both model names (the user-facing
     model_group alias and the dispatched provider model) must land on the
@@ -5467,3 +5630,810 @@ class TestOpenTelemetryTeamMetadataKeysConfig(unittest.TestCase):
         ):
             cfg = OpenTelemetryConfig(baggage_team_metadata_keys=["from_arg"])
             assert cfg.baggage_team_metadata_keys == ["from_arg"]
+
+
+class TestOpenTelemetryMetricAttributeFiltering(unittest.TestCase):
+    """LIT-3600: include/exclude control over which attributes are stamped on
+    emitted metrics, to cap metric cardinality. These drive the real
+    _handle_success -> _record_metrics path through an in-memory reader and
+    read attributes straight off the recorded data points, so they fail if the
+    filtering feature is reverted and pass only when it works end to end."""
+
+    HERE = os.path.dirname(__file__)
+    POLL_INTERVAL = 0.05
+    POLL_TIMEOUT = 2.0
+    DURATION_METRIC = "gen_ai.client.operation.duration"
+    TOKEN_METRIC = "gen_ai.client.token.usage"
+
+    # High-cardinality attributes the captured fixture emits by default. Each is
+    # a member of VALID_METRIC_ATTRIBUTE_NAMES and is present on the recorded
+    # metric when no filter is configured (verified by the backward-compat test).
+    HIGH_CARDINALITY_KEYS = (
+        "hidden_params",
+        "metadata.user_api_key_hash",
+        "metadata.requester_ip_address",
+        "metadata.requester_metadata",
+        "metadata.applied_guardrails",
+    )
+    RETAINED_LOW_CARDINALITY_KEY = "gen_ai.request.model"
+
+    def _load_fixtures(self):
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_kwargs.json")
+        ) as f:
+            kwargs = json.load(f)
+        with open(
+            os.path.join(self.HERE, "open_telemetry", "data", "captured_response.json")
+        ) as f:
+            response_obj = json.load(f)
+        return kwargs, response_obj
+
+    def _record(self, attributes):
+        """Run a real success hook with metrics enabled and return the reader."""
+        metric_reader = InMemoryMetricReader()
+        meter_provider = MeterProvider(metric_readers=[metric_reader])
+        tracer_provider = TracerProvider()
+        tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
+        otel = OpenTelemetry(
+            config=OpenTelemetryConfig(
+                exporter="console", enable_metrics=True, attributes=attributes
+            ),
+            tracer_provider=tracer_provider,
+            meter_provider=meter_provider,
+        )
+        otel.tracer = tracer_provider.get_tracer(__name__)
+
+        kwargs, response_obj = self._load_fixtures()
+        start = datetime.utcnow()
+        end = start + timedelta(seconds=1)
+        otel._handle_success(kwargs, response_obj, start, end)
+        return metric_reader
+
+    def _keysets(self, reader, metric_name):
+        """Attribute-key sets, one per recorded data point of `metric_name`."""
+        deadline = time.time() + self.POLL_TIMEOUT
+        while time.time() < deadline:
+            data = reader.get_metrics_data()
+            if data and hasattr(data, "resource_metrics"):
+                for rm in data.resource_metrics:
+                    for sm in rm.scope_metrics:
+                        for m in sm.metrics:
+                            if m.name == metric_name:
+                                return [
+                                    set(dp.attributes.keys())
+                                    for dp in m.data.data_points
+                                ]
+            time.sleep(self.POLL_INTERVAL)
+        return None
+
+    def test_exclude_list_strips_high_cardinality_keys_across_metrics(self):
+        """The bug: high-cardinality metadata/hidden_params explode metric
+        cardinality. With exclude_list set, none of them reach any data point,
+        while the retained low-cardinality model attribute survives. Asserted
+        on both the duration and token-usage histograms."""
+        reader = self._record(
+            OTELMetricAttributeFilter(exclude_list=list(self.HIGH_CARDINALITY_KEYS))
+        )
+        excluded = set(self.HIGH_CARDINALITY_KEYS)
+
+        for metric_name in (self.DURATION_METRIC, self.TOKEN_METRIC):
+            keysets = self._keysets(reader, metric_name)
+            self.assertTrue(keysets, f"{metric_name} was not recorded")
+            for keys in keysets:
+                self.assertTrue(
+                    excluded.isdisjoint(keys),
+                    f"{metric_name} leaked excluded keys: {excluded & keys}",
+                )
+                self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
+
+    def test_include_list_allows_only_listed_attributes(self):
+        """An allowlist caps emitted attributes to exactly the listed set.
+        gen_ai.token.type is a structural discriminator added to the token
+        histogram after filtering, so it is the only key permitted beyond the
+        allowlist, and only on that metric."""
+        include = ["gen_ai.request.model", "gen_ai.system"]
+        reader = self._record(OTELMetricAttributeFilter(include_list=include))
+        allowed = set(include)
+
+        duration_keysets = self._keysets(reader, self.DURATION_METRIC)
+        self.assertTrue(duration_keysets, "duration metric was not recorded")
+        for keys in duration_keysets:
+            self.assertEqual(keys, allowed)
+
+        token_keysets = self._keysets(reader, self.TOKEN_METRIC)
+        self.assertTrue(token_keysets, "token-usage metric was not recorded")
+        for keys in token_keysets:
+            self.assertEqual(keys - {"gen_ai.token.type"}, allowed)
+
+    def test_no_filter_preserves_high_cardinality_keys(self):
+        """Backward compatibility: with no attributes config, every
+        high-cardinality key the fixture carries is still stamped on the
+        metric, so existing customers who rely on them are unaffected."""
+        reader = self._record(None)
+        expected = set(self.HIGH_CARDINALITY_KEYS)
+
+        for metric_name in (self.DURATION_METRIC, self.TOKEN_METRIC):
+            keysets = self._keysets(reader, metric_name)
+            self.assertTrue(keysets, f"{metric_name} was not recorded")
+            for keys in keysets:
+                self.assertTrue(
+                    expected.issubset(keys),
+                    f"{metric_name} dropped {expected - keys} by default",
+                )
+                self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
+
+    def test_proxy_callback_settings_attributes_applied_without_kwarg(self):
+        """Regression for the proxy path: the OpenTelemetry logger is constructed
+        before the proxy populates litellm.callback_settings['otel']['attributes'],
+        and without the attributes kwarg, so the filter must be resolved at record
+        time rather than at __init__. Otherwise metrics ship at full cardinality
+        (the bug the live proxy surfaced; constructing with the kwarg, or with
+        callback_settings already set, hid it)."""
+        previous = litellm.callback_settings
+        litellm.callback_settings = {}  # not yet populated when the logger is built
+        try:
+            metric_reader = InMemoryMetricReader()
+            meter_provider = MeterProvider(metric_readers=[metric_reader])
+            tracer_provider = TracerProvider()
+            tracer_provider.add_span_processor(
+                SimpleSpanProcessor(InMemorySpanExporter())
+            )
+            otel = OpenTelemetry(
+                config=OpenTelemetryConfig(exporter="console", enable_metrics=True),
+                tracer_provider=tracer_provider,
+                meter_provider=meter_provider,
+            )
+            otel.tracer = tracer_provider.get_tracer(__name__)
+            # The proxy sets this only after the logger already exists.
+            litellm.callback_settings = {
+                "otel": {
+                    "attributes": {"exclude_list": list(self.HIGH_CARDINALITY_KEYS)}
+                }
+            }
+            kwargs, response_obj = self._load_fixtures()
+            start = datetime.utcnow()
+            otel._handle_success(
+                kwargs, response_obj, start, start + timedelta(seconds=1)
+            )
+        finally:
+            litellm.callback_settings = previous
+
+        excluded = set(self.HIGH_CARDINALITY_KEYS)
+        for metric_name in (self.DURATION_METRIC, self.TOKEN_METRIC):
+            keysets = self._keysets(metric_reader, metric_name)
+            self.assertTrue(keysets, f"{metric_name} was not recorded")
+            for keys in keysets:
+                self.assertTrue(
+                    excluded.isdisjoint(keys),
+                    f"{metric_name} leaked {excluded & keys} via callback_settings",
+                )
+                self.assertIn(self.RETAINED_LOW_CARDINALITY_KEY, keys)
+
+    def test_callback_settings_validation_failure_is_not_sticky(self):
+        """On the lazy callback_settings path a validation failure must not cache
+        the bad config. Once the operator corrects
+        callback_settings['otel']['attributes'], the next record resolves the
+        fixed filter instead of re-raising the stale error until a restart."""
+        previous = litellm.callback_settings
+        litellm.callback_settings = {
+            "otel": {
+                "attributes": {
+                    "include_list": ["gen_ai.system"],
+                    "exclude_list": ["hidden_params"],
+                }
+            }
+        }
+        try:
+            otel = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
+            attrs = {"gen_ai.system": "openai", "hidden_params": "{}"}
+
+            with self.assertRaises(ValueError):
+                otel._filter_metric_attributes(attrs)
+
+            litellm.callback_settings = {
+                "otel": {"attributes": {"exclude_list": ["hidden_params"]}}
+            }
+            filtered = otel._filter_metric_attributes(attrs)
+        finally:
+            litellm.callback_settings = previous
+
+        self.assertEqual(filtered, {"gen_ai.system": "openai"})
+
+    def test_include_and_exclude_together_raise_value_error(self):
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console",
+                    attributes=OTELMetricAttributeFilter(
+                        include_list=["gen_ai.system"],
+                        exclude_list=["hidden_params"],
+                    ),
+                )
+            )
+
+    def test_unknown_include_name_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console",
+                    attributes=OTELMetricAttributeFilter(
+                        include_list=["not.a.real.attribute"]
+                    ),
+                )
+            )
+
+    def test_unknown_exclude_name_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console",
+                    attributes=OTELMetricAttributeFilter(
+                        exclude_list=["metadata.does_not_exist"]
+                    ),
+                )
+            )
+
+    def test_dict_attributes_kwarg_path_validates(self):
+        """The YAML/kwargs entry point (a plain dict) flows through
+        _build_metric_attribute_filter and hits the same validation."""
+        with self.assertRaises(ValueError):
+            OpenTelemetry(
+                attributes={
+                    "include_list": ["gen_ai.system"],
+                    "exclude_list": ["hidden_params"],
+                }
+            )
+
+    def test_no_filter_returns_attrs_object_unchanged(self):
+        """The no-config path is a hot-path no-op: it returns the same dict
+        object, so default emission pays zero copy cost. Locking identity makes
+        a future refactor that always copies/filters trip here."""
+        otel = OpenTelemetry(config=OpenTelemetryConfig(exporter="console"))
+        attrs = {"gen_ai.request.model": "m", "hidden_params": "{}"}
+        self.assertIs(otel._filter_metric_attributes(attrs), attrs)
+
+    def test_token_type_discriminator_rejected_from_either_list(self):
+        """gen_ai.token.type is a structural discriminator stamped onto the
+        input/output token series after filtering; it cannot be filtered without
+        collapsing the two series into one. Listing it in include_list or
+        exclude_list is rejected loudly at startup rather than silently ignored,
+        so an operator gets an error instead of a no-op."""
+        for attributes in (
+            OTELMetricAttributeFilter(exclude_list=["gen_ai.token.type"]),
+            OTELMetricAttributeFilter(include_list=["gen_ai.token.type"]),
+        ):
+            with self.assertRaises(ValueError):
+                OpenTelemetry(
+                    config=OpenTelemetryConfig(
+                        exporter="console", attributes=attributes
+                    )
+                )
+
+
+class TestOTELServiceTierAttributes(unittest.TestCase):
+    """The tier a request asked for and the tier the provider served must land on
+    the litellm_request span, so tier usage is segmentable in traces."""
+
+    REQUEST_KEY = "gen_ai.openai.request.service_tier"
+    RESPONSE_KEY = "gen_ai.openai.response.service_tier"
+
+    def _span_attributes(self, standard_logging_object, response_obj):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        kwargs = {
+            "model": "gpt-5-mini",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": standard_logging_object.get("model_parameters") or {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": standard_logging_object,
+        }
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+        return {call[0][0]: call[0][1] for call in mock_span.set_attribute.call_args_list}
+
+    def test_served_tier_from_response_and_requested_tier_are_stamped(self):
+        response_obj = {
+            "id": "chatcmpl-1",
+            "model": "gpt-5-mini",
+            "service_tier": "scale",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {"service_tier": "auto"},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertEqual(attributes[self.RESPONSE_KEY], "scale")
+        self.assertEqual(attributes[self.REQUEST_KEY], "auto")
+
+    def test_served_tier_read_from_usage_object(self):
+        """Anthropic reports the served tier on the usage object, not the top level."""
+        response_obj = {
+            "id": "chatcmpl-2",
+            "model": "claude-sonnet-4-5",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {"usage_object": {"service_tier": "priority"}},
+                "model_parameters": {},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertEqual(attributes[self.RESPONSE_KEY], "priority")
+        self.assertNotIn(self.REQUEST_KEY, attributes)
+
+    def test_no_tier_anywhere_stamps_nothing(self):
+        response_obj = {
+            "id": "chatcmpl-3",
+            "model": "gpt-5-mini",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertNotIn(self.RESPONSE_KEY, attributes)
+        self.assertNotIn(self.REQUEST_KEY, attributes)
+
+    def test_unknown_requested_tier_is_not_stamped(self):
+        """The requested tier is caller-controlled, so an unrecognized value is
+        dropped rather than written verbatim onto the span."""
+        response_obj = {
+            "id": "chatcmpl-4",
+            "model": "gpt-5-mini",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {"service_tier": "Z" * 5000},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertNotIn(self.REQUEST_KEY, attributes)
+
+    def test_served_tier_is_stamped_even_when_unrecognized(self):
+        """The served tier comes from the provider, not the caller, so a tier a
+        provider adds later is still stamped."""
+        response_obj = {
+            "id": "chatcmpl-5",
+            "model": "gpt-5-mini",
+            "service_tier": "tier-added-by-provider-later",
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        }
+        attributes = self._span_attributes(
+            {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "model_parameters": {},
+                "response": response_obj,
+            },
+            response_obj,
+        )
+        self.assertEqual(attributes[self.RESPONSE_KEY], "tier-added-by-provider-later")
+
+
+class TestDynamicTracerProviderCache(unittest.TestCase):
+    """Every credential-scoped TracerProvider that owns its exporter also owns a
+    BatchSpanProcessor worker thread that only stops on shutdown, so the cache holding them
+    must be bounded and must shut down whatever it drops (LIT-5437: threads accumulated
+    until pods were OOMKilled)."""
+
+    BSP_THREAD_NAME = "OtelBatchSpanProcessor"
+
+    def _logger(self, cap=3, exporter="console"):
+        logger = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True),
+            max_dynamic_tracer_providers=cap,
+        )
+        self.addCleanup(logger._tracer_provider.shutdown)
+        self.addCleanup(self._drain, logger)
+        return logger
+
+    def _drain(self, logger):
+        for entry in list(logger._tracer_provider_cache.values()):
+            entry.provider.shutdown()
+        logger._tracer_provider_cache.clear()
+
+    def _live_exporter_threads(self):
+        return [t for t in threading.enumerate() if t.name == self.BSP_THREAD_NAME]
+
+    def _wait_for_exporter_threads(self, expected, timeout=10.0):
+        """Dropped providers are shut down off-thread, so poll instead of sleeping."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            count = len(self._live_exporter_threads())
+            if count <= expected:
+                return count
+            time.sleep(0.05)
+        return len(self._live_exporter_threads())
+
+    def test_distinct_credential_sets_stay_bounded(self):
+        """One tenant per credential set must not mean one live thread per credential set."""
+        logger = self._logger(cap=3)
+        before = len(self._live_exporter_threads())
+
+        for i in range(25):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        self.assertEqual(len(logger._tracer_provider_cache), 3)
+        # Guards the thread-name constant: a rename upstream would make this read 0 and the
+        # bound assertion below would pass while measuring nothing.
+        self.assertGreaterEqual(len(self._live_exporter_threads()), 1)
+        self.assertLessEqual(self._wait_for_exporter_threads(before + 3) - before, 3)
+
+    def test_evicted_provider_is_shut_down(self):
+        """An evicted provider is stopped, not silently dropped with its thread running."""
+        logger = self._logger(cap=3)
+        before = len(self._live_exporter_threads())
+        with patch.object(otel_module, "_shutdown_tracer_provider") as mock_shutdown:
+            logger._get_tracer_with_dynamic_headers({"authorization": "Basic evict-me"})
+            evicted = next(iter(logger._tracer_provider_cache.values()))
+
+            for i in range(3):
+                logger._get_tracer_with_dynamic_headers({"authorization": f"Basic keep-{i}"})
+
+            self.assertNotIn(evicted, logger._tracer_provider_cache.values())
+            self._wait_for_call(mock_shutdown)
+            mock_shutdown.assert_called_once_with(evicted.provider)
+
+        # The patch stopped the real shutdown, so stop the victim here; leaving its
+        # exporter thread alive would perturb the thread-census assertions elsewhere.
+        evicted.provider.shutdown()
+        still_cached = len(logger._tracer_provider_cache)
+        self.assertEqual(self._wait_for_exporter_threads(before + still_cached), before + still_cached)
+
+    def _wait_for_call(self, mock_fn, timeout=10.0):
+        """The shutdown runs on a worker thread, so give it a moment to land."""
+        deadline = time.time() + timeout
+        while time.time() < deadline and not mock_fn.call_args_list:
+            time.sleep(0.05)
+
+    def test_concurrent_first_requests_build_one_provider(self):
+        """Concurrent misses on one credential set race to build; only the winner may survive,
+        and the losers must be shut down rather than orphaned with their threads running."""
+        logger = self._logger(cap=3)
+        before = len(self._live_exporter_threads())
+        headers = {"authorization": "Basic same-tenant"}
+        barrier = threading.Barrier(16)
+
+        def _request_tracer(_):
+            barrier.wait()
+            return logger._get_tracer_with_dynamic_headers(headers)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+            list(pool.map(_request_tracer, range(16)))
+
+        self.assertEqual(len(logger._tracer_provider_cache), 1)
+        self.assertEqual(self._wait_for_exporter_threads(before + 1) - before, 1)
+
+    def test_shared_exporter_instance_survives_dropped_providers(self):
+        """A caller-supplied SpanExporter is shared with the logger's own provider, so a
+        dropped provider must not shut it down and silence the whole process."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+        with logger.tracer.start_as_current_span("before"):
+            pass
+
+        for i in range(4):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        with logger.tracer.start_as_current_span("after"):
+            pass
+
+        self.assertEqual(
+            [span.name for span in shared.get_finished_spans()], ["before", "after"]
+        )
+
+    def test_mixed_ownership_cache_shuts_down_only_the_victims_that_own_their_exporter(self):
+        """Both dynamic entry points share one cache, so it can hold providers of mixed
+        ownership. Whether an evicted provider may be shut down is a property of that
+        provider, not of the request that evicted it."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+        with logger.tracer.start_as_current_span("before"):
+            pass
+
+        # Cached by the headers path, so its processor wraps the SHARED exporter.
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic shared-owner"})
+        # Evicted by the config path, which builds its OWN exporter from a named kind.
+        logger._get_tracer_with_dynamic_config(
+            OpenTelemetryConfig(exporter="console", skip_set_global=True)
+        )
+
+        with logger.tracer.start_as_current_span("after"):
+            pass
+
+        self.assertFalse(shared._stopped)
+        self.assertEqual(
+            [span.name for span in shared.get_finished_spans()], ["before", "after"]
+        )
+
+    def test_mixed_ownership_cache_still_reclaims_a_thread_owning_victim(self):
+        """The other direction of the same defect: a victim that owns a real exporter
+        thread must still be shut down even when the evicting request does not."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+        before = len(self._live_exporter_threads())
+
+        # Cached by the config path with a named kind, so it owns a BatchSpanProcessor thread.
+        logger._get_tracer_with_dynamic_config(
+            OpenTelemetryConfig(exporter="console", skip_set_global=True)
+        )
+        self.assertEqual(len(self._live_exporter_threads()) - before, 1)
+
+        # Evicted by the headers path, whose own exporter is the shared instance.
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic shared-owner"})
+
+        self.assertEqual(self._wait_for_exporter_threads(before) - before, 0)
+
+    def test_dropped_shared_exporter_provider_is_not_retained_by_an_exit_hook(self):
+        """A provider we may never shut down must not register an interpreter-exit hook.
+        The hook holds a strong reference, so the provider would be pinned for the life of
+        the process (the very leak this fixes) and would stop the shared exporter at exit."""
+        shared = InMemorySpanExporter()
+        logger = self._logger(cap=1, exporter=shared)
+
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic a"})
+        entry = next(iter(logger._tracer_provider_cache.values()))
+        self.assertFalse(entry.owns_exporter)
+        victim = weakref.ref(entry.provider)
+
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic b"})
+        del entry
+        gc.collect()
+
+        self.assertIsNone(victim(), "evicted shared-exporter provider is still referenced")
+
+    def test_provider_that_owns_its_exporter_keeps_its_exit_flush(self):
+        """The counterpart: a provider that owns a buffering processor must keep its exit
+        hook so its last batch still flushes when the process stops."""
+        logger = self._logger(cap=3)
+        logger._get_tracer_with_dynamic_headers({"authorization": "Basic owned"})
+        entry = next(iter(logger._tracer_provider_cache.values()))
+
+        self.assertTrue(entry.owns_exporter)
+        self.assertIsNotNone(entry.provider._atexit_handler)
+
+    def test_dynamic_providers_share_one_resource(self):
+        """Building the Resource scans every installed distribution's entry points, and the
+        dynamic providers reach it from the async logging path, so one logger builds it once."""
+        logger = self._logger(cap=8)
+
+        for i in range(4):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        entries = list(logger._tracer_provider_cache.values())
+        self.assertEqual(len(entries), 4)
+        self.assertEqual(len({id(entry.provider.resource) for entry in entries}), 1)
+        self.assertIs(entries[0].provider.resource, logger._litellm_resource())
+
+    def test_resource_is_memoized_per_logger_not_shared(self):
+        """Two loggers must not share a Resource; the second's service.name would be wrong."""
+        first = self._logger()
+        second = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", skip_set_global=True, service_name="svc-second")
+        )
+        self.addCleanup(second._tracer_provider.shutdown)
+
+        self.assertIsNot(first._litellm_resource(), second._litellm_resource())
+        self.assertEqual(second._litellm_resource().attributes.get("service.name"), "svc-second")
+
+
+class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
+    """A Postgres service span must name the PostgreSQL server it reached.
+
+    Without ``db.system`` and ``server.address``, the only host in the trace is
+    the loopback address of Prisma's local query engine, so the backend
+    attributes the wait to ``localhost`` and it cannot be correlated with the
+    database's own metrics.
+    """
+
+    DSN = "postgresql://llmproxy:dbpassword9090@litellm-prod.abc123.us-east-1.rds.amazonaws.com:6432/litellm?schema=reporting"
+    REPLICA_DSN = "postgresql://reader:r3ad0nly@litellm-prod-ro.abc123.us-east-1.rds.amazonaws.com/litellm"
+
+    def _service_span(self, service, call_type, dsn, error=None, replica_dsn=None):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        otel = OpenTelemetry()
+        otel.tracer = provider.get_tracer(__name__)
+        parent = otel.tracer.start_span("Received Proxy Server Request")
+        payload = ServiceLoggerPayload(
+            is_error=error is not None,
+            error=error,
+            service=service,
+            duration=0.25,
+            call_type=call_type,
+            event_metadata=None,
+        )
+        hook = otel.async_service_failure_hook if error else otel.async_service_success_hook
+        kwargs = {"error": error} if error else {}
+        env = {k: v for k, v in (("DATABASE_URL", dsn), ("DATABASE_URL_READ_REPLICA", replica_dsn)) if v}
+        with patch.dict(os.environ, env, clear=False):
+            for absent in {"DATABASE_URL", "DATABASE_URL_READ_REPLICA"} - set(env):
+                os.environ.pop(absent, None)
+            asyncio.run(
+                hook(
+                    payload=payload,
+                    parent_otel_span=parent,
+                    start_time=datetime.now(),
+                    end_time=datetime.now(),
+                    **kwargs,
+                )
+            )
+        parent.end()
+        return next(s for s in exporter.get_finished_spans() if s.name == service.value)
+
+    def test_postgres_span_names_the_database_server(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertEqual(span.attributes["db.operation.name"], "get_data")
+        self.assertEqual(
+            span.attributes["server.address"],
+            "litellm-prod.abc123.us-east-1.rds.amazonaws.com",
+        )
+        self.assertEqual(span.attributes["server.port"], 6432)
+        self.assertEqual(span.attributes["db.namespace"], "litellm|reporting")
+
+    def test_datastore_span_is_a_client_span_carrying_the_legacy_db_system(self):
+        """Datadog types a span as a database call from CLIENT kind plus
+        ``db.system``; an INTERNAL span is classified as custom work."""
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
+        self.assertEqual(span.attributes["db.system"], "postgresql")
+
+    def test_internal_service_span_stays_internal(self):
+        span = self._service_span(ServiceTypes.RESET_BUDGET_JOB, "reset_budget", self.DSN)
+        self.assertEqual(span.kind, trace.SpanKind.INTERNAL)
+        self.assertNotIn("db.system.name", span.attributes)
+        self.assertNotIn("server.address", span.attributes)
+
+    def test_existing_service_and_call_type_attributes_are_unchanged(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        self.assertEqual(span.attributes["service"], "postgres")
+        self.assertEqual(span.attributes["call_type"], "get_data")
+
+    def test_failed_postgres_span_also_names_the_database_server(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN, error="connection refused")
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
+        self.assertEqual(
+            span.attributes["server.address"],
+            "litellm-prod.abc123.us-east-1.rds.amazonaws.com",
+        )
+        self.assertEqual(span.attributes["error"], "connection refused")
+
+    def test_no_credential_from_the_dsn_lands_on_the_span(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN)
+        exported = " ".join(str(value) for value in span.attributes.values())
+        self.assertIn("litellm-prod.abc123.us-east-1.rds.amazonaws.com", exported)
+        self.assertNotIn("dbpassword9090", exported)
+        self.assertNotIn("llmproxy", exported)
+
+    def test_redis_span_does_not_borrow_the_postgres_endpoint(self):
+        span = self._service_span(ServiceTypes.REDIS, "async_set_cache", self.DSN)
+        self.assertEqual(span.attributes["db.system.name"], "redis")
+        self.assertEqual(span.kind, trace.SpanKind.CLIENT)
+        self.assertNotIn("server.address", span.attributes)
+
+    def test_configured_read_replica_suppresses_the_endpoint(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", self.DSN, replica_dsn=self.REPLICA_DSN)
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertNotIn("server.address", span.attributes)
+        self.assertNotIn("db.namespace", span.attributes)
+
+    def test_unset_database_url_leaves_the_span_without_endpoint_attributes(self):
+        span = self._service_span(ServiceTypes.DB, "get_data", None)
+        self.assertEqual(span.attributes["db.system.name"], "postgresql")
+        self.assertNotIn("server.address", span.attributes)
+
+
+class TestOpenTelemetryNonInferenceUsage(unittest.TestCase):
+    """Reading a stored response replays the usage of the call that created it, so emitting those
+    token counts again on the read's span reports the same tokens a second time. Regression tests
+    for LIT-5602, covering the legacy emitter that runs by default."""
+
+    USAGE = {"prompt_tokens": 4000, "completion_tokens": 2000, "total_tokens": 6000}
+    TOKEN_KEYS = frozenset({"gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.total_tokens"})
+    BACKGROUND_POLL = {"internal_call_origin": "background_response_cost_poll"}
+    RESPONSE_OBJ = {"id": "resp_lit5602", "model": "gpt-4o", "usage": USAGE}
+    BACKGROUND_RESPONSE_OBJ = {**RESPONSE_OBJ, "background": True}
+
+    def _kwargs(self, call_type, litellm_metadata=None):
+        return {
+            "model": "gpt-4o",
+            "call_type": call_type,
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "openai",
+                "litellm_metadata": litellm_metadata or {},
+            },
+            "standard_logging_object": {"id": "lit5602", "call_type": call_type, "metadata": {}},
+        }
+
+    def _token_attributes_on_span(self, call_type, litellm_metadata=None, response_obj=None):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        otel.set_attributes(
+            span=mock_span,
+            kwargs=self._kwargs(call_type, litellm_metadata),
+            response_obj=response_obj or dict(self.RESPONSE_OBJ),
+        )
+        return {call[0][0] for call in mock_span.set_attribute.call_args_list if call[0][0] in self.TOKEN_KEYS}
+
+    def _token_histogram_calls(self, call_type, litellm_metadata=None, response_obj=None):
+        otel = OpenTelemetry()
+        otel._operation_duration_histogram = MagicMock()
+        otel._token_usage_histogram = MagicMock()
+        otel._cost_histogram = None
+        now = datetime.now()
+        otel._record_metrics(
+            self._kwargs(call_type, litellm_metadata), response_obj or dict(self.RESPONSE_OBJ), now, now
+        )
+        return otel._token_usage_histogram.record.call_count
+
+    def _time_per_output_token_calls(self, call_type, litellm_metadata=None, response_obj=None):
+        otel = OpenTelemetry()
+        otel._time_per_output_token_histogram = MagicMock()
+        now = datetime.now()
+        otel._record_time_per_output_token_metric(
+            self._kwargs(call_type, litellm_metadata), response_obj or dict(self.RESPONSE_OBJ), now, 1.0, {}
+        )
+        return otel._time_per_output_token_histogram.record.call_count
+
+    def test_inference_call_still_reports_its_tokens_on_the_span(self):
+        self.assertEqual(self._token_attributes_on_span("acompletion"), set(self.TOKEN_KEYS))
+
+    def test_response_read_does_not_report_the_retrieved_tokens_on_the_span(self):
+        self.assertEqual(self._token_attributes_on_span("aget_responses"), set())
+
+    def test_background_cost_poll_read_still_reports_its_tokens_on_the_span(self):
+        self.assertEqual(self._token_attributes_on_span("aget_responses", self.BACKGROUND_POLL), set(self.TOKEN_KEYS))
+
+    def test_inference_call_still_records_the_token_usage_histogram(self):
+        self.assertEqual(self._token_histogram_calls("acompletion"), 2)
+
+    def test_response_read_does_not_record_the_token_usage_histogram(self):
+        self.assertEqual(self._token_histogram_calls("aget_responses"), 0)
+
+    def test_background_cost_poll_read_still_records_the_token_usage_histogram(self):
+        self.assertEqual(self._token_histogram_calls("aget_responses", self.BACKGROUND_POLL), 2)
+
+    def test_background_response_read_still_reports_its_tokens_on_the_span(self):
+        self.assertEqual(
+            self._token_attributes_on_span("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ),
+            set(self.TOKEN_KEYS),
+        )
+
+    def test_background_response_read_still_records_the_token_usage_histogram(self):
+        self.assertEqual(self._token_histogram_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 2)
+
+    def test_inference_call_still_records_time_per_output_token(self):
+        self.assertEqual(self._time_per_output_token_calls("acompletion"), 1)
+
+    def test_response_read_does_not_divide_its_latency_by_the_retrieved_token_count(self):
+        self.assertEqual(self._time_per_output_token_calls("aget_responses"), 0)
+
+    def test_background_response_read_still_records_time_per_output_token(self):
+        self.assertEqual(
+            self._time_per_output_token_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 1
+        )

@@ -2,12 +2,13 @@
 #    On success, logs events to Helicone
 import os
 import traceback
+from typing import Final
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.helicone_mock_client import (
-    should_use_helicone_mock,
     create_mock_helicone_client,
+    should_use_helicone_mock,
 )
 
 
@@ -31,15 +32,12 @@ class HeliconeLogger:
         self.is_mock_mode = should_use_helicone_mock()
         if self.is_mock_mode:
             create_mock_helicone_client()
-            verbose_logger.info(
-                "[HELICONE MOCK] Helicone logger initialized in mock mode"
-            )
+            verbose_logger.info("[HELICONE MOCK] Helicone logger initialized in mock mode")
 
         self.provider_url = "https://api.openai.com/v1"
         self.key = os.getenv("HELICONE_API_KEY")
         self.api_base = os.getenv("HELICONE_API_BASE") or "https://api.hconeai.com"
-        if self.api_base.endswith("/"):
-            self.api_base = self.api_base[:-1]
+        self.api_base = self.api_base.removesuffix("/")
 
     def claude_mapping(self, model, messages, response_obj):
         from anthropic import AI_PROMPT, HUMAN_PROMPT
@@ -55,24 +53,31 @@ class HeliconeLogger:
                 prompt += f"{HUMAN_PROMPT}{message['content']}"
         prompt += f"{AI_PROMPT}"
 
-        choice = response_obj["choices"][0]
+        choice: Final = response_obj["choices"][0]
         message = choice["message"]
 
         content = []
         if "tool_calls" in message and message["tool_calls"]:
             for tool_call in message["tool_calls"]:
+                function = tool_call.get("function")
+                custom = tool_call.get("custom")
+                if not function and not custom:
+                    continue
+                name, tool_input = (
+                    (function["name"], function["arguments"]) if function else (custom["name"], custom["input"])
+                )
                 content.append(
                     {
                         "type": "tool_use",
                         "id": tool_call["id"],
-                        "name": tool_call["function"]["name"],
-                        "input": tool_call["function"]["arguments"],
+                        "name": name,
+                        "input": tool_input,
                     }
                 )
         elif "content" in message and message["content"]:
             content = [{"type": "text", "text": message["content"]}]
 
-        claude_response_obj = {
+        claude_response_obj: Final = {
             "id": response_obj["id"],
             "type": "message",
             "role": "assistant",
@@ -106,9 +111,7 @@ class HeliconeLogger:
         if metadata is None:
             metadata = {}
 
-        proxy_headers = (
-            litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
-        )
+        proxy_headers: Final = litellm_params.get("proxy_server_request", {}).get("headers", {}) or {}
 
         for header_key in proxy_headers:
             if header_key.startswith("helicone_"):
@@ -121,46 +124,32 @@ class HeliconeLogger:
 
         return metadata
 
-    def log_success(
-        self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs
-    ):
+    def log_success(self, model, messages, response_obj, start_time, end_time, print_verbose, kwargs):
         # Method definition
         try:
-            print_verbose(
-                f"Helicone Logging - Enters logging function for model {model}"
-            )
-            litellm_params = kwargs.get("litellm_params", {})
-            custom_llm_provider = litellm_params.get("custom_llm_provider", "")
+            print_verbose(f"Helicone Logging - Enters logging function for model {model}")
+            litellm_params: Final = kwargs.get("litellm_params", {})
+            custom_llm_provider: Final = litellm_params.get("custom_llm_provider", "")
             kwargs.get("litellm_call_id", None)
             metadata = litellm_params.get("metadata", {}) or {}
             metadata = self.add_metadata_from_header(litellm_params, metadata)
 
             # Check if model is a vertex_ai model
-            is_vertex_ai = custom_llm_provider == "vertex_ai" or model.startswith(
-                "vertex_ai/"
-            )
+            is_vertex_ai: Final = custom_llm_provider == "vertex_ai" or model.startswith("vertex_ai/")
 
             model = (
                 model
-                if any(
-                    accepted_model in model
-                    for accepted_model in self.helicone_model_list
-                )
-                or is_vertex_ai
+                if any(accepted_model in model for accepted_model in self.helicone_model_list) or is_vertex_ai
                 else "gpt-3.5-turbo"
             )
-            provider_request = {"model": model, "messages": messages}
-            if isinstance(response_obj, litellm.EmbeddingResponse) or isinstance(
-                response_obj, litellm.ModelResponse
-            ):
+            provider_request: Final = {"model": model, "messages": messages}
+            if isinstance(response_obj, litellm.EmbeddingResponse) or isinstance(response_obj, litellm.ModelResponse):
                 response_obj = response_obj.json()
 
             if "claude" in model and not is_vertex_ai:
-                response_obj = self.claude_mapping(
-                    model=model, messages=messages, response_obj=response_obj
-                )
+                response_obj = self.claude_mapping(model=model, messages=messages, response_obj=response_obj)
 
-            providerResponse = {
+            providerResponse: Final = {
                 "json": response_obj,
                 "headers": {"openai-version": "2020-10-01"},
                 "status": 200,
@@ -178,21 +167,17 @@ class HeliconeLogger:
             elif "gemini" in model:
                 url = f"{self.api_base}/custom/v1/log"
                 provider_url = "https://generativelanguage.googleapis.com/v1beta"
-            headers = {
+            headers: Final = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
             }
-            start_time_seconds = int(start_time.timestamp())
-            start_time_milliseconds = int(
-                (start_time.timestamp() - start_time_seconds) * 1000
-            )
-            end_time_seconds = int(end_time.timestamp())
-            end_time_milliseconds = int(
-                (end_time.timestamp() - end_time_seconds) * 1000
-            )
-            meta = {"Helicone-Auth": f"Bearer {self.key}"}
+            start_time_seconds: Final = int(start_time.timestamp())
+            start_time_milliseconds: Final = int((start_time.timestamp() - start_time_seconds) * 1000)
+            end_time_seconds: Final = int(end_time.timestamp())
+            end_time_milliseconds: Final = int((end_time.timestamp() - end_time_seconds) * 1000)
+            meta: Final = {"Helicone-Auth": f"Bearer {self.key}"}
             meta.update(metadata)
-            data = {
+            data: Final = {
                 "providerRequest": {
                     "url": provider_url,
                     "json": provider_request,
@@ -210,12 +195,10 @@ class HeliconeLogger:
                     },
                 },  # {"seconds": .., "milliseconds": ..}
             }
-            response = litellm.module_level_client.post(url, headers=headers, json=data)
+            response: Final = litellm.module_level_client.post(url, headers=headers, json=data)
             if response.status_code == 200:
                 if self.is_mock_mode:
-                    print_verbose(
-                        "[HELICONE MOCK] Helicone Logging - Successfully mocked!"
-                    )
+                    print_verbose("[HELICONE MOCK] Helicone Logging - Successfully mocked!")
                 else:
                     print_verbose("Helicone Logging - Success!")
             else:
@@ -225,4 +208,3 @@ class HeliconeLogger:
                 print_verbose(f"Helicone Logging - Error {response.text}")
         except Exception:
             print_verbose(f"Helicone Logging Error - {traceback.format_exc()}")
-            pass

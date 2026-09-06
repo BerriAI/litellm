@@ -16,10 +16,15 @@ from litellm.integrations.otel import (  # noqa: E402
 from litellm.integrations.otel.plumbing import context as ctx_mod  # noqa: E402
 from litellm.integrations.otel.plumbing import providers  # noqa: E402
 from litellm.integrations.otel.emitter import SpanEmitter  # noqa: E402
+from litellm.integrations.otel.emitter import stamp_error  # noqa: E402
+from litellm.integrations.otel.mappers.utils import (  # noqa: E402
+    MAX_TOOL_DEFINITION_ATTRS_PER_SPAN,
+)
 from litellm.integrations.otel.model.payloads import (  # noqa: E402
     GuardrailSpanData,
     LLMCallSpanData,
     ServiceSpanData,
+    SpanError,
 )
 from litellm.integrations.otel.model.spans import SPAN_REGISTRY, SpanRole  # noqa: E402
 
@@ -55,6 +60,42 @@ def _engine(legacy_compat=True):
     provider, exporter = providers.in_memory_provider(cfg)
     tracer = providers.get_tracer(provider, "litellm-test")
     return SpanEmitter(tracer, cfg), exporter
+
+
+def test_llm_call_span_cost_breakdown():
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _payload(
+            cost_breakdown={
+                "input_cost": 0.004,
+                "output_cost": 0.006,
+                "cache_read_cost": 0.001,
+                "total_cost": 0.011,
+            }
+        )
+    )
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+    # The rolled-up total stays sourced from response_cost.
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    # Per-component breakdown now rides the span.
+    assert a[f"{LiteLLM.COST_PREFIX}input"] == 0.004
+    assert a[f"{LiteLLM.COST_PREFIX}output"] == 0.006
+    assert a[f"{LiteLLM.COST_PREFIX}cache_read"] == 0.001
+    # Unreported components are omitted, not zero-filled.
+    assert f"{LiteLLM.COST_PREFIX}margin_total_amount" not in a
+
+
+def test_tracer_scope_carries_litellm_version():
+    from litellm._version import version as litellm_version
+
+    cfg = OpenTelemetryV2Config(exporter="in_memory")
+    provider, exporter = providers.in_memory_provider(cfg)
+    tracer = providers.get_tracer(provider, "litellm-test")
+    tracer.start_span("probe").end()
+    (span,) = exporter.get_finished_spans()
+    assert span.instrumentation_scope.version == litellm_version
 
 
 def test_llm_call_span_golden():
@@ -117,6 +158,46 @@ def test_error_span_sets_status_and_error_type():
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.ERROR
     assert span.attributes["error.type"] == "RateLimitError"
+
+
+def test_stamp_error_writes_full_attribute_set_and_event():
+    engine, exporter = _engine()
+    span = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
+    result = stamp_error(
+        span, SpanError("ProxyException", "boom", code="401", stack_trace="tb", llm_provider="anthropic")
+    )
+    span.end()
+    (s,) = exporter.get_finished_spans()
+    assert result == ("ProxyException", "boom")
+    assert s.attributes["error.type"] == "ProxyException"
+    assert s.attributes["error.message"] == "boom"
+    assert s.attributes["litellm.provider.error.code"] == "401"
+    assert s.attributes["litellm.provider.error.stack_trace"] == "tb"
+    assert s.attributes["litellm.provider.error.llm_provider"] == "anthropic"
+    assert s.status.status_code is StatusCode.ERROR
+    assert [e.name for e in s.events] == ["exception"]
+
+
+def test_stamp_error_opt_outs_skip_status_and_event():
+    engine, exporter = _engine()
+    span = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
+    stamp_error(span, SpanError("ProxyException", "boom", code="401"), record_event=False, set_status=False)
+    span.end()
+    (s,) = exporter.get_finished_spans()
+    assert s.attributes["error.type"] == "ProxyException"
+    assert s.attributes["litellm.provider.error.code"] == "401"
+    assert s.status.status_code is StatusCode.UNSET
+    assert s.events == ()
+
+
+def test_stamp_error_without_type_or_message_is_noop():
+    engine, exporter = _engine()
+    span = engine.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
+    assert stamp_error(span, SpanError()) is None
+    span.end()
+    (s,) = exporter.get_finished_spans()
+    assert "error.type" not in s.attributes
+    assert s.status.status_code is StatusCode.UNSET
 
 
 def test_hierarchy_and_kinds_match_registry():
@@ -227,3 +308,135 @@ def test_guardrail_success_span_is_unset():
     )
     (span,) = exporter.get_finished_spans()
     assert span.status.status_code is StatusCode.UNSET
+
+
+def _tools_payload(count):
+    """A request declaring ``count`` tools, in the chat-completion shape."""
+    return _payload(
+        model_parameters={
+            "temperature": 0.7,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": f"tool_{i}",
+                        "description": f"description for tool {i}",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+                for i in range(count)
+            ],
+        }
+    )
+
+
+def test_many_tools_do_not_evict_core_attributes():
+    """Tool definitions must never crowd core telemetry off the span.
+
+    An agentic client declares hundreds of tools. Spelling each one out as
+    per-index attributes overruns the OTel SDK's 128-attribute span limit,
+    which evicts oldest-first and so destroys the ``gen_ai.*`` attributes
+    written before it. Capping the tool family keeps the core intact.
+    """
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(_tools_payload(127))
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a[GenAI.PROVIDER_NAME] == "openai"
+    assert a[GenAI.USAGE_INPUT_TOKENS] == 10
+    assert a[GenAI.USAGE_OUTPUT_TOKENS] == 5
+    assert a[GenAI.RESPONSE_FINISH_REASONS] == ("stop",)
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    assert a["gen_ai.usage.prompt_tokens"] == 10
+
+    assert span.dropped_attributes == 0
+    assert a[LiteLLM.TOOLS_DECLARED] == 127
+    assert a["gen_ai.tool.0.name"] == "tool_0"
+    assert "gen_ai.tool.126.name" not in a
+    assert "llm.request.functions.126.name" not in a
+
+
+def test_tool_definitions_kept_in_full_below_the_cap():
+    """A handful of tools keeps full per-index detail in both vocabularies."""
+    engine, exporter = _engine()
+    data = LLMCallSpanData.from_standard_logging_payload(_tools_payload(3))
+    engine.emit(SpanRole.LLM_CALL, data)
+    (span,) = exporter.get_finished_spans()
+    a = span.attributes
+
+    assert a[LiteLLM.TOOLS_DECLARED] == 3
+    for idx in range(3):
+        assert a[f"gen_ai.tool.{idx}.name"] == f"tool_{idx}"
+        assert a[f"gen_ai.tool.{idx}.description"] == f"description for tool {idx}"
+        assert a[f"gen_ai.tool.{idx}.parameters"]
+        assert a[f"llm.request.functions.{idx}.name"] == f"tool_{idx}"
+
+
+def _tool_span(mapper_names, tool_count):
+    """The exported LLM-call span for ``mapper_names`` and ``tool_count`` tools."""
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=True,
+        mapper_names=list(mapper_names),
+    )
+    provider, exporter = providers.in_memory_provider(cfg)
+    engine = SpanEmitter(providers.get_tracer(provider, "litellm-test"), cfg)
+    engine.emit(
+        SpanRole.LLM_CALL,
+        LLMCallSpanData.from_standard_logging_payload(_tools_payload(tool_count)),
+    )
+    (span,) = exporter.get_finished_spans()
+    return span
+
+
+def _tool_definition_keys(attributes):
+    return [
+        key
+        for key in attributes
+        if key.startswith(("gen_ai.tool.", "llm.request.functions.", "llm.tools."))
+    ]
+
+
+@pytest.mark.parametrize(
+    "mapper_names",
+    [
+        ["genai"],
+        ["genai", "openinference"],
+        ["genai", "openinference", "langfuse", "weave", "langtrace"],
+    ],
+)
+def test_tool_definitions_stay_within_one_span_wide_budget(mapper_names):
+    """Every supported composition has to leave core telemetry on the span.
+
+    Each vocabulary spells the same tools out under its own keys, so an
+    allowance handed to each mapper separately multiplies by the number of
+    configured vocabularies and reaches the attribute limit again. Arize and
+    Phoenix already layer OpenInference on top of the default two, and every
+    vendor vocabulary can be listed at once. One budget shared across them all
+    is what keeps the total bounded.
+    """
+    span = _tool_span(mapper_names, 127)
+    a = span.attributes
+
+    assert span.dropped_attributes == 0
+    assert a[GenAI.REQUEST_MODEL] == "gpt-4o"
+    assert a[GenAI.PROVIDER_NAME] == "openai"
+    assert a[GenAI.USAGE_INPUT_TOKENS] == 10
+    assert a[GenAI.USAGE_OUTPUT_TOKENS] == 5
+    assert a[f"{LiteLLM.COST_PREFIX}total"] == 0.002
+    assert a[LiteLLM.TOOLS_DECLARED] == 127
+
+    emitted = _tool_definition_keys(a)
+    assert emitted, "some tool detail should survive in every composition"
+    assert len(emitted) <= MAX_TOOL_DEFINITION_ATTRS_PER_SPAN
+
+
+def test_vendor_tool_definitions_are_truncated_not_dropped():
+    """The OpenInference vocabulary keeps its leading tools and loses the tail."""
+    a = _tool_span(["genai", "openinference"], 127).attributes
+    assert a["llm.tools.0.tool.name"] == "tool_0"
+    assert a["llm.tools.0.tool.json_schema"]
+    assert "llm.tools.126.tool.name" not in a

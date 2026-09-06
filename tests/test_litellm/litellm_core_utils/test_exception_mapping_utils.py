@@ -1,20 +1,19 @@
-import os
-import sys
 
+import httpx
+import openai
 import pytest
 
 import litellm
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
+    _get_body_error_code,
     exception_type,
     extract_and_raise_litellm_exception,
 )
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.types.utils import LlmProviders
 
 # Test cases for is_error_str_context_window_exceeded
 # Tuple format: (error_message, expected_result)
@@ -76,6 +75,18 @@ context_window_test_cases = [
         "CerebrasException - Please reduce the length of the messages or completion. Current length is 50000 while limit is 40000",
         True,
     ),
+    (
+        "Invalid 'input[0]': maximum input length is 8192 tokens.",
+        True,
+    ),
+    (
+        "OpenAIException - Error code: 400 - {'error': {'message': \"Invalid 'input[0]': maximum input length is 8192 tokens.\", 'type': 'invalid_request_error'}}",
+        True,
+    ),
+    (
+        "Invalid 'metadata': maximum input length is 512 characters.",
+        False,
+    ),
     # Negative cases (should return False)
     ("A generic API error occurred.", False),
     ("Invalid API Key provided.", False),
@@ -118,6 +129,40 @@ class TestExceptionCheckers:
         error_str = "RateLimitError: OpenAIException - You exceeded your current quota. (status code 429)"
         result = ExceptionCheckers.is_error_str_rate_limit(error_str)
         assert result is True
+
+    def test_bare_429_in_body_is_ignored_when_status_code_says_otherwise(self):
+        """A 429 echoed back inside a 400's body is not a rate limit.
+
+        Word boundaries don't help: 429 is an ordinary token id (" that" in several
+        tokenisers), so an echoed prompt_token_ids array reads as a standalone 429.
+        """
+        error_str = (
+            '{"error":{"message":"`tools` must not be an empty array",'
+            '"type":"invalid_request_error"},'
+            '"prompt_token_ids":[9906,429,1234]}'
+        )
+        assert ExceptionCheckers.is_error_str_rate_limit(error_str, status_code=400) is False
+
+    def test_bare_429_still_detected_without_a_status_code(self):
+        """With no status available, a standalone 429 still counts (unchanged behaviour)."""
+
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests") is True
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests", status_code=None) is True
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests", status_code=429) is True
+
+    def test_non_integer_status_code_does_not_suppress_bare_429(self):
+        """A non-integer status counts as unknown, not as a contradiction."""
+
+        assert ExceptionCheckers.is_error_str_rate_limit("HTTP 429 Too Many Requests", status_code="not-an-int") is True
+
+    def test_rate_limit_phrase_is_honoured_under_a_non_429_status(self):
+        """Phrase matching stays ungated: some providers report a real rate limit in
+        the text under a non-429 status (#11455)."""
+
+        assert (
+            ExceptionCheckers.is_error_str_rate_limit("FireworksException - rate limit exceeded", status_code=400)
+            is True
+        )
 
     def test_is_azure_content_policy_violation_error_with_policy_violation_text(self):
         """Test detection of Azure content policy violation with explicit policy violation text"""
@@ -286,6 +331,81 @@ def test_lemonade_context_window_error_mapping():
     assert excinfo.value.model == model
 
 
+def test_openai_compatible_400_with_bare_429_in_body_maps_to_bad_request():
+    """A provider 400 whose echoed body contains a 429 must stay a 400.
+
+    ``is_error_str_rate_limit`` runs before the status-code branch for
+    openai-compatible providers, so a validation error echoing the request back came
+    out as RateLimitError, which tells the caller to retry a request that cannot
+    succeed and books the failure against provider throttling.
+    """
+    error_message = (
+        '{"error":{"message":"`tools` must not be an empty array",'
+        '"type":"invalid_request_error","code":400},'
+        '"prompt_token_ids":[9906,429,1234]}'
+    )
+    original_exception = OpenAIError(
+        status_code=400,
+        message=error_message,
+        headers={},
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="deepseek-ai/DeepSeek-V3",
+            original_exception=original_exception,
+            custom_llm_provider="deepinfra",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == "deepinfra"
+
+
+def test_openai_compatible_429_still_maps_to_rate_limit():
+    """A real 429 still maps to RateLimitError."""
+    original_exception = OpenAIError(
+        status_code=429,
+        message='{"error":{"message":"Too Many Requests","type":"rate_limit_error"}}',
+        headers={},
+    )
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="deepseek-ai/DeepSeek-V3",
+            original_exception=original_exception,
+            custom_llm_provider="deepinfra",
+        )
+
+    assert excinfo.value.status_code == 429
+
+
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "AnthropicException - prompt is too long: 250000 tokens > 200000 maximum",
+        "AnthropicException - input length and max_tokens exceed context limit: "
+        "200000 + 8000 > 200000, decrease input length or max_tokens and try again",
+    ],
+)
+def test_anthropic_context_window_error_mapping(error_message):
+    """Anthropic context-window overflows (input too long, or input + max_tokens
+    over the context limit) must map to ContextWindowExceededError (400) even when
+    the upstream exception carries no ``status_code`` attribute. Previously only
+    "prompt is too long" was special-cased, so the "exceed context limit" phrasing
+    fell through to a generic APIConnectionError (500)."""
+    original_exception = Exception(error_message)
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=original_exception,
+            custom_llm_provider="anthropic",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.llm_provider == "anthropic"
+
+
 # Test cases for Vertex AI RateLimitError mapping
 # As per https://github.com/BerriAI/litellm/issues/16189
 vertex_rate_limit_test_cases = [
@@ -330,6 +450,122 @@ def test_vertex_ai_rate_limit_error_mapping(error_message, should_raise_rate_lim
                 original_exception=original_exception,
                 custom_llm_provider=custom_llm_provider,
             )
+
+
+class TestGetBodyErrorCode:
+    """Unit tests for _get_body_error_code helper."""
+
+    def test_parses_int_code(self):
+        body = (
+            '{"error":{"message":"high demand","type":"upstream_error",'
+            '"param":"","code":429}}'
+        )
+        assert _get_body_error_code(body) == 429
+
+    def test_parses_string_code(self):
+        # some gateways serialize code as a string
+        body = '{"error":{"message":"x","code":"503"}}'
+        assert _get_body_error_code(body) == 503
+
+    def test_returns_none_on_non_json(self):
+        assert _get_body_error_code("not json") is None
+
+    def test_returns_none_when_no_error_key(self):
+        assert _get_body_error_code('{"ok":true}') is None
+
+    def test_returns_none_when_no_code_key(self):
+        assert _get_body_error_code('{"error":{"message":"x"}}') is None
+
+
+# Test cases for Gemini upstream-error body-code mapping.
+#
+# Body code 429 wrapped in a 5xx HTTP envelope (e.g. new-api gateways)
+# must map to RateLimitError so Router retries kick in. A 4xx HTTP
+# envelope with body code:429 must NOT — it falls through to whatever
+# the HTTP status code maps to (BadRequestError, AuthenticationError,
+# etc.), matching upstream's existing semantics.
+gemini_body_code_429_test_cases = [
+    # (status_code, error_body, expected_exception_type, description)
+    (
+        500,
+        '{"error":{"message":" This model is currently experiencing high demand.'
+        " Spikes in demand are usually temporary. Please try again later."
+        ' (request id: x)","type":"upstream_error","param":"","code":429}}',
+        litellm.RateLimitError,
+        "HTTP 500 envelope with body code:429 -> RateLimitError",
+    ),
+    (
+        503,
+        '{"error":{"message":"upstream unavailable","type":"upstream_error",'
+        '"param":"","code":429}}',
+        litellm.RateLimitError,
+        "HTTP 503 envelope with body code:429 -> RateLimitError",
+    ),
+    (
+        502,
+        '{"error":{"message":"bad gateway","code":429}}',
+        litellm.RateLimitError,
+        "HTTP 502 envelope with body code:429 -> RateLimitError",
+    ),
+    (
+        500,
+        '{"error":{"message":"server boom","code":500}}',
+        litellm.InternalServerError,
+        "HTTP 500 with body code:500 stays InternalServerError",
+    ),
+    (
+        500,
+        "plain text 500 error",
+        litellm.InternalServerError,
+        "HTTP 500 with non-JSON body falls through to status_code mapping",
+    ),
+    (
+        400,
+        '{"error":{"message":"malformed","code":429}}',
+        litellm.BadRequestError,
+        "HTTP 400 with body code:429 must NOT be promoted to RateLimitError",
+    ),
+    (
+        401,
+        '{"error":{"message":"bad key","code":429}}',
+        litellm.AuthenticationError,
+        "HTTP 401 with body code:429 must NOT be promoted to RateLimitError",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "status_code, error_body, expected_exception, description",
+    gemini_body_code_429_test_cases,
+)
+def test_gemini_upstream_error_body_code_429_maps_to_rate_limit(
+    status_code, error_body, expected_exception, description
+):
+    """
+    Body code 429 inside a 5xx envelope -> RateLimitError so Router
+    retries kick in. Body code 429 inside a 4xx envelope must fall
+    through to the HTTP-status-code branch (P1 from greptile review).
+    """
+    model = "gemini/gemini-2.5-flash"
+    custom_llm_provider = "gemini"
+
+    # Build an exception that looks like what _handle_error produces:
+    # a BaseLLMException-style object with .status_code and .message
+    class _FakeGeminiError(Exception):
+        def __init__(self, status_code, message):
+            self.status_code = status_code
+            self.message = message
+            super().__init__(message)
+
+    original_exception = _FakeGeminiError(status_code=status_code, message=error_body)
+
+    with pytest.raises(expected_exception) as excinfo:
+        exception_type(
+            model=model,
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+        )
+    assert isinstance(excinfo.value, expected_exception), description
 
 
 class TestExtractAndRaiseLitellmException:
@@ -406,3 +642,615 @@ class TestExtractAndRaiseLitellmException:
         )
 
         assert result is None
+
+
+class ModelError(Exception):
+    """Mimics replicate's SDK exception, whose mapping keys on the class name."""
+
+
+class CohereConnectionError(Exception):
+    """Mimics cohere's SDK exception, whose mapping keys on the class name."""
+
+
+def test_replicate_model_error_maps_to_bad_request():
+    """The replicate branch keys on ``type(original_exception).__name__ ==
+    "ModelError"`` rather than on the error string. The dispatch now lives in a
+    per-provider helper, so this class-name value has to be threaded into the
+    helper; if it is not, the bare name ``exception_type`` resolves to the
+    module-level function and the comparison is always False, silently mismapping
+    to APIConnectionError."""
+    original_exception = ModelError("the deployed model failed to return a prediction")
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="replicate/meta/llama-2-70b-chat",
+            original_exception=original_exception,
+            custom_llm_provider="replicate",
+        )
+
+    assert excinfo.value.llm_provider == "replicate"
+
+
+def test_cohere_connection_error_maps_to_rate_limit():
+    """The cohere branch keys on ``"CohereConnectionError" in
+    type(original_exception).__name__``. With the dispatch extracted into a helper
+    the class-name value must be passed in; otherwise ``in`` runs against the
+    module-level ``exception_type`` function object and raises TypeError, which the
+    outer handler swallows into a generic APIConnectionError."""
+    original_exception = CohereConnectionError("connection reset by peer")
+    original_exception.message = "connection reset by peer"
+
+    with pytest.raises(litellm.RateLimitError) as excinfo:
+        exception_type(
+            model="command-r",
+            original_exception=original_exception,
+            custom_llm_provider="cohere",
+        )
+
+    assert excinfo.value.llm_provider == "cohere"
+
+
+class ReplicateError(Exception):
+    """Mimics a replicate HTTP error carrying a status_code and response."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.response = httpx.Response(
+            status_code=status_code,
+            request=httpx.Request("POST", "https://api.replicate.com/v1/predictions"),
+        )
+
+
+def test_replicate_422_maps_to_unprocessable_entity():
+    """The replicate status-code ladder carried two identical ``status_code == 422``
+    branches; the second was unreachable dead code. After dropping the duplicate the
+    surviving branch must still map 422 to UnprocessableEntityError."""
+    original_exception = ReplicateError("validation failed for the input", 422)
+
+    with pytest.raises(litellm.UnprocessableEntityError) as excinfo:
+        exception_type(
+            model="replicate/meta/llama-2-70b-chat",
+            original_exception=original_exception,
+            custom_llm_provider="replicate",
+        )
+
+    assert excinfo.value.llm_provider == "replicate"
+
+
+def test_upstream_4xx_without_model_maps_to_bad_request():
+    """Responses API follow-ups (cancel/get/delete) call ``exception_type`` with
+    ``model=None``; the provider mapping used to be gated on ``if model:``, so an
+    upstream 400 like Azure's "Cannot cancel a synchronous response." fell through to
+    the generic 500 APIConnectionError instead of surfacing as a 400."""
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message='{"error": {"message": "Cannot cancel a synchronous response.", "type": "invalid_request_error"}}',
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model=None,
+            original_exception=original_exception,
+            custom_llm_provider="azure",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "Cannot cancel a synchronous response." in excinfo.value.message
+
+
+def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=404,
+        message='{"error": {"message": "Response with id \'resp_abc\' not found.", "type": "invalid_request_error"}}',
+    )
+
+    with pytest.raises(litellm.NotFoundError) as excinfo:
+        exception_type(
+            model=None,
+            original_exception=original_exception,
+            custom_llm_provider="azure",
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "Response with id 'resp_abc' not found." in excinfo.value.message
+
+
+class _UpstreamHTTPError(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__("upstream failure")
+        self.message = "upstream failure"
+        self.status_code = status_code
+        self.request = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+        self.response = httpx.Response(
+            status_code=status_code, request=self.request, text="upstream failure"
+        )
+
+
+UPSTREAM_STATUS_CODES = (400, 401, 403, 404, 408, 422, 429, 500, 503)
+
+OPENAI_SHAPED = {
+    400: (litellm.BadRequestError, 400),
+    401: (litellm.AuthenticationError, 401),
+    403: (litellm.APIError, 403),
+    404: (litellm.NotFoundError, 404),
+    408: (litellm.Timeout, 408),
+    422: (litellm.BadRequestError, 422),
+    429: (litellm.RateLimitError, 429),
+    500: (litellm.InternalServerError, 500),
+    503: (litellm.ServiceUnavailableError, 503),
+}
+
+PERMISSION_DENIED = (litellm.PermissionDeniedError, 403)
+
+STATUS_KEYED = {**OPENAI_SHAPED, 403: PERMISSION_DENIED}
+
+DEVIATIONS_FROM_THE_OPENAI_SHAPE = {
+    "anthropic": {403: PERMISSION_DENIED},
+    "azure": {500: (litellm.APIError, 500)},
+    "bedrock": {
+        403: PERMISSION_DENIED,
+        500: (litellm.ServiceUnavailableError, 503),
+    },
+    "cloudflare": {403: PERMISSION_DENIED},
+    "cohere": {403: PERMISSION_DENIED},
+    "databricks": {
+        403: PERMISSION_DENIED,
+        422: (litellm.BadRequestError, 400),
+    },
+    "gemini": {403: PERMISSION_DENIED},
+    "huggingface": {
+        404: (litellm.APIError, 404),
+        422: (litellm.APIError, 422),
+        500: (litellm.APIError, 500),
+    },
+    "nlp_cloud": {
+        403: (litellm.AuthenticationError, 403),
+        404: (litellm.APIError, 404),
+        408: (litellm.APIError, 408),
+        500: (litellm.APIError, 500),
+        503: (litellm.APIError, 503),
+    },
+    "ollama": {403: PERMISSION_DENIED},
+    "openrouter": {500: (litellm.APIError, 500)},
+    "replicate": {
+        403: (litellm.APIError, 500),
+        404: (litellm.APIError, 500),
+        422: (litellm.UnprocessableEntityError, 422),
+        500: (litellm.ServiceUnavailableError, 503),
+        503: (litellm.APIError, 500),
+    },
+    "sagemaker": {
+        403: PERMISSION_DENIED,
+        500: (litellm.ServiceUnavailableError, 503),
+    },
+    "vertex_ai": {403: PERMISSION_DENIED},
+    "vllm": {403: PERMISSION_DENIED},
+}
+
+PROVIDERS_WITH_A_HANDLER = (
+    "ai21",
+    "anthropic",
+    "azure",
+    "azure_ai",
+    "bedrock",
+    "cloudflare",
+    "cohere",
+    "databricks",
+    "deepseek",
+    "fireworks_ai",
+    "gemini",
+    "groq",
+    "huggingface",
+    "mistral",
+    "nlp_cloud",
+    "ollama",
+    "openai",
+    "openrouter",
+    "perplexity",
+    "replicate",
+    "runwayml",
+    "sagemaker",
+    "together_ai",
+    "vertex_ai",
+    "vllm",
+    "xai",
+)
+
+PROVIDER_ALIASES_WITH_A_HANDLER = (
+    "aleph_alpha",
+    "anthropic_text",
+    "azure_text",
+    "bedrock_mantle",
+    "cohere_chat",
+    "custom_openai",
+    "lemonade",
+    "litellm_proxy",
+    "ollama_chat",
+    "predibase",
+    "sagemaker_chat",
+    "text-completion-openai",
+    "vertex_ai_beta",
+    "watsonx",
+)
+
+PROVIDERS_WITHOUT_A_HANDLER = tuple(
+    sorted(
+        frozenset(provider.value for provider in LlmProviders)
+        - frozenset(PROVIDERS_WITH_A_HANDLER)
+        - frozenset(PROVIDER_ALIASES_WITH_A_HANDLER)
+        - frozenset(litellm.openai_compatible_providers)
+    )
+)
+
+MINIMAX_401_BODY = (
+    '{"type":"error","error":{"type":"authorized_error","message":"login fail: Please carry the API secret key '
+    "in the 'Authorization' field of the request header (1004)\",\"http_code\":\"401\"},"
+    '"request_id":"06ddc9ba97ee6340e38f10e09787f547"}'
+)
+
+
+def _expected_for(provider: str, status_code: int) -> tuple[type[Exception], int]:
+    return DEVIATIONS_FROM_THE_OPENAI_SHAPE.get(provider, {}).get(
+        status_code, OPENAI_SHAPED[status_code]
+    )
+
+
+@pytest.fixture
+def quiet_exception_mapping(monkeypatch):
+    monkeypatch.setattr(litellm, "suppress_debug_info", True)
+
+
+@pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_an_upstream_status_maps_to_one_exception_per_provider(
+    provider, status_code, quiet_exception_mapping
+):
+    expected_class, expected_status = _expected_for(provider, status_code)
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamHTTPError(status_code=status_code),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is expected_class
+    assert raised.value.status_code == expected_status
+
+
+@pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_a_mapped_exception_keeps_the_provider_and_model_it_came_from(
+    provider, status_code, quiet_exception_mapping
+):
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamHTTPError(status_code=status_code),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.llm_provider == provider
+    assert raised.value.model == "test-model"
+
+
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_an_already_mapped_litellm_exception_passes_through_untouched(
+    provider, quiet_exception_mapping
+):
+    already_mapped = litellm.RateLimitError(
+        message="already mapped", llm_provider=provider, model="test-model"
+    )
+
+    returned = exception_type(
+        model="test-model",
+        original_exception=already_mapped,
+        custom_llm_provider=provider,
+    )
+
+    assert returned is already_mapped
+
+
+@pytest.mark.parametrize("status_code", UPSTREAM_STATUS_CODES)
+@pytest.mark.parametrize("provider", PROVIDERS_WITHOUT_A_HANDLER)
+def test_a_provider_without_a_handler_maps_by_the_upstream_status(
+    provider, status_code, quiet_exception_mapping
+):
+    expected_class, expected_status = STATUS_KEYED[status_code]
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamHTTPError(status_code=status_code),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is expected_class
+    assert raised.value.status_code == expected_status
+    assert raised.value.llm_provider == provider
+    assert raised.value.model == "test-model"
+
+
+def test_a_minimax_bad_key_is_an_authentication_error(quiet_exception_mapping):
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    with pytest.raises(litellm.AuthenticationError) as raised:
+        exception_type(
+            model="MiniMax-M2.5",
+            original_exception=BaseLLMException(status_code=401, message=MINIMAX_401_BODY),
+            custom_llm_provider="minimax",
+        )
+
+    assert raised.value.status_code == 401
+    assert raised.value.llm_provider == "minimax"
+    assert raised.value.message.startswith("litellm.AuthenticationError: MinimaxException - ")
+    assert "login fail" in raised.value.message
+
+
+def test_an_exception_without_a_status_is_still_a_connection_error(quiet_exception_mapping):
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(
+            model="MiniMax-M2.5",
+            original_exception=RuntimeError("socket hung up"),
+            custom_llm_provider="minimax",
+        )
+
+
+def test_an_unmapped_exception_with_no_model_or_provider_is_a_connection_error(quiet_exception_mapping):
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        exception_type(
+            model=None,
+            original_exception=ValueError("boom"),
+            custom_llm_provider=None,
+        )
+
+    assert "boom" in raised.value.message
+
+
+def _raise_and_map(
+    model: str | None, original_exception: Exception, custom_llm_provider: str | None
+) -> None:
+    """Calls exception_type() from inside the except block, as litellm/main.py does,
+    so traceback.format_exc() has a real stack."""
+    try:
+        raise original_exception
+    except type(original_exception) as caught:
+        exception_type(
+            model=model,
+            original_exception=caught,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+
+def test_an_unmapped_exception_message_keeps_traceback_for_sdk_callers(quiet_exception_mapping):
+    """Direct SDK callers debug unmapped provider exceptions with this traceback;
+    only the proxy's response boundary strips it."""
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        _raise_and_map(
+            model="MiniMax-M2.5",
+            original_exception=RuntimeError("socket hung up"),
+            custom_llm_provider="minimax",
+        )
+
+    assert "Traceback (most recent call last)" in raised.value.message
+    assert "test_exception_mapping_utils.py" in raised.value.message
+
+
+def test_an_unmapped_exception_with_no_model_or_provider_message_keeps_traceback(
+    quiet_exception_mapping,
+):
+    with pytest.raises(litellm.APIConnectionError) as raised:
+        _raise_and_map(
+            model=None,
+            original_exception=ValueError("boom"),
+            custom_llm_provider=None,
+        )
+
+    assert "Traceback (most recent call last)" in raised.value.message
+
+
+CONTEXT_WINDOW_MESSAGE = "This model's maximum context length is 4096 tokens."
+CONTENT_POLICY_MESSAGE = (
+    '{"error": {"type": "invalid_request_error", "code": "content_policy_violation"}}'
+)
+TIMEOUT_MESSAGE = "Request timed out."
+
+PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW = (
+    "ai21",
+    "anthropic",
+    "azure",
+    "azure_ai",
+    "databricks",
+    "deepseek",
+    "fireworks_ai",
+    "gemini",
+    "groq",
+    "mistral",
+    "openai",
+    "perplexity",
+    "runwayml",
+    "together_ai",
+    "vertex_ai",
+    "xai",
+)
+
+PROVIDERS_THAT_RECOGNISE_A_CONTENT_POLICY_BLOCK = (
+    "ai21",
+    "azure",
+    "azure_ai",
+    "deepseek",
+    "fireworks_ai",
+    "groq",
+    "mistral",
+    "openai",
+    "perplexity",
+    "runwayml",
+    "together_ai",
+    "xai",
+)
+
+
+class _UpstreamErrorWithMessage(_UpstreamHTTPError):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(status_code=status_code)
+        self.args = (message,)
+        self.message = message
+        self.response = httpx.Response(
+            status_code=status_code, request=self.request, text=message
+        )
+
+
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_a_full_context_window_reaches_the_caller_as_the_router_needs_it(
+    provider, quiet_exception_mapping
+):
+    if provider in PROVIDERS_THAT_RECOGNISE_A_FULL_CONTEXT_WINDOW:
+        expected_class, expected_status = litellm.ContextWindowExceededError, 400
+    else:
+        expected_class, expected_status = litellm.BadRequestError, 400
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(CONTEXT_WINDOW_MESSAGE, 400),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is expected_class
+    assert raised.value.status_code == expected_status
+
+
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_a_content_policy_block_reaches_the_caller_as_the_router_needs_it(
+    provider, quiet_exception_mapping
+):
+    if provider in PROVIDERS_THAT_RECOGNISE_A_CONTENT_POLICY_BLOCK:
+        expected_class, expected_status = litellm.ContentPolicyViolationError, 400
+    else:
+        expected_class, expected_status = litellm.BadRequestError, 400
+
+    with pytest.raises(openai.APIError) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(CONTENT_POLICY_MESSAGE, 400),
+            custom_llm_provider=provider,
+        )
+
+    assert type(raised.value) is expected_class
+    assert raised.value.status_code == expected_status
+
+
+@pytest.mark.parametrize("provider", PROVIDERS_WITH_A_HANDLER)
+def test_a_timed_out_request_is_a_timeout_for_every_provider(
+    provider, quiet_exception_mapping
+):
+    with pytest.raises(litellm.Timeout) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=_UpstreamErrorWithMessage(TIMEOUT_MESSAGE, 408),
+            custom_llm_provider=provider,
+        )
+
+    assert raised.value.status_code == 408
+
+
+def test_bedrock_mantle_400_maps_to_bad_request():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message=(
+            '{"error": {"code": "validation_error", "message": '
+            "\"invalid request body: Invalid 'input': value did not match any expected variant\", "
+            '"type": "invalid_request_error"}}'
+        ),
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        exception_type(
+            model="gpt-5.6-terra",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "Invalid 'input'" in excinfo.value.message
+    assert type(excinfo.value) is litellm.BadRequestError
+
+
+def test_bedrock_mantle_context_overflow_maps_to_context_window_exceeded():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(
+        status_code=400,
+        message=(
+            '{"error":{"code":"validation_error",'
+            '"message":"prompt tokens (1055489) exceed model maximum (1050000) for openai.gpt-5.6-sol",'
+            '"param":null,"type":"invalid_request_error"}}'
+        ),
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="openai.gpt-5.6-sol",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "prompt is too long: 1055489 tokens > 1050000 maximum" in excinfo.value.message
+
+
+def test_branchless_provider_transport_error_maps_to_api_connection_error():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(status_code=500, message="[Errno 111] Connection refused")
+    original_exception.status_code_is_synthesized = True
+
+    with pytest.raises(litellm.APIConnectionError):
+        exception_type(
+            model="test-agent",
+            original_exception=original_exception,
+            custom_llm_provider="a2a",
+        )
+
+
+def test_branchless_provider_upstream_500_still_maps_to_internal_server_error():
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    original_exception = BaseLLMException(status_code=500, message="upstream exploded")
+
+    with pytest.raises(litellm.InternalServerError):
+        exception_type(
+            model="test-agent",
+            original_exception=original_exception,
+            custom_llm_provider="a2a",
+        )
+
+
+def test_handle_error_marks_only_a_status_code_it_never_received():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    handler = BaseLLMHTTPHandler()
+
+    with pytest.raises(litellm.llms.base_llm.chat.transformation.BaseLLMException) as transport:
+        raise handler._handle_error(e=httpx.ConnectError("Connection refused"), provider_config=None)
+    assert transport.value.status_code == 500
+    assert transport.value.status_code_is_synthesized is True
+
+    request = httpx.Request(method="POST", url="https://example.invalid")
+    upstream = httpx.HTTPStatusError(
+        "server error",
+        request=request,
+        response=httpx.Response(status_code=500, request=request, text="upstream exploded"),
+    )
+    with pytest.raises(litellm.llms.base_llm.chat.transformation.BaseLLMException) as received:
+        raise handler._handle_error(e=upstream, provider_config=None)
+    assert received.value.status_code == 500
+    assert received.value.status_code_is_synthesized is False

@@ -1,15 +1,11 @@
 import contextlib
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -23,6 +19,7 @@ import litellm.proxy.proxy_server as ps
 
 # Now we can safely import app
 from litellm.proxy.proxy_server import app
+from litellm.types.search import SearchToolInfoResponse
 
 client = TestClient(app)
 
@@ -611,6 +608,45 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
                     app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+@pytest.mark.asyncio
+async def test_get_all_search_tools_from_db_retries_on_transport_error():
+    """`SearchToolRegistry.get_all_search_tools_from_db` self-heals across one
+    ClientNotConnectedError via call_with_db_reconnect_retry."""
+    import prisma
+    from litellm.proxy.search_endpoints.search_tool_registry import (
+        SearchToolRegistry,
+    )
+
+    invocations: list = []
+
+    async def _flaky_find_many(**kwargs):
+        invocations.append(None)
+        if len(invocations) == 1:
+            raise prisma.errors.ClientNotConnectedError()
+        return []
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(
+        side_effect=_flaky_find_many
+    )
+    mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
+    mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
+    mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
+
+    result = await SearchToolRegistry.get_all_search_tools_from_db(
+        prisma_client=mock_prisma_client
+    )
+
+    assert result == []
+    assert len(invocations) == 2
+    mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
+    reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
+    assert (
+        reconnect_kwargs["reason"]
+        == "get_all_search_tools_from_db_lookup_failure"
+    )
+
+
 @contextlib.contextmanager
 def _mock_search_tool_backend(db_tools):
     """Patch the DB registry, prisma client, and config so /search_tools/list
@@ -776,3 +812,339 @@ async def test_list_search_tools_admin_with_restricted_key_still_sees_all():
     assert response.status_code == 200
     names = {t["search_tool_name"] for t in response.json()["search_tools"]}
     assert names == {"db-tool-1", "db-tool-2", "db-tool-3"}
+
+
+def _search_tool_responses(*names: str) -> list[SearchToolInfoResponse]:
+    return [
+        SearchToolInfoResponse(
+            search_tool_id=f"id-{name}",
+            search_tool_name=name,
+            litellm_params={"search_provider": "perplexity"},
+            search_tool_info=None,
+            created_at=None,
+            updated_at=None,
+            is_from_config=False,
+        )
+        for name in names
+    ]
+
+
+def _team_ids_looked_up(lookup: AsyncMock) -> list[str]:
+    return [awaited.args[0] for awaited in lookup.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_list_search_tools_dashboard_session_key_does_not_look_up_the_ui_team():
+    """
+    Regression: the Admin UI session key is stamped with the reserved team id
+    ``litellm-dashboard``, which has no row in LiteLLM_TeamTable. Resolving it as a real team
+    raised 404, which the endpoint reported as a 500, so the Search Tools page was broken for
+    every non-admin browsing the dashboard.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    dashboard_session_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+    )
+    ui_team_is_not_a_real_team = AsyncMock(
+        side_effect=HTTPException(
+            status_code=404,
+            detail={"error": f"Team doesn't exist in db. Team={UI_SESSION_TOKEN_TEAM_ID}."},
+        )
+    )
+
+    with (
+        _mock_search_tool_backend(_scoping_db_tools()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            ui_team_is_not_a_real_team,
+        ),
+        _override_auth(dashboard_session_user),
+    ):
+        response = TestClient(app).get("/search_tools/list")
+
+    assert response.status_code == 200
+    names = {t["search_tool_name"] for t in response.json()["search_tools"]}
+    assert names == {"db-tool-1", "db-tool-2", "db-tool-3"}
+    ui_team_is_not_a_real_team.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_dashboard_session_still_honors_key_allowlist():
+    """
+    Skipping the synthetic team must not widen visibility: a dashboard session whose key
+    carries a search_tools allowlist stays scoped to it.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.search_endpoints.search_tool_management import (
+        _filter_visible_search_tools,
+    )
+
+    restricted_dashboard_session = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-key",
+            search_tools=["db-tool-3"],
+        ),
+    )
+    lookup = AsyncMock()
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2", "db-tool-3"),
+        restricted_dashboard_session,
+        lookup,
+    )
+
+    assert [t["search_tool_name"] for t in visible] == ["db-tool-3"]
+    lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_still_applies_a_real_team_allowlist():
+    """A caller with a real team is still resolved and scoped by that team's allowlist."""
+    from litellm.proxy.search_endpoints.search_tool_management import (
+        _filter_visible_search_tools,
+    )
+
+    team_member = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        team_id="team-1",
+    )
+    lookup = AsyncMock(
+        return_value=LiteLLM_TeamTable(
+            team_id="team-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-team",
+                search_tools=["db-tool-2"],
+            ),
+        )
+    )
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2", "db-tool-3"),
+        team_member,
+        lookup,
+    )
+
+    assert [t["search_tool_name"] for t in visible] == ["db-tool-2"]
+    assert _team_ids_looked_up(lookup) == ["team-1"]
+
+
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_propagates_a_real_team_lookup_failure():
+    """
+    A caller whose real team cannot be resolved must not fall through to "no team", which
+    would drop that team's allowlist and show tools the caller may not call.
+    """
+    from litellm.proxy.search_endpoints.search_tool_management import (
+        _filter_visible_search_tools,
+    )
+
+    team_member = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        team_id="deleted-team",
+    )
+    lookup = AsyncMock(side_effect=HTTPException(status_code=404, detail={"error": "Team doesn't exist in db."}))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _filter_visible_search_tools(
+            _search_tool_responses("db-tool-1", "db-tool-2"),
+            team_member,
+            lookup,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert _team_ids_looked_up(lookup) == ["deleted-team"]
+
+
+@pytest.mark.asyncio
+async def test_list_search_tools_reports_a_missing_real_team_as_404():
+    """
+    The endpoint surfaces a genuine team lookup failure with its own status instead of
+    masking it as a 500 or quietly returning an unscoped list.
+    """
+    team_member = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        team_id="deleted-team",
+    )
+
+    with (
+        _mock_search_tool_backend(_scoping_db_tools()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            AsyncMock(
+                side_effect=HTTPException(
+                    status_code=404,
+                    detail={"error": "Team doesn't exist in db. Team=deleted-team."},
+                )
+            ),
+        ),
+        _override_auth(team_member),
+    ):
+        response = TestClient(app).get("/search_tools/list")
+
+    assert response.status_code == 404
+    assert "search_tools" not in response.json()
+
+
+# ---------------------------------------------------------------------------
+# Router sync on management writes (LIT-3379)
+#
+# The proxy resolves prisma_client / proxy_config / llm_router from
+# litellm.proxy.proxy_server module globals at call time and reaches its DB layer through a
+# module-level registry singleton, so there is no constructor or parameter to inject through.
+# Patching those globals is the only seam that exercises the endpoint end to end.
+# ---------------------------------------------------------------------------
+
+
+def _search_tool_row(name: str, provider: str = "tavily") -> dict:
+    return {
+        "search_tool_id": f"{name}-id",
+        "search_tool_name": name,
+        "litellm_params": {"search_provider": provider, "api_key": "sk-test"},
+        "search_tool_info": {"description": name},
+    }
+
+
+def _fake_registry(db_rows: list) -> MagicMock:
+    """A registry singleton whose writes land in db_rows, so the refresh reads back real state."""
+
+    async def _add(search_tool, **_):
+        row = _search_tool_row(
+            search_tool["search_tool_name"],
+            provider=search_tool.get("litellm_params", {}).get("search_provider", "tavily"),
+        )
+        db_rows.append(row)
+        return row
+
+    async def _update(search_tool_id, search_tool, **_):
+        row = _search_tool_row(
+            search_tool["search_tool_name"],
+            provider=search_tool.get("litellm_params", {}).get("search_provider", "tavily"),
+        )
+        db_rows[:] = [row if existing["search_tool_id"] == search_tool_id else existing for existing in db_rows]
+        return row
+
+    async def _delete(search_tool_id, **_):
+        db_rows[:] = [existing for existing in db_rows if existing["search_tool_id"] != search_tool_id]
+        return {"message": "deleted", "search_tool_name": search_tool_id}
+
+    async def _get_by_id(search_tool_id, **_):
+        return next((row for row in db_rows if row["search_tool_id"] == search_tool_id), None)
+
+    registry = MagicMock()
+    registry.add_search_tool_to_db = AsyncMock(side_effect=_add)
+    registry.update_search_tool_in_db = AsyncMock(side_effect=_update)
+    registry.delete_search_tool_from_db = AsyncMock(side_effect=_delete)
+    registry.get_search_tool_by_id_from_db = AsyncMock(side_effect=_get_by_id)
+    return registry
+
+
+@contextlib.contextmanager
+def _live_router_and_db(db_rows: list):
+    """Drive the endpoints against a real ProxyConfig so the router refresh actually runs."""
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config.update_config_state({})
+    fake_router = MagicMock()
+    fake_router.search_tools = list(db_rows)
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client", MagicMock()))  # test-quality-ok: proxy globals are the only seam; see the module note above
+        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", proxy_config))  # test-quality-ok: proxy globals are the only seam; see the module note above
+        stack.enter_context(patch("litellm.proxy.proxy_server.llm_router", fake_router))  # test-quality-ok: proxy globals are the only seam; see the module note above
+        stack.enter_context(
+            patch(  # test-quality-ok: proxy globals are the only seam; see the module note above
+                "litellm.proxy.search_endpoints.search_tool_management.SEARCH_TOOL_REGISTRY",
+                _fake_registry(db_rows),
+            )
+        )
+        stack.enter_context(
+            patch(  # test-quality-ok: proxy globals are the only seam; see the module note above
+                "litellm.proxy.search_endpoints.search_tool_registry.SearchToolRegistry.get_all_search_tools_from_db",
+                AsyncMock(side_effect=lambda **_: list(db_rows)),
+            )
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
+        )
+        try:
+            yield fake_router
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_create_search_tool_reaches_the_router_before_the_response():
+    """A UI-created tool must be usable immediately, not only after the next config reload tick."""
+    with _live_router_and_db([]) as fake_router:
+        response = TestClient(app).post(
+            "/search_tools",
+            json={
+                "search_tool": {
+                    "search_tool_name": "tavily-search",
+                    "litellm_params": {"search_provider": "tavily"},
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    assert [tool["search_tool_name"] for tool in fake_router.search_tools] == ["tavily-search"]
+
+
+@pytest.mark.asyncio
+async def test_update_search_tool_reaches_the_router_before_the_response():
+    with _live_router_and_db([_search_tool_row("tavily-search", provider="tavily")]) as fake_router:
+        response = TestClient(app).put(
+            "/search_tools/tavily-search-id",
+            json={
+                "search_tool": {
+                    "search_tool_name": "tavily-search",
+                    "litellm_params": {"search_provider": "exa_ai"},
+                }
+            },
+        )
+
+    assert response.status_code == 200
+    assert fake_router.search_tools[0]["litellm_params"]["search_provider"] == "exa_ai"
+
+
+@pytest.mark.asyncio
+async def test_delete_search_tool_removes_it_from_the_router():
+    """Deleting the last tool must clear the router; the old empty-list guard left it live."""
+    with _live_router_and_db([_search_tool_row("tavily-search")]) as fake_router:
+        response = TestClient(app).delete("/search_tools/tavily-search-id")
+
+    assert response.status_code == 200
+    assert fake_router.search_tools == []
+
+
+@pytest.mark.asyncio
+async def test_create_search_tool_survives_a_failing_router_refresh():
+    """The row is already committed, so a refresh failure must not turn into a 500."""
+    with _live_router_and_db([]):
+        with patch(  # test-quality-ok: forcing the refresh to fail needs the refresh itself replaced
+            "litellm.proxy.proxy_server.ProxyConfig.reload_search_tools_from_db",
+            AsyncMock(side_effect=RuntimeError("registry boom")),
+        ):
+            response = TestClient(app).post(
+                "/search_tools",
+                json={
+                    "search_tool": {
+                        "search_tool_name": "tavily-search",
+                        "litellm_params": {"search_provider": "tavily"},
+                    }
+                },
+            )
+
+    assert response.status_code == 200
+    assert response.json()["search_tool_name"] == "tavily-search"

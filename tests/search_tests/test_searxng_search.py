@@ -318,13 +318,11 @@ class TestSearXNGSearchHeaders:
         assert headers["Content-Type"] == "application/json"
         assert headers["Authorization"] == "Bearer test-key-123"
 
-    def test_headers_with_env_api_key(self):
+    def test_headers_with_env_api_key(self, monkeypatch):
         """Test that headers use SEARXNG_API_KEY from env."""
-        with patch(
-            "litellm.llms.searxng.search.transformation.get_secret_str",
-            return_value="env-key-456",
-        ):
-            headers = self.config.validate_environment(headers={})
+        monkeypatch.setenv("SEARXNG_API_KEY", "env-key-456")
+
+        headers = self.config.validate_environment(headers={})
 
         assert headers["Authorization"] == "Bearer env-key-456"
 

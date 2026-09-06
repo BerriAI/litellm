@@ -8,8 +8,8 @@ Regression test for: UTF-8 codec error when uploading binary files
 """
 
 import io
+import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
@@ -37,9 +37,7 @@ class TestVertexAIBinaryFileUpload:
         # Create mock PDF binary data (with non-UTF-8 bytes)
         # PDF files start with %PDF- and contain binary data
         mock_pdf_content = b"%PDF-1.4\n%\xc4\xe5\xf2\xe5\xeb\xa7\xf3\xa0\xd0\xc4\xc6\n"
-        mock_pdf_content += (
-            b"\x00\x01\x02\x03\xff\xfe\xfd" * 100
-        )  # Add more binary data
+        mock_pdf_content += b"\x00\x01\x02\x03\xff\xfe\xfd" * 100  # Add more binary data
 
         # Create file object
         file_obj = io.BytesIO(mock_pdf_content)
@@ -60,14 +58,12 @@ class TestVertexAIBinaryFileUpload:
         )
 
         # Verify the transformation returns bytes (not string)
-        assert isinstance(
-            transformed_request, bytes
-        ), f"Expected bytes for binary file, got {type(transformed_request)}"
+        assert isinstance(transformed_request, bytes), (
+            f"Expected bytes for binary file, got {type(transformed_request)}"
+        )
 
         # Verify the bytes match the original content
-        assert (
-            transformed_request == mock_pdf_content
-        ), "Transformed request should preserve binary content exactly"
+        assert transformed_request == mock_pdf_content, "Transformed request should preserve binary content exactly"
 
         # Verify that the bytes contain non-UTF-8 characters
         # This should raise UnicodeDecodeError if we try to decode
@@ -132,16 +128,14 @@ class TestVertexAIBinaryFileUpload:
             pytest.fail(f"httpx should accept bytes in data parameter: {e}")
 
         # Document the expected behavior
-        assert isinstance(
-            mock_binary_data, bytes
-        ), "Binary file data should remain as bytes"
+        assert isinstance(mock_binary_data, bytes), "Binary file data should remain as bytes"
 
     @pytest.mark.asyncio
-    async def test_jsonl_file_upload_returns_string(self):
+    async def test_jsonl_file_upload_returns_streaming_body(self):
         """
-        Test that JSONL files (text) are correctly transformed to strings.
-
-        This ensures we handle both binary and text files correctly.
+        Test that JSONL batch files are transformed into a streaming-media config
+        carrying a streaming body (not a buffered bytes payload), so the handler
+        can stage the upload to a temp file and send it in one media request.
         """
         # Create mock JSONL content
         mock_jsonl_content = (
@@ -164,10 +158,13 @@ class TestVertexAIBinaryFileUpload:
             litellm_params={},
         )
 
-        # JSONL files should be transformed to string
-        assert isinstance(
-            transformed_request, str
-        ), f"Expected string for JSONL file, got {type(transformed_request)}"
+        assert isinstance(transformed_request, dict) and "streaming_media_upload" in transformed_request, (
+            f"Expected a streaming media upload config for JSONL, got {type(transformed_request)}"
+        )
+
+        stream = transformed_request["streaming_media_upload"]["body_stream"]
+        decoded = json.loads(b"".join(stream.iter_bytes()).decode("utf-8"))
+        assert "request" in decoded, "JSONL transform must wrap each row in {'request': ...}"
 
     @pytest.mark.asyncio
     async def test_mixed_file_types_in_sequence(self):
@@ -208,7 +205,7 @@ class TestVertexAIBinaryFileUpload:
             optional_params={},
             litellm_params={},
         )
-        assert isinstance(result2, str)
+        assert isinstance(result2, dict) and "streaming_media_upload" in result2
 
         # Test 3: Upload another binary file
         binary_content2 = b"\xc4\xe5\xf2\xe5\xeb"
@@ -251,14 +248,12 @@ class TestVertexAIBinaryFileUpload:
             },
             "text_files": {
                 "input_type": "str or bytes",
-                "output_type": "str",
+                "output_type": "bytes",
                 "examples": ["JSONL", "CSV", "TXT"],
                 "http_method": "POST",
                 "encoding": "UTF-8",
             },
         }
 
-        assert (
-            expected_behavior["binary_files"]["encoding"] == "none - preserve raw bytes"
-        )
+        assert expected_behavior["binary_files"]["encoding"] == "none - preserve raw bytes"
         assert expected_behavior["text_files"]["encoding"] == "UTF-8"

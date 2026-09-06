@@ -6,6 +6,7 @@ Symbols pinned here:
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pytest
@@ -16,11 +17,12 @@ from litellm.proxy.utils import send_email
 @pytest.fixture(autouse=True)
 def _smtp_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SMTP_HOST", "smtp.invalid")
-    monkeypatch.setenv("SMTP_PORT", "2525")
+    monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_USERNAME", "u")
     monkeypatch.setenv("SMTP_PASSWORD", "p")
     monkeypatch.setenv("SMTP_SENDER_EMAIL", "from@invalid")
     monkeypatch.setenv("SMTP_TLS", "True")
+    monkeypatch.setenv("SMTP_USE_SSL", "False")
 
 
 @pytest.mark.asyncio
@@ -50,7 +52,18 @@ async def test_send_email_dispatches_via_smtp(in_memory_smtp: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_email_skips_starttls_when_disabled(
+async def test_send_email_starttls_uses_ssl(in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMTP_USE_SSL", "True")
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.sent[0].starttls_called is False
+
+
+@pytest.mark.asyncio
+async def test_send_email_skips_starttls_when_tls_disabled(
     in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SMTP_TLS", "False")
@@ -68,9 +81,7 @@ async def test_send_email_error_missing_sender_email(
 ) -> None:
     monkeypatch.delenv("SMTP_SENDER_EMAIL", raising=False)
     with pytest.raises(ValueError, match="SMTP_SENDER_EMAIL"):
-        await send_email(
-            receiver_email="x@y", subject="s", html="<p>h</p>"
-        )
+        await send_email(receiver_email="x@y", subject="s", html="<p>h</p>")
 
 
 @pytest.mark.asyncio
@@ -92,6 +103,49 @@ async def test_send_email_error_missing_html() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_email_sets_connection_timeout(in_memory_smtp: Any) -> None:
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.connection_kwargs[0].get("timeout") == 30.0
+
+
+@pytest.mark.asyncio
+async def test_send_email_timeout_env_override(in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMTP_TIMEOUT", "5")
+    monkeypatch.setenv("SMTP_USE_SSL", "True")
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.connection_kwargs[0].get("timeout") == 5.0
+
+
+@pytest.mark.asyncio
+async def test_send_email_malformed_timeout_is_swallowed(in_memory_smtp: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMTP_TIMEOUT", "30s")
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.sent == []
+
+
+@pytest.mark.asyncio
+async def test_send_email_runs_off_event_loop_thread(in_memory_smtp: Any) -> None:
+    await send_email(
+        receiver_email="to@invalid",
+        subject="Hi",
+        html="<p>x</p>",
+    )
+    assert in_memory_smtp.sent[0].thread_ident != threading.get_ident()
+
+
+@pytest.mark.asyncio
 async def test_send_email_smtp_failure_is_swallowed(
     in_memory_smtp: Any,
 ) -> None:
@@ -99,7 +153,5 @@ async def test_send_email_smtp_failure_is_swallowed(
     does not raise so a failing email never blocks the proxy.
     """
     in_memory_smtp.raise_on_send = RuntimeError("smtp boom")
-    await send_email(
-        receiver_email="to@invalid", subject="Hi", html="<p>x</p>"
-    )
+    await send_email(receiver_email="to@invalid", subject="Hi", html="<p>x</p>")
     assert in_memory_smtp.sent == []

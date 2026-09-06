@@ -3,23 +3,36 @@
 
 import os
 from ipaddress import ip_address
-from typing import Any, Dict, List, NoReturn, Optional
-from urllib.parse import ParseResult, urlparse, urlunparse
+from typing import TYPE_CHECKING, Any, Final, NoReturn
+from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
+from starlette.types import Scope
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.auth.token_endpoint_auth import (
+    TokenEndpointClientAuth,
+    build_token_endpoint_client_auth,
+    normalize_token_endpoint_auth_method,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+if TYPE_CHECKING:
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 # RFC 6749 §5.1 / OAuth 2.1 draft-15 §4.1.3: token-endpoint responses
 # must not be cached — both success and error bodies may reveal secrets.
-TOKEN_NO_CACHE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+TOKEN_NO_CACHE_HEADERS: Final = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 # Stripped from netloc before same-origin comparison so
 # ``llm.example.com`` matches ``llm.example.com:443`` (load balancers
 # routinely set X-Forwarded-Port: 443 even when the client URL has no
 # explicit port, which would otherwise break a literal netloc compare).
-_DEFAULT_PORTS = {"http": 80, "https": 443}
+_DEFAULT_PORTS: Final = {"http": 80, "https": 443}
+
+# Sentinel ``upstream_resource`` value meaning "derive the RFC 8707 resource identifier from the
+# server's own url". RFC 8707 requires an absolute URI, so this can never be a real resource value.
+UPSTREAM_RESOURCE_AUTO: Final = "auto"
 
 # Env var for ops to allowlist additional redirect_uri origins beyond
 # same-origin + loopback — needed for first-party OAuth clients hosted
@@ -27,26 +40,26 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 # an OAuth client of the MCP proxy on llm.example.com). Comma-separated;
 # each entry is ``host`` or ``host:port``; a ``*.`` prefix matches any
 # subdomain. HTTPS only.
-_TRUSTED_REDIRECT_ORIGINS_ENV = "MCP_TRUSTED_REDIRECT_ORIGINS"
+_TRUSTED_REDIRECT_ORIGINS_ENV: Final = "MCP_TRUSTED_REDIRECT_ORIGINS"
 
 # Comma-separated private-use URI allowlist for native MCP clients.
 # A trailing ``*`` is a prefix match; end the prefix with ``/`` (e.g.
 # ``myapp://host/oauth/*``) so ``.../oauth/callback*`` does not also
 # match ``.../oauth/callback-2``.
-_TRUSTED_NATIVE_REDIRECT_URIS_ENV = "MCP_TRUSTED_NATIVE_REDIRECT_URIS"
+_TRUSTED_NATIVE_REDIRECT_URIS_ENV: Final = "MCP_TRUSTED_NATIVE_REDIRECT_URIS"
 
 # Default allowlist for trusted native redirect URIs.
-_DEFAULT_NATIVE_REDIRECT_URIS: List[str] = [
+_DEFAULT_NATIVE_REDIRECT_URIS: Final[list[str]] = [
     "cursor://anysphere.cursor-mcp/oauth/callback",
 ]
 
-_warned_invalid_proxy_base_url: Optional[str] = None
+_warned_invalid_proxy_base_url: str | None = None
 
 
 def _oauth_invalid_request(
     error_description: str,
     *,
-    hint: Optional[str] = None,
+    hint: str | None = None,
     **extra: Any,
 ) -> NoReturn:
     """Raise ``invalid_request`` (RFC 6749) with a debuggable description.
@@ -55,7 +68,7 @@ def _oauth_invalid_request(
     ``invalid_request``; ``error_description`` and ``hint`` explain what
     failed and how to fix it (e.g. reverse-proxy / PROXY_BASE_URL issues).
     """
-    detail: Dict[str, Any] = {
+    detail: Final[dict[str, Any]] = {
         "error": "invalid_request",
         "error_description": error_description,
     }
@@ -70,14 +83,37 @@ def _origin_label(scheme: str, netloc: str) -> str:
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
 
 
-def _resolve_proxy_base_url_env() -> Optional[str]:
+def _redact_mcp_resource_url(url: str | None) -> str | None:
+    """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
+
+    Everything else is dropped: userinfo (``user:pass@``), the query string, the
+    fragment, and the path, because hosted MCP servers routinely embed the
+    credential in the path (e.g. ``/mcp/s/<token>``) and this value is persisted
+    in spend-log metadata that a caller who can invoke the tool can read back.
+    Returns None when the URL has no host to identify (nothing safe to log).
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        parts: Final = urlsplit(url)
+        hostname: Final = parts.hostname
+        port: Final = parts.port
+    except ValueError:
+        return None
+    if not hostname:
+        return None
+    netloc: Final = f"{hostname}:{port}" if port else hostname
+    return urlunsplit((parts.scheme, netloc, "", "", "")) or None
+
+
+def _resolve_proxy_base_url_env() -> str | None:
     global _warned_invalid_proxy_base_url
-    configured = os.environ.get("PROXY_BASE_URL", "").strip()
+    configured: Final = os.environ.get("PROXY_BASE_URL", "").strip()
     if not configured:
         return None
-    parsed = urlparse(configured)
+    parsed: Final = urlparse(configured)
     if parsed.scheme in ("http", "https") and parsed.netloc:
-        normalized = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+        normalized: Final = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
         return normalized.rstrip("/")
     if _warned_invalid_proxy_base_url != configured:
         verbose_logger.warning(
@@ -100,21 +136,21 @@ def get_request_base_url(request: Request) -> str:
     literal ``base_url``. Untrusted callers cannot poison OAuth-discovery
     / redirect_uri values by injecting headers.
     """
-    configured = _resolve_proxy_base_url_env()
+    configured: Final = _resolve_proxy_base_url_env()
     if configured:
         return configured
 
-    base_url = str(request.base_url).rstrip("/")
-    parsed = urlparse(base_url)
+    base_url: Final = str(request.base_url).rstrip("/")
+    parsed: Final = urlparse(base_url)
 
     if not IPAddressUtils.is_request_from_trusted_proxy(request):
         return base_url
 
-    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
-    x_forwarded_host = request.headers.get("X-Forwarded-Host")
-    x_forwarded_port = request.headers.get("X-Forwarded-Port")
+    x_forwarded_proto: Final = request.headers.get("X-Forwarded-Proto")
+    x_forwarded_host: Final = request.headers.get("X-Forwarded-Host")
+    x_forwarded_port: Final = request.headers.get("X-Forwarded-Port")
 
-    scheme = x_forwarded_proto if x_forwarded_proto else parsed.scheme
+    scheme: Final = x_forwarded_proto if x_forwarded_proto else parsed.scheme
 
     if x_forwarded_host:
         # X-Forwarded-Host may already include port (e.g., "example.com:8080")
@@ -129,7 +165,66 @@ def get_request_base_url(request: Request) -> str:
         if x_forwarded_port and ":" not in netloc:
             netloc = f"{netloc}:{x_forwarded_port}"
 
-    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
+    return urlunparse((scheme, _strip_default_port(scheme, netloc), parsed.path, "", "", ""))
+
+
+def well_known_root_suffix() -> str:
+    """The ``SERVER_ROOT_PATH`` segment inserted into a ``.well-known`` path (RFC 8414 / 9728
+    path insertion), empty for a root-mounted proxy or an explicit ``/``.
+
+    The discovery route registrations and the 401 challenges that advertise those routes both
+    derive their path from this one function, so the ``resource_metadata`` URL a client is told
+    to fetch cannot drift from the route that actually serves it.
+    """
+    root: Final = os.getenv("SERVER_ROOT_PATH", "")
+    return "" if root == "/" else root
+
+
+def get_route_relative_request_path(scope: Scope) -> str:
+    """The request path the MCP route shapes are written against: the raw ASGI path with the
+    deployment's ``root_path`` removed.
+
+    ``scope["path"]`` and ``_original_path`` are both raw request-line paths, so on a sub-path
+    deployment they still carry the ``SERVER_ROOT_PATH`` prefix (``/litellm/{server}/mcp``) while
+    every route shape compared against them is root-relative. Mirrors the segment-boundary strip in
+    :func:`litellm.proxy.auth.auth_utils.get_request_route`, which the rest of the MCP auth path
+    already routes through, so ``/litellmfoo`` is not truncated under ``root_path=/litellm``."""
+    raw_path = str(scope.get("_original_path") or scope.get("path", "") or "")
+    root_path = str(scope.get("app_root_path") or scope.get("root_path") or "").rstrip("/")
+    if root_path and (raw_path == root_path or raw_path.startswith(f"{root_path}/")):
+        return raw_path[len(root_path) :]
+    return raw_path
+
+
+def get_passthrough_resource_metadata_url(scope: Scope, server_name: str) -> str:
+    """The per-server protected-resource metadata URL matching the spelling the request
+    arrived on, so a strict RFC 9728 client resolves the same route the proxy registered.
+    ``_original_path`` preserves the ``/{server}/mcp`` spelling through the
+    ``dynamic_mcp_route`` rewrite; the ``SERVER_ROOT_PATH`` segment is inserted exactly as
+    the route decorators insert it (see :func:`well_known_root_suffix`)."""
+    request: Final = Request(scope)
+    base_url: Final = get_request_base_url(request)
+    _path: Final = get_route_relative_request_path(scope)
+
+    if _path.startswith(f"/{server_name}/mcp"):
+        return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/{server_name}/mcp"
+    return f"{base_url}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp/{server_name}"
+
+
+def get_passthrough_www_authenticate(
+    scope: Scope,
+    server_name: str,
+    invalid_token: bool = False,
+) -> str:
+    """The RFC 9728 ``WWW-Authenticate`` value advertising the per-server
+    protected-resource metadata, with the RFC 6750 ``invalid_token`` error code when the
+    caller presented a bearer that failed rather than no credential at all."""
+    resource_metadata_url: Final = get_passthrough_resource_metadata_url(
+        scope=scope,
+        server_name=server_name,
+    )
+    error_attr: Final = 'error="invalid_token", ' if invalid_token else ""
+    return f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"'
 
 
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
@@ -145,7 +240,7 @@ def validate_loopback_redirect_uri(redirect_uri: str) -> None:
     ``"127.0.0.1"`` alone would miss ``127.0.0.2`` and the full-form
     IPv6 loopback ``0:0:0:0:0:0:0:1``.
     """
-    parsed = _parse_redirect_uri_for_validation(redirect_uri)
+    parsed: Final = _parse_redirect_uri_for_validation(redirect_uri)
     if parsed.scheme not in ("http", "https"):
         _oauth_invalid_request(
             f"redirect_uri scheme {parsed.scheme!r} is not allowed; use http or https.",
@@ -154,7 +249,7 @@ def validate_loopback_redirect_uri(redirect_uri: str) -> None:
         _oauth_invalid_request(
             "redirect_uri must not contain a URL fragment (#...).",
         )
-    host = (parsed.hostname or "").lower()
+    host: Final = (parsed.hostname or "").lower()
     if host == "localhost":
         return
     try:
@@ -179,10 +274,10 @@ def _strip_default_port(scheme: str, netloc: str) -> str:
     """
     if not netloc:
         return netloc
-    lowered = netloc.lower()
+    lowered: Final = netloc.lower()
     if lowered.startswith("["):
         # IPv6 literal: port (if any) appears after the "]".
-        close = lowered.rfind("]")
+        close: Final = lowered.rfind("]")
         if close != -1 and lowered[close + 1 :].startswith(":"):
             try:
                 port = int(lowered[close + 2 :])
@@ -202,7 +297,7 @@ def _strip_default_port(scheme: str, netloc: str) -> str:
     return lowered
 
 
-def _parse_trusted_redirect_origins() -> List[str]:
+def _parse_trusted_redirect_origins() -> list[str]:
     """Parse ``MCP_TRUSTED_REDIRECT_ORIGINS`` into normalized entries.
     Empty / unset env var → empty list. Entries are lowercased and any
     scheme / path component the operator included is stripped. Default
@@ -211,10 +306,10 @@ def _parse_trusted_redirect_origins() -> List[str]:
     has already been normalized away — the allowlist path is https-only,
     so ``:443`` is the only default port that can legitimately appear.
     """
-    raw = os.environ.get(_TRUSTED_REDIRECT_ORIGINS_ENV, "").strip()
+    raw: Final = os.environ.get(_TRUSTED_REDIRECT_ORIGINS_ENV, "").strip()
     if not raw:
         return []
-    entries: List[str] = []
+    entries: Final[list[str]] = []
     for token in raw.split(","):
         entry = token.strip().lower()
         if not entry:
@@ -240,12 +335,12 @@ def _matches_trusted_origin_entry(netloc: str, entry: str) -> bool:
     the redirect_uri being validated.
     """
     if entry.startswith("*."):
-        suffix = entry[2:]
+        suffix: Final = entry[2:]
         if not suffix or suffix.startswith("."):
             return False
         # Strip port from netloc for wildcard host comparison;
         # wildcards don't express port constraints.
-        host = netloc.split(":", 1)[0] if ":" in netloc else netloc
+        host: Final = netloc.split(":", 1)[0] if ":" in netloc else netloc
         return host != suffix and host.endswith("." + suffix)
     return netloc == entry
 
@@ -266,10 +361,10 @@ def _normalize_native_redirect_uri(
     )
 
 
-def _parse_trusted_native_redirect_uris() -> List[str]:
+def _parse_trusted_native_redirect_uris() -> list[str]:
     """Built-in native MCP callbacks plus ``MCP_TRUSTED_NATIVE_REDIRECT_URIS``."""
-    entries: List[str] = [uri.lower() for uri in _DEFAULT_NATIVE_REDIRECT_URIS]
-    raw = os.environ.get(_TRUSTED_NATIVE_REDIRECT_URIS_ENV, "").strip()
+    entries: Final[list[str]] = [uri.lower() for uri in _DEFAULT_NATIVE_REDIRECT_URIS]
+    raw: Final = os.environ.get(_TRUSTED_NATIVE_REDIRECT_URIS_ENV, "").strip()
     if not raw:
         return entries
     for token in raw.split(","):
@@ -288,7 +383,7 @@ def _native_wildcard_prefix_matches(normalized: str, prefix: str) -> bool:
     """
     if not normalized.startswith(prefix):
         return False
-    suffix = normalized[len(prefix) :]
+    suffix: Final = normalized[len(prefix) :]
     if not suffix:
         return True
     if prefix.endswith("/"):
@@ -311,7 +406,7 @@ def _matches_trusted_native_redirect_uri(parsed) -> bool:
     if "\\" in parsed.netloc:
         return False
 
-    normalized = _normalize_native_redirect_uri(parsed)
+    normalized: Final = _normalize_native_redirect_uri(parsed)
     for entry in _parse_trusted_native_redirect_uris():
         if entry.endswith("*"):
             if _native_wildcard_prefix_matches(normalized, entry[:-1]):
@@ -331,8 +426,36 @@ def _parse_redirect_uri_for_validation(redirect_uri: str) -> ParseResult:
         )
 
 
-def _validate_trusted_http_redirect_shape(parsed: ParseResult) -> bool:
-    """Return True when ``parsed`` is an allowlisted native callback (caller may return)."""
+def is_loopback_redirect_host(parsed: ParseResult) -> bool:
+    """True when the redirect host is loopback (RFC 8252 section 7.3).
+
+    Shared by every redirect-URI policy in the MCP OAuth surface so that none of them
+    hand-rolls its own host list: a literal ``("localhost", "127.0.0.1", "::1")`` tuple
+    silently misses the rest of 127.0.0.0/8 and IPv6-mapped forms.
+    """
+    host: Final = (parsed.hostname or "").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def validate_redirect_uri_shape(parsed: ParseResult) -> bool:
+    """Validate redirect-URI *hygiene* and resolve allowlisted native callbacks.
+
+    Returns True when ``parsed`` is an allowlisted native callback (the caller may accept
+    it outright); returns False for http/https, leaving the trust decision to the caller;
+    raises for a URI that no policy should ever accept (bad scheme, fragment, missing
+    host, userinfo, backslash in the host).
+
+    This is deliberately separate from :func:`validate_trusted_redirect_uri`, which adds
+    the *first-party* trust policy (same-origin, loopback, ops allowlist) appropriate to
+    the proxy's own OAuth endpoints. Public dynamic-client registration accepts any https
+    client and relies on PKCE plus the consent screen instead, so it shares this hygiene
+    rule but not that trust policy.
+    """
     if parsed.scheme not in ("http", "https"):
         if _matches_trusted_native_redirect_uri(parsed):
             return True
@@ -360,7 +483,7 @@ def _validate_trusted_http_redirect_shape(parsed: ParseResult) -> bool:
     return False
 
 
-def _resolve_proxy_base_for_redirect(request: Request) -> Optional[str]:
+def _resolve_proxy_base_for_redirect(request: Request) -> str | None:
     try:
         return get_request_base_url(request)
     except Exception as exc:
@@ -375,25 +498,17 @@ def _resolve_proxy_base_for_redirect(request: Request) -> Optional[str]:
 def _trusted_redirect_uri_is_allowed(
     parsed: ParseResult,
     redirect_netloc: str,
-    proxy_base: Optional[str],
+    proxy_base: str | None,
 ) -> bool:
     if proxy_base:
-        proxy_parsed = urlparse(proxy_base)
-        if (
-            parsed.scheme == proxy_parsed.scheme
-            and redirect_netloc
-            == _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc)
+        proxy_parsed: Final = urlparse(proxy_base)
+        if parsed.scheme == proxy_parsed.scheme and redirect_netloc == _strip_default_port(
+            proxy_parsed.scheme, proxy_parsed.netloc
         ):
             return True
 
-    host = (parsed.hostname or "").lower()
-    if host == "localhost":
+    if is_loopback_redirect_host(parsed):
         return True
-    try:
-        if ip_address(host).is_loopback:
-            return True
-    except ValueError:
-        pass
 
     if parsed.scheme == "https":
         for entry in _parse_trusted_redirect_origins():
@@ -406,7 +521,7 @@ def _build_trusted_redirect_rejection_message(
     redirect_uri: str,
     parsed: ParseResult,
     redirect_netloc: str,
-    proxy_base: Optional[str],
+    proxy_base: str | None,
 ) -> str:
     """Build a client-facing rejection message.
 
@@ -415,15 +530,13 @@ def _build_trusted_redirect_rejection_message(
     through an unauthenticated endpoint. Full diagnostic detail — including
     the computed proxy base — is logged server-side by the caller.
     """
-    redirect_origin = _origin_label(parsed.scheme, redirect_netloc)
-    proxy_parsed = urlparse(proxy_base) if proxy_base else None
-    proxy_netloc_norm = (
-        _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc)
-        if proxy_parsed and proxy_parsed.netloc
-        else ""
+    redirect_origin: Final = _origin_label(parsed.scheme, redirect_netloc)
+    proxy_parsed: Final = urlparse(proxy_base) if proxy_base else None
+    proxy_netloc_norm: Final = (
+        _strip_default_port(proxy_parsed.scheme, proxy_parsed.netloc) if proxy_parsed and proxy_parsed.netloc else ""
     )
 
-    mismatch_parts: List[str] = []
+    mismatch_parts: Final[list[str]] = []
     if proxy_parsed and proxy_parsed.netloc:
         if parsed.scheme != proxy_parsed.scheme:
             mismatch_parts.append(
@@ -433,16 +546,10 @@ def _build_trusted_redirect_rejection_message(
                 "or trust X-Forwarded-Proto from your ingress)"
             )
         if redirect_netloc != proxy_netloc_norm:
-            mismatch_parts.append(
-                f"host/port: redirect_uri {redirect_netloc!r} does not match "
-                "the proxy origin"
-            )
+            mismatch_parts.append(f"host/port: redirect_uri {redirect_netloc!r} does not match the proxy origin")
 
     if mismatch_parts:
-        return (
-            f"redirect_uri origin ({redirect_origin}) does not match the proxy "
-            "origin. " + "; ".join(mismatch_parts)
-        )
+        return f"redirect_uri origin ({redirect_origin}) does not match the proxy origin. " + "; ".join(mismatch_parts)
     return (
         f"redirect_uri ({redirect_uri!r}) is not allowed: not same-origin with "
         f"the proxy origin, not loopback, and not listed in "
@@ -455,17 +562,18 @@ def _raise_trusted_redirect_uri_rejected(
     redirect_uri: str,
     parsed: ParseResult,
     redirect_netloc: str,
-    proxy_base: Optional[str],
+    proxy_base: str | None,
 ) -> NoReturn:
-    description = _build_trusted_redirect_rejection_message(
-        redirect_uri, parsed, redirect_netloc, proxy_base
-    )
+    description: Final = _build_trusted_redirect_rejection_message(redirect_uri, parsed, redirect_netloc, proxy_base)
 
-    hint = (
+    hint: Final = (
         "Align the proxy public URL with the browser URL. Set PROXY_BASE_URL to your "
         "HTTPS origin (e.g. https://litellm.example.com), or enable "
         "general_settings.use_x_forwarded_for with mcp_trusted_proxy_ranges for your "
-        "ingress. Verify: curl https://<host>/.well-known/oauth-authorization-server "
+        "ingress. If the redirect_uri is a legitimate separate-origin OAuth client "
+        "(e.g. a web app registering with the proxy from another host via dynamic client "
+        f"registration), add its origin to {_TRUSTED_REDIRECT_ORIGINS_ENV}. "
+        "Verify: curl https://<host>/.well-known/oauth-authorization-server "
         "| jq .issuer — issuer must match window.location.origin in the UI."
     )
 
@@ -518,13 +626,120 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     BYOK endpoints, which only serve native MCP clients, retain
     :func:`validate_loopback_redirect_uri`.
     """
-    parsed = _parse_redirect_uri_for_validation(redirect_uri)
-    if _validate_trusted_http_redirect_shape(parsed):
+    parsed: Final = _parse_redirect_uri_for_validation(redirect_uri)
+    if validate_redirect_uri_shape(parsed):
         return
-    redirect_netloc = _strip_default_port(parsed.scheme, parsed.netloc)
-    proxy_base = _resolve_proxy_base_for_redirect(request)
+    redirect_netloc: Final = _strip_default_port(parsed.scheme, parsed.netloc)
+    proxy_base: Final = _resolve_proxy_base_for_redirect(request)
     if _trusted_redirect_uri_is_allowed(parsed, redirect_netloc, proxy_base):
         return
-    _raise_trusted_redirect_uri_rejected(
-        request, redirect_uri, parsed, redirect_netloc, proxy_base
+    _raise_trusted_redirect_uri_rejected(request, redirect_uri, parsed, redirect_netloc, proxy_base)
+
+
+def canonicalize_url_identity(url: str) -> str:
+    """Normalize a URL to a comparable identity: lowercase scheme and host, drop the scheme's default
+    port, and strip userinfo, params, query, fragment and a trailing slash while keeping IPv6
+    brackets. The one URL-canonicalization primitive shared by the RFC 8707 resource emitter and the
+    RFC 8414 issuer/authorize-endpoint comparison, so the default-port and IPv6 rules cannot be
+    present in one and missing in the other. The netloc (not ``parsed.hostname``) carries the
+    authority so ``[::1]:8080`` survives with its brackets intact."""
+    parsed: Final = urlparse(url)
+    scheme: Final = parsed.scheme.lower()
+    netloc: Final = _strip_default_port(scheme, parsed.netloc.rpartition("@")[2])
+    return urlunparse((scheme, netloc, parsed.path.rstrip("/"), "", "", ""))
+
+
+def canonical_resource_uri(url: str) -> str | None:
+    """Canonicalize an upstream MCP server URL into an RFC 8707 resource identifier.
+
+    Keeps only the scheme, host, port and path, which is the shape the MCP authorization spec's
+    "Canonical Server URI" section describes and every one of its examples takes; the reference
+    implementation is ``mcp.shared.auth_utils.resource_url_from_server_url``, and this is the stricter
+    variant. The scheme and host are lowercased, the scheme's default port is dropped so
+    ``https://host:443/mcp`` and ``https://host/mcp`` never present as two resources, and a trailing
+    slash is dropped so ``https://host/mcp/`` and ``https://host/mcp`` do not either.
+
+    Userinfo, query and fragment are dropped rather than carried. A transport URL routinely holds
+    credentials in exactly those components (``user:password@``, ``?api_key=``), while a resource
+    indicator names the resource and nothing else; this value is published somewhere the transport
+    URL never goes, into the authorization redirect the browser follows and into token request
+    bodies, so carrying them would disclose them to the authorization server, its logs, and browser
+    history. RFC 8707 forbids a fragment outright and says a resource SHOULD NOT carry a query. An
+    upstream whose identifier genuinely needs more than this is served by setting
+    ``upstream_resource`` explicitly, which is passed through untouched.
+
+    Returns ``None`` when the URL is not absolute, which cannot yield a valid resource identifier.
+    """
+    parsed: Final = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return canonicalize_url_identity(url)
+
+
+def resolve_upstream_resource(mcp_server: "MCPServer") -> str | None:
+    """Resolve the RFC 8707 ``resource`` value this server's upstream OAuth legs must carry.
+
+    The MCP authorization spec requires an MCP client to send ``resource`` on both the
+    authorization request and every token request, naming the canonical URI of the MCP server the
+    token is for. Authorization server temperaments are irreconcilable and undetectable, so this
+    stays an explicit per-server opt-in: most SaaS providers ignore the parameter, some hard-reject
+    it and express audience through scopes instead, and strict or MCP-native ones refuse to mint a
+    correctly scoped token without it (``invalid_target``).
+
+    ``None`` or blank omits the parameter, which is the default and preserves the behavior of every
+    server working today. ``"auto"`` derives the canonical URI from the server's own URL; it is not
+    an absolute URI, so RFC 8707 guarantees it can never collide with a real resource value. Any
+    other value is sent verbatim, because the identifier has to match what the authorization server
+    expects exactly and normalizing it could break that match.
+
+    Every upstream leg for a server resolves through this one function, so the authorize request
+    and the token requests cannot disagree; a token request naming a resource the authorization
+    request never asked for is itself an ``invalid_target`` under RFC 8707.
+    """
+    configured: Final = (mcp_server.upstream_resource or "").strip()
+    if not configured:
+        return None
+    if configured.lower() != UPSTREAM_RESOURCE_AUTO:
+        return configured
+    if not mcp_server.url:
+        verbose_logger.warning(
+            "MCP server %s sets upstream_resource=auto but has no url to derive a resource "
+            "identifier from; omitting the RFC 8707 resource parameter. Set upstream_resource to "
+            "the exact resource identifier the authorization server expects instead.",
+            mcp_server.server_id,
+        )
+        return None
+    canonical: Final = canonical_resource_uri(mcp_server.url)
+    if canonical is None:
+        verbose_logger.warning(
+            "MCP server %s sets upstream_resource=auto but its url is not an absolute URI, so no "
+            "RFC 8707 resource identifier could be derived; omitting the resource parameter",
+            mcp_server.server_id,
+        )
+    return canonical
+
+
+def build_upstream_oauth2_token_request(
+    mcp_server: "MCPServer",
+    *,
+    auth_method: object,
+    client_id: str | None,
+    client_secret: str | None,
+) -> TokenEndpointClientAuth:
+    """Client auth plus the RFC 8707 ``resource`` for one upstream plain-OAuth2 token request.
+
+    Resolving both in one call is what stops a leg authenticating without naming the resource its
+    sibling legs named; the RFC 8693 legs (OBO, id_jag) carry ``audience`` and stay on
+    ``build_token_endpoint_client_auth``. The client-auth inputs are passed in because a leg may
+    authenticate as the caller's own client rather than the server's; ``resource`` always comes from
+    the server, so no leg can choose or forget it.
+    """
+    client_auth: Final = build_token_endpoint_client_auth(
+        auth_method=normalize_token_endpoint_auth_method(auth_method),
+        client_id=client_id,
+        client_secret=client_secret,
     )
+    resource: Final = resolve_upstream_resource(mcp_server)
+    if not resource:
+        return client_auth
+    return TokenEndpointClientAuth(headers=client_auth.headers, body={**client_auth.body, "resource": resource})

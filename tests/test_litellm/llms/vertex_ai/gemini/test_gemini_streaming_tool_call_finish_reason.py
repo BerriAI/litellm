@@ -302,3 +302,39 @@ def test_streaming_tool_call_finish_reason_with_empty_content_in_final_chunk():
     assert len(response2.choices) == 1
     # Must be "tool_calls", NOT "stop"
     assert response2.choices[0].finish_reason == "tool_calls"
+
+
+def test_streaming_metadata_only_chunk_does_not_yield_empty_choices():
+    """
+    web_search + reasoning makes Gemini emit mid-stream chunks that carry only
+    grounding/thought metadata — no content part and no finishReason.
+    _process_candidates skips content-less candidates, so without a fallback
+    `choices` is empty and the downstream streaming handler hits
+    `IndexError: list index out of range` on choices[0].
+
+    Ref: https://github.com/BerriAI/litellm/issues/28884
+    """
+    logging_obj = _make_logging_obj()
+    iterator = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    # Grounding-only chunk: a candidate with groundingMetadata but no content
+    # part and no finishReason (what web_search + reasoning produces mid-stream).
+    metadata_only_chunk = {
+        "candidates": [
+            {
+                "index": 0,
+                "groundingMetadata": {"webSearchQueries": ["weather boston"]},
+            }
+        ]
+    }
+
+    response = iterator.chunk_parser(metadata_only_chunk)
+    assert response is not None
+    # Must expose at least one choice so downstream choices[0] is safe.
+    assert len(response.choices) == 1
+    assert response.choices[0].finish_reason is None
+    assert response.choices[0].delta.content is None
