@@ -212,10 +212,15 @@ echo "=== Starting mock Presidio server ==="
 uv run --no-sync python "$SCRIPT_DIR/fixtures/mock_presidio_server/server.py" &
 MOCK_PRESIDIO_PID=$!
 
+PRESIDIO_READY=0
 for i in $(seq 1 15); do
-  if curl -sf http://127.0.0.1:${MOCK_PRESIDIO_PORT}/health >/dev/null 2>&1; then break; fi
+  if curl -sf http://127.0.0.1:${MOCK_PRESIDIO_PORT}/health >/dev/null 2>&1; then PRESIDIO_READY=1; break; fi
   sleep 1
 done
+if [ "$PRESIDIO_READY" -ne 1 ]; then
+  echo "Mock Presidio server never answered /health on port ${MOCK_PRESIDIO_PORT}" >&2
+  exit 1
+fi
 
 # --- LiteLLM proxy ---
 echo "=== Starting LiteLLM proxy ==="
