@@ -121,6 +121,11 @@ from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
 )
+from litellm.proxy.db.health_check_latest import (
+    LatestHealthCheckRow,
+    fetch_latest_health_checks,
+    fetch_latest_health_checks_for_models,
+)
 from litellm.proxy.db.log_db_metrics import log_db_metrics
 from litellm.proxy.db.prisma_client import (
     PrismaWrapper,
@@ -5965,48 +5970,13 @@ class PrismaClient:
             verbose_proxy_logger.error("Error getting health check history: %s", e)
             return []
 
-    async def get_all_latest_health_checks(self) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
-        """
-        Get the latest health check for each model.
+    async def get_all_latest_health_checks(self) -> tuple[LatestHealthCheckRow, ...]:
+        """Latest health check per (model_id, model_name), deduplicated in Postgres."""
+        return await fetch_latest_health_checks(self)
 
-        Uses DB-level DISTINCT ON (model_id, model_name) with ORDER BY checked_at DESC
-        (via Prisma ``distinct`` + ``order``) so we never load the full history into memory.
-        """
-        try:
-            return await HealthCheckRepository(self).table.find_many(
-                distinct=["model_id", "model_name"],
-                order=[
-                    {"model_id": "asc"},
-                    {"model_name": "asc"},
-                    {"checked_at": "desc"},
-                ],
-            )
-        except Exception as e:
-            verbose_proxy_logger.error("Error getting all latest health checks: %s", e)
-            return []
-
-    async def get_latest_health_checks_for_models(
-        self, model_names: "Sequence[str]"
-    ) -> "Sequence[prisma_models.LiteLLM_HealthCheckTable]":
-        """
-        Get the latest health check for each of the named models.
-
-        Same DISTINCT ON as ``get_all_latest_health_checks``, bounded to the models asked
-        about, so a paged caller reads health for its page instead of for the whole table.
-        """
-        if not model_names:
-            return ()
-        latest_first: Final = (("model_id", "asc"), ("model_name", "asc"), ("checked_at", "desc"))
-        order: Final = [{field: direction} for field, direction in latest_first]  # mutable-ok: prisma order is a list
-        try:
-            return await HealthCheckRepository(self).table.find_many(
-                where={"model_name": {"in": list(model_names)}},  # mutable-ok: prisma filters are dicts and lists
-                distinct=["model_id", "model_name"],  # mutable-ok: prisma distinct takes a list
-                order=order,
-            )
-        except Exception as e:  # noqa: BLE001  # health decorates a list; a driver error must not fail the page
-            verbose_proxy_logger.error("Error getting latest health checks for models: %s", e)
-            return ()
+    async def get_latest_health_checks_for_models(self, model_names: Sequence[str]) -> tuple[LatestHealthCheckRow, ...]:
+        """Same as ``get_all_latest_health_checks``, bounded to the named models."""
+        return await fetch_latest_health_checks_for_models(self, model_names)
 
 
 ### HELPER FUNCTIONS ###
