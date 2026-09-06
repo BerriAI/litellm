@@ -8,6 +8,7 @@ from base64 import b64encode
 from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import reduce
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict, cast
 from urllib.parse import urlencode, urlparse
@@ -2162,16 +2163,22 @@ def _json_object_frame(text_data: str) -> Mapping[str, object] | None:
         return None
 
 
-def _placed_model(frame: Mapping[str, object], placement: Sequence[str]) -> str | None:
-    key, *nested = placement
-    value: Final = frame.get(key)
-    if not nested:
-        return value if isinstance(value, str) else None
+def _nested_frame(frame: Mapping[str, object] | None, key: str) -> Mapping[str, object] | None:
+    if frame is None:
+        return None
     try:
-        child: Final = _JSON_OBJECT_FRAME.validate_python(value)
+        return _JSON_OBJECT_FRAME.validate_python(frame.get(key))
     except ValidationError:
         return None
-    return _placed_model(child, nested)
+
+
+def _placed_model(frame: Mapping[str, object], placement: Sequence[str]) -> str | None:
+    *parents, leaf = placement
+    container: Final = reduce(_nested_frame, parents, frame)
+    if container is None:
+        return None
+    value: Final = container.get(leaf)
+    return value if isinstance(value, str) else None
 
 
 def _client_frame_models(text_data: str) -> tuple[str, ...]:
