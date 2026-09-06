@@ -1006,6 +1006,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         delta: Final = cast(Mapping[str, object], processed_chunk["delta"])  # cast-ok: keys checked before use
         if delta.get("stop_reason") == "max_tokens":
             return processed_chunk
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            refusal_stop_details,
+        )
+
         return cast(  # cast-ok: rebuilt dict matches the message_delta TypedDict shape for this branch
             ContentBlockDelta | MessageBlockDelta,
             {  # mutable-ok: fresh translation payload; never mutated after construction
@@ -1013,11 +1017,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 "delta": {  # mutable-ok: fresh message_delta payload; never mutated after construction
                     **delta,
                     "stop_reason": "refusal",
-                    "stop_details": {  # mutable-ok: fresh stop_details payload; never mutated after construction
-                        "type": "refusal",
-                        "category": None,
-                        "explanation": "".join(self._refusal_text_parts),
-                    },
+                    "stop_details": refusal_stop_details("".join(self._refusal_text_parts)),
                 },
             },
         )
@@ -1098,9 +1098,13 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         - Different content types in the response
         - Specific markers in the content
         """
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            openai_chat_refusal_text,
+        )
+
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        refusal_text: Final = LiteLLMAnthropicMessagesAdapter._refusal_text(chunk.choices[0].delta)
+        refusal_text: Final = openai_chat_refusal_text(chunk.choices[0].delta)
         if refusal_text is not None:
             self._refusal_text_parts.append(refusal_text)
 

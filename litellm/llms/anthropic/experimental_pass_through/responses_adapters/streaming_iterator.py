@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    refusal_stop_details,
+    responses_output_refusal_text,
+)
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
 
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
@@ -136,8 +140,20 @@ class AnthropicResponsesStreamWrapper:
 
         if event_type == "response.refusal.delta":
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
-            if isinstance(delta, str):
-                self._refusal_text_parts.append(delta)
+            if not isinstance(delta, str) or not delta:
+                return
+            self._refusal_text_parts.append(delta)
+            item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
+            block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
+            if block_idx < 0:
+                block_idx = self._open_block(item_id, {"type": "text", "text": ""})
+            self._chunk_queue.append(
+                {
+                    "type": "content_block_delta",
+                    "index": block_idx,
+                    "delta": {"type": "text_delta", "text": delta},
+                }
+            )
             return
 
         # ---- text delta ----
@@ -225,9 +241,7 @@ class AnthropicResponsesStreamWrapper:
                 event.get("response") if isinstance(event, dict) else None
             )
             output: Final = (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
-            refusal_text: Final = LiteLLMAnthropicToResponsesAPIAdapter._refusal_text_from_output(output) or (
-                "".join(self._refusal_text_parts) or None
-            )
+            refusal_text: Final = responses_output_refusal_text(output) or ("".join(self._refusal_text_parts) or None)
             status: Final = getattr(response_obj, "status", None) if response_obj is not None else None
             has_tool_call: Final = any(
                 getattr(item, "type", None) == "function_call"
@@ -255,12 +269,8 @@ class AnthropicResponsesStreamWrapper:
                 "stop_reason": stop_reason,
                 "stop_sequence": None,
                 **(
-                    {  # mutable-ok: fresh refusal stop_details payload built per chunk
-                        "stop_details": {  # mutable-ok: fresh refusal stop_details payload built per chunk
-                            "type": "refusal",
-                            "category": None,
-                            "explanation": refusal_text,
-                        }
+                    {  # mutable-ok: fresh message_delta stop_details entry built per chunk
+                        "stop_details": refusal_stop_details(refusal_text)
                     }
                     if stop_reason == "refusal"
                     else {}  # mutable-ok: empty spread placeholder for non-refusal stop

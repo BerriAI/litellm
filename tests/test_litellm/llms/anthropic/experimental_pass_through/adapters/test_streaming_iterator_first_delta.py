@@ -108,7 +108,7 @@ def _text_deltas(events: List[dict]) -> List[str]:
     ]
 
 
-def test_streaming_chat_refusal_emits_only_refusal_stop_details():
+def test_streaming_chat_refusal_emits_refusal_text_and_stop_details():
     chunks = [
         _make_chunk(Delta(content=None, refusal="I cannot fulfill this request.")),
         _make_chunk(Delta(content=None), finish_reason="stop"),
@@ -117,7 +117,7 @@ def test_streaming_chat_refusal_emits_only_refusal_stop_details():
 
     events = _drain_sync(wrapper)
 
-    assert _text_deltas(events) == []
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
     message_delta = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["delta"] == {
         "stop_reason": "refusal",
@@ -130,7 +130,7 @@ def test_streaming_chat_refusal_emits_only_refusal_stop_details():
 
 
 @pytest.mark.asyncio
-async def test_streaming_chat_refusal_emits_only_refusal_stop_details_async():
+async def test_streaming_chat_refusal_emits_refusal_text_and_stop_details_async():
     chunks = [
         _make_chunk(Delta(content=None, refusal="I cannot fulfill this request.")),
         _make_chunk(Delta(content=None), finish_reason="stop"),
@@ -139,7 +139,7 @@ async def test_streaming_chat_refusal_emits_only_refusal_stop_details_async():
 
     events = await _drain_async(wrapper)
 
-    assert _text_deltas(events) == []
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
     message_delta = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["delta"]["stop_reason"] == "refusal"
     assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
