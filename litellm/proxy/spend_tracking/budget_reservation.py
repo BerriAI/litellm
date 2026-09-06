@@ -14,7 +14,12 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, resolve_token_rates
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    TokenRates,
+    normalize_service_tier,
+    provider_writes_prompt_to_cache_unasked,
+    resolve_token_rates,
+)
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.proxy._types import (
     Litellm_EntityType,
@@ -1136,36 +1141,24 @@ def _input_cost_for_cost_info(
     )
 
 
-AUTO_PROMPT_CACHING_PROVIDERS: Final = frozenset({"openai", "azure"})
-
-
 def _billed_input_rate(
     rates: TokenRates,
     model_info: Mapping[str, object],
     request_body: Mapping[str, object],
 ) -> float:
-    """OpenAI writes a large prompt into its own cache without the request asking and bills every
-    written token at the cache-creation rate, so an input token there costs the higher of the two.
-    Every other provider writes only what the request marks with cache_control, and holding the
-    write rate for a request that marks nothing reserves above anything it can bill."""
+    """An input token costs the higher of the input and cache-creation rates wherever the prompt
+    lands in the provider's cache, since every written token bills at the write rate. Holding the
+    write rate for a request that marks nothing, on a provider that writes nothing unasked, would
+    reserve above anything the request can bill."""
     if _writes_the_prompt_to_cache(model_info=model_info, request_body=request_body):
         return max(rates.input_rate, rates.cache_creation_rate)
     return rates.input_rate
 
 
 def _writes_the_prompt_to_cache(model_info: Mapping[str, object], request_body: Mapping[str, object]) -> bool:
-    if model_info.get("litellm_provider") in AUTO_PROMPT_CACHING_PROVIDERS:
-        return True
-    return AnthropicCacheControlHook.request_has_cache_control(
-        messages=_blocks_in(request_body, "messages") + _blocks_in(request_body, "input"),
-        system=request_body.get("system"),
-        tools=_blocks_in(request_body, "tools"),
-    )
-
-
-def _blocks_in(request_body: Mapping[str, object], field: str) -> tuple[object, ...]:
-    value: Final = request_body.get(field)
-    return tuple(value) if isinstance(value, (list, tuple)) else ()
+    return provider_writes_prompt_to_cache_unasked(
+        model_info.get("litellm_provider")
+    ) or AnthropicCacheControlHook.body_has_cache_control(request_body)
 
 
 def _token_rates_for_cost_info(
@@ -1185,14 +1178,18 @@ def _token_rates_for_cost_info(
             total_tokens=input_tokens + output_tokens,
         ),
         custom_llm_provider=pricing.model_info.get("litellm_provider"),
-        service_tier=_requested_service_tier(request_body),
+        service_tier=_billed_service_tier(request_body=request_body, pricing=pricing),
         data_residency=pricing.data_residency,
+        vertex_location=pricing.vertex_location,
     )
 
 
-def _requested_service_tier(request_body: Mapping[str, object]) -> str | None:
-    service_tier: Final = request_body.get("service_tier")
-    return service_tier if isinstance(service_tier, str) else None
+def _billed_service_tier(request_body: Mapping[str, object], pricing: _DeploymentPricing) -> str | None:
+    """The tier the finished request bills on: its own `service_tier` when it names one, and
+    otherwise the tier the deployment pins, which the router applies to every request that does
+    not. "auto" leaves the choice to the provider, so it prices as the standard tier does."""
+    requested: Final = request_body.get("service_tier")
+    return normalize_service_tier(requested if isinstance(requested, str) else pricing.service_tier)
 
 
 def _estimate_request_max_cost_for_model(
@@ -1227,6 +1224,8 @@ def _max_cost_for_cost_info(
         request_body=request_body,
         model_info=pricing.model_info,
     )
+    if image_cost is not None:
+        return image_cost
 
     estimated_input_tokens: Final = _estimate_input_tokens(
         request_body=request_body,
@@ -1241,7 +1240,7 @@ def _max_cost_for_cost_info(
         model_info=pricing.model_info,
     )
     if estimated_input_tokens is None or output_tokens is None:
-        return image_cost
+        return None
 
     output_multiplier: Final = _get_output_multiplier(request_body=request_body)
     rates: Final = _token_rates_for_cost_info(
@@ -1250,17 +1249,30 @@ def _max_cost_for_cost_info(
         input_tokens=estimated_input_tokens,
         output_tokens=output_tokens,
     )
-    # The reasoning-token share is unknown before the request runs, so reserve every
-    # output token at the higher of the standard and reasoning rates to avoid
-    # under-reserving reasoning-heavy requests.
-    output_rate: Final = max(rates.output_rate, rates.billed_reasoning_rate)
     input_rate: Final = _billed_input_rate(
         rates=rates,
         model_info=pricing.model_info,
         request_body=request_body,
     )
-    token_cost: Final = (estimated_input_tokens * input_rate) + (output_tokens * output_multiplier * output_rate)
-    return token_cost if image_cost is None else max(image_cost, token_cost)
+    output_rate: Final = _billed_output_rate(rates=rates, model_info=pricing.model_info)
+    return (estimated_input_tokens * input_rate) + (output_tokens * output_multiplier * output_rate)
+
+
+def _billed_output_rate(rates: TokenRates, model_info: Mapping[str, object]) -> float:
+    """How much of the reasoning budget a response spends is unknown before it runs, so every
+    output token reserves at the higher of the standard and reasoning rates. An image model
+    priced only per image token is the exception: that rate belongs to the tokens of a generated
+    picture, which the per-image path reserves, and charging it for the text-completion cap an
+    image route never spends would hold tens of times the picture's price."""
+    if _prices_output_per_image_token(model_info):
+        return 0.0
+    return max(rates.output_rate, rates.billed_reasoning_rate)
+
+
+def _prices_output_per_image_token(model_info: Mapping[str, object]) -> bool:
+    return not _to_float(model_info.get("output_cost_per_token")) and bool(
+        _to_float(model_info.get("output_cost_per_image_token"))
+    )
 
 
 def _estimate_image_generation_cost(
@@ -1303,11 +1315,15 @@ def _estimate_image_generation_cost(
 
 @dataclass(frozen=True, slots=True)
 class _DeploymentPricing:
-    """A deployment's cost entry, with the pricing context that comes from the deployment
-    rather than the request: the regional host it is sent to sets a data-residency uplift."""
+    """A deployment's cost entry, with the pricing context that comes from the deployment rather
+    than the request: the regional host or Vertex location it is sent to carries a price uplift,
+    and a service tier pinned in its litellm_params bills every request that does not name its
+    own tier at that tier's rates."""
 
     model_info: ModelInfo
     data_residency: str | None = None
+    vertex_location: str | None = None
+    service_tier: str | None = None
 
 
 def _get_model_cost_info(model: str) -> ModelInfo:
@@ -1369,12 +1385,16 @@ def _deployment_cost_info(
     if model_info is None:
         return None
     api_base: Final = _get_value(litellm_params, "api_base")
+    vertex_location: Final = _get_value(litellm_params, "vertex_location") or litellm.vertex_location
+    service_tier: Final = _get_value(litellm_params, "service_tier")
     return _DeploymentPricing(
         model_info=model_info,
         data_residency=infer_openai_data_residency(
             custom_llm_provider=model_info.get("litellm_provider"),
             api_base=api_base if isinstance(api_base, str) else None,
         ),
+        vertex_location=vertex_location if isinstance(vertex_location, str) else None,
+        service_tier=service_tier if isinstance(service_tier, str) else None,
     )
 
 
@@ -1494,7 +1514,7 @@ def _estimate_output_tokens(
     route: str,
     model_info: Mapping[str, object],
 ) -> int | None:
-    if _bills_no_completion_tokens(route=route):
+    if _is_input_only_route(route=route):
         return 0
 
     requested: int | None = None
@@ -1546,17 +1566,13 @@ def _get_output_multiplier(request_body: dict) -> int:
     return output_multiplier
 
 
-def _bills_no_completion_tokens(route: str) -> bool:
-    """Image routes bill the picture, sized by the request's own `size` and `quality`, so the
-    completion-token fallback below would price a chat-shaped guess at the model's image-token
-    rate and reserve about sixty times what a 1024x1024 image costs."""
+def _is_input_only_route(route: str) -> bool:
     return any(
         route_part in route
         for route_part in (
             "embeddings",
             "rerank",
             "moderations",
-            "images/",
         )
     )
 

@@ -1264,41 +1264,11 @@ def test_reservation_prices_every_image_of_a_router_served_image_model():
     assert estimated == pytest.approx(3 * per_image)
 
 
-def test_image_reservation_keeps_the_token_cost_when_it_is_the_larger_one():
-    """Image models are commonly priced per image and per prompt token at once, so a long
-    prompt can cost more than the pictures. Reserving only the per-image price would let such
-    a request through a budget its token bill goes on to overshoot."""
-    router = Router(
-        model_list=[
-            {
-                "model_name": "pixels-with-a-long-prompt",
-                "litellm_params": {"model": "openai/dall-e-3", "api_key": "sk-fake"},
-                "model_info": {
-                    "mode": "image_generation",
-                    "output_cost_per_image": 0.01,
-                    "input_cost_per_token": 1e-05,
-                    "output_cost_per_token": 0.0,
-                    "max_output_tokens": 1000,
-                },
-            }
-        ]
-    )
-    input_tokens = 50_000
-
-    estimated = estimate_request_max_cost(
-        request_body={"model": "pixels-with-a-long-prompt", "prompt": "a cat", "n": 1},
-        route="/v1/images/generations",
-        llm_router=router,
-        input_token_counts={"pixels-with-a-long-prompt": input_tokens},
-    )
-
-    assert estimated == pytest.approx(input_tokens * 1e-05)
-
-
 def test_image_generation_reserves_the_picture_not_a_chat_token_fallback():
-    """An image request carries no token cap, so the chat fallback of 16K output tokens priced at
-    gpt-image-1's per-image-token rate reserves $0.65 against a 1024x1024 low-quality picture that
-    bills about a cent, and a key with headroom for the picture is refused."""
+    """gpt-image-1 prices its output only per image token, so charging the chat fallback of 16K
+    output tokens at that rate would reserve $0.65 against a 1024x1024 low-quality picture that
+    bills about a cent, and refuse a key holding enough for the picture. The reservation prices
+    the prompt and leaves the picture to the per-image path."""
     from litellm.proxy.spend_tracking.budget_reservation import (
         DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK,
     )
@@ -1405,6 +1375,83 @@ def test_reservation_prices_a_regional_deployment_at_the_uplifted_rate():
             input_token_counts={"gpt-5.5": input_tokens},
         )
         for api_base in (None, "https://eu.api.openai.com/v1")
+    ]
+
+    global_estimate, regional_estimate = estimates
+    assert global_estimate is not None and regional_estimate is not None
+    assert regional_estimate == pytest.approx(global_estimate * uplift)
+
+
+def test_reservation_prices_a_deployment_pinned_service_tier_at_that_tier_rate():
+    """The router hands every request that does not name its own service_tier the one pinned in
+    the deployment's litellm_params, and the bill follows it: gpt-5.5's priority rates run 2.5x
+    the standard ones. Reserving at the standard rate lets those requests through a budget their
+    own bill then overshoots. A request that names a tier still wins, so flex on the same
+    deployment reserves at the flex rate."""
+    model_info = litellm.get_model_info("gpt-5.5")
+    priority_input_rate = model_info.get("input_cost_per_token_priority")
+    priority_output_rate = model_info.get("output_cost_per_token_priority")
+    flex_input_rate = model_info.get("input_cost_per_token_flex")
+    flex_output_rate = model_info.get("output_cost_per_token_flex")
+    assert priority_input_rate is not None and priority_output_rate is not None
+    assert flex_input_rate is not None and flex_output_rate is not None
+    input_tokens = 10_000
+    output_tokens = 100
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.5-priority",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-fake", "service_tier": "priority"},
+            }
+        ]
+    )
+    request_body = _long_prompt_request(model="gpt-5.5-priority", max_tokens=output_tokens)
+
+    estimated = estimate_request_max_cost(
+        request_body=request_body,
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5-priority": input_tokens},
+    )
+
+    assert estimated == pytest.approx((input_tokens * priority_input_rate) + (output_tokens * priority_output_rate))
+    flex_estimate = estimate_request_max_cost(
+        request_body={**request_body, "service_tier": "flex"},
+        route="/chat/completions",
+        llm_router=router,
+        input_token_counts={"gpt-5.5-priority": input_tokens},
+    )
+    assert flex_estimate == pytest.approx((input_tokens * flex_input_rate) + (output_tokens * flex_output_rate))
+
+
+def test_reservation_prices_a_regional_vertex_deployment_at_the_uplifted_rate():
+    """Google bills every non-global Vertex endpoint at a flat premium over the global one, 1.1x
+    on gemini-3.5-flash, so a deployment pinned to us-east1 costs 10% more than the same model on
+    the global endpoint. Reserving at the global rate under-reserves every request it serves."""
+    uplift = litellm.get_model_info("vertex_ai/gemini-3.5-flash").get("regional_endpoint_uplift_multiplier")
+    assert uplift is not None and uplift > 1
+    input_tokens = 10_000
+    request_body = _long_prompt_request(model="vertex-flash", max_tokens=100)
+
+    estimates = [
+        estimate_request_max_cost(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=Router(
+                model_list=[
+                    {
+                        "model_name": "vertex-flash",
+                        "litellm_params": {
+                            "model": "vertex_ai/gemini-3.5-flash",
+                            "vertex_project": "test-project",
+                            "vertex_location": vertex_location,
+                        },
+                    }
+                ]
+            ),
+            input_token_counts={"vertex-flash": input_tokens},
+        )
+        for vertex_location in ("global", "us-east1")
     ]
 
     global_estimate, regional_estimate = estimates

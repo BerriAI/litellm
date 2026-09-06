@@ -782,6 +782,30 @@ class PromptTokensDetailsResult(TypedDict):
     audio_length_seconds: float
 
 
+AUTO_CACHE_WRITING_PROVIDERS: Final = frozenset({"openai", "azure"})
+
+
+def provider_writes_prompt_to_cache_unasked(custom_llm_provider: object) -> bool:
+    """OpenAI and Azure write a long prompt into their own cache without the request asking for it
+    and bill every written token at the cache-creation rate, which runs above the input rate.
+    Every other provider writes only the blocks a request marks with cache_control."""
+    return custom_llm_provider in AUTO_CACHE_WRITING_PROVIDERS
+
+
+def normalize_service_tier(service_tier: object) -> str | None:
+    """
+    Reduce a service_tier value to a concrete billable tier string or None.
+
+    "auto" is a routing preference and any non-string value is not a billable
+    tier, so both defer to standard pricing (or to the tier the provider reports
+    on the response usage) instead of crashing the downstream cost-key lookup,
+    which calls service_tier.lower()
+    """
+    if not isinstance(service_tier, str) or service_tier.lower() == ServiceTier.AUTO.value:
+        return None
+    return service_tier
+
+
 def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     cache_hit_tokens: Final = cast(int | None, getattr(usage.prompt_tokens_details, "cached_tokens", 0)) or 0
     cache_creation_tokens: Final = (
@@ -1135,17 +1159,19 @@ def resolve_token_rates(
     custom_llm_provider: str | None,
     service_tier: str | None = None,
     data_residency: str | None = None,
+    vertex_location: str | None = None,
     current_time: datetime | None = None,
 ) -> TokenRates:
     """The highest per-token rates a request with this usage can be billed at.
 
     Applies the same rate selection generic_cost_per_token does (tiered_pricing tables,
-    *_above_Nk_tokens thresholds, service-tier rates, the regional-processing uplift of the host
-    the request is sent to, and the provider's threshold inclusivity), so a caller that only knows
-    the token counts ahead of the request, such as budget reservation, prices them the way the
-    finished request will be. One of those can still move between the estimate and the bill: an
-    off-peak window open right now can close before the response lands, so each rate is the
-    highest of the off-peak and standard-hours candidates rather than the one in force right now.
+    *_above_Nk_tokens thresholds, service-tier rates, the uplift of the regional OpenAI host or
+    non-global Vertex location the request is sent to, and the provider's threshold inclusivity),
+    so a caller that only knows the token counts ahead of the request, such as budget reservation,
+    prices them the way the finished request will be. One of those can still move between the
+    estimate and the bill: an off-peak window open right now can close before the response lands,
+    so each rate is the highest of the off-peak and standard-hours candidates rather than the one
+    in force right now.
     """
     standard_hours_info: Final[ModelInfo] = {**model_info, "off_peak_pricing": None}
     off_peak_variants: Final = (
@@ -1162,7 +1188,8 @@ def resolve_token_rates(
             )
             for info in off_peak_variants
         ),
-        multiplier=_get_regional_uplift_multiplier(model_info, data_residency),
+        multiplier=_get_regional_uplift_multiplier(model_info, data_residency)
+        * get_vertex_regional_endpoint_uplift(model_info, vertex_location),
     )
 
 
