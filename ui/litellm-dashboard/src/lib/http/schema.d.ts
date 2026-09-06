@@ -29379,6 +29379,8 @@ export interface components {
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            /** Cost Discount */
+            cost_discount?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
             /** Default Api Key Rpm Limit */
@@ -39372,6 +39374,8 @@ export interface components {
             cache_read_input_token_cost?: number | null;
             /** Cost Per Ptu Per Hour */
             cost_per_ptu_per_hour?: number | null;
+            /** Cost Discount */
+            cost_discount?: number | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -39546,6 +39550,8 @@ export interface components {
             complexity_router_default_model?: string | null;
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Input"])[] | null;
+            /** Cost Discount */
+            cost_discount?: number | null;
             /** Custom Llm Provider */
             custom_llm_provider?: string | null;
             /** Default Api Key Rpm Limit */
