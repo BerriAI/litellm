@@ -921,6 +921,7 @@ async def pass_through_request(
     custom_llm_provider: str | None = None,
     guardrails_config: dict | None = None,
     timeout: float | None = None,
+    model: str | None = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -941,6 +942,7 @@ async def pass_through_request(
         guardrails_config: Optional field - guardrails configuration for passthrough endpoint
         timeout: Optional per-endpoint timeout in seconds. Falls back to
             general_settings.pass_through_request_timeout, then 600s.
+        model: Optional field - model name for spend logs when the request body has none
     """
     from litellm.exceptions import ModifyResponseException
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -1028,9 +1030,8 @@ async def pass_through_request(
             verbose_proxy_logger.debug("Added guardrails to passthrough request metadata: %s", guardrails_to_run)
 
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
-        # Surface the requested model (when the body carries one) so logging/spans
-        # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
-        passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
+        body_model: Final = _parsed_body.get("model") if isinstance(_parsed_body, dict) else None
+        passthrough_model: Final = body_model or model or "unknown"
         start_time: Final = datetime.now()
         team_callbacks: Final = _resolve_team_callback_wiring(
             user_api_key_dict=user_api_key_dict,
@@ -1852,6 +1853,7 @@ def create_pass_through_route(
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
+    model: str | None = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -1929,6 +1931,7 @@ def create_pass_through_route(
                 "cost_per_request": cost_per_request,
                 "guardrails": None,
                 "timeout": timeout,
+                "model": model,
             }
 
             if passthrough_params is not None:
@@ -1943,6 +1946,8 @@ def create_pass_through_route(
             param_guardrails: Final = target_params.get("guardrails", None)
             param_default_query_params: Final = target_params.get("default_query_params", None)
             param_timeout: Final = target_params.get("timeout", timeout)
+            _raw_model: Final = target_params.get("model", model)
+            param_model: Final[str | None] = _raw_model if isinstance(_raw_model, str) else None
 
             # Construct the full target URL with subpath if needed
             full_target: Final = HttpPassThroughEndpointHelpers.construct_target_url_with_subpath(
@@ -1991,6 +1996,7 @@ def create_pass_through_route(
                         custom_llm_provider=custom_llm_provider,
                         guardrails_config=cast(dict | None, param_guardrails),
                         timeout=cast(float | None, param_timeout),
+                        model=param_model,
                     )
                 finally:
                     if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
@@ -2810,6 +2816,7 @@ class InitPassThroughEndpointHelpers:
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,
+        model: str | None = None,
     ):
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
@@ -2851,6 +2858,7 @@ class InitPassThroughEndpointHelpers:
                 guardrails=guardrails,
                 config_file_path=config_file_path,
                 timeout=timeout,
+                model=model,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -2873,6 +2881,7 @@ class InitPassThroughEndpointHelpers:
                 "cost_per_request": cost_per_request,
                 "guardrails": guardrails,
                 "timeout": timeout,
+                "model": model,
             },
         }
 
@@ -2893,6 +2902,7 @@ class InitPassThroughEndpointHelpers:
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,
+        model: str | None = None,
     ):
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
@@ -2935,6 +2945,7 @@ class InitPassThroughEndpointHelpers:
                 guardrails=guardrails,
                 config_file_path=config_file_path,
                 timeout=timeout,
+                model=model,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -2957,6 +2968,7 @@ class InitPassThroughEndpointHelpers:
                 "cost_per_request": cost_per_request,
                 "guardrails": guardrails,
                 "timeout": timeout,
+                "model": model,
             },
         }
 
@@ -3131,6 +3143,7 @@ async def _register_pass_through_endpoint(
     methods: Final = endpoint_data.get("methods")
     cost_per_request: Final = endpoint_data.get("cost_per_request")
     timeout: Final = endpoint_data.get("timeout")
+    model: Final = endpoint_data.get("model")
 
     verbose_proxy_logger.debug("Initializing pass through endpoint: %s (ID: %s)", path, endpoint_id)
     InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -3149,6 +3162,7 @@ async def _register_pass_through_endpoint(
         config_file_path=config_file_path,
         auth=auth_enforced,
         timeout=timeout,
+        model=model,
     )
 
     methods_for_key: Final = methods if methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
@@ -3176,6 +3190,7 @@ async def _register_pass_through_endpoint(
             config_file_path=config_file_path,
             auth=auth_enforced,
             timeout=timeout,
+            model=model,
         )
         visited_endpoints.add(f"{endpoint_id}:subpath:{path}:{methods_str}")
 
@@ -3561,6 +3576,7 @@ async def update_pass_through_endpoints(
             default_query_params=updated_endpoint.default_query_params,
             auth=updated_endpoint.auth,
             timeout=updated_endpoint.timeout,
+            model=updated_endpoint.model,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -3578,6 +3594,7 @@ async def update_pass_through_endpoints(
             default_query_params=updated_endpoint.default_query_params,
             auth=updated_endpoint.auth,
             timeout=updated_endpoint.timeout,
+            model=updated_endpoint.model,
         )
 
     return PassThroughEndpointResponse(endpoints=[updated_endpoint] if updated_endpoint else [])
@@ -3653,6 +3670,7 @@ async def create_pass_through_endpoints(
             default_query_params=created_endpoint.default_query_params,
             auth=created_endpoint.auth,
             timeout=created_endpoint.timeout,
+            model=created_endpoint.model,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -3670,6 +3688,7 @@ async def create_pass_through_endpoints(
             default_query_params=created_endpoint.default_query_params,
             auth=created_endpoint.auth,
             timeout=created_endpoint.timeout,
+            model=created_endpoint.model,
         )
 
     return PassThroughEndpointResponse(endpoints=[created_endpoint])
