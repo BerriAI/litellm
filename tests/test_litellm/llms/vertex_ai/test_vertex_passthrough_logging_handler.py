@@ -158,6 +158,7 @@ def test_audio_predict_response_supports_bytes_base64_encoded(
 def test_lyria_predict_cost_falls_back_to_bundled_map_when_runtime_metadata_is_incomplete(
     monkeypatch: pytest.MonkeyPatch,
     missing_fields: tuple[str, ...] | None,
+    local_model_cost_map: None,
 ) -> None:
     if missing_fields is None:
         monkeypatch.delitem(litellm.model_cost, "vertex_ai/lyria-002")
