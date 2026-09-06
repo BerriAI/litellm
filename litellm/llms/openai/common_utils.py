@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
@@ -325,6 +326,7 @@ class BaseOpenAILLM:
             transport=transport,
             mounts=AsyncHTTPHandler._create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
+            headers=accept_encoding_header(),
         )
 
     @staticmethod
@@ -343,6 +345,7 @@ class BaseOpenAILLM:
         return httpx.Client(
             verify=ssl_config,
             follow_redirects=True,
+            headers=accept_encoding_header(),
         )
 
 

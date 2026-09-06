@@ -622,6 +622,98 @@ async def test_httpx_handler_uses_env_user_agent(monkeypatch):
         await handler.close()
 
 
+@pytest.mark.parametrize("disable_default_headers", [False, True])
+def test_sync_client_asks_only_for_encodings_httpx_can_stream(disable_default_headers):
+    from litellm.llms.custom_httpx.accept_encoding import DECODABLE_ACCEPT_ENCODING
+
+    assert "zstd" not in DECODABLE_ACCEPT_ENCODING
+    assert "gzip" in DECODABLE_ACCEPT_ENCODING
+
+    handler = HTTPHandler(disable_default_headers=disable_default_headers)
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("Accept-Encoding") == DECODABLE_ACCEPT_ENCODING
+    finally:
+        handler.close()
+
+
+@pytest.mark.asyncio
+async def test_async_client_asks_only_for_encodings_httpx_can_stream():
+    from litellm.llms.custom_httpx.accept_encoding import DECODABLE_ACCEPT_ENCODING
+
+    handler = AsyncHTTPHandler()
+    try:
+        req = handler.client.build_request("GET", "https://example.com")
+        assert req.headers.get("Accept-Encoding") == DECODABLE_ACCEPT_ENCODING
+    finally:
+        await handler.close()
+
+
+@pytest.fixture
+def frame_per_event_sse_upstream():
+    """Upstream that answers each SSE event as its own zstd frame whenever the client offers zstd."""
+    zstandard = pytest.importorskip("zstandard")
+
+    events = (b'data: {"seq": 1}\n\n', b'data: {"seq": 2}\n\n')
+
+    class ChunkPerFrameStream(httpx.SyncByteStream, httpx.AsyncByteStream):
+        def __init__(self, chunks):
+            self.chunks = chunks
+
+        def __iter__(self):
+            yield from self.chunks
+
+        async def __aiter__(self):
+            for chunk in self.chunks:
+                yield chunk
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if "zstd" not in request.headers.get("Accept-Encoding", ""):
+            return httpx.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                stream=ChunkPerFrameStream(events),
+            )
+
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream", "Content-Encoding": "zstd"},
+            stream=ChunkPerFrameStream(tuple(zstandard.ZstdCompressor().compress(event) for event in events)),
+        )
+
+    return httpx.MockTransport(respond), b"".join(events)
+
+
+def test_httpx_own_headers_die_on_an_upstream_that_frames_each_event(frame_per_event_sse_upstream):
+    transport, _ = frame_per_event_sse_upstream
+
+    with httpx.Client(transport=transport) as client, pytest.raises(httpx.DecodingError):
+        client.get("https://oci.invalid/v1/chat/completions")
+
+
+@pytest.mark.asyncio
+async def test_async_streamed_events_survive_an_upstream_that_frames_each_event(frame_per_event_sse_upstream):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    transport, expected_body = frame_per_event_sse_upstream
+
+    async with httpx.AsyncClient(transport=transport, headers=get_default_headers()) as client:
+        response = await client.get("https://oci.invalid/v1/chat/completions")
+
+    assert response.content == expected_body
+
+
+def test_sync_streamed_events_survive_an_upstream_that_frames_each_event(frame_per_event_sse_upstream):
+    from litellm.llms.custom_httpx.http_handler import get_default_headers
+
+    transport, expected_body = frame_per_event_sse_upstream
+
+    with httpx.Client(transport=transport, headers=get_default_headers()) as client:
+        response = client.get("https://oci.invalid/v1/chat/completions")
+
+    assert response.content == expected_body
+
+
 def test_get_httpx_client_applies_float_timeout_without_mocking_handler():
     """
     Exercise real _get_httpx_client + HTTPHandler: params={'timeout': x} must reach httpx.Client(timeout=...).

@@ -15,6 +15,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.llms.openai.common_utils import BaseOpenAILLM
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -685,7 +686,8 @@ class BaseAzureLLM(BaseOpenAILLM):
             azure_client_params: Final[_AzureGatewayClientParams] = {
                 "api_version": api_version,
                 "base_url": f"{api_base}",
-                "http_client": litellm.client_session,
+                "http_client": (litellm.aclient_session if acompletion else litellm.client_session),
+                "default_headers": accept_encoding_header(),
                 "max_retries": max_retries,
                 "timeout": timeout,
             }

@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.types.llms.custom_http import *
 
 if TYPE_CHECKING:
@@ -131,7 +132,7 @@ def _build_aiohttp_keepalive_socket_factory() -> Callable[[_AddrInfo], socket.so
     return factory
 
 
-def get_default_headers() -> dict:
+def get_default_headers() -> Mapping[str, str]:
     """
     Get default headers for HTTP requests.
 
@@ -139,10 +140,10 @@ def get_default_headers() -> dict:
     - Override: set `LITELLM_USER_AGENT` to fully override the header value.
     """
     user_agent: Final = os.environ.get("LITELLM_USER_AGENT")
-    if user_agent is not None:
-        return {"User-Agent": user_agent}
 
-    return {"User-Agent": f"litellm/{version}"}
+    return MappingProxyType(
+        {**accept_encoding_header(), "User-Agent": user_agent if user_agent is not None else f"litellm/{version}"}
+    )
 
 
 # Initialize headers (User-Agent)
@@ -620,7 +621,6 @@ class AsyncHTTPHandler:
             shared_session=shared_session,
         )
 
-        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers: Final = get_default_headers()
 
         return httpx.AsyncClient(
@@ -1252,8 +1252,7 @@ class HTTPHandler:
         # /path/to/client.pem
         cert: Final = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
-        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
-        default_headers: Final = get_default_headers() if not self.disable_default_headers else None
+        default_headers: Final = accept_encoding_header() if self.disable_default_headers else get_default_headers()
 
         # Create a client with a connection pool
         return httpx.Client(

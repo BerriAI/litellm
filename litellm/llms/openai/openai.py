@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.logging_utils import speech_request_body, track_
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -1696,9 +1697,9 @@ class OpenAIFilesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
+                openai_client = AsyncOpenAI(**data, default_headers=accept_encoding_header())
             else:
-                openai_client = OpenAI(**data)
+                openai_client = OpenAI(**data, default_headers=accept_encoding_header())
         else:
             openai_client = client
 
@@ -2054,9 +2055,9 @@ class OpenAIBatchesAPI(BaseLLM):
                 elif v is not None:
                     data[k] = v
             if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
+                openai_client = AsyncOpenAI(**data, default_headers=accept_encoding_header())
             else:
-                openai_client = OpenAI(**data)
+                openai_client = OpenAI(**data, default_headers=accept_encoding_header())
         else:
             openai_client = client
 
@@ -2264,7 +2265,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = OpenAI(**data)
+            openai_client = OpenAI(**data, default_headers=accept_encoding_header())
         else:
             openai_client = client
 
@@ -2289,7 +2290,7 @@ class OpenAIAssistantsAPI(BaseLLM):
                     data["base_url"] = v
                 elif v is not None:
                     data[k] = v
-            openai_client = AsyncOpenAI(**data)
+            openai_client = AsyncOpenAI(**data, default_headers=accept_encoding_header())
         else:
             openai_client = client
 

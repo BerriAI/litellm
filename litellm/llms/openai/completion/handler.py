@@ -8,6 +8,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base import BaseLLM
+from litellm.llms.custom_httpx.accept_encoding import accept_encoding_header
 from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUserMessage
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
 from litellm.utils import ProviderConfigManager
@@ -130,6 +131,7 @@ class OpenAITextCompletion(BaseLLM):
                         api_key=api_key,
                         base_url=api_base,
                         http_client=litellm.client_session,
+                        default_headers=accept_encoding_header(),
                         timeout=timeout,
                         max_retries=max_retries,
                         organization=organization,
@@ -234,6 +236,7 @@ class OpenAITextCompletion(BaseLLM):
                 api_key=api_key,
                 base_url=api_base,
                 http_client=litellm.client_session,
+                default_headers=accept_encoding_header(),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
@@ -291,6 +294,7 @@ class OpenAITextCompletion(BaseLLM):
                 api_key=api_key,
                 base_url=api_base,
                 http_client=litellm.aclient_session,
+                default_headers=accept_encoding_header(),
                 timeout=timeout,
                 max_retries=max_retries,
                 organization=organization,
