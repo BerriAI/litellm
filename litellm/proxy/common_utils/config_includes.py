@@ -1,8 +1,36 @@
+import os
 from collections.abc import Awaitable, Mapping
 from types import MappingProxyType
 from typing import Final, Protocol
 
+from litellm._logging import verbose_proxy_logger
+
 INCLUDE_KEY: Final = "include"
+
+
+def resolve_include_file_path(include_file: str, declared_in: str, root_config_path: str) -> str:
+    """
+    Resolve one `include` entry to the file it names, next to the config that declares it.
+
+    A config written before nested entries resolved this way can name a file sitting next to the root
+    config instead, so that file is still read, with a warning naming where it was found.
+    """
+    declared_relative: Final = os.path.abspath(os.path.join(os.path.dirname(declared_in), include_file))
+    if os.path.exists(declared_relative):
+        return declared_relative
+
+    root_relative: Final = os.path.abspath(os.path.join(os.path.dirname(root_config_path), include_file))
+    if root_relative == declared_relative or not os.path.exists(root_relative):
+        return declared_relative
+
+    verbose_proxy_logger.warning(
+        "Config include '%s' declared in %s was not found next to it, so %s was read instead. "
+        "Move the included file next to the config that declares it.",
+        include_file,
+        declared_in,
+        root_relative,
+    )
+    return root_relative
 
 
 class ConfigLoader(Protocol):
