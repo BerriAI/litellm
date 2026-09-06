@@ -12,8 +12,6 @@ class APIRouteChatConfig(OpenAIGPTConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None
     ) -> tuple[str | None, str | None]:
-        resolved_api_base: Final = api_base or get_secret_str("API_ROUTE_BASE_URL")
-        if not resolved_api_base:
-            raise ValueError("API Route requires API_ROUTE_BASE_URL or api_base parameter.")
+        resolved_api_base: Final = api_base or get_secret_str("API_ROUTE_BASE_URL") or "https://global.api-route.com/v1"
         resolved_api_key: Final = api_key or get_secret_str("API_ROUTE_API_KEY")
         return resolved_api_base, resolved_api_key
