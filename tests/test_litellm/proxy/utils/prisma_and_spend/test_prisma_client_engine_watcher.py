@@ -712,3 +712,73 @@ async def test_poll_engine_proc_planned_death_skips_reconnect(
         "cleanup_called": 1,
         "confirmed_dead": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Windows: os.kill(pid, 0) is NOT a liveness probe -- CPython maps every sig
+# other than CTRL_C_EVENT/CTRL_BREAK_EVENT (including 0) to TerminateProcess,
+# so the Unix-style liveness checks would terminate the query engine (~1s after
+# connect, then every subsequent query fails with ConnectError). The engine
+# watcher therefore must never signal the engine on Windows. These tests run on
+# the Linux CI runner and simulate Windows by patching ``sys.platform`` -- the
+# module-level ``skipif(win32)`` above keeps them from running on real Windows
+# where ``os.kill`` would actually kill the test's own processes.
+# ---------------------------------------------------------------------------
+def test_is_engine_alive_never_calls_os_kill_on_windows(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prisma_client._engine_pid = 12345
+    fake_kill = MagicMock()
+    monkeypatch.setattr("os.kill", fake_kill)
+    monkeypatch.setattr(sys, "platform", "win32")
+    pinned = {
+        "result": prisma_client._is_engine_alive(),
+        "os_kill_calls": fake_kill.call_count,
+    }
+    assert pinned == {"result": True, "os_kill_calls": 0}
+
+
+@pytest.mark.asyncio
+async def test_poll_engine_proc_is_noop_on_windows(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prisma_client._engine_pid = 555
+    prisma_client._watching_engine = True
+    prisma_client.attempt_db_reconnect = AsyncMock()
+    fake_kill = MagicMock()
+    monkeypatch.setattr("os.kill", fake_kill)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    # Must return immediately without ever signalling the engine.
+    await asyncio.wait_for(prisma_client._poll_engine_proc(), timeout=1)
+    pinned = {
+        "os_kill_calls": fake_kill.call_count,
+        "reconnect_calls": prisma_client.attempt_db_reconnect.await_count,
+    }
+    assert pinned == {"os_kill_calls": 0, "reconnect_calls": 0}
+
+
+@pytest.mark.asyncio
+async def test_start_engine_watcher_does_not_poll_on_windows(
+    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows both waitpid and pidfd are unavailable; the watcher must NOT
+    fall back to os.kill polling (which would terminate the engine). It records
+    the PID but starts no poller, deferring to query-level reconnect retry."""
+    monkeypatch.setattr(prisma_client, "_get_engine_pid", MagicMock(return_value=4242))
+    monkeypatch.setattr(prisma_client, "_try_waitpid_watch", MagicMock(return_value=False))
+    monkeypatch.setattr(prisma_client, "_try_pidfd_watch", MagicMock(return_value=False))
+    poll = AsyncMock()
+    monkeypatch.setattr(prisma_client, "_poll_engine_proc", poll)
+    fake_kill = MagicMock()
+    monkeypatch.setattr("os.kill", fake_kill)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    await prisma_client._start_engine_watcher()
+    await asyncio.sleep(0)
+    pinned = {
+        "watching": prisma_client._watching_engine,
+        "poll_started": poll.await_count,
+        "os_kill_calls": fake_kill.call_count,
+    }
+    assert pinned == {"watching": False, "poll_started": 0, "os_kill_calls": 0}
