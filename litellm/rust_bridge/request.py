@@ -5,6 +5,8 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Generic, Protocol, TypeVar
 
+from .callbacks import OneShotCallbackHandle
+
 
 @dataclass(frozen=True, slots=True)
 class NativeBedrockOptions:
@@ -72,8 +74,7 @@ def vertex_options(params: Mapping[str, object]) -> NativeVertexOptions:
         location=location if isinstance(location, str) else None,
     )
 
-
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, TypeVar
 
 
 class NativePreCallDetails(TypedDict):
