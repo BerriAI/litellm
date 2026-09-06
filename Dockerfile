@@ -99,7 +99,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python3 libsndfile tini
+RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile tini
 
 WORKDIR /app
 ENV PATH="/app/.venv/bin:${PATH}" \
