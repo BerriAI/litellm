@@ -102,11 +102,16 @@ def test_the_next_lookup_retries_a_package_that_failed_to_import():
     assert not llms_package.guardrail_translation_discovery.unavailable
 
 
-def test_a_complete_discovery_is_cached():
-    first = llms_package.load_guardrail_translation_mappings()
-    second = llms_package.load_guardrail_translation_mappings()
+def test_a_complete_discovery_is_not_scanned_again():
+    healthy = llms_package.load_guardrail_translation_mappings()
 
-    assert first is second
+    assert CallTypes.acompletion in healthy
+
+    with unimportable(OPENAI_CHAT_TRANSLATION_MODULE):
+        after_the_package_breaks = llms_package.load_guardrail_translation_mappings()
+
+    assert CallTypes.acompletion in after_the_package_breaks
+    assert not llms_package.guardrail_translation_discovery.unavailable
 
 
 def test_a_package_that_keeps_failing_is_reported_once_and_its_recovery_announced(caplog):
