@@ -4036,6 +4036,63 @@ async def test_health_latest_endpoint_reports_the_newest_check_of_a_deployment_p
     assert newest["model_name"] == "bedrock-nova"
 
 
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_folds_a_legacy_id_less_row_into_the_deployment_of_the_same_name():
+    """A row saved before deployment ids were stored is the same model, so it must not stand beside the current row with a status of its own."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    legacy = _stored_health_row_without_id("gpt-5.4-mini")
+    legacy.status = "unhealthy"
+    legacy.checked_at = datetime(2026, 9, 1, 7, 31)
+    rows = [
+        legacy,
+        _stored_health_row("id-openai", "gpt-5.4-mini", checked_at=datetime(2026, 9, 6, 7, 31)),
+    ]
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
+
+    assert result["total_models"] == 1
+    assert result["latest_health_checks"]["id-openai"]["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_keeps_an_id_less_row_apart_when_two_deployments_share_its_name():
+    """Two deployments checked under one name leave an id-less row pointing at neither, so folding it into either would report a status for a deployment nobody checked."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    shared = _stored_health_row_without_id("bedrock-nova")
+    shared.checked_at = datetime(2026, 9, 1, 7, 30)
+    rows = [
+        shared,
+        _stored_health_row("id-bedrock", "bedrock-nova", checked_at=datetime(2026, 9, 6, 7, 30)),
+        _stored_health_row("id-openai", "bedrock-nova", checked_at=datetime(2026, 9, 6, 7, 31)),
+    ]
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
+
+    assert sorted(result["latest_health_checks"]) == ["bedrock-nova", "id-bedrock", "id-openai"]
+
+
 def _paging_health_prisma(rows: Sequence[object]) -> SimpleNamespace:
     async def _history(
         model_name: str | None = None,

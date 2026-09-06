@@ -5,9 +5,11 @@ than once whenever it was checked under several names or whenever rows saved bef
 were stored are still around. Readers want the most recent check, which is what these helpers pick.
 """
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import groupby
+from operator import itemgetter
 from types import MappingProxyType
 from typing import Final, Protocol, TypeVar
 
@@ -42,9 +44,26 @@ def _newest_per_key(rows: Iterable[RowT], key: Callable[[RowT], str | None]) -> 
     return MappingProxyType({row_key: row for row in oldest_first if (row_key := key(row))})
 
 
+def _sole_deployment_id_per_name(rows: Sequence[StoredHealthRow]) -> Mapping[str, str]:
+    """For each model name exactly one deployment was checked under, that deployment's id."""
+    identified: Final = sorted((row.model_name, model_id) for row in rows if (model_id := row.model_id) is not None)
+    per_name: Final = (
+        (name, frozenset(model_id for _, model_id in group)) for name, group in groupby(identified, key=itemgetter(0))
+    )
+    return MappingProxyType({name: sole for name, ids in per_name if len(ids) == 1 for sole in ids})
+
+
 def latest_by_deployment(rows: Iterable[RowT]) -> Mapping[str, RowT]:
-    """The newest row per deployment, keyed by deployment id where the row carries one, else by model name."""
-    return _newest_per_key(rows, lambda row: row.model_id or row.model_name)
+    """The newest row per deployment, keyed by deployment id.
+
+    A row saved before deployment ids were stored takes the id of the one deployment its model name
+    was checked under, so a model reports one status rather than a current one beside a legacy one.
+    A name more than one deployment was checked under points at no single deployment, so rows saved
+    under it without an id stay keyed by that name.
+    """
+    stored: Final = tuple(rows)
+    id_by_name: Final = _sole_deployment_id_per_name(stored)
+    return _newest_per_key(stored, lambda row: row.model_id or id_by_name.get(row.model_name) or row.model_name)
 
 
 def latest_by_model_name(rows: Iterable[RowT]) -> Mapping[str, RowT]:
