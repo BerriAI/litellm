@@ -433,10 +433,30 @@ export default function ModelInfoView({
       // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
       const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
 
+      // A key removed from either raw JSON editor is just absent from the
+      // recomputed blob above -- the backend's merge can't tell that apart from
+      // "field not touched", so the stale value would otherwise survive the save
+      // (#34005). Diff against the pre-edit snapshot and name the removed keys
+      // explicitly. Diffed against `updatedLitellmParams` (pre-mask-strip), not
+      // `safeLitellmParams`: an untouched masked secret is still present there
+      // (with its masked value) and must NOT be reported as deleted.
+      const litellmParamsKeysToDelete = Object.keys(modelData?.litellm_params ?? {}).filter(
+        (key) => !(key in updatedLitellmParams),
+      );
+      const modelInfoKeysToDelete = Object.keys(modelData?.model_info ?? {}).filter(
+        (key) => !(key in updatedModelInfo),
+      );
+
       const updateData = {
         model_name: values.model_name,
         litellm_params: safeLitellmParams,
         model_info: updatedModelInfo,
+        ...(litellmParamsKeysToDelete.length > 0 && {
+          litellm_params_keys_to_delete: litellmParamsKeysToDelete,
+        }),
+        ...(modelInfoKeysToDelete.length > 0 && {
+          model_info_keys_to_delete: modelInfoKeysToDelete,
+        }),
       };
 
       await modelPatchUpdateCall(accessToken, updateData, modelId);
