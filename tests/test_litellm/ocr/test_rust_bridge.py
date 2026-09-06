@@ -213,7 +213,14 @@ def _reset_rust_flag():
     rust_bridge.set_rust_ocr(ocr=None, aocr=None, decline=None)
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
-    rust_bridge.set_rust_ocr(decline=lambda model, custom_llm_provider, **features: "unsupported feature" if any(features.get(key) for key in ("stream", "has_agentic_hook", "has_custom_client")) or features.get("request_format") == "native" else None)
+    rust_bridge.set_rust_ocr(
+        decline=lambda model, custom_llm_provider, *, context: (
+            "unsupported feature"
+            if any(getattr(context.capabilities, key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
+            or context.capabilities.request_format == "native"
+            else None
+        )
+    )
     yield
     rust_bridge.set_rust_ocr(ocr=None, aocr=None, decline=None)
     configuration.reset_rust_configuration()

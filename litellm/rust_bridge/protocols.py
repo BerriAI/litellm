@@ -32,10 +32,8 @@ class RustChatCompletionsDecline(Protocol):
         optional_params: Mapping[str, object] | None,
         custom_llm_provider: str | None,
         *,
+        options: NativeRequestOptions,
         context: NativeRequestContext,
-        stream: bool,
-        has_custom_client: bool = False,
-        has_agentic_hook: bool = False,
     ) -> str | None: ...
 
 
@@ -64,10 +62,7 @@ class RustRouteDecline(Protocol):
         model: str,
         custom_llm_provider: str,
         *,
-        stream: bool = False,
-        has_agentic_hook: bool = False,
-        has_custom_client: bool = False,
-        request_format: str | None = None,
+        context: NativeRequestContext,
     ) -> str | None: ...
 
 

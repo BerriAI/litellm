@@ -35,18 +35,14 @@ impl ResponsesWebSocketConnection {
         options: NativeRequestOptions,
         context: NativeRequestContext,
     ) -> PyResult<Bound<'py, PyAny>> {
-        if let Some(reason) = responses_websocket_decline(
-            "responses websocket",
+        let provider_supported = litellm_core::responses::websocket::native_websocket_supported(
             options.provider("openai"),
-            false,
-            false,
-            false,
-            None,
-        ) {
+        );
+        let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
+        if let Some(reason) = routes::definition::request_decline(provider_supported, &context) {
             return Err(crate::errors::RustBridgeDeclined::new_err(reason));
         }
         let options: litellm_core::request_options::RequestOptions = options.into();
-        let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
         let request = ResponsesWebSocketRequest { url: request.url };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let inner = RustResponsesWebSocketConnection::connect(request, &options, &context)
@@ -79,21 +75,16 @@ impl ResponsesWebSocketConnection {
 }
 
 #[pyfunction]
-#[pyo3(signature = (_model, custom_llm_provider, *, stream=false, has_agentic_hook=false, has_custom_client=false, request_format=None))]
+#[pyo3(signature = (_model, custom_llm_provider, *, context))]
 fn responses_websocket_decline(
     _model: &str,
     custom_llm_provider: &str,
-    stream: bool,
-    has_agentic_hook: bool,
-    has_custom_client: bool,
-    request_format: Option<&str>,
+    context: NativeRequestContext,
 ) -> Option<String> {
+    let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
     routes::definition::request_decline(
         litellm_core::responses::websocket::native_websocket_supported(custom_llm_provider),
-        stream,
-        has_agentic_hook,
-        has_custom_client,
-        request_format,
+        &context,
     )
 }
 

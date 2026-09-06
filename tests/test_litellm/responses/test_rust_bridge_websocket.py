@@ -43,10 +43,10 @@ def reset_responses_websocket():
     responses_websocket.set_rust_responses_websocket(connection=None, decline=None)
     configuration.reset_rust_configuration()
     responses_websocket.set_rust_responses_websocket(
-        decline=lambda model, custom_llm_provider, **features: (
+        decline=lambda model, custom_llm_provider, *, context: (
             "unsupported feature"
-            if any(features.get(key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
-            or features.get("request_format") == "native"
+            if any(getattr(context.capabilities, key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
+            or context.capabilities.request_format == "native"
             else None
         )
     )
@@ -131,9 +131,9 @@ async def test_connection_dispatch_cleans_up_without_reconnecting(native, sessio
 
     class Native:
         @classmethod
-        async def connect(cls, request, *, context, callback_adapter=None):
+        async def connect(cls, request, *, options, context):
             connections.append("native")
-            assert request.options.custom_llm_provider == "azure"
+            assert options.custom_llm_provider == "azure"
             return native_socket
 
     @asynccontextmanager

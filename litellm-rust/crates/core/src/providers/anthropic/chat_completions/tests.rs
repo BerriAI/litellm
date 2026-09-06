@@ -1,6 +1,5 @@
 use super::*;
 use crate::Error;
-use crate::request_context::LiteLlmRequestContext;
 use serde_json::json;
 
 fn messages(value: Value) -> Vec<ChatMessage> {
@@ -27,11 +26,7 @@ fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
 }
 
 fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
-    ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(
-        &messages(msgs),
-        &params(opts),
-        &LiteLlmRequestContext::default(),
-    )
+    ANTHROPIC_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
 }
 
 #[test]
