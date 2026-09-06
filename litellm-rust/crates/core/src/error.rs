@@ -2,8 +2,6 @@ use thiserror::Error as ThisError;
 
 #[derive(Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
-    #[error("native execution declined: {0}")]
-    Declined(&'static str),
     #[error("expected {expected}, got {actual}")]
     InvalidType {
         expected: &'static str,

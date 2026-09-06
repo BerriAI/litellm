@@ -3,23 +3,19 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Callable, Coroutine
-from contextlib import nullcontext
 from dataclasses import dataclass
 from io import IOBase
-from types import MappingProxyType
 from typing import Final
 
 import httpx
 from pydantic import TypeAdapter
 
-import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge.bindings import UNCHANGED, Unchanged
-from litellm.rust_bridge.configuration import rust_enabled
+from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
 from litellm.rust_bridge.protocols import RustAtranscription, RustTranscription
 from litellm.rust_bridge.request import (
-    NativePreCallDetails,
     NativeRequestCapabilities,
     NativeRequestContext,
     NativeRequestOptions,
@@ -38,7 +34,6 @@ from litellm.rust_bridge.runtime import (
     identity,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 _TRANSCRIPTION: Final[EndpointDispatch[RustTranscription, RustAtranscription]] = EndpointDispatch.native(
@@ -182,6 +177,20 @@ def _input_source_kind(file: FileTypes) -> str:
     return "opaque"
 
 
+def _consume_audio_for_native(
+    file: FileTypes | dict[str, object],  # mutable-ok: accepts the public SDK file union
+) -> dict[str, object]:  # mutable-ok: returns an owned native payload consumed once
+    """Read audio only after the native route has admitted the request."""
+    if isinstance(file, dict):
+        return TypeAdapter(dict[str, object]).validate_python(file)
+    processed: Final = process_audio_file(file)
+    return {  # mutable-ok: deferred reader constructs the owned native audio payload once
+        "data": base64.b64encode(processed.file_content).decode("ascii"),
+        "format": processed.filename.rsplit(".", 1)[-1].lower() if "." in processed.filename else "wav",
+        "filename": processed.filename,
+    }
+
+
 @dataclass
 class _TranscriptionOperation:
     model: str
@@ -196,55 +205,17 @@ class _TranscriptionOperation:
     python: Callable[[FileTypes], TranscriptionResult]
     asynchronous: bool = False
     has_custom_client: bool = False
-    fallback_file: FileTypes | None = None
-    logged: bool = False
 
     def prepare(self) -> PreparedNativeCall[NativeTranscriptionRequest]:
-        key: Final = (
-            self.api_key
-            or litellm.api_key
-            or TypeAdapter(str | None).validate_python(getattr(litellm, f"{self.provider}_key", None))
-            or get_secret_str(f"{self.provider.upper()}_API_KEY")
-        )
-        base: Final = (
-            self.api_base
-            or litellm.api_base
-            or get_secret_str(f"{self.provider.upper()}_BASE_URL")
-            or get_secret_str(f"{self.provider.upper()}_API_BASE")
-        )
-        content: Final = self.file[1] if isinstance(self.file, tuple) else self.file
-        position: Final = content.tell() if isinstance(content, IOBase) and content.seekable() else None
-        try:
-            processed: Final = process_audio_file(self.file)
-        finally:
-            if position is not None and isinstance(content, IOBase):
-                content.seek(position)
-        self.fallback_file = (processed.filename, processed.file_content, processed.content_type)
-        audio: Final = TypeAdapter(dict[str, object]).validate_python(
-            MappingProxyType(
-                {
-                    "data": base64.b64encode(processed.file_content).decode("ascii"),
-                    "format": processed.filename.rsplit(".", 1)[-1].lower() if "." in processed.filename else "wav",
-                    "filename": processed.filename,
-                }
-            )
-        )
-        log_details: Final[NativePreCallDetails] = {
-            "api_base": base or "",
-            "headers": self.headers,
-            "complete_input_dict": {"model": self.model, **self.optional_params},
-        }
-        self.logging.pre_call(input="audio transcription", api_key=key, additional_args=log_details)
-        self.logged = True
         return PreparedNativeCall(
             NativeTranscriptionRequest(
                 model=self.model,
-                audio=audio,
+                audio=self.file,
                 optional_params=self.optional_params,
             ),
             options=NativeRequestOptions(
-                api_key=key,
-                api_base=base,
+                api_key=self.api_key,
+                api_base=self.api_base,
                 custom_llm_provider=self.provider,
                 extra_headers=self.headers,
                 timeout_seconds=timeout_to_seconds(self.timeout),
@@ -261,16 +232,15 @@ class _TranscriptionOperation:
                     input_source_kind=_input_source_kind(self.file),
                 ),
             ),
+            callback_adapter=ProviderLoggingAdapter(self.logging, "audio transcription", self.api_key),
         )
 
     def fallback(self) -> TranscriptionResult:
-        with self.logging.suppress_next_pre_call() if self.logged else nullcontext():
-            return self.python(self.fallback_file if self.fallback_file is not None else self.file)
+        return self.python(self.file)
 
     async def afallback(self) -> TranscriptionResponse:
-        with self.logging.suppress_next_pre_call() if self.logged else nullcontext():
-            result: Final = self.python(self.fallback_file if self.fallback_file is not None else self.file)
-            return await result if isinstance(result, Coroutine) else result
+        result: Final = self.python(self.file)
+        return await result if isinstance(result, Coroutine) else result
 
     def adapt(self, response: dict[str, object]) -> TranscriptionResponse:
         text: Final = TypeAdapter(str).validate_python(response["text"])
@@ -333,7 +303,6 @@ def dispatch_transcription(
             adapt=operation.adapt,
             fallback=operation.afallback,
             error_context=error_context,
-            eligible=rust_enabled(),
         )
     return _TRANSCRIPTION.invoke(
         prepare=operation.prepare,
@@ -341,5 +310,4 @@ def dispatch_transcription(
         adapt=operation.adapt,
         fallback=operation.fallback,
         error_context=error_context,
-        eligible=rust_enabled(),
     )

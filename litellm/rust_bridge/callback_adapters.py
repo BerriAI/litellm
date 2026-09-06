@@ -10,7 +10,7 @@ from .callbacks import CallbackDecision, CallbackUnchanged, SessionCallbackHandl
 
 
 class PreCallArguments(TypedDict):
-    complete_input_dict: ReadOnly[Mapping[str, JsonValue]]
+    complete_input_dict: Mapping[str, JsonValue]  # writable-ok: provider hooks may replace request fields
     api_base: ReadOnly[str]
     headers: ReadOnly[Mapping[str, str]]
 
@@ -90,12 +90,19 @@ class ProviderLoggingAdapter:
 
     def pre_call(self, payload: object, /) -> CallbackDecision:
         event: Final = ProviderPreCall.model_validate(payload)
+        request: Final = dict(event.request)  # mutable-ok: Python hooks may mutate their owned request copy
         additional_args: Final[PreCallArguments] = {
-            "complete_input_dict": event.request,
+            "complete_input_dict": request,
             "api_base": event.api_base,
             "headers": event.headers,
         }
         self.logging_obj.pre_call(input=self.input, api_key=self.api_key, additional_args=additional_args)
+        mutated: Final = additional_args["complete_input_dict"]
+        if dict(mutated) != dict(event.request):  # mutable-ok: compare hook-owned mapping snapshots
+            return {  # mutable-ok: callback decisions are fixed-shape wire dictionaries
+                "action": "replace",
+                "payload": dict(mutated),
+            }
         return _unchanged()
 
     def post_call(self, payload: object, /) -> CallbackDecision:

@@ -63,7 +63,7 @@ where
         .await
 }
 
-pub fn ocr_provider_supported(model: &str, provider: &str, request_format: Option<&str>) -> bool {
+pub fn ocr_admitted(model: &str, provider: &str, request_format: Option<&str>) -> bool {
     common_utils::ocr_provider_config(provider, model).is_some_and(|config| {
         request_format != Some("native") || config.supported_ocr_params().contains(&"req_format")
     })

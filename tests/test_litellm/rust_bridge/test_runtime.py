@@ -41,7 +41,6 @@ def enabled() -> bool:
 @dataclass(frozen=True, slots=True)
 class FallbackCase:
     process_enabled: bool | None = None
-    eligible: bool = True
     binding_available: bool = True
     declined: bool = False
     expected_events: tuple[str, ...] = ()
@@ -51,10 +50,6 @@ FALLBACK_CASES: Final = (
     pytest.param(
         FallbackCase(process_enabled=False, expected_events=("python",)),
         id="process-disabled",
-    ),
-    pytest.param(
-        FallbackCase(eligible=False, expected_events=("python",)),
-        id="request-ineligible",
     ),
     pytest.param(
         FallbackCase(binding_available=False, expected_events=("load", "python")),
@@ -90,7 +85,6 @@ def test_invoke_falls_back_only_before_provider_success(case: FallbackCase) -> N
         fallback=lambda: events.append("python") or "fallback",
         adapt=str,
         error_context=context(),
-        eligible=case.eligible,
     )
 
     assert result == "fallback"
@@ -125,7 +119,6 @@ async def test_ainvoke_matches_sync_fallback_contract(case: FallbackCase) -> Non
         fallback=fallback,
         adapt=str,
         error_context=context(),
-        eligible=case.eligible,
     )
 
     assert result == "fallback"

@@ -152,21 +152,9 @@ def _provider_eligibility_options(
     return NativeRequestOptions(custom_llm_provider=provider, bedrock=bedrock, anthropic=anthropic)
 
 
-def _eligibility_context(
-    *,
-    execution_mode: str | None = None,
-    stream: bool,
-    has_custom_client: bool = False,
-    has_agentic_hook: bool = False,
-) -> NativeRequestContext:
-    return NativeRequestContext(
-        capabilities=NativeRequestCapabilities(
-            execution_mode=execution_mode,
-            stream=stream,
-            has_custom_client=has_custom_client,
-            has_agentic_hook=has_agentic_hook,
-        )
-    )
+def _execution_context(context: NativeRequestContext | None, mode: str) -> NativeRequestContext:
+    current = context or NativeRequestContext()
+    return with_capabilities(current, replace(current.capabilities, execution_mode=mode))
 
 
 def _build_model_response(

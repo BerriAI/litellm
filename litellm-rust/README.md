@@ -37,7 +37,7 @@ Python builds the frozen request dataclasses in `litellm/rust_bridge/request.py`
 PyO3 extracts their fields before execution. AWS credentials and metadata policy
 belong in `options.bedrock`; Vertex project/location belongs in `options.vertex`.
 
-This boundary preserves existing Python provider preparation, preflight decisions,
+This boundary preserves existing Python provider preparation and admission decisions,
 fallback, and callbacks
 
 ## Crates

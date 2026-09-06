@@ -11,8 +11,7 @@ use std::future::Future;
 #[derive(FromPyObject)]
 struct AudioTranscriptionInputs {
     model: String,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)]
-    audio: Value,
+    audio: Py<PyAny>,
     #[pyo3(from_py_with = litellm_python_interop::from_py)]
     optional_params: Map<String, Value>,
 }
@@ -22,16 +21,22 @@ fn prepare_transcription(
     options: NativeRequestOptions,
     context: NativeRequestContext,
     _callback_adapter: Option<Py<PyAny>>,
-    _python_context: crate::execution::PythonCallContext<'_>,
+    python_context: crate::execution::PythonCallContext<'_>,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
-    let provider_supported = litellm_core::audio_transcription::transcription_provider_supported(
-        options.provider("bedrock"),
-    );
+    let provider_admitted =
+        litellm_core::audio_transcription::transcription_admitted(options.provider("bedrock"));
     let context: LiteLlmRequestContext = context.into();
-    if let Some(reason) = super::definition::request_decline(provider_supported, &context) {
-        return Err(crate::errors::RustBridgeDeclined::new_err(reason));
+    if let litellm_core::native_outcome::NativeOutcome::Declined(decline) =
+        super::definition::admission(provider_admitted, &context)
+    {
+        return Err(crate::errors::RustBridgeDeclined::new_err(decline.reason()));
     }
-    let audio = input.audio;
+    let py = python_context.py;
+    let audio = py
+        .import("litellm.rust_bridge.transcription")?
+        .getattr("_consume_audio_for_native")?
+        .call1((input.audio.bind(py),))?;
+    let audio: Value = litellm_python_interop::from_py(&audio)?;
     Ok(async move {
         run_route(
             AudioTranscriptionRequest {

@@ -20,10 +20,10 @@ impl NativeRouteDecline {
 }
 
 pub fn native_route_decline(
-    provider_supported: bool,
+    provider_admitted: bool,
     capabilities: &RequestCapabilities,
 ) -> Option<NativeRouteDecline> {
-    if !provider_supported {
+    if !provider_admitted {
         return Some(NativeRouteDecline::UnsupportedProvider);
     }
     if capabilities.stream {

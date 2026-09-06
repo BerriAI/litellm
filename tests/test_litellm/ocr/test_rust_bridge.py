@@ -11,8 +11,8 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.callback_adapters import ProviderLoggingAdapter
 from litellm.rust_bridge.request import (
     NativeOCRRequest,
     NativeRequestContext,
@@ -432,7 +432,6 @@ def test_bridge_wrapper_forwards_prepared_args_and_wraps_response():
         adapt=dict,
         model="mistral-ocr-latest",
         provider="mistral",
-        eligible=True,
     )
 
     assert response == FAKE_OCR_RESPONSE
@@ -481,7 +480,6 @@ async def test_bridge_wrapper_forwards_prepared_async_args_and_wraps_response():
         adapt=dict,
         model="mistral-ocr-maas",
         provider="vertex_ai",
-        eligible=True,
     )
 
     assert response == FAKE_OCR_RESPONSE
@@ -524,17 +522,14 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
         "api_key": "sk-test",
         "api_base": "https://proxy.internal",
         "custom_llm_provider": "mistral",
-        "extra_headers": {
-            "Authorization": "Bearer sk-test",
-            "x-trace-id": "trace-1",
-        },
+        "extra_headers": {"x-trace-id": "trace-1"},
         "optional_params": {"include_image_base64": True},
         "vertex": NativeVertexOptions(),
         "timeout_seconds": 12.5,
     }
 
 
-def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
+def test_run_rust_ocr_does_not_resolve_credentials_before_admission():
     bridge = RecordingBridge()
     litellm.rust(True)
     rust_bridge._OCR.sync.override(bridge)
@@ -542,10 +537,10 @@ def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
     ocr_main._run_rust_ocr(
         fallback=lambda: pytest.fail("unexpected Python fallback"),
         prepared_request=build_prepared_request(api_key=None, timeout=None),
-        resolve_api_key=lambda name: "sk-from-vault" if name == "MISTRAL_API_KEY" else None,
+        resolve_api_key=lambda name: pytest.fail(f"unexpected pre-admission lookup: {name}"),
     )
 
-    assert bridge.calls[0]["api_key"] == "sk-from-vault"
+    assert bridge.calls[0]["api_key"] is None
 
 
 def test_run_rust_ocr_prefers_explicit_key_over_resolver():
@@ -568,7 +563,7 @@ def test_run_rust_ocr_prefers_explicit_key_over_resolver():
     assert bridge.calls[0]["api_key"] == "sk-explicit"
 
 
-def test_run_rust_ocr_uses_provider_api_key_env_var():
+def test_run_rust_ocr_leaves_provider_discovery_to_native_admission():
     bridge = RecordingBridge()
     resolver_calls = []
     litellm.rust(True)
@@ -589,8 +584,8 @@ def test_run_rust_ocr_uses_provider_api_key_env_var():
         resolve_api_key=_resolver,
     )
 
-    assert resolver_calls == ["PROVIDER_OCR_API_KEY"]
-    assert bridge.calls[0]["api_key"] == "sk-provider-env"
+    assert resolver_calls == []
+    assert bridge.calls[0]["api_key"] is None
 
 
 def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
@@ -618,7 +613,7 @@ def test_prepare_rust_ocr_call_forwards_vertex_routing_metadata():
     assert bridge.calls[0]["vertex"] == NativeVertexOptions(project="project-1", location="us-central1")
 
 
-def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_manager():
+def test_prepare_rust_ocr_call_does_not_resolve_vertex_metadata_before_admission():
     bridge = RecordingBridge()
     litellm.rust(True)
     rust_bridge._OCR.sync.override(bridge)
@@ -639,10 +634,10 @@ def test_prepare_rust_ocr_call_resolves_vertex_routing_metadata_from_secret_mana
         resolve_api_key=_resolver,
     )
 
-    assert bridge.calls[0]["vertex"] == NativeVertexOptions(project="project-from-secret", location="us-east5")
+    assert bridge.calls[0]["vertex"] == NativeVertexOptions()
 
 
-def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
+def test_prepare_rust_ocr_call_leaves_azure_base_discovery_to_native():
     bridge = RecordingBridge()
     litellm.rust(True)
     rust_bridge._OCR.sync.override(bridge)
@@ -658,10 +653,10 @@ def test_prepare_rust_ocr_call_resolves_azure_ai_api_base_from_secret_manager():
         resolve_api_key=lambda name: "https://azure.example.com" if name == "AZURE_AI_API_BASE" else None,
     )
 
-    assert bridge.calls[0]["api_base"] == "https://azure.example.com"
+    assert bridge.calls[0]["api_base"] is None
 
 
-def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
+def test_prepare_rust_ocr_call_leaves_document_intelligence_endpoint_to_native():
     bridge = RecordingBridge()
     litellm.rust(True)
     rust_bridge._OCR.sync.override(bridge)
@@ -679,7 +674,7 @@ def test_prepare_rust_ocr_call_resolves_document_intelligence_endpoint():
         ),
     )
 
-    assert bridge.calls[0]["api_base"] == "https://document-intelligence.example.com"
+    assert bridge.calls[0]["api_base"] is None
 
 
 def test_run_rust_ocr_passes_provider_logging_adapter():
@@ -721,7 +716,7 @@ def test_ocr_routes_azure_ai_to_rust_when_enabled(fake_bridge):
     assert fake_bridge.calls[0]["custom_llm_provider"] == "azure_ai"
 
 
-def test_ocr_rust_path_converts_file_document_before_bridge(fake_bridge):
+def test_ocr_rust_path_keeps_file_document_opaque_until_native_admission(fake_bridge):
     response = litellm.ocr(
         model=MODEL,
         document={"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
@@ -730,8 +725,7 @@ def test_ocr_rust_path_converts_file_document_before_bridge(fake_bridge):
 
     assert isinstance(response, OCRResponse)
     document = fake_bridge.calls[0]["document"]
-    assert document["type"] == "document_url"
-    assert document["document_url"].startswith("data:application/pdf;base64,")
+    assert document == {"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"}
 
 
 def test_ocr_exception_type_uses_resolved_provider_context(
@@ -772,10 +766,7 @@ async def test_aocr_routes_to_async_rust_when_enabled(fake_async_bridge):
     assert call["document"] == DOCUMENT
     assert call["api_key"] == "sk-test"
     assert call["custom_llm_provider"] == "mistral"
-    assert call["extra_headers"] == {
-        "Authorization": "Bearer sk-test",
-        "x-trace-id": "trace-1",
-    }
+    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
     assert call["optional_params"].get("include_image_base64") is True
 
 

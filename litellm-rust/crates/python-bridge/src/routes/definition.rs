@@ -102,12 +102,17 @@ pub(super) fn add_function(
     module.add_function(function)
 }
 
-pub(crate) fn request_decline(
-    provider_supported: bool,
+pub(crate) fn admission(
+    provider_admitted: bool,
     context: &litellm_core::request_context::LiteLlmRequestContext,
-) -> Option<String> {
-    litellm_core::eligibility::native_route_decline(provider_supported, &context.capabilities)
-        .map(|reason| reason.reason().to_string())
+) -> litellm_core::native_outcome::NativeOutcome<()> {
+    match litellm_core::eligibility::native_route_decline(provider_admitted, &context.capabilities)
+    {
+        Some(reason) => litellm_core::native_outcome::NativeOutcome::Declined(
+            litellm_core::native_outcome::Decline::new(reason.reason()),
+        ),
+        None => litellm_core::native_outcome::NativeOutcome::Completed(()),
+    }
 }
 
 #[cfg(test)]
@@ -297,6 +302,11 @@ for field in ('litellm_call_id', 'trace_id', 'request_model'):
             locals.set_item("routes", module).unwrap();
             py.run(
                 c"
+import asyncio
+
+async def invoke_async(execute, request, options):
+    return await execute(request, options=options, context=context)
+
 for route, provider in (
     ('chat_completions', 'anthropic'),
     ('messages', 'anthropic'),
@@ -311,13 +321,16 @@ for route, provider in (
     )
     unsupported_options = Options(custom_llm_provider='unsupported-native-provider')
     functions = (
-        (routes.ResponsesWebSocketConnection.connect,)
+        ((routes.ResponsesWebSocketConnection.connect, True),)
         if route == 'responses_websocket'
-        else (getattr(routes, route), getattr(routes, 'a' + route))
+        else ((getattr(routes, route), False), (getattr(routes, 'a' + route), True))
     )
-    for execute in functions:
+    for execute, is_async in functions:
         try:
-            execute(request, options=unsupported_options, context=context)
+            if is_async:
+                asyncio.run(invoke_async(execute, request, unsupported_options))
+            else:
+                execute(request, options=unsupported_options, context=context)
         except Exception as error:
             assert type(error).__name__ == 'RustBridgeDeclined', (route, error)
         else:

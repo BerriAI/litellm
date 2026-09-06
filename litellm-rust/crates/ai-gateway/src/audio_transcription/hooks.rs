@@ -275,7 +275,6 @@ fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
 
 fn core_error_kind(error: &Error) -> &'static str {
     match error {
-        Error::Declined(_) => "UnsupportedRequest",
         Error::Auth(_) => "AuthError",
         Error::InvalidProvider(_) => "InvalidProvider",
         Error::InvalidRequest(_) => "InvalidRequest",
