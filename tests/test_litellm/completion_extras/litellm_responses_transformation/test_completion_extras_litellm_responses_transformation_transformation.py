@@ -4015,3 +4015,38 @@ def test_convert_chat_completion_messages_to_responses_api_omits_absent_prompt_c
     response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
 
     assert all("prompt_cache_breakpoint" not in block for block in response[0]["content"])
+
+
+def test_convert_chat_completion_messages_to_responses_api_keeps_prompt_cache_breakpoint_on_unknown_block():
+    """A block type the bridge cannot map still has to keep the marker.
+
+    The hook marks the last block of the message it targets, so a message ending in a block this
+    bridge does not know falls through to the stringify path. Losing the marker there is the same
+    failure as losing it on a text block: the request goes out in explicit mode with nothing marked.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    breakpoint_marker = {"mode": "explicit"}
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe this"},
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": "Zm9v", "format": "wav"},
+                    "prompt_cache_breakpoint": breakpoint_marker,
+                },
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    content = response[0]["content"]
+    assert [block["type"] for block in content] == ["input_text", "input_text"]
+    assert content[1]["prompt_cache_breakpoint"] == breakpoint_marker

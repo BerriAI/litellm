@@ -1057,7 +1057,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             verbose_logger.debug("Chat provider:   passthrough -> %s", item)
                         else:
                             # Default to input_text for unknown types
-                            converted = self._convert_content_str_to_input_text(str(item.get("text", item)), role)
+                            converted = with_prompt_cache_breakpoint(
+                                self._convert_content_str_to_input_text(str(item.get("text", item)), role),
+                                item.get("prompt_cache_breakpoint"),
+                            )
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   unknown(%s) -> %s", original_type, converted)
             verbose_logger.debug("Chat provider: Final converted content: %s", result)

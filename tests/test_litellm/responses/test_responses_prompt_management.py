@@ -428,7 +428,6 @@ class TestResponsesAPIPromptManagement:
         sent_input = mock_handler.call_args.kwargs["input"]
         assert "cache_control" not in sent_input[0]
 
-
     def test_all_non_message_input_items_remain_unchanged(self):
         reasoning_item = {
             "type": "reasoning",
