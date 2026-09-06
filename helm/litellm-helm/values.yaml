@@ -309,6 +309,20 @@ db:
   # only (e.g. when IAM_TOKEN_DB_AUTH supplies the token at runtime).
   readReplicaUrl: ""
 
+  # In-container connection pool (PgBouncer, transaction mode) shared by every
+  # worker in the pod. Without it each --num_workers worker opens its own
+  # connection_limit connections to Postgres, so a pod's footprint against the
+  # database's connection ceiling is workers x connection_limit and grows with
+  # every replica. With it, the pod holds at most maxDbConnections upstream
+  # connections no matter how many workers run; the workers connect to the pool
+  # over loopback, with no extra network hop. Migrations still go straight to
+  # Postgres. Starting profile for numWorkers: 4 is maxDbConnections: 20, so
+  # a database with a 5000-connection ceiling fits roughly 200 replicas.
+  connectionPool:
+    enabled: false
+    maxDbConnections: 20
+    maxClientConn: 1000
+
   # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
   #  The Stackgres Operator must already be installed within the target
   #  Kubernetes cluster.
