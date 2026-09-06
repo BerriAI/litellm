@@ -6504,6 +6504,17 @@ def test_get_error_information_ignores_malformed_headers() -> None:
     assert error_information["error_provider_request_id"] is None
 
 
+def test_get_provider_request_id_ignores_header_lookup_errors() -> None:
+    from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
+
+    class HeaderLookupError(Exception):
+        @property
+        def response(self) -> object:
+            raise RuntimeError("headers unavailable")
+
+    assert _get_provider_request_id(HeaderLookupError("provider error")) is None
+
+
 def test_get_standard_logging_object_payload_failure_status_keeps_overhead_none(logging_obj):
     """A post_call guardrail can fail the request after the upstream call succeeded; the failure
     payload keeps litellm_overhead_time_ms None, matching responses that carry their own _hidden_params."""
