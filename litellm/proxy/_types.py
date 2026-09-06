@@ -825,6 +825,9 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        # update_team resolves proxy/org/team admin itself and filters team admins
+        # through the team_admin_editable_team_fields setting
+        "/team/update",
         "/team/member_add",
         "/team/member_delete",
         "/team/member_update",

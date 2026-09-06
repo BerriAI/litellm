@@ -29,6 +29,10 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_SECRET_FIELDS,
     resolve_sso_config,
 )
+from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
+)
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import invalidate_config_param
 from litellm.repositories.config_repository import ConfigRepository
@@ -212,6 +216,9 @@ class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
 
+_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS))
+
+
 class UISettings(BaseModel):
     """Configuration for UI-specific flags"""
 
@@ -304,6 +311,18 @@ class UISettings(BaseModel):
         description="If true, shows the Chat page in the UI sidebar, letting users chat with an LLM and connect their own MCP server credentials via OAuth.",
     )
 
+    team_admin_editable_team_fields: Sequence[str] = Field(
+        default=(),
+        description=(
+            "Team settings fields a team admin may change on the teams they administer. "
+            "Empty means team admins cannot edit team settings at all. "
+            "Proxy admins and org admins are not affected."
+        ),
+        json_schema_extra={  # mutable-ok: pydantic only merges json_schema_extra when it is a plain dict
+            "items": {"type": "string", "enum": [*_TEAM_ADMIN_FIELD_ENUM]},  # mutable-ok: nested in the dict above
+        },
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -326,6 +345,7 @@ ALLOWED_UI_SETTINGS_FIELDS: Final = {
     "disable_custom_api_keys",
     "disable_key_generate_for_org_admin",
     "enable_chat_ui",
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 }
 
 ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: Final = "enable_ptu_cost_attribution"
@@ -360,6 +380,7 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "disable_vector_stores_for_internal_users",
     "allow_vector_stores_for_team_admins",
     "disable_key_generate_for_org_admin",
+    TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 ]
 
 # Extension point: packages outside OSS (e.g. litellm_enterprise) can
@@ -1570,6 +1591,20 @@ async def update_ui_settings(
         settings: Final = effective_cls.model_validate(settings_body)
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=e.errors())
+
+    unsupported_team_fields: Final = sorted(
+        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+    )
+    if unsupported_team_fields:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
+                "error": (
+                    f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING} does not support {unsupported_team_fields}. "
+                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS)}."
+                )
+            },
+        )
 
     # Only include fields the caller actually sent (not Pydantic defaults).
     settings_dict: Final[Mapping[str, JsonValue]] = settings.model_dump(exclude_unset=True)
