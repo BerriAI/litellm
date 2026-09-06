@@ -11,7 +11,6 @@ from typing import (
     Final,
     Literal,
     Protocol,
-    cast,  # noqa: TID251  # rebuilt message_delta dict spans the ContentBlockDelta/MessageBlockDelta union
     get_args,
 )
 
@@ -25,6 +24,7 @@ from litellm.types.llms.anthropic import (
     ContentBlockDelta,
     ContextManagementResponse,
     MessageBlockDelta,
+    MessageDelta,
     StreamingContentBlockDeltaType,
     UsageDelta,
     UsageIteration,
@@ -1006,26 +1006,28 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self,
         processed_chunk: ContentBlockDelta | MessageBlockDelta,
     ) -> ContentBlockDelta | MessageBlockDelta:
-        if processed_chunk.get("type") != "message_delta" or not self._refusal_text:
+        if processed_chunk["type"] != "message_delta" or not self._refusal_text:
             return processed_chunk
-        delta: Final = cast(Mapping[str, object], processed_chunk["delta"])  # cast-ok: keys checked before use
+        delta: Final = processed_chunk["delta"]
         if delta.get("stop_reason") == "max_tokens":
             return processed_chunk
         from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
             refusal_stop_details,
         )
 
-        return cast(  # cast-ok: rebuilt dict matches the message_delta TypedDict shape for this branch
-            ContentBlockDelta | MessageBlockDelta,
-            {  # mutable-ok: fresh translation payload; never mutated after construction
-                **processed_chunk,
-                "delta": {  # mutable-ok: fresh message_delta payload; never mutated after construction
-                    **delta,
-                    "stop_reason": "refusal",
-                    "stop_details": refusal_stop_details(self._refusal_text),
-                },
-            },
-        )
+        refusal_delta: Final[MessageDelta] = {  # mutable-ok: fresh message_delta payload
+            **delta,
+            "stop_reason": "refusal",
+            "stop_details": refusal_stop_details(self._refusal_text),
+        }
+        if "context_management" in processed_chunk:
+            return MessageBlockDelta(
+                type="message_delta",
+                delta=refusal_delta,
+                usage=processed_chunk["usage"],
+                context_management=processed_chunk["context_management"],
+            )
+        return MessageBlockDelta(type="message_delta", delta=refusal_delta, usage=processed_chunk["usage"])
 
     @staticmethod
     def _delta_has_content(processed_chunk: Mapping[str, object]) -> bool:
