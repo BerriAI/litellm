@@ -3916,6 +3916,7 @@ class LlmProviders(str, Enum):
     HOSTED_VLLM = "hosted_vllm"
     TENCENT = "tencent"
     LLAMAFILE = "llamafile"
+    LLMMAN = "llmman"
     LM_STUDIO = "lm_studio"
     GALADRIEL = "galadriel"
     NEBIUS = "nebius"
