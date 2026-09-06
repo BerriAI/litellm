@@ -82,7 +82,16 @@ class HealthCheckHelpers:
         from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
         _metadata_variable_name: Final = "litellm_metadata"
-        litellm_metadata: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
+        existing_metadata: Final = model_params.get(_metadata_variable_name)
+        health_check_metadata: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
+        existing_tags: Final = existing_metadata.get("tags", ()) if isinstance(existing_metadata, dict) else ()
+        health_check_tags: Final = health_check_metadata["tags"]
+        litellm_metadata: Final = health_check_metadata.copy()
+        if isinstance(existing_metadata, dict):
+            litellm_metadata.update(existing_metadata)
+        litellm_metadata.update(health_check_metadata)
+        health_check_tags[:] = dict.fromkeys((*existing_tags, *health_check_tags))
+        litellm_metadata["tags"] = health_check_tags
         model_params[_metadata_variable_name] = litellm_metadata
         model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
             data=model_params,
