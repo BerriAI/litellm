@@ -47,12 +47,14 @@ impl ResponsesWebSocketConnection {
         context: NativeRequestContext,
         callback_adapter: Option<Py<PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let provider_supported = litellm_core::responses::websocket::native_websocket_supported(
+        let provider_admitted = litellm_core::responses::websocket::native_websocket_supported(
             options.provider("openai"),
         );
         let context: litellm_core::request_context::LiteLlmRequestContext = context.into();
-        if let Some(reason) = routes::definition::request_decline(provider_supported, &context) {
-            return Err(crate::errors::RustBridgeDeclined::new_err(reason));
+        if let litellm_core::native_outcome::NativeOutcome::Declined(decline) =
+            routes::definition::admission(provider_admitted, &context)
+        {
+            return Err(crate::errors::RustBridgeDeclined::new_err(decline.reason()));
         }
         let options: litellm_core::request_options::RequestOptions = options.into();
         let call_id = context.litellm_call_id.clone().unwrap_or_default();

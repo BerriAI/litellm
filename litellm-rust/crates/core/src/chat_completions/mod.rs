@@ -8,6 +8,7 @@
 
 use crate::Error;
 use crate::eligibility::native_route_decline;
+use crate::native_outcome::{Decline, NativeOutcome};
 use crate::request_context::LiteLlmRequestContext;
 use crate::request_options::RequestOptions;
 mod client;
@@ -31,18 +32,24 @@ pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
     options: &RequestOptions,
     context: &LiteLlmRequestContext,
-) -> Result<ChatCompletionsResponse, Error> {
+) -> Result<NativeOutcome<ChatCompletionsResponse>, Error> {
+    if let Some(reason) = chat_completions_admission(
+        request.model,
+        options.custom_llm_provider.as_deref(),
+        request.messages.clone(),
+        &request.optional_params,
+        options,
+        context,
+    ) {
+        return Ok(NativeOutcome::Declined(Decline::new(reason)));
+    }
     execute_chat_completions_provider_call(resolve_request(request, options.clone(), context)?)
         .await
+        .map(NativeOutcome::Completed)
 }
 
-/// Whether the core would accept this request, without resolving credentials or
-/// touching the network.
-///
-/// A host that keeps the Python implementation asks this first so it can emit
-/// its pre-call logging exactly once, on whichever path is about to run.
-/// Returns the decline reason, or `None` when the request is accepted.
-pub fn chat_completions_decline_reason(
+/// Pure admission for the normal route entrypoint.
+fn chat_completions_admission(
     model: &str,
     custom_llm_provider: Option<&str>,
     messages: Value,

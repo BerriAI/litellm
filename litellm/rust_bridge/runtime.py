@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Final, Generic, NoReturn, Protocol, TypeAlias, TypeVar, assert_never
+from typing import Final, Generic, NoReturn, Protocol, TypeAlias, TypeVar
 
 from litellm.exceptions import APIError, AuthenticationError, InternalServerError, RateLimitError
 from litellm.rust_bridge.bindings import (
@@ -32,14 +32,6 @@ class PythonFallbackReason(Enum):
     NATIVE_DECLINED = "native_declined"
 
 
-class NativeSkipReason(Enum):
-    DISABLED = "disabled"
-    INELIGIBLE = "ineligible"
-    UNAVAILABLE = "unavailable"
-    DECLINED = "declined"
-    FAILED = "failed"
-
-
 @dataclass(frozen=True, slots=True)
 class Handled(Generic[ResultT]):
     value: ResultT
@@ -51,18 +43,7 @@ class PythonFallback:
     detail: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class NativeSkipped:
-    reason: NativeSkipReason
-    detail: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class NativeFailed:
-    error: Exception
-
-
-DispatchResult: TypeAlias = Handled[ResultT] | PythonFallback | NativeSkipped | NativeFailed
+DispatchResult: TypeAlias = Handled[ResultT] | PythonFallback
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,11 +98,8 @@ class EndpointBinding(Generic[BindingT]):
         call: Callable[[BindingT, RequestT], NativeT],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> DispatchResult[ResultT]:
-        binding_or_fallback: Final = self._binding_or_python_fallback(
-            eligible=eligible,
-        )
+        binding_or_fallback: Final = self._binding_or_python_fallback()
         if isinstance(binding_or_fallback, PythonFallback):
             return binding_or_fallback
         return self._attempt_call(
@@ -137,11 +115,8 @@ class EndpointBinding(Generic[BindingT]):
         call: Callable[[BindingT, RequestT], Awaitable[NativeT]],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> DispatchResult[ResultT]:
-        binding_or_fallback: Final = self._binding_or_python_fallback(
-            eligible=eligible,
-        )
+        binding_or_fallback: Final = self._binding_or_python_fallback()
         if isinstance(binding_or_fallback, PythonFallback):
             return binding_or_fallback
         return await self._attempt_acall(
@@ -158,22 +133,18 @@ class EndpointBinding(Generic[BindingT]):
         fallback: Callable[[], ResultT],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> ResultT:
         result: Final = self._attempt(
             prepare=prepare,
             call=call,
             adapt=adapt,
             error_context=error_context,
-            eligible=eligible,
         )
         match result:
             case Handled(value=value):
                 return value
             case PythonFallback():
                 return fallback()
-            case _ as unreachable:
-                assert_never(unreachable)
 
     async def ainvoke(
         self,
@@ -183,22 +154,18 @@ class EndpointBinding(Generic[BindingT]):
         fallback: Callable[[], Awaitable[ResultT]],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> ResultT:
         result: Final = await self._aattempt(
             prepare=prepare,
             call=call,
             adapt=adapt,
             error_context=error_context,
-            eligible=eligible,
         )
         match result:
             case Handled(value=value):
                 return value
             case PythonFallback():
                 return await fallback()
-            case _ as unreachable:
-                assert_never(unreachable)
 
     def require(
         self,
@@ -207,22 +174,18 @@ class EndpointBinding(Generic[BindingT]):
         call: Callable[[BindingT, RequestT], NativeT],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> ResultT:
         result: Final = self._attempt(
             prepare=prepare,
             call=call,
             adapt=adapt,
             error_context=error_context,
-            eligible=eligible,
         )
         match result:
             case Handled(value=value):
                 return value
             case PythonFallback():
                 self._raise_required(result)
-            case _ as unreachable:
-                assert_never(unreachable)
 
     async def arequire(
         self,
@@ -231,34 +194,26 @@ class EndpointBinding(Generic[BindingT]):
         call: Callable[[BindingT, RequestT], Awaitable[NativeT]],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> ResultT:
         result: Final = await self._aattempt(
             prepare=prepare,
             call=call,
             adapt=adapt,
             error_context=error_context,
-            eligible=eligible,
         )
         match result:
             case Handled(value=value):
                 return value
             case PythonFallback():
                 self._raise_required(result)
-            case _ as unreachable:
-                assert_never(unreachable)
 
     def _raise_required(self, fallback: PythonFallback) -> NoReturn:
         detail: Final = f": {fallback.detail}" if fallback.detail else ""
         reason: Final = _required_reason(fallback.reason)
         raise RuntimeError(f"native {self.route} endpoint {reason}{detail}")
 
-    def _binding_or_python_fallback(
-        self,
-        *,
-        eligible: bool,
-    ) -> BindingT | PythonFallback:
-        if not eligible or not self.enabled():
+    def _binding_or_python_fallback(self) -> BindingT | PythonFallback:
+        if not self.enabled():
             return PythonFallback(PythonFallbackReason.NATIVE_DISABLED)
         binding: Final = self.load()
         if binding is None:
@@ -385,7 +340,6 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         fallback: Callable[[], ResultT],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> ResultT:
         return self.sync.invoke(
             prepare=prepare,
@@ -393,7 +347,6 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
             fallback=fallback,
             adapt=adapt,
             error_context=error_context,
-            eligible=eligible,
         )
 
     async def ainvoke(
@@ -404,7 +357,6 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         fallback: Callable[[], Awaitable[ResultT]],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> ResultT:
         return await self.asynchronous.ainvoke(
             prepare=prepare,
@@ -412,7 +364,6 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
             fallback=fallback,
             adapt=adapt,
             error_context=error_context,
-            eligible=eligible,
         )
 
     def require(
@@ -422,14 +373,12 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         call: Callable[[SyncBindingT, RequestT], NativeT],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> ResultT:
         return self.sync.require(
             prepare=prepare,
             call=call,
             adapt=adapt,
             error_context=error_context,
-            eligible=eligible,
         )
 
     async def arequire(
@@ -439,14 +388,12 @@ class EndpointDispatch(Generic[SyncBindingT, AsyncBindingT]):
         call: Callable[[AsyncBindingT, RequestT], Awaitable[NativeT]],
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
-        eligible: bool = True,
     ) -> ResultT:
         return await self.asynchronous.arequire(
             prepare=prepare,
             call=call,
             adapt=adapt,
             error_context=error_context,
-            eligible=eligible,
         )
 
 

@@ -220,7 +220,7 @@ fn declines_an_unsupported_request_before_resolving_credentials() {
     call.options.api_key = None;
     // No api_key is set and no env is consulted: the gate must run first, so the
     // error is the decline rather than a missing-credential error.
-    assert_eq!(decline(call), Error::Declined("streaming"));
+    assert_eq!(decline(call), Error::Unsupported("streaming"));
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn rejects_an_unknown_provider() {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        Error::Declined("provider is not on the rust chat completions path")
+        Error::Unsupported("provider is not on the rust chat completions path")
     );
 }
 
@@ -245,7 +245,7 @@ fn rejects_a_model_with_no_resolvable_provider() {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        Error::Declined("provider is not on the rust chat completions path")
+        Error::Unsupported("provider is not on the rust chat completions path")
     );
 }
 
@@ -258,7 +258,7 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!([]),
             json!({}),
         )),
-        Error::Declined("empty message list")
+        Error::Unsupported("empty message list")
     );
     assert_eq!(
         decline(request(
@@ -267,7 +267,7 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!("not a list"),
             json!({}),
         )),
-        Error::Declined("unreadable message list")
+        Error::Unsupported("unreadable message list")
     );
 }
 
@@ -513,7 +513,7 @@ fn decline_reason(
         Value::Object(map) => map,
         other => panic!("params must be an object, got {other}"),
     };
-    super::chat_completions_decline_reason(
+    super::chat_completions_admission(
         model,
         provider,
         messages,
@@ -524,7 +524,7 @@ fn decline_reason(
 }
 
 #[test]
-fn the_gate_accepts_what_prepare_accepts() {
+fn admission_accepts_a_supported_call() {
     assert_eq!(
         decline_reason(
             "anthropic/claude-sonnet-4-5",
@@ -537,7 +537,7 @@ fn the_gate_accepts_what_prepare_accepts() {
 }
 
 #[test]
-fn the_gate_declines_without_resolving_credentials_or_calling_out() {
+fn admission_declines_without_resolving_credentials_or_calling_out() {
     assert_eq!(
         decline_reason(
             "anthropic/claude-sonnet-4-5",
@@ -581,9 +581,7 @@ fn the_gate_declines_without_resolving_credentials_or_calling_out() {
 }
 
 #[test]
-fn the_gate_agrees_with_prepare_on_every_case_it_accepts() {
-    // A gate that accepts what prepare then declines would make the host emit
-    // its pre-call logging on a path that falls back, so pin the agreement.
+fn admission_agrees_with_preparation_on_supported_cases() {
     for (messages, params) in [
         (
             json!([{"role": "user", "content": "hi"}]),
@@ -606,7 +604,7 @@ fn the_gate_agrees_with_prepare_on_every_case_it_accepts() {
                 params.clone()
             ),
             None,
-            "gate declined {messages}"
+            "admission declined {messages}"
         );
         prepare_chat_completions_call(request(
             "anthropic/claude-sonnet-4-5",
@@ -711,7 +709,12 @@ mod round_trip {
         call: TestChatCompletionsCall<'_>,
         context: &LiteLlmRequestContext,
     ) -> Result<super::super::types::ChatCompletionsResponse, Error> {
-        run_chat_completions(call.request, &call.options, context).await
+        match run_chat_completions(call.request, &call.options, context).await? {
+            crate::native_outcome::NativeOutcome::Completed(response) => Ok(response),
+            crate::native_outcome::NativeOutcome::Declined(decline) => {
+                panic!("round-trip fixture was declined: {}", decline.reason())
+            }
+        }
     }
 
     const GOOD_BODY: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
@@ -886,7 +889,7 @@ mod round_trip {
 }
 
 #[test]
-fn preflight_and_execution_share_provider_metadata_eligibility() {
+fn admission_and_preparation_share_provider_metadata_eligibility() {
     let messages = json!([{"role": "user", "content": "hi"}]);
     let cases = [
         (
@@ -930,7 +933,7 @@ fn preflight_and_execution_share_provider_metadata_eligibility() {
     for (provider, options, expected_decline) in cases {
         let context = LiteLlmRequestContext::default();
         let params = Map::new();
-        let preflight = super::chat_completions_decline_reason(
+        let admission = super::chat_completions_admission(
             "claude-sonnet-4-5",
             Some(provider),
             messages.clone(),
@@ -948,9 +951,9 @@ fn preflight_and_execution_share_provider_metadata_eligibility() {
             &context,
         );
         assert_eq!(
-            preflight.is_some(),
+            admission.is_some(),
             expected_decline,
-            "{provider} preflight"
+            "{provider} admission"
         );
         assert_eq!(execution.is_err(), expected_decline, "{provider} execution");
     }

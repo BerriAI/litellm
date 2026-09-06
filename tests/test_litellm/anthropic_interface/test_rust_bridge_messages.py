@@ -40,6 +40,7 @@ class RecordingMessages:
         *,
         options: object,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -65,6 +66,7 @@ class RecordingAsyncMessages:
         *,
         options: object,
         context: NativeRequestContext,
+        callback_adapter: object | None = None,
     ) -> dict[str, object]:
         self.calls.append(
             {
@@ -114,19 +116,11 @@ class RaisingAsyncMessages:
 
 @pytest.fixture(autouse=True)
 def _reset_rust_flag():
-    rust_messages.set_rust_messages(messages=None, amessages=None, decline=None)
+    rust_messages.set_rust_messages(messages=None, amessages=None)
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
-    rust_messages.set_rust_messages(
-        decline=lambda model, custom_llm_provider, *, context: (
-            "unsupported feature"
-            if any(getattr(context.capabilities, key) for key in ("stream", "has_agentic_hook", "has_custom_client"))
-            or context.capabilities.request_format == "native"
-            else None
-        )
-    )
     yield
-    rust_messages.set_rust_messages(messages=None, amessages=None, decline=None)
+    rust_messages.set_rust_messages(messages=None, amessages=None)
     configuration.reset_rust_configuration()
     rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
 
@@ -285,7 +279,7 @@ def test_public_messages_strips_provider_specific_fields_before_native_dispatch(
     assert "provider_specific_fields" in messages[0]["content"][0]
 
 
-@pytest.mark.parametrize("condition", ["disabled", "declined", "missing_binding", "missing_preflight", "stream"])
+@pytest.mark.parametrize("condition", ["disabled", "missing_binding"])
 def test_public_messages_fallback_once(monkeypatch, condition):
     module = importlib.import_module("litellm.llms.anthropic.experimental_pass_through.messages.handler")
     python = PythonMessages()
@@ -293,18 +287,13 @@ def test_public_messages_fallback_once(monkeypatch, condition):
     bridge = RecordingMessages()
     litellm.rust(condition != "disabled")
     rust_messages.set_rust_messages(messages=bridge)
-    if condition == "declined":
-        rust_messages.set_rust_messages(decline=lambda model, custom_llm_provider, **features: "unsupported provider")
-    elif condition == "missing_binding":
+    if condition == "missing_binding":
         rust_messages._MESSAGES.sync.override(None)
-    elif condition == "missing_preflight":
-        rust_messages._PREFLIGHT.override(None)
     litellm.anthropic.messages.create(
         model="anthropic/test-model",
         max_tokens=64,
         messages=[{"role": "user", "content": "hi"}],
         api_key="key",
-        stream=condition == "stream",
     )
     assert python.calls == 1
     assert bridge.calls == []
@@ -316,7 +305,9 @@ def test_public_messages_invalid_response_does_not_fallback(monkeypatch, respons
     python = PythonMessages()
     monkeypatch.setattr(module, "base_llm_http_handler", python)
     litellm.rust(True)
-    rust_messages.set_rust_messages(messages=lambda request, *, options, context: response)
+    rust_messages.set_rust_messages(
+        messages=lambda request, *, options, context, callback_adapter=None: response
+    )
     with pytest.raises(ValidationError):
         litellm.anthropic.messages.create(
             model="anthropic/test-model",

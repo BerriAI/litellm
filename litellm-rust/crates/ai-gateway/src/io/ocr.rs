@@ -1,1 +1,1 @@
-pub use crate::ocr::{OcrRequest, ocr, ocr_provider_supported, ocr_with_observer};
+pub use crate::ocr::{OcrRequest, ocr, ocr_admitted, ocr_with_observer};

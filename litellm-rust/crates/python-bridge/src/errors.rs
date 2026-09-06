@@ -18,7 +18,6 @@ pyo3::create_exception!(
 
 pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        Error::Declined(message) => RustBridgeDeclined::new_err(message),
         Error::Auth(message) => PyValueError::new_err(message),
         Error::InvalidProvider(_)
         | Error::InvalidRequest(_)
@@ -30,7 +29,6 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
 
 pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        Error::Declined(message) => RustBridgeDeclined::new_err(message),
         Error::Auth(message) => RustUpstreamError::new_err((401u16, message)),
         Error::Http { status, body } => {
             RustUpstreamError::new_err((status, format!("{status}: {body}")))
@@ -88,15 +86,6 @@ mod tests {
                 .and_then(|args| args.extract())
                 .expect("transport errors retain their status and message");
             assert_eq!(args, (0, message.to_string()));
-        });
-    }
-
-    #[rstest]
-    fn only_explicit_decline_authorizes_python_fallback(#[from(initialized_python)] (): ()) {
-        Python::attach(|py| {
-            let mapped = chat_completions_error_to_pyerr(Error::Declined("unsupported request"));
-            assert!(mapped.is_instance_of::<RustBridgeDeclined>(py));
-            assert_eq!(mapped.value(py).to_string(), "unsupported request");
         });
     }
 

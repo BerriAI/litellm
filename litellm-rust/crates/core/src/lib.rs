@@ -8,6 +8,7 @@ pub mod error;
 pub mod hook_contracts;
 pub mod http_utils;
 pub mod messages;
+pub mod native_outcome;
 #[cfg(any(feature = "observability", test))]
 pub mod observability;
 pub mod ocr;

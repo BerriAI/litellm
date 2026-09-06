@@ -50,11 +50,11 @@ pub(super) fn resolve_request(
 ) -> Result<ResolvedChatCompletionsRequest, Error> {
     let (model, provider, config) =
         resolve_provider_config(request.model, options.custom_llm_provider.as_deref())
-            .map_err(|_| Error::Declined("provider is not on the rust chat completions path"))?;
-    let messages =
-        parse_messages(request.messages).map_err(|_| Error::Declined("unreadable message list"))?;
+            .map_err(|_| Error::Unsupported("provider is not on the rust chat completions path"))?;
+    let messages = parse_messages(request.messages)
+        .map_err(|_| Error::Unsupported("unreadable message list"))?;
     if messages.is_empty() {
-        return Err(Error::Declined("empty message list"));
+        return Err(Error::Unsupported("empty message list"));
     }
     if let Some(reason) = super::unsupported_reason(
         provider,
@@ -64,7 +64,7 @@ pub(super) fn resolve_request(
         &options,
         context,
     ) {
-        return Err(Error::Declined(reason.0));
+        return Err(Error::Unsupported(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {
         model,

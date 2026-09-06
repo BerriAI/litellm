@@ -54,8 +54,6 @@ def dispatch_ocr(
     adapt: Callable[[Mapping[str, object]], ResultT],
     model: str,
     provider: str,
-    eligible: bool = True,
-    request_format: str | None = None,
 ) -> ResultT:
     return _OCR.invoke(
         prepare=prepare,
@@ -63,7 +61,6 @@ def dispatch_ocr(
         fallback=fallback,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),
-        eligible=eligible,
     )
 
 
@@ -74,8 +71,6 @@ async def adispatch_ocr(
     adapt: Callable[[Mapping[str, object]], ResultT],
     model: str,
     provider: str,
-    eligible: bool = True,
-    request_format: str | None = None,
 ) -> ResultT:
     return await _OCR.ainvoke(
         prepare=prepare,
@@ -83,5 +78,4 @@ async def adispatch_ocr(
         fallback=fallback,
         adapt=adapt,
         error_context=BridgeErrorContext(provider=provider, model=model),
-        eligible=eligible,
     )
