@@ -97,18 +97,21 @@ impl ProviderAttemptObserver for ProviderObserver {
     }
 }
 
-fn observer_request(api_base: &str) -> OcrRequest<'_> {
+fn observer_request() -> OcrRequest<'static> {
     OcrRequest {
         model: "mistral/mistral-ocr-4-1",
         document: json!({"type":"document_url","document_url":"https://example.com/document.pdf"}),
         optional_params: Map::new(),
-        options: RequestOptions {
-            api_key: Some("test-key".into()),
-            api_base: Some(api_base.into()),
-            custom_llm_provider: Some("mistral".into()),
-            timeout: Some(Duration::from_secs(2)),
-            ..Default::default()
-        },
+    }
+}
+
+fn observer_options(api_base: &str) -> RequestOptions {
+    RequestOptions {
+        api_key: Some("test-key".into()),
+        api_base: Some(api_base.into()),
+        custom_llm_provider: Some("mistral".into()),
+        timeout: Some(Duration::from_secs(2)),
+        ..Default::default()
     }
 }
 
@@ -146,7 +149,8 @@ async fn observer_case(status: u16, body: &'static str, decision: Option<&'stati
         decision,
     };
     let result = ocr_with_observer(
-        observer_request(&url),
+        observer_request(),
+        &observer_options(&url),
         &observer_context(),
         RequestHooks::default(),
         &mut observer,
@@ -210,7 +214,8 @@ async fn provider_callback_rejection_stops_before_http() {
     };
 
     let result = ocr_with_observer(
-        observer_request(&url),
+        observer_request(),
+        &observer_options(&url),
         &observer_context(),
         RequestHooks::default(),
         &mut observer,
@@ -241,11 +246,12 @@ async fn invalid_ocr_preparation_does_not_call_observers_or_provider() {
     };
     let request = OcrRequest {
         document: json!(42),
-        ..observer_request(&url)
+        ..observer_request()
     };
     assert!(
         ocr_with_observer(
             request,
+            &observer_options(&url),
             &observer_context(),
             RequestHooks::default(),
             &mut observer

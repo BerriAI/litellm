@@ -81,7 +81,9 @@ impl ResponsesWebSocketConnection {
                     }
                 }
             }
-            let inner = match RustResponsesWebSocketConnection::connect(request, &options, &context).await {
+            let inner = match RustResponsesWebSocketConnection::connect(request, &options, &context)
+                .await
+            {
                 Ok(inner) => inner,
                 Err(error) => {
                     if let Some(observer) = observer.as_mut() {
