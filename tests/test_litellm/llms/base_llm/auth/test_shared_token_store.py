@@ -12,9 +12,12 @@ from typing import Final
 import httpx
 import pytest
 
+from pydantic import SecretStr
+
 from litellm.llms.base_llm.auth.shared_token_store import (
     CACHE_DIR_ENV,
     FileTokenStore,
+    StoredToken,
     default_shared_token_store,
 )
 from litellm.llms.base_llm.auth.token_exchange import JwtBearerTokenExchangeEngine
@@ -103,6 +106,22 @@ def test_a_minted_assertion_never_reaches_the_shared_store(tmp_path: Path):
     assert stored_files(tmp_path) == [], "a per-exchange assertion must keep its token off disk"
     assert [request["assertion"] for request in poster.requests] == ["minted-jwt-1", "minted-jwt-2"]
     assert second.access_token.get_secret_value() != first.access_token.get_secret_value()
+
+
+def test_a_failed_write_leaves_no_staging_file_holding_a_live_token(tmp_path: Path):
+    """Nothing ever sweeps this directory, so a staging file a failed write leaves behind would keep a
+    working token readable on disk for as long as the pod lives."""
+    store = FileTokenStore(tmp_path)
+    (tmp_path / "occupied.json").mkdir()
+
+    store.save(
+        "occupied",
+        StoredToken(access_token=SecretStr("sk-ant-oat01-live"), expires_at_epoch=None, assertion_sha256="sha"),
+    )
+
+    leaked = [path for path in tmp_path.rglob("*") if path.is_file() and "sk-ant-oat01-live" in path.read_text()]
+    assert leaked == [], "a staged token file survived the failed write"
+    assert store.load("occupied") is None
 
 
 def test_a_rotated_assertion_buys_a_fresh_token_that_other_workers_pick_up(tmp_path: Path):

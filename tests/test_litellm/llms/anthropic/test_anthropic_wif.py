@@ -814,6 +814,14 @@ class TestDenialHints:
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in message
         assert not message.endswith(".")
 
+    def test_the_workspace_hint_says_federation_ignores_the_bedrock_variable(self, monkeypatch: pytest.MonkeyPatch):
+        """ANTHROPIC_WORKSPACE_ID is the spelling Anthropic's own reference uses, and the Bedrock Claude
+        platform provider already reads it, so an operator who set it needs the 401 to say it is ignored
+        here rather than name only a variable they have never heard of."""
+        message = self._raise(self.BASE_PARAMS, 401, monkeypatch)
+        assert "ANTHROPIC_WORKSPACE_ID" in message
+        assert "Bedrock" in message
+
     def test_no_workspace_hint_when_workspace_set(self, monkeypatch: pytest.MonkeyPatch):
         message = self._raise({**self.BASE_PARAMS, "anthropic_federation_workspace_id": "wrkspc_1"}, 401, monkeypatch)
         assert "ANTHROPIC_FEDERATION_WORKSPACE_ID" not in message

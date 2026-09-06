@@ -94,7 +94,8 @@ _DENIAL_HINT: Final = (
 )
 _WORKSPACE_HINT: Final = (
     "If the federation rule is enabled in more than one workspace, set anthropic_federation_workspace_id"
-    " (or ANTHROPIC_FEDERATION_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'"
+    " (or ANTHROPIC_FEDERATION_WORKSPACE_ID) to the wrkspc_ id of the workspace to mint tokens for, or to 'default'."
+    " Federation does not read ANTHROPIC_WORKSPACE_ID, which the Bedrock Claude platform provider already uses"
 )
 _SERVICE_ACCOUNT_HINT: Final = (
     "Anthropic's reference lists service_account_id as required: set anthropic_service_account_id"
