@@ -171,7 +171,7 @@ class LowestCostLoggingHandler(CustomLogger):
                     self.logged_success += 1
         except Exception as e:
             verbose_logger.exception(
-                "litellm.proxy.hooks.prompt_injection_detection.py::async_pre_call_hook(): Exception occured - %s", e
+                "litellm.router_strategy.lowest_cost.py::async_log_success_event(): Exception occured - %s", e
             )
 
     async def async_get_available_deployments(
