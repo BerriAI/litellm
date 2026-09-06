@@ -113,6 +113,7 @@ async def test_connection_forwards_session_callback_adapter() -> None:
             cls,
             request: NativeResponsesWebSocketRequest,
             *,
+            options: object,
             context: NativeRequestContext,
             callback_adapter: object | None = None,
         ) -> _FakeNativeConnection:
@@ -167,7 +168,7 @@ async def test_connection_dispatch_cleans_up_without_reconnecting(native, sessio
 
     class Native:
         @classmethod
-        async def connect(cls, request, *, options, context):
+        async def connect(cls, request, *, options, context, callback_adapter=None):
             connections.append("native")
             assert options.custom_llm_provider == "azure"
             return native_socket
