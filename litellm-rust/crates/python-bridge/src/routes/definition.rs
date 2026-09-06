@@ -304,7 +304,7 @@ for field in ('litellm_call_id', 'trace_id', 'request_model'):
                 c"
 import asyncio
 
-async def invoke_async(execute, request, options):
+async def execute_async(execute, request, options, context):
     return await execute(request, options=options, context=context)
 
 for route, provider in (
@@ -328,7 +328,7 @@ for route, provider in (
     for execute, is_async in functions:
         try:
             if is_async:
-                asyncio.run(invoke_async(execute, request, unsupported_options))
+                asyncio.run(execute_async(execute, request, unsupported_options, context))
             else:
                 execute(request, options=unsupported_options, context=context)
         except Exception as error:
