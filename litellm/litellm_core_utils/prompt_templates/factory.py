@@ -783,6 +783,13 @@ def convert_generic_image_chunk_to_openai_image_obj(
     return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
 
 
+def _media_type_with_original_parameters(format_override: str, original_media_type: str) -> str:
+    base_type, separator, parameters = original_media_type.partition(";")
+    if not separator or base_type.strip() != format_override.strip():
+        return format_override
+    return f"{format_override}{separator}{parameters}"
+
+
 def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) -> GenericImageParsingChunk:
     """
     Input:
@@ -802,7 +809,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
         if format:
-            media_type = format
+            media_type = _media_type_with_original_parameters(format, media_type)
         else:
             media_type = media_type.replace("\\/", "/")
 
@@ -1854,17 +1861,26 @@ def add_cache_control_to_content(
     return anthropic_content_element
 
 
+def _native_tool_use_input(raw: object, tool_name: str) -> dict[str, object]:
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if not isinstance(raw, str):
+        return {}
+    parsed: Final = parse_tool_call_arguments(
+        "{}" if raw == REDACTED_BY_LITELLM else raw,
+        tool_name=tool_name,
+        context="Anthropic assistant tool_use block",
+    )
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _anthropic_native_tool_use_block(block: Mapping[str, object], tool_use_id: str) -> AnthropicMessagesToolUseParam:
     tool_name: Final = str(block.get("name", ""))
     tool_use_param: Final = AnthropicMessagesToolUseParam(
         type="tool_use",
         id=tool_use_id,
         name=tool_name,
-        input=_parse_tool_call_arguments(
-            block.get("input"),
-            tool_name=tool_name,
-            context="Anthropic assistant tool_use block",
-        ),
+        input=_native_tool_use_input(block.get("input"), tool_name),
     )
     add_cache_control_to_content(
         anthropic_content_element=tool_use_param,

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
@@ -3525,10 +3526,10 @@ def test_bedrock_converse_pdf_only_user_message_gets_text_block():
 )
 def test_anthropic_messages_pt_user_pdf_data_uri_becomes_document_block(model, llm_provider):
     """
-    Regression for LIT-6778: Claude Code sends a PDF as an image_url part with a
-    pdf data URI after the /v1/messages -> completion bridge. Every Anthropic-shaped
-    API rejects `{"type": "image", "media_type": "application/pdf"}`, so the user
-    content must carry a document block, with the block's cache breakpoint intact.
+    Regression for LIT-6778: an OpenAI client attaches a PDF as an image_url part
+    whose url is a pdf data URI. Every Anthropic-shaped API rejects
+    `{"type": "image", "media_type": "application/pdf"}`, so the user content must
+    carry a document block, with the block's cache breakpoint intact.
     """
     messages = [
         {
@@ -4062,3 +4063,62 @@ def test_anthropic_messages_pt_tool_result_pdf_data_uri_becomes_a_document_block
             ],
         }
     ]
+
+
+def test_anthropic_messages_pt_text_document_keeps_charset_named_by_the_data_uri():
+    """
+    `format` is meant to name the media type when the data URI is vague, so naming
+    the type the URI already declares must not throw away its `charset`. Decoding
+    latin-1 bytes as utf-8 raises before the request ever leaves litellm.
+    """
+    latin1_data_uri: Final = "data:text/plain;charset=iso-8859-1;base64," + base64.b64encode(
+        "café".encode("iso-8859-1")
+    ).decode()
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": latin1_data_uri, "format": "text/plain"}}],
+        }
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[0]["content"] == [
+        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "café"}}
+    ]
+
+
+def test_anthropic_messages_pt_rejects_unparseable_native_tool_use_input():
+    """
+    The same broken arguments already fail the request when they arrive under
+    `tool_calls`, so a native `tool_use` block must not quietly send `{}` to the
+    model and get a confident answer built on arguments the caller never sent.
+    """
+    messages = [
+        {"role": "user", "content": "what is the weather"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": "{not json"}],
+        },
+    ]
+
+    with pytest.raises(ValueError, match="get_weather"):
+        anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+
+def test_anthropic_messages_pt_native_tool_use_input_survives_guardrail_redaction():
+    """
+    A guardrail replaces tool input with the redaction sentinel, which is not JSON.
+    Rejecting it would turn every redacted replay into a 400.
+    """
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": REDACTED_BY_LITELLM}],
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-5", llm_provider="anthropic")
+
+    assert result[1]["content"] == [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {}}]
