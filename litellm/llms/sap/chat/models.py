@@ -191,7 +191,8 @@ class LLMModelDetails(BaseModel):
     name: str
     version: str = "latest"
     params: dict | None = None
-
+    timeout: int | None = None
+    max_retries: int | None = Field(default=None, ge=0, le=5)
 
 class PromptTemplatingModuleConfig(BaseModel):
     prompt: Template
