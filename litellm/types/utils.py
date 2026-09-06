@@ -2900,6 +2900,7 @@ RoutingDecisionCause = Literal[
     # called. Distinct from "session_affinity_pin", which reports the session_affinity flag pinning
     # every turn including new asks; this cause only appears when session_affinity is off.
     "user_turn_continuation",
+    "semantic_route_match",
     "default_fallback",
     "keyword",
     "quality_tier",
@@ -2926,7 +2927,7 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: Literal["complexity", "adaptive", "quality"]
+    router_type: Literal["complexity", "adaptive", "quality", "semantic"]
     routed_model: str
     cause: RoutingDecisionCause
     tier: str

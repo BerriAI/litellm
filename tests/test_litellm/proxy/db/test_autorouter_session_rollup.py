@@ -97,6 +97,20 @@ class TestBuildTransaction:
         transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "tier": "reasoning"}))
         assert transaction is not None and transaction.tier == "reasoning"
 
+    def test_a_semantic_routing_decision_is_carried_onto_the_transaction(self):
+        transaction = _build(
+            metadata=_metadata(
+                routing_decision={
+                    "router_model_name": "semantic-auto",
+                    "router_type": "semantic",
+                    "routed_model": "code-model",
+                    "cause": "semantic_route_match",
+                    "tier": "code-model",
+                }
+            )
+        )
+        assert transaction is not None and transaction.router_type == "semantic"
+
     @pytest.mark.parametrize("tier", [None, "", 3, {"tier": "medium"}])
     def test_a_decision_without_a_usable_tier_records_no_tier(self, tier: object):
         transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "tier": tier}))

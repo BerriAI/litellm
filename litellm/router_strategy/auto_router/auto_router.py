@@ -16,7 +16,7 @@ from litellm.litellm_core_utils.internal_call_metadata import (
     forwarded_internal_call_metadata,
     parent_session_kwargs,
 )
-from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN, StandardLoggingRoutingDecision
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
@@ -73,6 +73,7 @@ class AutoRouter(CustomLogger):
 
         self.auto_router_config_path: str | None = auto_router_config_path
         self.auto_router_config: str | None = auto_router_config
+        self.model_name = model_name
         self.auto_sync_value = self.DEFAULT_AUTO_SYNC_VALUE
         self.loaded_routes: list[Route] = self._load_semantic_routing_routes()
         self.routelayer: SemanticRouter | None = None
@@ -209,9 +210,19 @@ class AutoRouter(CustomLogger):
         message_content: Final = self._extract_text_from_messages(resolved_messages)
         route_name: Final = await self._matched_route_name(routelayer, message_content, request_kwargs)
 
+        routed: Final = route_name or self.default_model
+        routing_decision: Final = StandardLoggingRoutingDecision(
+            router_model_name=self.model_name,
+            router_type="semantic",
+            routed_model=routed,
+            cause="semantic_route_match" if route_name else "default_fallback",
+        )
+        if route_name is not None:
+            routing_decision["tier"] = route_name
         return PreRoutingHookResponse(
-            model=route_name or self.default_model,
+            model=routed,
             messages=messages,
+            routing_decision=routing_decision,
         )
 
     async def _matched_route_name(
