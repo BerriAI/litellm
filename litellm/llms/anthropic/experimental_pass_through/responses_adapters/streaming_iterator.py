@@ -4,7 +4,7 @@ import asyncio
 import json
 import traceback
 from collections import deque
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm import verbose_logger
@@ -55,7 +55,7 @@ class AnthropicResponsesStreamWrapper:
         self._sent_message_stop = False
         self._chunk_queue: deque[dict[str, object]] = deque()
         self._refusal_text_parts: list[str] = []  # mutable-ok: accumulates streamed refusal delta text across chunks
-        self._sync_responses_iterator: Any = None
+        self._sync_responses_iterator: Iterator[object] | None = None
 
     def _make_message_start(self) -> dict[str, object]:
         return {
@@ -312,11 +312,9 @@ class AnthropicResponsesStreamWrapper:
             else:
                 if self._sync_responses_iterator is None:
                     self._sync_responses_iterator = iter(self.responses_stream)
+                sync_iterator: Final = self._sync_responses_iterator
                 missing: Final = object()
-                while True:
-                    event = await asyncio.to_thread(next, self._sync_responses_iterator, missing)
-                    if event is missing:
-                        break
+                while (event := await asyncio.to_thread(next, sync_iterator, missing)) is not missing:
                     self._process_event(event)
                     if self._chunk_queue:
                         return self._chunk_queue.popleft()
