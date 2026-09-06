@@ -27,12 +27,16 @@ real `<shard> / Run tests` names rather than staying opaque.
 Whatever the sweep cannot work out is left out of the comparison and reported
 instead of guessed, because a guess that lands wrong fails a workflow GitHub
 would have published perfectly well. A name still holding an expression once the
-combination is filled in is one GitHub resolves per job, so it is one of those:
-guessing that two jobs sharing such a template clash would fail workflows over a
-context this sweep cannot read. A matrix that is itself an expression or that
-lists values which are not scalars, an `include` or `exclude` row shaped the same
-way, a whole `strategy:` that comes from an expression, and a call this sweep
-cannot follow, go in the same bucket. The cost is that a real clash hiding behind
+combination is filled in is usually one GitHub resolves per job, so it is one of
+those: guessing that two jobs sharing such a template clash would fail workflows
+over a context this sweep cannot read. The exception is a name whose leftover
+expressions all read a `github.` property other than `github.job`, which one run
+fills in the same way for every job in it, so those are compared against the
+other jobs of their own workflow and stay out of the comparison across files,
+where two workflows can run on different events. A matrix that is itself an
+expression or that lists values which are not scalars, an `include` or `exclude`
+row shaped the same way, a whole `strategy:` that comes from an expression, and a
+call this sweep cannot follow, go in the same bucket. The cost is that a real clash hiding behind
 one of them goes unseen, which leaves a merge no worse off than before this check
 existed, where the opposite direction would block work that was fine.
 
@@ -64,6 +68,7 @@ MATRIX_REF: Final = re.compile(r"^matrix\.(?P<key>[\w-]+)$")
 LITERAL: Final = re.compile(r"^'(?P<text>[^']*)'$")
 FORMAT_CALL: Final = re.compile(r"^format\((?P<args>.*)\)$", re.DOTALL)
 COMPARISON: Final = re.compile(r"^(?P<left>.+?)\s*(?P<operator>==|!=)\s*(?P<right>.+)$", re.DOTALL)
+RUN_WIDE: Final = re.compile(r"^github\.(?!job\b)[\w.]+$")
 GITHUB_PLACEHOLDER: Final = re.compile(r"\{\{|\}\}|\{\d+\}")
 NO_MATRIX: Final[Mapping[str, str]] = MappingProxyType({})
 NO_CALLERS: Final[frozenset[str]] = frozenset()
@@ -88,6 +93,7 @@ class Names:
 
     known: tuple[str, ...] = ()
     unknown: tuple[str, ...] = ()
+    local: tuple[str, ...] = ()
 
 
 class Job(BaseModel):
@@ -300,10 +306,17 @@ def comparable(name: str) -> bool:
     return EXPRESSION.search(name) is None
 
 
+def run_wide(name: str) -> bool:
+    """A name whose leftover expressions one workflow run fills in the same way for every job in it."""
+    return all(RUN_WIDE.match(span.group("body").strip()) is not None for span in EXPRESSION.finditer(name))
+
+
 def settled(names: Sequence[str]) -> Names:
+    unresolved: Final = tuple(name for name in names if not comparable(name))
     return Names(
         tuple(name for name in names if comparable(name)),
-        tuple(f"its name stays `{name}`" for name in names if not comparable(name)),
+        tuple(f"its name stays `{name}`" for name in unresolved if not run_wide(name)),
+        tuple(name for name in unresolved if run_wide(name)),
     )
 
 
@@ -340,7 +353,13 @@ def joined(groups: Sequence[Names]) -> Names:
     return Names(
         tuple(name for group in groups for name in group.known),
         tuple(reason for group in groups for reason in group.unknown),
+        tuple(name for group in groups for name in group.local),
     )
+
+
+def tagged(names: Names) -> tuple[tuple[str, bool], ...]:
+    """Each name a job publishes beside whether only its own workflow's run settles it."""
+    return (*((name, False) for name in names.known), *((name, True) for name in names.local))
 
 
 def call_blocker(job: Job, workflows: Mapping[str, Workflow], callers: frozenset[str]) -> str | None:
@@ -366,9 +385,15 @@ def job_names(job_id: str, job: Job, workflows: Mapping[str, Workflow], callers:
             for callee_id, callee_job in workflows[path].jobs.items()
         )
     )
+    composed: Final = tuple(
+        (f"{prefix} / {suffix}", prefix_local or suffix_local)
+        for prefix, prefix_local in tagged(prefixes)
+        for suffix, suffix_local in tagged(suffixes)
+    )
     return Names(
-        tuple(f"{prefix} / {suffix}" for prefix in prefixes.known for suffix in suffixes.known),
+        tuple(name for name, is_local in composed if not is_local),
         (*prefixes.unknown, *suffixes.unknown),
+        tuple(name for name, is_local in composed if is_local),
     )
 
 
@@ -432,9 +457,33 @@ def clash(name: str, owners: Sequence[str]) -> str | None:
     return None
 
 
+def local_published(sources: Mapping[str, str]) -> Iterator[tuple[tuple[str, str], str]]:
+    """Names their own workflow's run settles, keyed by the file whose run settles them."""
+    for rel, job_id, names in scanned_jobs(sources):
+        for name in names.local:
+            yield (rel, name), f"job `{job_id}`"
+
+
+def local_clash(rel: str, name: str, owners: Sequence[str]) -> str | None:
+    """Why one workflow's own run lands several of its jobs on one check run."""
+    if len(owners) < 2:
+        return None
+    jobs: Final = tuple(dict.fromkeys(owners))
+    return (
+        f"`{name}` is published {len(owners)} times inside {rel}, by {', '.join(jobs)}. One run fills that "
+        f"expression in the same way throughout, so they all land on one check run; make the names differ."
+    )
+
+
+def local_clashes(sources: Mapping[str, str]) -> tuple[str, ...]:
+    grouped: Final = itertools.groupby(sorted(local_published(sources)), key=operator.itemgetter(0))
+    found: Final = tuple(local_clash(rel, name, tuple(owner for _, owner in pairs)) for (rel, name), pairs in grouped)
+    return tuple(message for message in found if message is not None)
+
+
 def collisions(sources: Mapping[str, str]) -> tuple[str, ...]:
     found: Final = tuple(clash(name, owners) for name, owners in owners_by_name(sources))
-    return tuple(message for message in found if message is not None)
+    return (*(message for message in found if message is not None), *local_clashes(sources))
 
 
 def workflow_sources() -> Mapping[str, str]:
