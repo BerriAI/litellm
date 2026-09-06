@@ -4142,7 +4142,7 @@ class Router:
         specific_deployment: Final = kwargs.pop("specific_deployment", None)
         prompt_management_deployment: Final = await self.async_get_available_deployment(
             model=model,
-            messages=[{"role": "user", "content": "prompt"}],
+            messages=cast(list[dict[str, str]], messages),  # cast-ok: selection reads messages structurally
             specific_deployment=specific_deployment,
             request_kwargs=kwargs,
         )
