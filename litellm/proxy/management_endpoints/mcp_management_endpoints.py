@@ -2673,6 +2673,8 @@ if MCP_AVAILABLE:
         """
         Updates the MCP Server in the db.
 
+        Partial update: a field left out of the payload keeps its stored value, and a field sent as null is cleared.
+
         Parameters:
         - payload: UpdateMCPServerRequest - Required. The updated mcp server data.
         ```
@@ -3098,6 +3100,8 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         litellm_changed_by: str | None = Header(None),
     ):
+        """Partial update: a field left out keeps its stored value, and a field sent as null is cleared, except
+        ``toolset_name`` and ``tools``, which a toolset always has; empty the tool selection with an explicit []."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
         if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
             raise HTTPException(
