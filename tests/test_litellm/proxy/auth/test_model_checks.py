@@ -449,10 +449,6 @@ def test_get_known_models_from_wildcard_hosted_vllm_uses_provider_endpoint():
         litellm.check_provider_endpoint = True  # test-quality-ok: required to exercise provider endpoint discovery
         with (
             patch("litellm.module_level_client.get", return_value=response),  # test-quality-ok: required HTTP boundary
-            patch(  # test-quality-ok: VLLM model listing has no injectable API key seam
-                "litellm.llms.vllm.common_utils.VLLMModelInfo.get_api_key",
-                return_value="test-key",
-            ),
         ):
             result = get_known_models_from_wildcard(
                 "hosted_vllm/*",

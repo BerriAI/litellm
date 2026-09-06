@@ -47,9 +47,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
     def get_api_base(api_base: str | None = None) -> str | None:
         api_base = api_base or get_secret_str("VLLM_API_BASE")
         if api_base is None:
-            raise ValueError(
-                "VLLM_API_BASE is not set. Please set the environment variable, to use VLLM's pass-through - `{LITELLM_API_BASE}/vllm/{endpoint}`."
-            )
+            raise ValueError("VLLM_API_BASE is not set.")
         return api_base
 
     @staticmethod
@@ -62,12 +60,7 @@ class VLLMModelInfo(BaseLLMModelInfo):
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base = VLLMModelInfo.get_api_base(api_base)
-        api_key = VLLMModelInfo.get_api_key(api_key)
         endpoint: Final = "/v1/models"
-        if api_base is None or api_key is None:
-            raise ValueError(
-                "VLLM_API_BASE or VLLM_API_KEY is not set. Please set the environment variable, to query VLLM's `/models` endpoint."
-            )
 
         url: Final = _add_path_to_api_base(api_base, endpoint)
         response: Final = litellm.module_level_client.get(
