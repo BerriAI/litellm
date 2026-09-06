@@ -12058,6 +12058,25 @@ class Router:
         """
         return resolve_model_group_alias(self.model_group_alias, model)
 
+    def _team_strategy_marker_model_name(self, model: str, request_kwargs: Mapping[str, object]) -> str | None:
+        metadata: Final = request_kwargs.get("metadata") or MappingProxyType({})
+        litellm_metadata: Final = request_kwargs.get("litellm_metadata") or MappingProxyType({})
+        team_id: Final = (metadata.get("user_api_key_team_id") if isinstance(metadata, Mapping) else None) or (
+            litellm_metadata.get("user_api_key_team_id") if isinstance(litellm_metadata, Mapping) else None
+        )
+        if not isinstance(team_id, str):
+            return None
+        indices: Final = self.team_model_to_deployment_indices.get((team_id, model), ())
+        return next(
+            (
+                model_name
+                for idx in indices
+                if self._is_strategy_marker_deployment(self.model_list[idx])
+                and isinstance(model_name := self.model_list[idx].get("model_name"), str)
+            ),
+            None,
+        )
+
     def _get_deployment_by_litellm_model(self, model: str) -> list:
         """
         Get the deployment by litellm model.
@@ -13000,11 +13019,15 @@ class Router:
 
         `model` is whatever the caller asked for, which may be a `model_group_alias` key, while the
         strategy registries and the marker deployment are keyed by the marker's own `model_name`, so
-        every lookup below resolves the alias first. Only the lookups: the caller-facing name stays
-        the alias, since spend metadata is stamped before routing and the response carries the tier
-        group the strategy picked.
+        every lookup below resolves the alias, then the team public name, first. Only the lookups: the
+        caller-facing name stays the alias, since spend metadata is stamped before routing and the
+        response carries the tier group the strategy picked.
         """
-        requested_registered_model_name: Final = self._get_model_from_alias(model=model) or model
+        requested_registered_model_name: Final = (
+            self._get_model_from_alias(model=model)
+            or self._team_strategy_marker_model_name(model=model, request_kwargs=request_kwargs)
+            or model
+        )
         registered_model_name: Final = await self._resolve_claude_code_session_router(
             model=model,
             registered_model_name=requested_registered_model_name,
