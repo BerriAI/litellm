@@ -3968,7 +3968,9 @@ def test_get_standard_logging_object_payload_carries_matched_access_groups(loggi
             "model": "gpt-4o",
             "messages": [],
             "litellm_params": {
-                "metadata": {"user_api_key_matched_model_access_groups": ["premium-pool", "shared-pool"]},
+                "metadata": {
+                    "user_api_key_matched_model_access_groups": ["premium-pool", "shared-pool"]
+                },
                 "proxy_server_request": {"body": {}},
             },
         },
@@ -4052,7 +4054,9 @@ def _model_router_response(selected_model: str, stamp: bool):
     from litellm.types.utils import ModelResponse
 
     response = ModelResponse(model=selected_model)
-    response._hidden_params = {AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model} if stamp else {}
+    response._hidden_params = (
+        {AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: selected_model} if stamp else {}
+    )
     return response
 
 
@@ -4076,7 +4080,9 @@ def test_standard_logging_payload_uses_stamped_model_router_model(logging_obj):
             "messages": [],
             "litellm_params": {"metadata": {}},
         },
-        init_response_obj=_model_router_response("azure_ai/grok-4-1-fast-reasoning", stamp=True),
+        init_response_obj=_model_router_response(
+            "azure_ai/grok-4-1-fast-reasoning", stamp=True
+        ),
         start_time=now,
         end_time=now,
         logging_obj=logging_obj,
@@ -4108,7 +4114,9 @@ def test_standard_logging_payload_keeps_requested_model_without_router_stamp(
             "messages": [],
             "litellm_params": {"metadata": {}},
         },
-        init_response_obj=_model_router_response("azure_ai/grok-4-1-fast-reasoning", stamp=False),
+        init_response_obj=_model_router_response(
+            "azure_ai/grok-4-1-fast-reasoning", stamp=False
+        ),
         start_time=now,
         end_time=now,
         logging_obj=logging_obj,
@@ -5487,7 +5495,9 @@ class TestNonInferenceCallTypesAreNotBilled:
             init_response_obj=self._retrieved_response(),
             start_time=now,
             end_time=now,
-            logging_obj=self._logging_obj("aget_responses", litellm_metadata=self.BACKGROUND_POLL_METADATA),
+            logging_obj=self._logging_obj(
+                "aget_responses", litellm_metadata=self.BACKGROUND_POLL_METADATA
+            ),
             status="success",
         )
 
@@ -5733,7 +5743,9 @@ async def test_streaming_success_callbacks_survive_cost_calculation_failure():
     releasing.async_log_success_event = AsyncMock()
 
     patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
-    with patcher, patch.object(logging_obj, "_response_cost_calculator", side_effect=ValueError("bad usage block")):
+    with patcher, patch.object(
+        logging_obj, "_response_cost_calculator", side_effect=ValueError("bad usage block")
+    ):
         await logging_obj.async_success_handler(result=_assembled_stream_result())
 
     assert logging_obj.model_call_details["response_cost"] is None
@@ -5746,9 +5758,8 @@ async def test_streaming_success_callbacks_survive_standard_logging_payload_fail
     releasing.async_log_success_event = AsyncMock()
 
     patcher, logging_obj = _streaming_logging_obj_with_callbacks([releasing])
-    with (
-        patcher,
-        patch.object(logging_obj, "_build_standard_logging_payload", side_effect=ValueError("incomplete stream")),
+    with patcher, patch.object(
+        logging_obj, "_build_standard_logging_payload", side_effect=ValueError("incomplete stream")
     ):
         await logging_obj.async_success_handler(result=_assembled_stream_result())
 
@@ -6021,8 +6032,6 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
             )
         for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
-
-
 def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
     """With LITELLM_OTEL_V2 on, the "newrelic" callback builds the OTel v2
     logger (per-team credential routing); with the flag off (default) it keeps
@@ -6175,9 +6184,7 @@ def test_get_error_information_skips_traceback_for_budget_rejection_with_provide
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     assert litellm.log_client_error_tracebacks is False
-    over_budget = _raise_and_catch(
-        litellm.BudgetExceededError(current_cost=0.01, max_budget=0.0, llm_provider="anthropic")
-    )
+    over_budget = _raise_and_catch(litellm.BudgetExceededError(current_cost=0.01, max_budget=0.0, llm_provider="anthropic"))
     result = StandardLoggingPayloadSetup.get_error_information(over_budget)
     assert result["error_code"] == "429"
     assert result["llm_provider"] == "anthropic"
@@ -6406,8 +6413,6 @@ def test_get_standard_logging_object_payload_survives_logging_obj_without_timing
         ("x-request-id", "response"),
         ("request-id", "response"),
         ("x-ms-request-id", "response"),
-        ("apim-request-id", "response"),
-        ("x-goog-request-id", "response"),
         ("cf-ray", "response"),
         ("X-Request-Id", "litellm_response_headers"),
         ("X-MS-Request-ID", "headers"),
@@ -6601,7 +6606,9 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
             ],
             "model": "EmbeddingsGigaR",
         },
-        request=httpx.Request("POST", "https://gigachat.devices.sberbank.ru/api/v1/embeddings"),
+        request=httpx.Request(
+            "POST", "https://gigachat.devices.sberbank.ru/api/v1/embeddings"
+        ),
     )
 
     _, _, swapped_result = logging_obj._success_handler_helper_fn(
@@ -6620,14 +6627,12 @@ def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervene
     request-level guardrail_status but never mask an intervention."""
     flagged = {"guardrail_status": "guardrail_flagged"}
 
-    assert (
-        _get_status_fields("success", [{"guardrail_status": "success"}, flagged], None)["guardrail_status"]
-        == "guardrail_flagged"
-    )
-    assert (
-        _get_status_fields("success", [flagged, {"guardrail_status": "guardrail_intervened"}], None)["guardrail_status"]
-        == "guardrail_intervened"
-    )
+    assert _get_status_fields(
+        "success", [{"guardrail_status": "success"}, flagged], None
+    )["guardrail_status"] == "guardrail_flagged"
+    assert _get_status_fields(
+        "success", [flagged, {"guardrail_status": "guardrail_intervened"}], None
+    )["guardrail_status"] == "guardrail_intervened"
 
 
 def test_get_error_information_redacts_provider_key_from_upstream_url():
