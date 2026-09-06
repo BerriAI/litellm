@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure_ai.azure_model_router.transformation import (
     AzureModelRouterConfig,
 )
@@ -136,6 +138,26 @@ def test_azure_ai_validate_environment_with_azure_ad_token():
     assert headers.get("Authorization") == "Bearer fake-azure-ad-token"
     assert "api-key" not in headers
     assert headers["Content-Type"] == "application/json"
+
+
+@pytest.fixture
+def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+
+
+def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
+    """A Foundry deployment reached through azure_ai reads the azure_ai/ card, where gpt-6-astra supports
+    reasoning_effort none, so temperature and top_p ride along; the bare OpenAI card says none is
+    unsupported and the route used to refuse temperature and drop top_p (LIT-7081)."""
+    optional_params = AzureAIStudioConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9},
+        optional_params={},
+        model="gpt-6-astra",
+        drop_params=False,
+    )
+
+    assert optional_params == {"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9}
 
 
 def test_azure_ai_grok_stop_parameter_handling():

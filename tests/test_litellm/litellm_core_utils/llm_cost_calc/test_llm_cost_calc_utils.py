@@ -2060,6 +2060,21 @@ def test_generic_cost_per_token_azure_gpt_6_astra_foundry_price_sheet(
     assert completion_cost == pytest.approx(zone_multiplier * output_multiplier * completion_tokens * 5e-5)
 
 
+def test_generic_cost_per_token_azure_ai_gpt_6_astra_flex_bills_the_standard_rate(_local_model_cost_map):
+    """Foundry sells gpt-6-astra on Standard Global only, so a flex service_tier bills the standard rate.
+    The bare OpenAI card the azure_ai route fell back to before this entry existed carries flex prices
+    at half rate (LIT-7081)."""
+    usage = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
+
+    standard = generic_cost_per_token(model="azure_ai/gpt-6-astra", usage=usage, custom_llm_provider="azure_ai")
+    flex = generic_cost_per_token(
+        model="azure_ai/gpt-6-astra", usage=usage, custom_llm_provider="azure_ai", service_tier="flex"
+    )
+
+    assert flex == standard
+    assert standard == pytest.approx((1000 * 1e-05, 100 * 5e-05))
+
+
 @pytest.mark.parametrize(
     "model,expected_none,expected_xhigh,expected_minimal",
     [

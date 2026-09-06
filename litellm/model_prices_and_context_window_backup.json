@@ -3499,6 +3499,11 @@
         "mode": "chat",
         "output_cost_per_token": 5e-05,
         "output_cost_per_token_above_272k_tokens": 7.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
         "source": "https://ai.azure.com/catalog/models/gpt-6-astra",
         "supported_endpoints": [
             "/v1/chat/completions",
