@@ -32,6 +32,11 @@ import ComplexityRouterConfig, {
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
+import {
+  type AutoRouterCompressionState,
+  buildAutoRouterCompressionParams,
+  DEFAULT_AUTO_ROUTER_COMPRESSION,
+} from "./buildAutoRouterCompression";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   BuildComplexityRouterConfigParams,
@@ -194,6 +199,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [embeddingModel, setEmbeddingModel] = useState<string | undefined>(undefined);
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
+  const [autoRouterCompression, setAutoRouterCompression] = useState<AutoRouterCompressionState>(
+    DEFAULT_AUTO_ROUTER_COMPRESSION,
+  );
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
   const [editingTiers, setEditingTiers] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -465,6 +473,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       model_type: "complexity_router",
       complexity_router_config: complexityRouterConfigPayload,
       model_access_group: form.getValues("model_access_group"),
+      ...buildAutoRouterCompressionParams(autoRouterCompression),
     };
 
     await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
@@ -670,6 +679,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       onMatchThresholdChange={setMatchThreshold}
                       escalationKeywords={escalationKeywords}
                       onEscalationKeywordsChange={setEscalationKeywords}
+                      autoRouterCompression={autoRouterCompression}
+                      onAutoRouterCompressionChange={setAutoRouterCompression}
                       showValidationErrors={showValidationErrors}
                     />
                   </div>

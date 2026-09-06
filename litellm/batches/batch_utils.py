@@ -25,6 +25,27 @@ class BatchCostUsageResult:
     failed_requests: int
 
 
+_COMPLETED_BATCH_STATUSES: Final = frozenset({"completed", "complete"})
+_TERMINAL_BATCH_STATUSES: Final = _COMPLETED_BATCH_STATUSES | frozenset({"failed", "cancelled", "expired"})
+
+
+def batch_cost_is_final(batch: Batch) -> bool:
+    """Whether this retrieve of the batch is the one to account its cost from.
+
+    A batch still in flight has nothing to price, and a "completed" batch can report
+    no output_file_id for a moment before the output populates; pricing either records
+    $0 under the batch's single spend row and pins it there. Final means a completed
+    batch whose output file has arrived or whose counts prove no line succeeded, or
+    any other terminal status (failed, cancelled, expired).
+    """
+    if batch.status not in _TERMINAL_BATCH_STATUSES:
+        return False
+    if batch.status not in _COMPLETED_BATCH_STATUSES or batch.output_file_id is not None:
+        return True
+    request_counts: Final = batch.request_counts
+    return request_counts is not None and request_counts.total > 0 and request_counts.completed == 0
+
+
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: list[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"],
@@ -160,7 +181,7 @@ def _classify_output_line_stats(
 
 
 def _safe_output_line_stats(
-    entry: Mapping[str, Any],
+    entry: Mapping[str, object],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
     model_info: ModelInfo | None,
@@ -182,7 +203,7 @@ def _safe_output_line_stats(
 
 
 def _compute_output_line_stats(
-    entry: Mapping[str, Any],
+    entry: Mapping[str, object],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
     model_info: ModelInfo | None,
@@ -213,7 +234,7 @@ def _compute_output_line_stats(
 
 
 def _output_line_cost(
-    response_body: Mapping[str, Any],
+    response_body: Mapping[str, object],
     usage: Usage,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock"],
     model_name: str | None,
@@ -556,7 +577,7 @@ def _iter_batch_output_entries(file_content: bytes) -> Iterator[dict]:
 
 def _parse_batch_output_line(line: bytes) -> dict | None:
     try:
-        parsed: Final = json.loads(line)
+        parsed: Final[object] = json.loads(line)
     except ValueError as e:
         verbose_logger.warning("skipping malformed batch output line: %s", str(e))
         return None
@@ -601,7 +622,7 @@ def _count_entry_tokens(
     return 0
 
 
-def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
+def _count_prompt_or_input_tokens(model: str, value: object) -> int:
     """Token-count a ``prompt`` / ``input`` field that the OpenAI batch
     schema allows in four shapes:
 
@@ -680,7 +701,7 @@ def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[st
 
 def _get_response_from_batch_job_output_file(
     batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
-) -> Mapping[str, Any]:
+) -> Mapping[str, object]:
     """
     Get the response from the batch job output file
     """

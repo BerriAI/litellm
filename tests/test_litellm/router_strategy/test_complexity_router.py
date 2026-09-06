@@ -15,6 +15,12 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import Router
+from litellm.router_utils.auto_router_model_naming import (
+    CUSTOMIZATION_CAPABILITY,
+    GATED_AUTO_ROUTER_CAPABILITIES,
+    HEURISTIC_V2_CAPABILITY,
+    count_capability_routers,
+)
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
@@ -46,7 +52,6 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
     TrainedTierArtifact,
 )
-from litellm.router_utils.auto_router_model_naming import count_heuristic_v2_routers
 from litellm.types.router import (
     Deployment,
     LiteLLM_Params,
@@ -1124,7 +1129,7 @@ class TestRouterComplexityDeploymentMethods:
                 self._router_row("v2-b", "id-b", "heuristic_v2"),
                 self._router_row("v1-c", "id-c", "heuristic"),
             ],
-            heuristic_v2_router_limit=lambda: 1,
+            auto_router_capability_limit=lambda: 1,
             ignore_invalid_deployments=True,
         )
 
@@ -1139,7 +1144,7 @@ class TestRouterComplexityDeploymentMethods:
                     self._router_row("v2-a", "id-a", "heuristic_v2"),
                     self._router_row("v2-b", "id-b", "heuristic_v2"),
                 ],
-                heuristic_v2_router_limit=lambda: 1,
+                auto_router_capability_limit=lambda: 1,
             )
 
     def test_heuristic_v2_limit_is_resolved_on_every_registration(self) -> None:
@@ -1152,14 +1157,14 @@ class TestRouterComplexityDeploymentMethods:
                 self._router_row("v2-a", "id-a", "heuristic_v2"),
                 self._router_row("v2-b", "id-b", "heuristic_v2"),
             ],
-            heuristic_v2_router_limit=lambda: limits["value"],
+            auto_router_capability_limit=lambda: limits["value"],
             ignore_invalid_deployments=True,
         )
         assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
-        assert router.heuristic_v2_router_limit_violation() is None
+        assert router.auto_router_capability_violation(HEURISTIC_V2_CAPABILITY) is None
 
         limits["value"] = 1
-        assert router.heuristic_v2_router_limit_violation() is not None
+        assert router.auto_router_capability_violation(HEURISTIC_V2_CAPABILITY) is not None
         assert router.upsert_deployment(Deployment(**self._router_row("v2-c", "id-c", "heuristic_v2"))) is None
         assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
 
@@ -1174,7 +1179,7 @@ class TestRouterComplexityDeploymentMethods:
                 self._router_row("v2-a", "id-a", "heuristic_v2"),
                 self._router_row("v2-b", "id-b", "heuristic_v2"),
             ],
-            heuristic_v2_router_limit=lambda: limits["value"],
+            auto_router_capability_limit=lambda: limits["value"],
             ignore_invalid_deployments=True,
         )
         limits["value"] = 1
@@ -1195,7 +1200,7 @@ class TestRouterComplexityDeploymentMethods:
         assert router.upsert_deployment(Deployment(**db_row)) is not None
 
         assert sorted(str(row["model_name"]) for row in router.config_deployments()) == ["gpt-4o-mini", "v2-a"]
-        assert count_heuristic_v2_routers(router.config_deployments()) == 1
+        assert count_capability_routers(router.config_deployments(), capability=HEURISTIC_V2_CAPABILITY) == 1
 
     def test_failed_edit_of_a_live_v2_router_rolls_back_without_the_ceiling(self) -> None:
         """A rollback after a failed upsert re-admits state that was already serving, so it must not be
@@ -1208,7 +1213,7 @@ class TestRouterComplexityDeploymentMethods:
                 self._router_row("v2-a", "id-a", "heuristic_v2"),
                 self._router_row("v2-b", "id-b", "heuristic_v2"),
             ],
-            heuristic_v2_router_limit=lambda: limits["value"],
+            auto_router_capability_limit=lambda: limits["value"],
             ignore_invalid_deployments=True,
         )
         limits["value"] = 1
@@ -1220,7 +1225,7 @@ class TestRouterComplexityDeploymentMethods:
         assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
         live = router.get_deployment(model_id="id-a")
         assert live is not None and live.litellm_params.complexity_router_config["classifier_type"] == "heuristic_v2"
-        assert router.heuristic_v2_router_limit_violation() is not None
+        assert router.auto_router_capability_violation(HEURISTIC_V2_CAPABILITY) is not None
 
     def test_heuristic_v2_routers_are_unlimited_by_default(self) -> None:
         router = Router(
@@ -1232,18 +1237,18 @@ class TestRouterComplexityDeploymentMethods:
         )
 
         assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
-        assert router.heuristic_v2_router_limit_violation() is None
+        assert router.auto_router_capability_violation(HEURISTIC_V2_CAPABILITY) is None
 
-    def test_heuristic_v2_router_limit_violation_frees_the_slot_of_the_router_being_edited(self) -> None:
+    def test_auto_router_capability_violation_frees_the_slot_of_the_router_being_edited(self) -> None:
         """A DB reload upserts the existing heuristic_v2 router again; that edit must keep its own slot
         while a different deployment switching to heuristic_v2 is refused."""
         router = Router(
             model_list=[self._POOL, self._router_row("v2-a", "id-a", "heuristic_v2")],
-            heuristic_v2_router_limit=lambda: 1,
+            auto_router_capability_limit=lambda: 1,
             ignore_invalid_deployments=True,
         )
 
-        assert router.heuristic_v2_router_limit_violation() is not None
+        assert router.auto_router_capability_violation(HEURISTIC_V2_CAPABILITY) is not None
 
         edited = self._router_row("v2-a-renamed", "id-a", "heuristic_v2")
         assert router.upsert_deployment(Deployment(**edited)) is not None
@@ -1253,6 +1258,205 @@ class TestRouterComplexityDeploymentMethods:
         assert sorted(router.complexity_routers) == ["v2-a-renamed"]
         assert router.upsert_deployment(Deployment(**self._router_row("v1-c", "id-c", "heuristic"))) is not None
         assert sorted(router.complexity_routers) == ["v1-c", "v2-a-renamed"]
+
+    @staticmethod
+    def _custom_tier_row(model_name: str, model_id: str) -> dict[str, object]:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": "gpt-4o-mini",
+                "complexity_router_config": {
+                    "classifier_type": "llm",
+                    "classifier_llm_config": {"model": "gpt-4o-mini"},
+                    "tier_definitions": [
+                        {"name": "routine", "description": "routine drafting and lookups"},
+                        {"name": "hard", "description": "multi-step reasoning under tradeoffs"},
+                    ],
+                    "tiers": {"routine": "gpt-4o-mini", "hard": "gpt-4o"},
+                    "fallback_tier": "routine",
+                },
+            },
+            "model_info": {"id": model_id},
+        }
+
+    @staticmethod
+    def _custom_prompt_row(model_name: str, model_id: str) -> dict[str, object]:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": "gpt-4o-mini",
+                "complexity_router_config": {
+                    "classifier_type": "llm",
+                    "classifier_llm_config": {"model": "gpt-4o-mini", "system_prompt": "judge it my way"},
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                },
+            },
+        } | {"model_info": {"id": model_id}}
+
+    def test_a_second_custom_prompt_router_is_refused_under_the_ceiling(self) -> None:
+        """An operator-written classifier system_prompt is metered like the other licensed capabilities."""
+        with pytest.raises(ValueError, match="operator-written classifier prompt"):
+            Router(
+                model_list=[
+                    self._POOL,
+                    self._custom_prompt_row("prompt-a", "id-a"),
+                    self._custom_prompt_row("prompt-b", "id-b"),
+                ],
+                auto_router_capability_limit=lambda: 1,
+            )
+
+    def test_the_shipped_rubric_and_default_prompt_stay_free(self) -> None:
+        """Only an operator-written prompt is gated: picking a shipped rubric preset, or writing no
+        prompt at all, leaves a router unmetered, so several of them register under a ceiling of one."""
+        def rubric(model_name: str, model_id: str, preset: str | None) -> dict[str, object]:
+            llm_config: dict[str, object] = {"model": "gpt-4o-mini"}
+            if preset is not None:
+                llm_config["classification_rubric"] = preset
+            return {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_default_model": "gpt-4o-mini",
+                    "complexity_router_config": {
+                        "classifier_type": "llm",
+                        "classifier_llm_config": llm_config,
+                        "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                    },
+                },
+                "model_info": {"id": model_id},
+            }
+
+        router = Router(
+            model_list=[
+                self._POOL,
+                rubric("default-a", "id-a", None),
+                rubric("preset-b", "id-b", "agentic"),
+                rubric("preset-c", "id-c", "chat"),
+            ],
+            auto_router_capability_limit=lambda: 1,
+        )
+
+        assert sorted(router.complexity_routers) == ["default-a", "preset-b", "preset-c"]
+
+    def test_a_second_custom_tier_router_is_refused_under_the_ceiling(self) -> None:
+        """Operator-defined tier sets are metered like heuristic_v2: one per proxy without the license."""
+        with pytest.raises(ValueError, match="tier_definitions"):
+            Router(
+                model_list=[
+                    self._POOL,
+                    self._custom_tier_row("tiers-a", "id-a"),
+                    self._custom_tier_row("tiers-b", "id-b"),
+                ],
+                auto_router_capability_limit=lambda: 1,
+            )
+
+    def test_custom_tier_routers_are_unlimited_with_the_license_feature(self) -> None:
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._custom_tier_row("tiers-a", "id-a"),
+                self._custom_tier_row("tiers-b", "id-b"),
+            ],
+            auto_router_capability_limit=lambda: None,
+        )
+
+        assert sorted(router.complexity_routers) == ["tiers-a", "tiers-b"]
+        assert router.auto_router_capability_violation(CUSTOMIZATION_CAPABILITY) is None
+
+    def test_each_capability_holds_its_own_slot(self) -> None:
+        """heuristic_v2 has its own slot, while custom tiers and custom prompts share one customization
+        slot: one v2 plus EITHER customization fits, but a second customization of any form is refused."""
+        router = Router(
+            model_list=[
+                self._POOL,
+                self._router_row("v2-a", "id-a", "heuristic_v2"),
+                self._custom_tier_row("tiers-a", "id-t"),
+            ],
+            auto_router_capability_limit=lambda: 1,
+            ignore_invalid_deployments=True,
+        )
+
+        assert sorted(router.complexity_routers) == ["tiers-a", "v2-a"]
+        assert router.auto_router_capability_violation(HEURISTIC_V2_CAPABILITY) is not None
+        assert router.auto_router_capability_violation(CUSTOMIZATION_CAPABILITY) is not None
+
+        assert router.upsert_deployment(Deployment(**self._custom_tier_row("tiers-b", "id-t2"))) is None
+        assert router.upsert_deployment(Deployment(**self._custom_prompt_row("prompt-b", "id-p2"))) is None
+        assert router.upsert_deployment(Deployment(**self._router_row("v2-b", "id-b", "heuristic_v2"))) is None
+        assert sorted(router.complexity_routers) == ["tiers-a", "v2-a"]
+
+    @staticmethod
+    def _operator_prompt_row(model_name: str, model_id: str, field: str) -> dict[str, object]:
+        return {
+            "model_name": model_name,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": "gpt-4o-mini",
+                "complexity_router_config": {
+                    "classifier_type": "llm",
+                    "classifier_llm_config": {"model": "gpt-4o-mini"},
+                    "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+                    field: '- "reset my password" -> SIMPLE',
+                },
+            },
+            "model_info": {"id": model_id},
+        }
+
+    @pytest.mark.parametrize("field", ["classification_prompt", "classification_examples"])
+    def test_operator_written_prompt_sections_claim_the_customization_slot(self, field: str) -> None:
+        """The dashboard prompt editor writes opening instructions and calibration examples as their own
+        fields on a BUILT-IN tier router, so each must claim the slot on its own."""
+        with pytest.raises(ValueError, match="operator-written classifier prompt"):
+            Router(
+                model_list=[
+                    self._POOL,
+                    self._operator_prompt_row("prompt-a", "id-a", field),
+                    self._operator_prompt_row("prompt-b", "id-b", field),
+                ],
+                auto_router_capability_limit=lambda: 1,
+            )
+
+    @pytest.mark.parametrize("field", ["classification_prompt", "classification_examples"])
+    def test_an_operator_prompt_section_claims_the_slot_held_by_custom_tiers(self, field: str) -> None:
+        """Switching the FORM of customization cannot buy a second unlicensed router."""
+        with pytest.raises(ValueError, match="operator-written classifier prompt"):
+            Router(
+                model_list=[
+                    self._POOL,
+                    self._custom_tier_row("tiers-a", "id-a"),
+                    self._operator_prompt_row("prompt-b", "id-b", field),
+                ],
+                auto_router_capability_limit=lambda: 1,
+            )
+
+    def test_a_custom_prompt_claims_the_slot_held_by_custom_tiers(self) -> None:
+        """The customization ceiling is shared: changing its form cannot get a second unlicensed router."""
+        with pytest.raises(ValueError, match="operator-written classifier prompt"):
+            Router(
+                model_list=[
+                    self._POOL,
+                    self._custom_tier_row("tiers-a", "id-a"),
+                    self._custom_prompt_row("prompt-b", "id-b"),
+                ],
+                auto_router_capability_limit=lambda: 1,
+            )
+
+    def test_renaming_built_in_tiers_is_not_a_custom_tier_set(self) -> None:
+        """tier_labels renames the built-in ladder without defining one, so it stays ungated: two such
+        routers register under a ceiling of one."""
+        def labeled(model_name: str, model_id: str) -> dict[str, object]:
+            row = self._router_row(model_name, model_id, "heuristic")
+            row["litellm_params"]["complexity_router_config"]["tier_labels"] = {"SIMPLE": "Cheap", "MEDIUM": "Standard"}
+            return row
+
+        router = Router(
+            model_list=[self._POOL, labeled("labels-a", "id-a"), labeled("labels-b", "id-b")],
+            auto_router_capability_limit=lambda: 1,
+        )
+
+        assert sorted(router.complexity_routers) == ["labels-a", "labels-b"]
 
     def test_hybrid_initialization_waits_for_later_pool_deployments(self):
         router = Router(
@@ -1307,6 +1511,110 @@ class TestRouterComplexityDeploymentMethods:
         }
         assert adaptive.model_to_prefs["cheap"].quality_tier == 1
         assert adaptive.model_to_prefs["premium"].quality_tier == 3
+
+    def test_hybrid_adaptive_router_falls_back_to_model_info_cost(self):
+        """Custom pricing declared under model_info (the conventional location everywhere else
+        in LiteLLM) must still feed the hybrid adaptive router's cost-weighted scoring, not
+        silently cost the deployment at 0.0."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "hybrid",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": "cheap",
+                        "complexity_router_config": {
+                            "adaptive": True,
+                            "tiers": {"SIMPLE": ["cheap"], "MEDIUM": ["cheap", "premium"]},
+                        },
+                    },
+                },
+                {
+                    "model_name": "cheap",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"input_cost_per_token": 0.00000015},
+                },
+                {
+                    "model_name": "premium",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                    "model_info": {"input_cost_per_token": 0.000005},
+                },
+            ]
+        )
+
+        adaptive = router.adaptive_routers["hybrid"][0].strategy
+        assert adaptive.model_to_cost == {
+            "cheap": pytest.approx(0.00000015),
+            "premium": pytest.approx(0.000005),
+        }
+
+    @pytest.mark.asyncio
+    async def test_hybrid_adaptive_router_pick_model_favors_the_cheaper_model_info_priced_deployment(self):
+        """Same fix, exercised through pick_model's actual scoring rather than the model_to_cost
+        dict alone. `premium` is listed first (SIMPLE tier) deliberately: before the fix both
+        models silently cost 0.0, tying every score, and pick_best's insertion-order tie-break
+        would hand every request to the first-listed (expensive) model instead."""
+        from litellm.types.router import RequestType
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "hybrid",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": "cheap",
+                        "complexity_router_config": {
+                            "adaptive": True,
+                            "adaptive_weights": {"quality": 0.0, "cost": 1.0},
+                            "tiers": {"SIMPLE": ["premium"], "MEDIUM": ["premium", "cheap"]},
+                        },
+                    },
+                },
+                {
+                    "model_name": "premium",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                    "model_info": {"input_cost_per_token": 0.000005},
+                },
+                {
+                    "model_name": "cheap",
+                    "litellm_params": {"model": "openai/gpt-4o-mini"},
+                    "model_info": {"input_cost_per_token": 0.00000015},
+                },
+            ]
+        )
+        adaptive = router.adaptive_routers["hybrid"][0].strategy
+
+        picks = [await adaptive.pick_model(RequestType.GENERAL) for _ in range(10)]
+
+        assert picks == ["cheap"] * 10
+
+    def test_hybrid_adaptive_router_prefers_litellm_params_cost_over_model_info(self):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "hybrid",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_default_model": "cheap",
+                        "complexity_router_config": {
+                            "adaptive": True,
+                            "tiers": {"SIMPLE": ["cheap"]},
+                        },
+                    },
+                },
+                {
+                    "model_name": "cheap",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "input_cost_per_token": 0.00000015,
+                    },
+                    "model_info": {"input_cost_per_token": 0.000005},
+                },
+            ]
+        )
+
+        adaptive = router.adaptive_routers["hybrid"][0].strategy
+        assert adaptive.model_to_cost == {"cheap": pytest.approx(0.00000015)}
 
 
 class TestComplexityRouterTagBasedRouting:
