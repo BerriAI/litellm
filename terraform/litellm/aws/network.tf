@@ -48,17 +48,18 @@ resource "aws_subnet" "private" {
 }
 
 resource "aws_eip" "nat" {
-  count  = local.create_vpc ? 1 : 0
+  count  = local.nat_enabled ? 1 : 0
   domain = "vpc"
   tags   = merge(local.tags, { Name = "${local.name}-nat" })
 
   depends_on = [aws_internet_gateway.this]
 }
 
-# Single NAT gateway in the first public subnet. For HA, replicate per AZ —
-# adds ~$30/mo per gateway, so off by default for a baseline deployment.
+# Single NAT gateway in the first public subnet, and none at all when
+# tasks_in_public_subnets gives the tasks their own egress. For HA, replicate
+# per AZ: ~$33/mo per gateway, so one is the baseline.
 resource "aws_nat_gateway" "this" {
-  count         = local.create_vpc ? 1 : 0
+  count         = local.nat_enabled ? 1 : 0
   allocation_id = aws_eip.nat[0].id
   subnet_id     = aws_subnet.public[0].id
 
@@ -89,9 +90,15 @@ resource "aws_route_table" "private" {
   count  = local.create_vpc ? 1 : 0
   vpc_id = aws_vpc.this[0].id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.this[0].id
+  # No NAT gateway means no default route to give these subnets. They stay for
+  # RDS and ElastiCache, neither of which needs egress.
+  dynamic "route" {
+    for_each = local.nat_enabled ? [1] : []
+
+    content {
+      cidr_block     = "0.0.0.0/0"
+      nat_gateway_id = aws_nat_gateway.this[0].id
+    }
   }
 
   tags = merge(local.tags, { Name = "${local.name}-private" })

@@ -62,3 +62,8 @@ output "migration_run_command" {
   description = "Break-glass command to re-run the one-off prisma migration task."
   value       = module.litellm.migration_run_command
 }
+
+output "bedrock_model_import_role_arn" {
+  description = "Role ARN to pass to `aws bedrock create-model-import-job --role-arn`. Null unless enable_bedrock_custom_model_import is set."
+  value       = module.litellm.bedrock_model_import_role_arn
+}

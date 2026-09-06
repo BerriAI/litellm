@@ -48,4 +48,10 @@ module "litellm" {
   backend_extra_env     = var.backend_extra_env
   gateway_extra_secrets = var.gateway_extra_secrets
   backend_extra_secrets = var.backend_extra_secrets
+
+  bedrock_model_arns                 = var.bedrock_model_arns
+  enable_bedrock_mantle              = var.enable_bedrock_mantle
+  enable_bedrock_custom_model_import = var.enable_bedrock_custom_model_import
+
+  tasks_in_public_subnets = var.tasks_in_public_subnets
 }

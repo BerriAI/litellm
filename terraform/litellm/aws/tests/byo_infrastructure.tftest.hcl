@@ -53,6 +53,93 @@ run "module_owns_everything_by_default" {
   }
 }
 
+# The NAT-less shape: tasks move to the public subnets and pay for their own
+# egress with a public IP.
+run "tasks_in_public_subnets_replaces_the_nat_gateway" {
+  command = plan
+
+  # A module-created subnet's id is unknown until apply, so pin the public ones
+  # to a literal the subnet assertion below can name.
+  override_resource {
+    target          = aws_subnet.public
+    override_during = plan
+    values          = { id = "subnet-module-public" }
+  }
+
+  variables {
+    azs                     = ["us-east-1a", "us-east-1b"]
+    tasks_in_public_subnets = true
+    # The migration and bootstrap run-task calls are pinned to the private
+    # subnets, so a database is incompatible with this mode.
+    create_database = false
+  }
+
+  assert {
+    condition     = length(aws_nat_gateway.this) == 0 && length(aws_eip.nat) == 0
+    error_message = "tasks_in_public_subnets must drop both the NAT gateway and the elastic IP it holds."
+  }
+
+  assert {
+    condition = alltrue([
+      aws_ecs_service.gateway.network_configuration[0].assign_public_ip == true,
+      aws_ecs_service.gateway.network_configuration[0].subnets == toset(["subnet-module-public"]),
+      aws_ecs_service.backend.network_configuration[0].assign_public_ip == true,
+      aws_ecs_service.backend.network_configuration[0].subnets == toset(["subnet-module-public"]),
+      aws_ecs_service.ui.network_configuration[0].assign_public_ip == true,
+      aws_ecs_service.ui.network_configuration[0].subnets == toset(["subnet-module-public"]),
+    ])
+    error_message = "The gateway, backend, and UI services must all land in the public subnets with a public IP, which is the only egress left once the NAT gateway is gone."
+  }
+
+  # The private subnets stay for Aurora and ElastiCache, so the route table is
+  # still created. That it carries no default route is not assertable here:
+  # `route` is computed, so it is unknown until apply.
+  assert {
+    condition     = length(aws_route_table.private) == 1
+    error_message = "The private route table must survive for Aurora and ElastiCache even with no NAT gateway to route to."
+  }
+}
+
+# The flag buys nothing on a caller-supplied VPC, where the module creates no NAT
+# gateway to begin with, so it must not quietly relocate the tasks into subnets
+# the caller did not nominate for public exposure.
+run "tasks_in_public_subnets_is_inert_on_a_caller_supplied_vpc" {
+  command = plan
+
+  variables {
+    vpc_id                  = "vpc-00000000000000001"
+    public_subnet_ids       = ["subnet-pub-a", "subnet-pub-b"]
+    private_subnet_ids      = ["subnet-priv-a", "subnet-priv-b"]
+    tasks_in_public_subnets = true
+    create_database         = false
+  }
+
+  assert {
+    condition = alltrue([
+      aws_ecs_service.gateway.network_configuration[0].assign_public_ip == false,
+      aws_ecs_service.gateway.network_configuration[0].subnets == toset(["subnet-priv-a", "subnet-priv-b"]),
+      aws_ecs_service.backend.network_configuration[0].assign_public_ip == false,
+      aws_ecs_service.backend.network_configuration[0].subnets == toset(["subnet-priv-a", "subnet-priv-b"]),
+      aws_ecs_service.ui.network_configuration[0].assign_public_ip == false,
+      aws_ecs_service.ui.network_configuration[0].subnets == toset(["subnet-priv-a", "subnet-priv-b"]),
+    ])
+    error_message = "tasks_in_public_subnets must be ignored when vpc_id is set, leaving all three services in the caller's private subnets with no public IP."
+  }
+}
+
+run "tasks_in_public_subnets_with_a_database_fails_at_plan" {
+  command = plan
+
+  variables {
+    azs                     = ["us-east-1a", "us-east-1b"]
+    tasks_in_public_subnets = true
+  }
+
+  expect_failures = [
+    aws_ecs_task_definition.migrations,
+  ]
+}
+
 run "existing_vpc_creates_no_networking" {
   command = plan
 
