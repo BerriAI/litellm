@@ -1271,6 +1271,24 @@ def get_model_rate_limit_from_metadata(
     return None
 
 
+def resolve_rate_limited_model_name(
+    requested_model: str,
+    configured_models: Collection[str],
+    llm_router: Router | None,
+) -> str | None:
+    """The configured name that governs `requested_model`: itself, its model_group_alias target,
+    or a model access group serving it."""
+    if requested_model in configured_models:
+        return requested_model
+    if llm_router is None:
+        return None
+    candidates: Final = (
+        llm_router._get_model_from_alias(requested_model),
+        *llm_router.get_model_access_groups(model_name=requested_model),
+    )
+    return next((c for c in candidates if c is not None and c in configured_models), None)
+
+
 def get_team_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> dict[str, int] | None:
