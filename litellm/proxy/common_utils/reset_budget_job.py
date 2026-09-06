@@ -676,7 +676,7 @@ class ResetBudgetJob:
                     compute_budget_reset_at(budget_duration=b.budget_duration, settings=self.reset_settings),
                 )
                 for b in budgets_to_reset
-                if b.budget_id is not None and b.budget_duration is not None
+                if b.budget_id is not None and b.budget_duration
             ),
             endusers=endusers,
             counter_resets=(
@@ -1287,6 +1287,12 @@ class ResetBudgetJob:
             except Exception as redis_err:
                 verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
         budget_duration: Final = window["budget_duration"]
+        if not budget_duration:
+            verbose_proxy_logger.warning(
+                "Skipping window reset for entity %s: budget_duration is empty or missing",
+                entity_id,
+            )
+            return False
         next_reset_at: Final = compute_budget_reset_at(budget_duration=budget_duration, settings=reset_settings)
         window["reset_at"] = next_reset_at.isoformat()
         await ResetBudgetJob._roll_window_spend_row(
@@ -1465,7 +1471,7 @@ class ResetBudgetJob:
         """
         try:
             item.spend = _carried_spend(item.spend, _rollover_cap(item.max_budget)) if _rollover_enabled() else 0.0
-            if hasattr(item, "budget_duration") and item.budget_duration is not None:
+            if hasattr(item, "budget_duration") and item.budget_duration:
                 item.budget_reset_at = compute_budget_reset_at(
                     budget_duration=item.budget_duration, settings=reset_settings
                 )
