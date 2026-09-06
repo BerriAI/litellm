@@ -28,7 +28,7 @@ Enable public-repository access for the Macro runner group, then dispatch `CodSp
 
 Review the measurements and copy the candidate to `budgets.json`. Calibration rejects runs whose medians differ by more than 10% from their median. Each ceiling is 120% of the median baseline. The initial empty manifest intentionally fails normal budget checks until calibration is complete; never substitute local laptop measurements
 
-In CodSpeed, set conversion simulation thresholds to 5% and walltime thresholds to 10%, disable informational-only failures, and establish a comparison baseline on `litellm_internal_staging`. In GitHub, require `CodSpeed Performance Analysis`, `Python boundary (simulation)`, and `Python boundary (walltime)` on protected integration branches. Calibration runs are manual setup runs and must not be used as PR merge evidence
+In CodSpeed, set conversion simulation thresholds to 5% and walltime thresholds to 10%, disable informational-only failures, and establish a comparison baseline on `litellm_internal_staging`. In GitHub, require `CodSpeed Performance Analysis`, `Python boundary (simulation)`, and `Python boundary (walltime)` on protected integration branches. Calibration runs have separate check names ending in `calibration`, so they cannot satisfy the required budget checks
 
 Before enabling merge protection, verify a trial PR that adds an extra conversion fails CPU analysis, and a delayed async operation fails walltime analysis and the fixed budget check. Remove the trial slowdowns before merging. Repository checks alone do not configure CodSpeed thresholds or branch protection
 

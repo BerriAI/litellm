@@ -90,7 +90,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    name: Python boundary (${{ matrix.mode }})
+    name: Python boundary (${{ matrix.mode }}${{ inputs.calibrate_boundary && ' calibration' || '' }})
     strategy:
       fail-fast: false
       matrix:
