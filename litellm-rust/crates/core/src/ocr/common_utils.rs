@@ -1,18 +1,15 @@
 use std::net::IpAddr;
-use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use reqwest::Url;
 use serde_json::Value;
 
-use super::client::http_client;
 use crate::Error;
 use crate::http_utils::truncate_error_body;
 
 const DEFAULT_MAX_IMAGE_URL_DOWNLOAD_SIZE_MB: f64 = 50.0;
 const MAX_SAFE_FETCH_REDIRECTS: usize = 10;
-const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
 
 fn document_url_field(document: &Value) -> Result<Option<(&str, &str)>, Error> {
     let Some(object) = document.as_object() else {
@@ -227,107 +224,6 @@ pub(super) async fn convert_document_url_to_data_uri(document: Value) -> Result<
         .ok_or_else(|| Error::InvalidRequest("OCR document must be an object".to_string()))?;
     transformed.insert(field.to_string(), Value::String(data_uri));
     Ok(Value::Object(transformed))
-}
-
-fn same_origin(left: &str, right: &str) -> bool {
-    let Ok(left) = reqwest::Url::parse(left) else {
-        return false;
-    };
-    let Ok(right) = reqwest::Url::parse(right) else {
-        return false;
-    };
-    left.scheme() == right.scheme()
-        && left.host_str() == right.host_str()
-        && left.port_or_known_default() == right.port_or_known_default()
-}
-
-fn poll_interval_secs(response: &reqwest::Response) -> u64 {
-    response
-        .headers()
-        .get(reqwest::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(2)
-}
-
-fn operation_status(response_json: &Value) -> Result<&str, Error> {
-    let status = response_json
-        .get("status")
-        .and_then(Value::as_str)
-        .ok_or(Error::MissingField("status"))?;
-    match status {
-        "succeeded" => Ok("succeeded"),
-        "running" | "notStarted" => Ok("running"),
-        "failed" => {
-            let message = response_json
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("Unknown error");
-            Err(Error::InvalidResponse(format!(
-                "Azure Document Intelligence analysis failed: {message}"
-            )))
-        }
-        other => Err(Error::InvalidResponse(format!(
-            "Unknown operation status: {other}"
-        ))),
-    }
-}
-
-pub(super) async fn poll_document_intelligence(
-    operation_url: &str,
-    original_url: &str,
-    headers: &[(String, String)],
-    timeout: Option<Duration>,
-) -> Result<Value, Error> {
-    if !same_origin(operation_url, original_url) {
-        return Err(Error::InvalidResponse(
-            "Azure Document Intelligence: rejected cross-origin polling URL".to_string(),
-        ));
-    }
-
-    let start = Instant::now();
-    let timeout = timeout.unwrap_or(Duration::from_secs(
-        AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS,
-    ));
-    loop {
-        if start.elapsed() > timeout {
-            return Err(Error::Network(format!(
-                "Azure Document Intelligence operation polling timed out after {} seconds",
-                timeout.as_secs()
-            )));
-        }
-
-        let mut request_builder = http_client().get(operation_url);
-        for (key, value) in headers {
-            if key.eq_ignore_ascii_case("ocp-apim-subscription-key") {
-                request_builder = request_builder.header(key, value);
-            }
-        }
-        let response = request_builder
-            .send()
-            .await
-            .map_err(|err| Error::Network(err.to_string()))?;
-        let poll_interval = poll_interval_secs(&response);
-        let status = response.status();
-        let text = response
-            .text()
-            .await
-            .map_err(|err| Error::Network(err.to_string()))?;
-        if !status.is_success() {
-            return Err(Error::Http {
-                status: status.as_u16(),
-                body: truncate_error_body(&text),
-            });
-        }
-        let response_json: Value = serde_json::from_str(&text).map_err(|err| {
-            Error::InvalidResponse(format!("invalid Azure DI poll response JSON: {err}"))
-        })?;
-        if operation_status(&response_json)? == "succeeded" {
-            return Ok(response_json);
-        }
-        tokio::time::sleep(Duration::from_secs(poll_interval)).await;
-    }
 }
 
 #[cfg(test)]
