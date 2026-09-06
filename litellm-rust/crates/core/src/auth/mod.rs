@@ -57,7 +57,7 @@ impl OperationCancellation {
         self.state.cancelled.load(Ordering::Acquire)
     }
 
-    async fn cancelled(&self) {
+    pub async fn cancelled(&self) {
         let notified = self.state.notify.notified();
         if self.is_cancelled() {
             return;
@@ -101,6 +101,10 @@ impl OperationControl {
 pub enum OutboundBody {
     Bodyless,
     JsonObject(serde_json::Map<String, Value>),
+    Encoded {
+        bytes: Vec<u8>,
+        content_type: HeaderValue,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -278,6 +282,12 @@ where
     Callback: FnOnce(OutboundRequestView) -> CallbackFuture,
     CallbackFuture: Future<Output = Result<BodyDecision, Error>>,
 {
+    let mut request = request;
+    if let OutboundBody::Encoded { content_type, .. } = &request.body {
+        request
+            .headers
+            .insert(reqwest::header::CONTENT_TYPE, content_type.clone());
+    }
     validate_destination(origin, &request)?;
     let decision = control
         .run(callback(OutboundRequestView {
@@ -293,6 +303,10 @@ where
         OutboundBody::JsonObject(value) => Some(serde_json::to_vec(&value).map_err(|error| {
             Error::InvalidRequest(format!("failed to encode request: {error}"))
         })?),
+        OutboundBody::Encoded {
+            bytes,
+            content_type: _,
+        } => Some(bytes),
     };
     let preparation = control.run(authorization.prepare()).await?;
     let mut headers = request.headers;
@@ -380,6 +394,9 @@ fn resolve_body(body: OutboundBody, decision: BodyDecision) -> Result<OutboundBo
                 .ok_or_else(|| {
                     Error::InvalidRequest("callback replacement must be a JSON object".into())
                 }),
+            OutboundBody::Encoded { .. } => Err(Error::InvalidRequest(
+                "callback cannot replace an encoded operation body".into(),
+            )),
         },
     }
 }

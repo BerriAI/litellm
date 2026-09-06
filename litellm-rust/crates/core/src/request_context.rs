@@ -1,11 +1,11 @@
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct RequestAttribution {
     pub user_api_key_hash: Option<String>,
     pub user_api_key_user_id: Option<String>,
     pub user_api_key_team_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct RequestCapabilities {
     pub execution_mode: Option<String>,
     pub stream: bool,
@@ -18,7 +18,7 @@ pub struct RequestCapabilities {
     pub requires_connection: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct LiteLlmRequestContext {
     pub litellm_call_id: Option<String>,
     pub trace_id: Option<String>,

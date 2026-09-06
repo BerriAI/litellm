@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,7 @@ use serde_json::{Map, Value};
 use crate::Error;
 use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use crate::ocr::transformation::OcrProviderConfig;
+use crate::request_context::LiteLlmRequestContext;
 
 pub struct OcrRequest<'a> {
     pub model: &'a str,
@@ -17,6 +19,7 @@ pub struct OcrRequest<'a> {
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,
     pub litellm_call_id: Option<&'a str>,
+    pub context: LiteLlmRequestContext,
 }
 
 pub struct PreparedOcrRequest {
@@ -30,6 +33,7 @@ pub struct PreparedOcrRequest {
     pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,
+    pub context: LiteLlmRequestContext,
 }
 
 impl CallLifecycleRequest for PreparedOcrRequest {
@@ -48,9 +52,19 @@ pub struct ProviderOcrRequest {
     pub(super) custom_llm_provider: String,
     pub(super) config: &'static dyn OcrProviderConfig,
     pub(super) url: String,
-    pub(super) body: Value,
+    pub(super) body: Option<Value>,
+    pub(super) pending_upload: Option<PendingOcrUpload>,
+    pub(super) optional_params: Map<String, Value>,
     pub(super) upstream_headers: Vec<(String, String)>,
+    pub(super) authorization: Arc<dyn crate::auth::AuthorizationProvider>,
     pub(super) timeout: Option<Duration>,
+    pub(super) context: LiteLlmRequestContext,
+}
+
+pub struct PendingOcrUpload {
+    pub url: String,
+    pub bytes: Vec<u8>,
+    pub mime_type: String,
 }
 
 impl ProviderOcrRequest {
@@ -67,11 +81,14 @@ impl ProviderOcrRequest {
     }
 
     pub fn body(&self) -> &Value {
-        &self.body
+        self.body.as_ref().expect("OCR body is prepared")
     }
 
     pub fn with_body(self, body: Value) -> Self {
-        Self { body, ..self }
+        Self {
+            body: Some(body),
+            ..self
+        }
     }
 }
 

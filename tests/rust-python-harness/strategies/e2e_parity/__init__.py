@@ -17,10 +17,7 @@ CASES: Final[tuple[CaseDefinition, ...]] = (
         ModuleCaseSpec(
             coverage=Coverage.PARTIAL,
             module="tests.rust-python-harness.strategies.e2e_parity.sdk.ocr.test_sdk_parity",
-            note=(
-                "Recorded sync/async SDK parity; invalid-model provider errors differ, "
-                "and Reducto lacks a Rust contract."
-            ),
+            note="Recorded sync/async SDK parity; invalid-model provider errors differ.",
         ),
         surface="sdk",
     ),

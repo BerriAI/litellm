@@ -84,11 +84,16 @@ pub(crate) struct NativeRequestOptions {
     bedrock: Option<NativeBedrockOptions>,
     anthropic: Option<NativeAnthropicOptions>,
     vertex: Option<NativeVertexOptions>,
+    auth_provider: Option<Py<PyAny>>,
 }
 
 impl NativeRequestOptions {
     pub(crate) fn provider(&self, default: &'static str) -> &str {
         self.custom_llm_provider.as_deref().unwrap_or(default)
+    }
+
+    pub(crate) fn take_auth_provider(&mut self) -> Option<Py<PyAny>> {
+        self.auth_provider.take()
     }
 }
 
@@ -205,6 +210,7 @@ class Options:
     bedrock: object = None
     anthropic: object = None
     vertex: object = None
+    auth_provider: object = None
 
 @dataclass(frozen=True)
 class BedrockOptions:

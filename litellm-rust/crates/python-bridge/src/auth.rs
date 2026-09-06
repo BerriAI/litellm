@@ -49,15 +49,14 @@ impl PythonTokenProvider {
             .extract::<PyRef<'_, AuthCallbackRuntime>>()?
             .0
             .clone();
-        let callback = CallbackZero::new(callable.bind(py).clone())?;
         let session = if asynchronous {
             PythonTokenSession::Async {
-                callback,
+                callback: CallbackZero::new(callable.bind(py).clone())?,
                 context: runtime.async_context(py)?,
             }
         } else {
             PythonTokenSession::Sync {
-                callback,
+                callback: CallbackZero::new(callable.bind(py).clone())?,
                 context: runtime.sync_context(py)?,
             }
         };

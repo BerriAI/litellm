@@ -95,6 +95,7 @@ class NativeRequestOptions:
     bedrock: NativeBedrockOptions | None = None
     anthropic: NativeAnthropicOptions | None = None
     vertex: NativeVertexOptions | None = None
+    auth_provider: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
