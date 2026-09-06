@@ -38,7 +38,6 @@ class _Deployment(TypedDict):
 
 _CALL_KWARGS: Final = TypeAdapter(_CallKwargs)
 _DEPLOYMENTS: Final = TypeAdapter(list[_Deployment])
-_REDIS_COUNTS: Final = TypeAdapter(dict[str, float | None])
 _MEMORY_COUNTS: Final = TypeAdapter(tuple[float | None, ...] | None)
 
 
@@ -70,11 +69,6 @@ def _request_count_keys(model_group: str, healthy_deployments: Sequence[Mapping[
 
 def _as_counts(values: Sequence[float | None]) -> tuple[int, ...]:
     return tuple(0 if value is None else int(value) for value in values)
-
-
-def _shared_counts(raw: object, keys: tuple[str, ...]) -> tuple[int, ...]:
-    by_key: Final = _REDIS_COUNTS.validate_python(raw)
-    return _as_counts([by_key.get(key) for key in keys])
 
 
 def _local_counts(raw: object, keys: tuple[str, ...]) -> tuple[int, ...]:
@@ -151,7 +145,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         redis_cache: Final = self.router_cache.redis_cache
         if redis_cache is not None:
             try:
-                shared: Final = _shared_counts(redis_cache.batch_get_cache(key_list=list(keys)), keys)
+                shared: Final = _as_counts(redis_cache.batch_get_counts(list(keys)))
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:
@@ -166,7 +160,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         redis_cache: Final = self.router_cache.redis_cache
         if redis_cache is not None:
             try:
-                shared: Final = _shared_counts(await redis_cache.async_batch_get_cache(key_list=list(keys)), keys)
+                shared: Final = _as_counts(await redis_cache.async_batch_get_counts(list(keys)))
             except Exception as e:
                 _warn_unreadable(model_group, e)
             else:

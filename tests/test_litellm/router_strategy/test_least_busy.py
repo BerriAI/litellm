@@ -1,4 +1,3 @@
-import json
 from typing import Final
 
 import pytest
@@ -18,44 +17,34 @@ def _call_kwargs(deployment_id: str) -> dict[str, object]:
 
 
 class SharedRedisCounters:
-    """Stores JSON strings and hands back a fresh object per read, the way a real Redis client does."""
+    """Mirrors what Redis gives the handler: increments clamped at zero, a TTL set once when
+    the key is created, and ordered reads that raise rather than invent a value."""
 
     def __init__(self) -> None:
-        self.encoded: dict[str, str] = {}
-        self.ttls: dict[str, float] = {}
+        self.counts: dict[str, int] = {}
+        self.ttls: dict[str, int] = {}
 
-    def count(self, key: str) -> object:
-        raw: Final = self.encoded.get(key)
-        return None if raw is None else json.loads(raw)
+    def count(self, key: str) -> int | None:
+        return self.counts.get(key)
 
-    def get_cache(self, key: str, **kwargs: object) -> object:
-        return self.count(key)
-
-    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
-        self.encoded[key] = json.dumps(value)
-
-    async def async_get_cache(self, key: str, **kwargs: object) -> object:
-        return self.count(key)
-
-    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
-        self.set_cache(key, value)
+    def expire(self, key: str) -> None:
+        self.counts.pop(key, None)
+        self.ttls.pop(key, None)
 
     def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
-        current: Final = self.count(key) or 0
-        assert isinstance(current, int)
-        incremented: Final = max(0, current + value)
-        self.encoded[key] = json.dumps(incremented)
-        self.ttls[key] = ttl
+        incremented: Final = max(0, self.counts.get(key, 0) + value)
+        self.counts[key] = incremented
+        self.ttls.setdefault(key, ttl)
         return incremented
 
     async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
         return self.increment_with_floor(key, value, ttl)
 
-    def batch_get_cache(self, key_list: list[str], **kwargs: object) -> dict[str, object]:
-        return {key: self.count(key) for key in key_list}
+    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+        return tuple(self.counts.get(key) for key in key_list)
 
-    async def async_batch_get_cache(self, key_list: list[str], **kwargs: object) -> dict[str, object]:
-        return self.batch_get_cache(key_list)
+    async def async_batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+        return self.batch_get_counts(key_list)
 
 
 def _worker(shared: SharedRedisCounters | None) -> LeastBusyLoggingHandler:
@@ -98,17 +87,25 @@ def test_sync_pick_reads_the_shared_counts() -> None:
     assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
 
-def test_redis_counts_keep_a_refreshed_ttl() -> None:
+def test_the_handler_never_pushes_a_counters_ttl_forward() -> None:
+    """A worker that dies mid-request leaves a +1 nobody will ever decrement. Redis expires that
+    stuck count an hour after the key was created, which only works while nothing writes the TTL
+    again: a handler that refreshed it on every touch would keep the count alive for as long as
+    the group takes traffic, and the deployment would read busier than it is forever."""
     shared: Final = SharedRedisCounters()
     worker: Final = _worker(shared)
     key: Final = f"{GROUP}_request_count:dep-a"
-    shared.ttls[key] = 5
 
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    assert shared.ttls == {key: IN_FLIGHT_COUNT_TTL_SECONDS}
+
+    shared.ttls[key] = 5
     worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
     worker.log_success_event(_call_kwargs("dep-a"), None, None, None)
 
-    assert shared.count(key) == 0
-    assert shared.ttls == {key: IN_FLIGHT_COUNT_TTL_SECONDS}
+    assert shared.count(key) == 1
+    assert shared.ttls == {key: 5}
 
 
 @pytest.mark.asyncio
@@ -127,10 +124,10 @@ async def test_counts_stay_in_memory_without_redis() -> None:
 
 
 class UnavailableRedis(SharedRedisCounters):
-    def batch_get_cache(self, key_list: list[str], **kwargs: object) -> dict[str, object]:
+    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
         raise ConnectionError("redis is down")
 
-    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
+    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
         raise ConnectionError("redis is down")
 
 
@@ -153,7 +150,7 @@ def test_a_shared_counter_that_expired_mid_request_cannot_go_negative() -> None:
     worker: Final = _worker(shared)
 
     worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
-    shared.encoded.clear()
+    shared.expire(f"{GROUP}_request_count:dep-a")
     worker.log_success_event(_call_kwargs("dep-a"), None, None, None)
 
     assert shared.count(f"{GROUP}_request_count:dep-a") == 0
@@ -187,4 +184,4 @@ def test_calls_without_a_deployment_are_ignored() -> None:
     worker.log_pre_api_call(model="m", messages=[], kwargs={"litellm_params": {"metadata": None}})
     worker.log_pre_api_call(model="m", messages=[], kwargs={})
 
-    assert shared.encoded == {}
+    assert shared.counts == {}

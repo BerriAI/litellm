@@ -165,6 +165,36 @@ async def test_async_completion_with_unsupported_strategy_rejects_configured_plu
 
 
 @pytest.mark.asyncio
+async def test_prompt_management_model_still_runs_the_plugin_pipeline():
+    """
+    A prompt-management model routes through its own factory, which picked the deployment
+    on the synchronous path. Plugins never run there, so the guard turned every such request
+    into an error message about the caller's own API choice, on an async call the caller made
+    correctly. It also read the in-flight counts with a blocking call inside the event loop.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "cached-claude",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/claude-sonnet-5",
+                    "prompt_id": "cache-points",
+                },
+            }
+        ],
+        routing_strategy="least-busy",
+        plugins=[BlockEverything()],
+    )
+
+    with pytest.raises(ValueError, match="No deployments left after routing-plugin filtering"):
+        await router.acompletion(
+            model="cached-claude",
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_call_id="lit-7039",
+        )
+
+
+@pytest.mark.asyncio
 async def test_router_without_plugins_is_unaffected():
     """Regression guard: a Router with no `plugins` configured behaves exactly as before."""
     router = Router(
