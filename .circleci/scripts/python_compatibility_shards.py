@@ -6,6 +6,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Mapping
+from glob import glob
 from pathlib import Path
 from typing import Final, cast
 
@@ -53,9 +54,7 @@ def _entries(repo_root: Path, workflow: Path, job_name: str) -> tuple[Shard, ...
 
 def load_shards(repo_root: Path) -> tuple[Shard, ...]:
     shards: Final = tuple(
-        shard
-        for workflow, job_name in WORKFLOWS
-        for shard in _entries(repo_root, workflow, job_name)
+        shard for workflow, job_name in WORKFLOWS for shard in _entries(repo_root, workflow, job_name)
     )
     if len({shard.name for shard in shards}) != len(shards):
         raise ValueError("GitHub unit-test shard names must be unique")
@@ -82,7 +81,7 @@ def pytest_command(shard: Shard, python_version: str, results_dir: Path) -> tupl
         ".venv/bin/python",
         "-m",
         "pytest",
-        *shlex.split(shard.test_path),
+        *(match for path in shlex.split(shard.test_path) for match in (sorted(glob(path)) or (path,))),
         "--tb=short",
         "-vv",
         f"--maxfail={shard.max_failures}",
