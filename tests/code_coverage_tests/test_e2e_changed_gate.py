@@ -113,6 +113,16 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
         (("tests/e2e/logging/test_datadog_e2e.py", "litellm/router.py"), ("tests/e2e/logging/test_datadog_e2e.py",)),
         (("tests/e2e/ui/test_keys.py", "tests/e2e/claude_code/test_cli.py", "tests/e2e/load/test_burst.py"), ()),
         (("tests/e2e/batches/test_managed_files_enforcement_e2e.py",), ()),
+        (("tests/e2e/guardrails/test_presidio_masking_e2e.py",), ()),
+        (("tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e.py",), ()),
+        (
+            ("tests/e2e/llm_translation/realtime/test_realtime_e2e.py",),
+            ("tests/e2e/llm_translation/realtime/test_realtime_e2e.py",),
+        ),
+        (
+            ("tests/e2e/guardrails/test_bedrock_guardrail_e2e.py",),
+            ("tests/e2e/guardrails/test_bedrock_guardrail_e2e.py",),
+        ),
         (("tests/e2e/logging/helpers.py", "docs/my-website/docs/index.md", "tests/e2e/CLAUDE.md"), ()),
         (
             ("tests/e2e/logging/test_datadog_e2e.py", "tests/e2e/logging/test_datadog_e2e.py"),
@@ -120,7 +130,7 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
         ),
     ),
 )
-def test_changed_suite_files_are_selected_outside_the_own_lane(
+def test_changed_suite_files_are_selected_unless_the_stack_cannot_run_them(
     changed: tuple[str, ...], expected: tuple[str, ...]
 ) -> None:
     assert select_tests(changed) == expected
@@ -154,3 +164,40 @@ def test_the_canary_joins_directly_selected_files_in_sorted_order() -> None:
 
 def test_a_harness_unit_test_change_runs_itself_and_the_canary() -> None:
     assert select_tests(("tests/e2e/test_proxy_client.py",)) == (*CANARY, "tests/e2e/test_proxy_client.py")
+
+
+def test_a_canary_argument_the_shell_never_expanded_fails_the_selector() -> None:
+    result: Final = subprocess.run(
+        [sys.executable, str(SELECT_TESTS), "tests/e2e/access_control/test_*.py"],
+        input="tests/e2e/proxy_client.py\n",
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "tests/e2e/access_control/test_*.py" in result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("secrets", "offender", "unprintable"),
+    (
+        ('{"AWS_ACCESS_KEY_ID": "AKIAEXAMPLE", "BAD-NAME": "shibboleth"}', "BAD-NAME", "shibboleth"),
+        ("""{"AWS_SECRET_ACCESS_KEY": "quote'shibboleth"}""", "AWS_SECRET_ACCESS_KEY", "shibboleth"),
+        ('{"DD_API_KEY": "line\\nshibboleth"}', "DD_API_KEY", "shibboleth"),
+    ),
+)
+def test_an_unusable_secret_is_named_without_printing_its_value(
+    tmp_path: Path, secrets: str, offender: str, unprintable: str
+) -> None:
+    env_path: Final = tmp_path / ".env"
+
+    result: Final = subprocess.run(
+        [sys.executable, str(SECRETS_TO_ENV), str(env_path)], input=secrets, capture_output=True, text=True
+    )
+
+    assert result.returncode == 1
+    assert offender in result.stderr
+    assert unprintable not in result.stderr
+    assert result.stdout == ""
+    assert not env_path.exists()

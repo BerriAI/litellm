@@ -20,10 +20,15 @@ def main() -> int:
     except (ValidationError, UnicodeError):
         _ = sys.stderr.write("expected a JSON object containing string environment values\n")
         return 1
-    if any(
-        ENV_NAME.fullmatch(key) is None or any(char in value for char in "'\n\r\0") for key, value in secrets.items()
-    ):
-        _ = sys.stderr.write("environment names or values cannot be represented in both bash and dotenv\n")
+    unusable: Final = tuple(
+        key
+        for key, value in secrets.items()
+        if ENV_NAME.fullmatch(key) is None or any(char in value for char in "'\n\r\0")
+    )
+    if unusable:
+        _ = sys.stderr.write(
+            f"these names or values cannot be represented in both bash and dotenv: {' '.join(sorted(unusable))}\n"
+        )
         return 1
     for value in secrets.values():
         if len(value) >= MIN_MASKED_LENGTH:
