@@ -145,6 +145,43 @@ async def test_streaming_chat_refusal_emits_refusal_text_and_stop_details_async(
     assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
 
 
+def test_streaming_chat_refusal_parked_in_provider_specific_fields_is_emitted():
+    """Providers that do not populate ``delta.refusal`` (Azure o-series among
+    them) hand LiteLLM the refusal as an unrecognized field, which lands in
+    ``provider_specific_fields``. That first delta still has to stream as text,
+    otherwise the client gets ``stop_reason: refusal`` over an empty content
+    array and shows the user nothing.
+    """
+    chunks = [
+        _make_chunk(Delta(content=None, provider_specific_fields={"refusal": "I cannot fulfill this request."})),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="openai-model")
+
+    events = _drain_sync(wrapper)
+
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
+@pytest.mark.asyncio
+async def test_streaming_chat_refusal_parked_in_provider_specific_fields_is_emitted_async():
+    chunks = [
+        _make_chunk(Delta(content=None, provider_specific_fields={"refusal": "I cannot fulfill this request."})),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="openai-model")
+
+    events = await _drain_async(wrapper)
+
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
 def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved():
     chunks = [
         _make_chunk(
