@@ -200,5 +200,11 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "jetinfer": {
+    "base_url": "https://api.jetinfer.com/v1",
+    "api_key_env": "JETINFER_API_KEY",
+    "api_base_env": "JETINFER_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
