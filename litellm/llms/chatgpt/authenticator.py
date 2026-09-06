@@ -150,7 +150,27 @@ class Authenticator:
                 return account_id
         return None
 
+    def _can_run_interactive_device_login(self) -> bool:
+        """Check if the process can run an interactive device-code login.
+
+        In headless or proxy environments (e.g. LiteLLM Proxy, Kubernetes, Docker),
+        synchronous device code polling must never block the event loop.
+        """
+        import sys
+
+        return bool(sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+
     def _login_device_code(self) -> dict[str, str]:
+        if not self._can_run_interactive_device_login():
+            raise GetAccessTokenError(
+                message=(
+                    "ChatGPT authentication required, but interactive device-code login "
+                    "cannot run in a non-interactive/headless environment (such as the LiteLLM proxy). "
+                    "Please authenticate beforehand using the CLI or provision the auth token file."
+                ),
+                status_code=401,
+            )
+
         cooldown_remaining: Final = self._get_device_code_cooldown_remaining(self._read_auth_file())
         if cooldown_remaining > 0:
             token: Final = self._wait_for_access_token(cooldown_remaining)
@@ -372,6 +392,8 @@ class Authenticator:
         self._write_auth_file({**auth_data, "device_code_requested_at": time.time()})
 
     def _wait_for_access_token(self, timeout_seconds: float) -> str | None:
+        if not self._can_run_interactive_device_login():
+            return None
         deadline: Final = time.time() + timeout_seconds
         while time.time() < deadline:
             auth_data = self._read_auth_file()
