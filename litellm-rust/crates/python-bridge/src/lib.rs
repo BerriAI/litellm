@@ -91,7 +91,9 @@ impl ResponsesWebSocketConnection {
                     }
                 }
             }
-            let inner = match RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout).await {
+            let inner = match RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
+                .await
+            {
                 Ok(inner) => inner,
                 Err(error) => {
                     if let Some(observer) = observer.as_mut() {
