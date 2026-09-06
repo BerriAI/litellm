@@ -2,6 +2,7 @@ import asyncio
 import os
 import posixpath
 from collections.abc import Awaitable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 import yaml
@@ -24,7 +25,19 @@ class BucketObjectReader(Protocol):
     def __call__(self, object_key: str, /) -> Awaitable[object | None]: ...
 
 
-def get_file_contents_from_s3(bucket_name, object_key):
+class SyncBucketObjectReader(Protocol):
+    def __call__(self, object_key: str, /) -> object | None: ...
+
+
+def _parsed_config(file_contents: str) -> object:
+    parsed: Final = yaml.safe_load(file_contents)
+    return MappingProxyType({}) if parsed is None else parsed
+
+
+def s3_object_reader(bucket_name: str) -> SyncBucketObjectReader:
+    """
+    Build one reader for a whole config, so an `include` tree costs one S3 client rather than one per object.
+    """
     try:
         # v0 rely on boto3 for authentication - allowing boto3 to handle IAM credentials etc
         import boto3
@@ -39,24 +52,28 @@ def get_file_contents_from_s3(bucket_name, object_key):
             aws_secret_access_key=credentials.secret_key,
             aws_session_token=credentials.token,  # Optional, if using temporary credentials
         )
-        verbose_proxy_logger.debug("Retrieving %s from S3 bucket: %s", object_key, bucket_name)
-        response: Final = s3_client.get_object(Bucket=bucket_name, Key=object_key)
-        verbose_proxy_logger.debug("Response: %s", response)
-
-        # Read the file contents and directly parse YAML
-        file_contents: Final = response["Body"].read().decode("utf-8")
-        verbose_proxy_logger.debug("File contents retrieved from S3")
-
-        # Parse YAML directly from string
-        config: Final = yaml.safe_load(file_contents)
-        return config
-
     except ImportError as e:
         # this is most likely if a user is not using the litellm docker container
         verbose_proxy_logger.error("ImportError: %s", e)
+        return lambda object_key: None
     except Exception as e:
-        verbose_proxy_logger.error("Error retrieving file contents: %s", e)
-        return None
+        verbose_proxy_logger.error("Error creating the S3 client for bucket %s: %s", bucket_name, e)
+        return lambda object_key: None
+
+    def read(object_key: str) -> object | None:
+        try:
+            verbose_proxy_logger.debug("Retrieving %s from S3 bucket: %s", object_key, bucket_name)
+            response: Final = s3_client.get_object(Bucket=bucket_name, Key=object_key)
+            return _parsed_config(response["Body"].read().decode("utf-8"))
+        except Exception as e:  # noqa: BLE001  # any boto3 error must read as a missing object
+            verbose_proxy_logger.error("Error retrieving %s from S3 bucket %s: %s", object_key, bucket_name, e)
+            return None
+
+    return read
+
+
+def get_file_contents_from_s3(bucket_name: str, object_key: str) -> object | None:
+    return s3_object_reader(bucket_name)(object_key)
 
 
 def gcs_config_bucket(bucket_name: str) -> "GCSBucketBase | None":
@@ -64,27 +81,27 @@ def gcs_config_bucket(bucket_name: str) -> "GCSBucketBase | None":
         from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 
         return GCSBucketLogger(bucket_name=bucket_name)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # an unbuildable client must read as an unreadable bucket
         verbose_proxy_logger.error("Error creating the GCS client for bucket %s: %s", bucket_name, e)
         return None
 
 
-async def get_config_file_contents_from_gcs(bucket_name, object_key, gcs_bucket=None):
+async def get_config_file_contents_from_gcs(
+    bucket_name: str,
+    object_key: str,
+    gcs_bucket: "GCSBucketBase | None" = None,
+) -> object | None:
     try:
         bucket: Final = gcs_config_bucket(bucket_name) if gcs_bucket is None else gcs_bucket
         if bucket is None:
             return None
-        file_contents = await bucket.download_gcs_object(object_key)
+        file_contents: Final = await bucket.download_gcs_object(object_key)
         if file_contents is None:
             raise Exception(f"File contents are None for {object_key}")
-        # file_contentis is a bytes object, so we need to convert it to yaml
-        file_contents = file_contents.decode("utf-8")
-        # convert to yaml
-        config: Final = yaml.safe_load(file_contents)
-        return config
+        return _parsed_config(file_contents.decode("utf-8"))
 
     except Exception as e:
-        verbose_proxy_logger.error("Error retrieving file contents: %s", e)
+        verbose_proxy_logger.error("Error retrieving %s from GCS bucket %s: %s", object_key, bucket_name, e)
         return None
 
 
@@ -110,20 +127,24 @@ async def resolve_bucket_includes(
         include_key: Final = resolve_include_object_key(declared_in, include_entry)
         included: Final = await fetch(include_key)
         if included is None:
-            raise FileNotFoundError(f"Included config could not be read from bucket: {include_key}")
+            raise FileNotFoundError(
+                f"Included config could not be read from bucket: {include_key}. "
+                "The underlying bucket error is logged above."
+            )
         return include_key, included
 
     return await resolve_includes(config=config, location=object_key, load=load)
 
 
-def bucket_object_reader(bucket_type: str | None, bucket_name: str) -> BucketObjectReader:
+async def bucket_object_reader(bucket_type: str | None, bucket_name: str) -> BucketObjectReader:
     """
     Build one reader for a whole config, so an `include` tree costs one bucket client rather than one per object.
     """
     if bucket_type != "gcs":
+        read_object: Final = await asyncio.to_thread(s3_object_reader, bucket_name)
 
         async def read_from_s3(object_key: str) -> object | None:
-            return await asyncio.to_thread(get_file_contents_from_s3, bucket_name, object_key)
+            return await asyncio.to_thread(read_object, object_key)
 
         return read_from_s3
 
@@ -143,7 +164,7 @@ async def get_config_from_bucket(
     bucket_name: str,
     object_key: str,
 ) -> dict[str, object] | None:
-    read: Final = bucket_object_reader(bucket_type, bucket_name)
+    read: Final = await bucket_object_reader(bucket_type, bucket_name)
 
     async def fetch(key: str) -> Mapping[str, object] | None:
         raw: Final = await read(key)

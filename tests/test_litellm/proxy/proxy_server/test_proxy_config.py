@@ -743,13 +743,27 @@ async def test_ProxyConfig__process_includes_follows_nested_includes(tmp_path):
 
 @pytest.mark.asyncio
 async def test_ProxyConfig__process_includes_resolves_a_nested_include_next_to_its_own_file(tmp_path):
-    """A nested `include` names a sibling of the file that declares it, not of the root config."""
     (tmp_path / "shared").mkdir()
     (tmp_path / "shared" / "models.yaml").write_text(
         "include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n"
     )
     (tmp_path / "shared" / "more_models.yaml").write_text("model_list:\n  - model_name: second\n")
     (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: wrong-directory\n")
+
+    result = await ProxyConfig()._process_includes(
+        {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
+    )
+
+    assert result == {"model_list": [{"model_name": "first"}, {"model_name": "second"}]}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__process_includes_still_reads_a_nested_include_left_beside_the_root_config(tmp_path):
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / "models.yaml").write_text(
+        "include:\n  - more_models.yaml\nmodel_list:\n  - model_name: first\n"
+    )
+    (tmp_path / "more_models.yaml").write_text("model_list:\n  - model_name: second\n")
 
     result = await ProxyConfig()._process_includes(
         {"include": ["shared/models.yaml"]}, config_file_path=str(tmp_path / "config.yaml")
@@ -1110,7 +1124,6 @@ async def test_ProxyConfig_get_config_loads_from_file(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ProxyConfig_get_config_from_a_bucket_merges_includes(monkeypatch):
-    """A bucket-hosted config.yaml used to drop its `include:` entries silently (LIT-6982)."""
     objects = {
         "lit6982/config.yaml": {
             "include": ["model_config.yaml"],
@@ -1121,8 +1134,8 @@ async def test_ProxyConfig_get_config_from_a_bucket_merges_includes(monkeypatch)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.setattr(
-        "litellm.proxy.common_utils.load_config_utils.get_file_contents_from_s3",
-        lambda bucket_name, object_key: objects.get(object_key),
+        "litellm.proxy.common_utils.load_config_utils.s3_object_reader",
+        lambda bucket_name: objects.get,
     )
     monkeypatch.setenv("LITELLM_CONFIG_BUCKET_NAME", "litellm-configs")
     monkeypatch.setenv("LITELLM_CONFIG_BUCKET_OBJECT_KEY", "lit6982/config.yaml")

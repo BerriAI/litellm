@@ -93,11 +93,6 @@ class TestGetFileContentsFromS3:
 
 
 class TestBucketConfigIncludes:
-    """`include:` directives in a bucket-hosted config.yaml (LIT-6982).
-
-    They used to be dropped silently: the proxy booted with the root config applied and everything
-    the included objects declared missing, with nothing logged.
-    """
 
     @staticmethod
     def _bucket(objects):
@@ -161,7 +156,6 @@ class TestBucketConfigIncludes:
 
     @pytest.mark.asyncio
     async def test_a_nested_include_resolves_against_the_object_that_declares_it(self):
-        """A nested `include` names a neighbour of the object declaring it, not of the root config."""
         merged = await resolve_bucket_includes(
             config={"include": ["shared/models.yaml"]},
             object_key="configs/config.yaml",
@@ -265,8 +259,8 @@ class TestBucketConfigIncludes:
             "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
         }
         monkeypatch.setattr(
-            "litellm.proxy.common_utils.load_config_utils.get_file_contents_from_s3",
-            lambda bucket_name, object_key: objects.get(object_key),
+            "litellm.proxy.common_utils.load_config_utils.s3_object_reader",
+            lambda bucket_name: objects.get,
         )
 
         config = await get_config_from_bucket(
@@ -279,21 +273,72 @@ class TestBucketConfigIncludes:
         }
 
     @pytest.mark.asyncio
-    async def test_the_blocking_s3_read_runs_off_the_event_loop_thread(self, monkeypatch):
+    async def test_the_blocking_s3_work_runs_off_the_event_loop_thread(self, monkeypatch):
         loop_thread = threading.current_thread()
-        read_threads = []
+        threads = []
 
-        def record_thread(bucket_name, object_key):
-            read_threads.append(threading.current_thread())
-            return {"model_list": [{"model_name": "a-model"}]}
+        def build_reader(bucket_name):
+            threads.append(threading.current_thread())
 
-        monkeypatch.setattr(
-            "litellm.proxy.common_utils.load_config_utils.get_file_contents_from_s3", record_thread
-        )
+            def read(object_key):
+                threads.append(threading.current_thread())
+                return {"model_list": [{"model_name": "a-model"}]}
+
+            return read
+
+        monkeypatch.setattr("litellm.proxy.common_utils.load_config_utils.s3_object_reader", build_reader)
 
         await get_config_from_bucket(bucket_type="s3", bucket_name="litellm-configs", object_key="config.yaml")
 
-        assert read_threads and loop_thread not in read_threads
+        assert len(threads) == 2 and loop_thread not in threads
+
+    @pytest.mark.asyncio
+    async def test_one_s3_client_serves_the_whole_include_tree(self, monkeypatch):
+        objects = {
+            "lit6982/config.yaml": {"include": ["model_config.yaml"]},
+            "lit6982/model_config.yaml": {"model_list": [{"model_name": "included-model"}]},
+        }
+        readers = []
+
+        def build_reader(bucket_name):
+            requested = []
+            readers.append(requested)
+
+            def read(object_key):
+                requested.append(object_key)
+                return objects.get(object_key)
+
+            return read
+
+        monkeypatch.setattr("litellm.proxy.common_utils.load_config_utils.s3_object_reader", build_reader)
+
+        await get_config_from_bucket(
+            bucket_type="s3", bucket_name="litellm-configs", object_key="lit6982/config.yaml"
+        )
+
+        assert readers == [["lit6982/config.yaml", "lit6982/model_config.yaml"]]
+
+    @pytest.mark.asyncio
+    async def test_an_empty_included_object_merges_as_an_empty_config(self, monkeypatch):
+        objects = {
+            "lit6982/config.yaml": "include:\n  - empty.yaml\nmodel_list:\n  - model_name: only-model\n",
+            "lit6982/empty.yaml": "",
+        }
+
+        class FakeGCSBucket:
+            async def download_gcs_object(self, object_key):
+                return objects[object_key].encode("utf-8")
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_utils.load_config_utils.gcs_config_bucket",
+            lambda bucket_name: FakeGCSBucket(),
+        )
+
+        config = await get_config_from_bucket(
+            bucket_type="gcs", bucket_name="litellm-configs", object_key="lit6982/config.yaml"
+        )
+
+        assert config == {"model_list": [{"model_name": "only-model"}]}
 
     @pytest.mark.asyncio
     async def test_get_config_from_bucket_merges_includes_over_gcs(self, monkeypatch):
@@ -336,8 +381,8 @@ class TestBucketConfigIncludes:
     @pytest.mark.asyncio
     async def test_get_config_from_bucket_returns_none_when_the_root_object_is_missing(self, monkeypatch):
         monkeypatch.setattr(
-            "litellm.proxy.common_utils.load_config_utils.get_file_contents_from_s3",
-            lambda bucket_name, object_key: None,
+            "litellm.proxy.common_utils.load_config_utils.s3_object_reader",
+            lambda bucket_name: (lambda object_key: None),
         )
 
         assert (

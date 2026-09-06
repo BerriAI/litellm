@@ -341,7 +341,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
-from litellm.proxy.common_utils.config_includes import resolve_includes
+from litellm.proxy.common_utils.config_includes import resolve_include_file_path, resolve_includes
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
@@ -4560,7 +4560,7 @@ class ProxyConfig:
         included_config_adapter: Final = TypeAdapter(dict[str, object])
 
         async def load_included(include_file: str, declared_in: str) -> tuple[str, Mapping[str, object]]:
-            file_path: Final = os.path.abspath(os.path.join(os.path.dirname(declared_in), include_file))
+            file_path: Final = resolve_include_file_path(include_file, declared_in, config_file_path)
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"Included file not found: {file_path}")
             try:
