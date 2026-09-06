@@ -699,3 +699,61 @@ def test_an_include_row_naming_a_listed_key_extends_only_the_combinations_it_mat
 
     assert frozenset(name for name, _ in published(sources)) == frozenset({"3.12 fast"})
     assert len(blind_spots(sources)) == 1
+
+
+def test_a_job_whose_whole_strategy_is_an_expression_is_reported_rather_than_rejecting_the_file() -> None:
+    sources: Final = {
+        "plan.yml": (
+            "on: pull_request\njobs:\n  plan:\n    name: Plan\n    runs-on: ubuntu-latest\n"
+            "  fan:\n    strategy: ${{ fromJSON(needs.plan.outputs.strategy) }}\n    runs-on: ubuntu-latest\n"
+        )
+    }
+
+    assert unreadable(sources) == ()
+    assert frozenset(name for name, _ in published(sources)) == frozenset({"Plan"})
+    assert "`strategy` comes from an expression" in blind_spots(sources)[0]
+    assert exit_code(sources) == 0
+
+
+def test_one_job_publishing_one_name_for_every_matrix_combination_is_a_collision() -> None:
+    sources: Final = {
+        "unit.yml": (
+            "on: pull_request\njobs:\n  build:\n    name: Run tests\n    runs-on: ubuntu-latest\n"
+            '    strategy:\n      matrix:\n        python-version: ["3.12", "3.13"]\n'
+        )
+    }
+
+    found: Final = collisions(sources)
+    assert len(found) == 1
+    assert "`Run tests` is published 2 times by unit.yml job `build`" in found[0]
+    assert exit_code(sources) == 1
+
+
+def test_a_name_carrying_a_matrix_value_publishes_one_name_per_combination_without_colliding() -> None:
+    sources: Final = {
+        "unit.yml": (
+            "on: pull_request\njobs:\n  build:\n    name: Run tests ${{ matrix.python-version }}\n"
+            '    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        python-version: ["3.12", "3.13"]\n'
+        )
+    }
+
+    assert frozenset(name for name, _ in published(sources)) == frozenset({"Run tests 3.12", "Run tests 3.13"})
+    assert collisions(sources) == ()
+    assert exit_code(sources) == 0
+
+
+def test_a_file_that_is_not_valid_yaml_is_reported_rather_than_raising() -> None:
+    sources: Final = {"broken.yml": "jobs:\n  build: [\n"}
+
+    assert unreadable(sources) == (
+        "broken.yml sits in the workflows directory but it does not read as one YAML "
+        "document, so none of its jobs were checked.",
+    )
+    assert exit_code(sources) == 1
+
+
+def test_a_file_holding_two_yaml_documents_is_reported_rather_than_raising() -> None:
+    sources: Final = {"two.yml": "on: pull_request\n---\non: push\n"}
+
+    assert len(unreadable(sources)) == 1
+    assert exit_code(sources) == 1

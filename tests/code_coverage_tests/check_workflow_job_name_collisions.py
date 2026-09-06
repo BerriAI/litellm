@@ -1,10 +1,12 @@
-"""Catch two workflow jobs that publish check runs under the same name.
+"""Catch workflow jobs that publish check runs under the same name.
 
 A ruleset's required status check names a check run and GitHub matches it by that
 name alone. When two jobs publish the same name the required context stops
 mapping to the job that proves it: the commit carries two check runs under one
 name and nothing says which one the ruleset required. Both being green hides the
 clash completely, so the context quietly stops meaning what the ruleset intended.
+One job lands in the same place when its `name:` holds no matrix value, since
+every combination it runs then reports under that one name.
 
 `.github/workflows/auto-close-duplicates.yml` shipped a job id `test` while
 `.github/workflows/test-mcp.yml` already published the required `test` context,
@@ -29,16 +31,17 @@ combination is filled in is one GitHub resolves per job, so it is one of those:
 guessing that two jobs sharing such a template clash would fail workflows over a
 context this sweep cannot read. A matrix that is itself an expression or that
 lists values which are not scalars, an `include` or `exclude` row shaped the same
-way, and a call this sweep cannot follow, go in the same bucket. The cost is that a real clash hiding behind one of them goes unseen,
-which leaves a merge no worse off than before this check existed, where the
-opposite direction would block work that was fine.
+way, a whole `strategy:` that comes from an expression, and a call this sweep
+cannot follow, go in the same bucket. The cost is that a real clash hiding behind
+one of them goes unseen, which leaves a merge no worse off than before this check
+existed, where the opposite direction would block work that was fine.
 
 A job calling a local reusable workflow publishes one check run per job of the
 callee, named `<caller> / <callee>` and chained through however many levels of
 local calls it takes, which is why a caller's name never collides with a plain
-job that happens to match it. A file under `.github/workflows/` that does not read as
-a workflow at all is reported rather than skipped, since skipping it silently
-would hide every job it holds.
+job that happens to match it. A file under `.github/workflows/` that does not
+read as one workflow at all is reported rather than skipped, since skipping it
+silently would hide every job it holds.
 """
 
 import itertools
@@ -90,7 +93,7 @@ class Names:
 class Job(BaseModel):
     name: object = None
     uses: str | None = None
-    strategy: Mapping[str, object] = Field(default_factory=dict)
+    strategy: object = Field(default_factory=dict)
 
 
 class Workflow(BaseModel):
@@ -104,7 +107,10 @@ def scalar_text(value: object) -> str:
 
 def parse(source: str) -> tuple[Workflow, object] | Unreadable:
     """The workflow plus its raw `on:` value, or why the file does not read as one."""
-    parsed: Final = yaml.safe_load(source)
+    try:
+        parsed: Final = yaml.safe_load(source)
+    except yaml.YAMLError:
+        return Unreadable("it does not read as one YAML document")
     if not isinstance(parsed, dict):
         return Unreadable("its top level is not a mapping of workflow keys")
     try:
@@ -186,6 +192,8 @@ def crossed_values(listed: Sequence[tuple[str, tuple[str, ...]]]) -> tuple[Mappi
 
 def matrix_combinations(job: Job) -> tuple[Mapping[str, str], ...] | Opaque:
     """One mapping per job the matrix produces, `exclude` applied before `include` as GitHub does."""
+    if not isinstance(job.strategy, Mapping):
+        return Opaque("its whole `strategy` comes from an expression")
     matrix: Final = job.strategy.get("matrix")
     if matrix is None:
         return ()
@@ -304,7 +312,7 @@ def expand(template: str, job: Job) -> Names:
     if isinstance(combinations, Opaque):
         return Names((), (combinations.reason,))
     over: Final = combinations or (NO_MATRIX,)
-    return settled(tuple(dict.fromkeys(rendered(template, values) for values in over)))
+    return settled(tuple(rendered(template, values) for values in over))
 
 
 def suffixed(job_id: str, combination: Mapping[str, str]) -> str:
@@ -408,13 +416,25 @@ def owners_by_name(sources: Mapping[str, str]) -> Iterator[tuple[str, tuple[str,
         yield name, tuple(owner for _, owner in pairs)
 
 
+def clash(name: str, owners: Sequence[str]) -> str | None:
+    """Why one name is ambiguous, whether two jobs carry it or one job repeats it over its matrix."""
+    jobs: Final = tuple(dict.fromkeys(owners))
+    if len(jobs) > 1:
+        return (
+            f"`{name}` is published by {len(jobs)} jobs: {', '.join(jobs)}. A required status check matching "
+            f"that name cannot say which job proves it; give one of them a distinct `name:` or job id."
+        )
+    if len(owners) > 1:
+        return (
+            f"`{name}` is published {len(owners)} times by {jobs[0]}, once per matrix combination. A required "
+            f"status check matching that name cannot say which run proves it; put a matrix value in its `name:`."
+        )
+    return None
+
+
 def collisions(sources: Mapping[str, str]) -> tuple[str, ...]:
-    return tuple(
-        f"`{name}` is published by {len(owners)} jobs: {', '.join(owners)}. A required status check matching "
-        f"that name cannot say which job proves it; give one of them a distinct `name:` or job id."
-        for name, owners in owners_by_name(sources)
-        if len(owners) > 1
-    )
+    found: Final = tuple(clash(name, owners) for name, owners in owners_by_name(sources))
+    return tuple(message for message in found if message is not None)
 
 
 def workflow_sources() -> Mapping[str, str]:
