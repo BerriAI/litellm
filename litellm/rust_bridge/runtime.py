@@ -10,7 +10,8 @@ from litellm.rust_bridge.bindings import (
     UNCHANGED,
     NativeBinding,
     Unchanged,
-    native_exception_types,
+    native_declined_types,
+    native_upstream_types,
 )
 from litellm.rust_bridge.protocols import NativeModule, RustRouteDecline
 from litellm.rust_bridge.request import NativeRequestCapabilities, NativeRequestContext
@@ -32,6 +33,14 @@ class PythonFallbackReason(Enum):
     NATIVE_DECLINED = "native_declined"
 
 
+class NativeSkipReason(Enum):
+    DISABLED = "disabled"
+    INELIGIBLE = "ineligible"
+    UNAVAILABLE = "unavailable"
+    DECLINED = "declined"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True, slots=True)
 class Handled(Generic[ResultT]):
     value: ResultT
@@ -43,7 +52,18 @@ class PythonFallback:
     detail: str | None = None
 
 
-DispatchResult: TypeAlias = Handled[ResultT] | PythonFallback
+@dataclass(frozen=True, slots=True)
+class NativeSkipped:
+    reason: NativeSkipReason
+    detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class NativeFailed:
+    error: Exception
+
+
+DispatchResult: TypeAlias = Handled[ResultT] | PythonFallback | NativeSkipped | NativeFailed
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,10 +316,10 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
     ) -> DispatchResult[ResultT]:
-        exceptions: Final = native_exception_types()
-        if exceptions is None:
+        declined: Final = native_declined_types()
+        upstream: Final = native_upstream_types()
+        if not declined or not upstream:
             return Handled(adapt(call()))
-        declined, upstream = exceptions
         try:
             value: Final = call()
         except declined as error:
@@ -315,10 +335,10 @@ class EndpointBinding(Generic[BindingT]):
         adapt: Callable[[NativeT], ResultT],
         error_context: BridgeErrorContext,
     ) -> DispatchResult[ResultT]:
-        exceptions: Final = native_exception_types()
-        if exceptions is None:
+        declined: Final = native_declined_types()
+        upstream: Final = native_upstream_types()
+        if not declined or not upstream:
             return Handled(adapt(await call()))
-        declined, upstream = exceptions
         try:
             value: Final = await call()
         except declined as error:
@@ -503,6 +523,12 @@ def always_enabled() -> bool:
 
 def identity(value: ResultT) -> ResultT:
     return value
+
+
+def adapt_result(result: DispatchResult[NativeT], adapt: Callable[[NativeT], ResultT]) -> DispatchResult[ResultT]:
+    if isinstance(result, Handled):
+        return Handled(adapt(result.value))
+    return result
 
 
 async def async_none() -> None:

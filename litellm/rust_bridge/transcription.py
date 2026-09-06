@@ -57,7 +57,6 @@ _PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
 
 
 def configure_rust_transcription(
-    enabled: bool = True,
     *,
     transcription: RustTranscription | None | Unchanged = UNCHANGED,
     atranscription: RustAtranscription | None | Unchanged = UNCHANGED,
