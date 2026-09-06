@@ -133,12 +133,49 @@ class UnavailableRedis(SharedRedisCounters):
         raise ConnectionError("redis is down")
 
 
-def test_redis_outage_never_fails_the_request() -> None:
+@pytest.mark.asyncio
+async def test_a_redis_outage_falls_back_to_this_workers_own_counts() -> None:
     worker: Final = _worker(UnavailableRedis())
 
     worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
 
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    await worker.async_log_success_event(_call_kwargs("dep-a"), None, None, None)
+
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+def test_a_shared_counter_that_expired_mid_request_cannot_go_negative() -> None:
+    shared: Final = SharedRedisCounters()
+    worker: Final = _worker(shared)
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+    shared.encoded.clear()
+    worker.log_success_event(_call_kwargs("dep-a"), None, None, None)
+
+    assert shared.count(f"{GROUP}_request_count:dep-a") == 0
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+
+@pytest.mark.asyncio
+async def test_a_local_counter_that_expired_mid_request_cannot_go_negative() -> None:
+    worker: Final = _worker(None)
+    in_memory: Final = worker.router_cache.in_memory_cache
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+    in_memory.delete_cache(f"{GROUP}_request_count:dep-a")
+    await worker.async_log_success_event(_call_kwargs("dep-a"), None, None, None)
+
+    assert worker.router_cache.get_cache(f"{GROUP}_request_count:dep-a") == 0
+
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    assert await worker.async_get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 
 def test_calls_without_a_deployment_are_ignored() -> None:
