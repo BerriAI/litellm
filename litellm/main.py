@@ -1048,6 +1048,22 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
+    # OpenCode's entries only reach the published cost map once released, so an
+    # install whose map predates this provider resolves neither pricing nor the
+    # wire format: spend records as zero and every Responses model falls through
+    # to chat completions. Both are answered from what ships with the package.
+    from litellm.llms.opencode.common_utils import (
+        ensure_opencode_pricing,
+        is_responses_model,
+        opencode_surface,
+    )
+
+    opencode_surface_name: Final = opencode_surface(custom_llm_provider)
+    if opencode_surface_name is not None:
+        ensure_opencode_pricing(custom_llm_provider, model)
+        if model_info.get("mode") != "responses" and is_responses_model(opencode_surface_name, model):
+            model_info["mode"] = "responses"
+
     # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
     # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
     # those keys.
@@ -3429,6 +3445,115 @@ def _complete_openrouter(ctx: _CompletionDispatchContext) -> _CompletionDispatch
     return response
 
 
+def _complete_opencode(
+    ctx: _CompletionDispatchContext,
+) -> _CompletionDispatchResult:
+    acompletion: Final = ctx.acompletion
+    api_base = ctx.api_base  # rebind-ok: resolved below from module/env fallbacks
+    api_key = ctx.api_key  # rebind-ok: resolved below from module/env fallbacks
+    client: Final = ctx.client
+    custom_llm_provider: Final = ctx.custom_llm_provider
+    headers: Final = ctx.headers
+    litellm_params: Final = ctx.litellm_params
+    logging: Final = ctx.logging
+    messages: Final = ctx.messages
+    model: Final = ctx.model
+    model_response: Final = ctx.model_response
+    optional_params: Final = ctx.optional_params
+    shared_session: Final = ctx.shared_session
+    stream: Final = ctx.stream
+    timeout: Final = ctx.timeout
+
+    from litellm.llms.opencode.common_utils import (
+        resolve_opencode_api_base,
+        resolve_opencode_api_key,
+    )
+
+    surface: Final = "go" if custom_llm_provider == "opencode_go" else "zen"
+    _base_url: Final = "https://opencode.ai/zen/go/v1" if surface == "go" else "https://opencode.ai/zen/v1"
+    api_base = (
+        resolve_opencode_api_base(surface, api_base) or _base_url
+    )  # rebind-ok: resolved from module/env fallbacks
+
+    api_key = resolve_opencode_api_key(surface, api_key)  # rebind-ok: resolved from module/env fallbacks
+
+    base_headers: Final = headers or litellm.headers or {}  # mutable-ok: empty dict fallback for headers
+    _headers: Final = (
+        {**base_headers, "Authorization": f"Bearer {api_key}"}  # mutable-ok: dict literal for request headers
+        if api_key is not None
+        else base_headers
+    )
+
+    # Part of the catalogue is served over the Anthropic Messages wire format.
+    # Those models go through the Anthropic chat handler, which translates
+    # OpenAI input to Anthropic and the Anthropic reply back to a ModelResponse
+    # (and handles streaming and acompletion natively) — the same path the
+    # first-party anthropic provider takes.
+    from litellm.llms.opencode.chat.messages_transformation import is_messages_model
+
+    if is_messages_model(surface, model):
+        # AnthropicChatCompletion builds its headers from AnthropicConfig
+        # directly, and that resolves a missing key from ANTHROPIC_API_KEY, so
+        # a missing OpenCode key has to be rejected here rather than sending a
+        # first-party Anthropic credential to opencode.ai.
+        if api_key is None:
+            raise ValueError(
+                f"OpenCode API key is required. Set OPENCODE_{surface.upper()}_API_KEY "
+                f"or OPENCODE_API_KEY, or pass api_key."
+            )
+        messages_base: Final = api_base.rstrip("/")
+        messages_url: Final = (
+            messages_base
+            if messages_base.endswith("/v1/messages")
+            else f"{messages_base}/messages"
+            if messages_base.endswith("/v1")
+            else f"{messages_base}/v1/messages"
+        )
+        return anthropic_chat_completions.completion(
+            model=model,
+            messages=messages,
+            api_base=messages_url,
+            acompletion=acompletion,
+            custom_prompt_dict=litellm.custom_prompt_dict,
+            model_response=model_response,
+            print_verbose=print_verbose,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            logger_fn=None,
+            encoding=_get_encoding(),
+            api_key=api_key,
+            logging_obj=logging,
+            headers=base_headers,  # Bearer is chat-arm only; the config injects x-api-key
+            timeout=timeout,  # pyright: ignore[reportArgumentType]  # ctx.timeout is str|None-widened same as every other _complete_* dispatch handler; narrowing is a pre-existing, repo-wide gap in _CompletionDispatchContext, not opencode-specific
+            client=client,
+            custom_llm_provider=f"opencode_{surface}",
+        )
+
+    ## COMPLETION CALL (chat arm)
+    response = base_llm_http_handler.completion(  # rebind-ok: chat arm result
+        model=model,
+        stream=stream,
+        messages=messages,
+        acompletion=acompletion,
+        api_base=api_base,
+        model_response=model_response,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        shared_session=shared_session,
+        custom_llm_provider=f"opencode_{surface}",
+        timeout=timeout,  # pyright: ignore[reportArgumentType]  # ctx.timeout is str|None-widened same as every other _complete_* dispatch handler; narrowing is a pre-existing, repo-wide gap in _CompletionDispatchContext, not opencode-specific
+        headers=_headers,
+        encoding=_get_encoding(),
+        api_key=api_key,
+        logging_obj=logging,
+        client=client,
+    )
+    ## LOGGING
+    logging.post_call(input=messages, api_key=api_key, original_response=response)
+
+    return response
+
+
 def _complete_vercel_ai_gateway(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -5699,6 +5824,8 @@ def completion(
             response = _complete_minimax(_dispatch_ctx)
         elif custom_llm_provider == "hosted_vllm":
             response = _complete_hosted_vllm(_dispatch_ctx)
+        elif custom_llm_provider in ("opencode_zen", "opencode_go"):
+            response = _complete_opencode(_dispatch_ctx)  # rebind-ok: dispatch chain rebinds response
         elif (
             # A known OpenAI model name only decides the route when nothing else
             # resolved a provider. get_llm_provider() already maps these names to

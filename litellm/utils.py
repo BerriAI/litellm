@@ -8072,6 +8072,14 @@ class ProviderConfigManager:
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
             LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIChatConfig(), False),
             LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
+            LlmProviders.OPENCODE_ZEN: (
+                lambda model: litellm.get_opencode_config("zen", model),
+                True,
+            ),
+            LlmProviders.OPENCODE_GO: (
+                lambda model: litellm.get_opencode_config("go", model),
+                True,
+            ),
             LlmProviders.VERCEL_AI_GATEWAY: (
                 lambda: litellm.VercelAIGatewayConfig(),
                 False,
@@ -8491,6 +8499,12 @@ class ProviderConfigManager:
                 )
 
                 return GithubCopilotAnthropicMessagesConfig()
+        elif provider in (litellm.LlmProviders.OPENCODE_ZEN, litellm.LlmProviders.OPENCODE_GO):
+            from litellm.llms.opencode.chat.messages_transformation import (
+                OpenCodeMessagesConfig,
+            )
+
+            return OpenCodeMessagesConfig(surface="go" if provider == litellm.LlmProviders.OPENCODE_GO else "zen")
 
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -8705,6 +8719,18 @@ class ProviderConfigManager:
             return litellm.BedrockMantleResponsesAPIConfig(
                 use_openai_path=mantle_base_segment(model, litellm.model_cost) == "openai/v1"
             )
+        elif litellm.LlmProviders.OPENCODE_ZEN == provider:
+            from litellm.llms.opencode.zen.responses.transformation import (
+                OpenCodeZenResponsesAPIConfig,
+            )
+
+            return OpenCodeZenResponsesAPIConfig()
+        elif litellm.LlmProviders.OPENCODE_GO == provider:
+            from litellm.llms.opencode.go.responses.transformation import (
+                OpenCodeGoResponsesAPIConfig,
+            )
+
+            return OpenCodeGoResponsesAPIConfig()
         return None
 
     @staticmethod

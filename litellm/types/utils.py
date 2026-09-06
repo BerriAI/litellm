@@ -3983,6 +3983,8 @@ class LlmProviders(str, Enum):
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
     GDC = "gdc"
+    OPENCODE_ZEN = "opencode_zen"
+    OPENCODE_GO = "opencode_go"
 
 
 # Create a set of all provider values for quick lookup
