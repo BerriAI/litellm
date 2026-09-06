@@ -4093,6 +4093,35 @@ async def test_health_latest_endpoint_keeps_an_id_less_row_apart_when_two_deploy
     assert sorted(result["latest_health_checks"]) == ["bedrock-nova", "id-bedrock", "id-openai"]
 
 
+@pytest.mark.asyncio
+async def test_health_latest_endpoint_never_reports_an_id_less_row_as_a_deployments_own_status():
+    """A check saved without a deployment id covers whatever its name resolved to, so it must not overwrite the status of the one deployment that name was checked under."""
+    from litellm.proxy.health_endpoints._health_endpoints import latest_health_checks_endpoint
+
+    group_wide = _stored_health_row_without_id("gpt-5.4-mini")
+    group_wide.status = "unhealthy"
+    group_wide.checked_at = datetime(2026, 9, 6, 7, 31)
+    rows = [
+        group_wide,
+        _stored_health_row("id-openai", "gpt-5.4-mini", checked_at=datetime(2026, 9, 1, 7, 31)),
+    ]
+
+    with _proxy_health_globals(
+        _ACCESS_GROUP_MODEL_LIST,
+        _ACCESS_GROUP_ROUTER,
+        prisma_client=SimpleNamespace(
+            get_all_latest_health_checks=AsyncMock(return_value=rows),
+            get_health_check_history=AsyncMock(return_value=rows),
+        ),
+    ):
+        result = await latest_health_checks_endpoint(
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_role=LitellmUserRoles.PROXY_ADMIN)
+        )
+
+    assert sorted(result["latest_health_checks"]) == ["gpt-5.4-mini", "id-openai"]
+    assert result["latest_health_checks"]["id-openai"]["status"] == "healthy"
+
+
 def _paging_health_prisma(rows: Sequence[object]) -> SimpleNamespace:
     async def _history(
         model_name: str | None = None,
