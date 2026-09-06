@@ -700,3 +700,71 @@ def test_connection_error_answers_when_prisma_is_mocked_after_import():
     with patch.dict(sys.modules, {"prisma": MagicMock()}):
         assert PrismaDBExceptionHandler.is_database_connection_error(Exception("x")) is False
         assert PrismaDBExceptionHandler.is_database_connection_error(httpx.ConnectError("refused")) is True
+
+
+_PRISMA_ABSENT: Final = dict.fromkeys(
+    ("prisma", "prisma.errors", "prisma.engine", "prisma.engine.errors"), None
+)
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        PrismaDBExceptionHandler.is_database_connection_error,
+        PrismaDBExceptionHandler.is_database_infrastructure_error,
+        PrismaDBExceptionHandler.is_prisma_data_error,
+        PrismaDBExceptionHandler.is_database_transport_error,
+        PrismaDBExceptionHandler.is_deadlock_error,
+        PrismaDBExceptionHandler.is_prisma_engine_internal_error,
+        PrismaDBExceptionHandler.is_database_service_unavailable_error,
+        PrismaDBExceptionHandler.is_permanent_database_fault,
+        PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain,
+    ],
+    ids=lambda predicate: predicate.__name__,
+)
+def test_predicates_answer_false_when_prisma_is_not_installed(predicate):
+    """
+    A DB-less proxy install ships without the optional prisma package, so no
+    exception it sees can be a prisma one. Every predicate must answer False
+    instead of raising ModuleNotFoundError out of the error path it is being
+    used to handle.
+    """
+    with patch.dict(sys.modules, _PRISMA_ABSENT):
+        assert predicate(Exception("No api key passed in.")) is False
+
+
+def test_chain_helpers_answer_when_prisma_is_not_installed():
+    """
+    The chain walk and the 503 wording go through the same predicates, so they
+    have to survive a missing prisma too.
+    """
+    auth_failure = Exception("No api key passed in.")
+
+    with patch.dict(sys.modules, _PRISMA_ABSENT):
+        assert PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(auth_failure) is None
+        assert PrismaDBExceptionHandler.database_unavailable_message(httpx.ConnectError("refused"))
+
+
+def test_non_prisma_db_signals_still_classified_when_prisma_is_not_installed():
+    """
+    Guarding the prisma import must not blind the predicates to the signals
+    that do not need prisma: httpx transport failures and the proxy's own
+    no_db_connection exception.
+    """
+    connect_error = httpx.ConnectError("All connection attempts failed")
+    no_db_connection = ProxyException(
+        message="No connected db.",
+        type=ProxyErrorTypes.no_db_connection,
+        param="None",
+        code=500,
+    )
+
+    with patch.dict(sys.modules, _PRISMA_ABSENT):
+        assert PrismaDBExceptionHandler.is_database_connection_error(connect_error) is True
+        assert PrismaDBExceptionHandler.is_database_infrastructure_error(connect_error) is True
+        assert PrismaDBExceptionHandler.is_database_transport_error(connect_error) is True
+        assert PrismaDBExceptionHandler.is_database_service_unavailable_error(connect_error) is True
+
+        assert PrismaDBExceptionHandler.is_database_connection_error(no_db_connection) is True
+        assert PrismaDBExceptionHandler.is_database_infrastructure_error(no_db_connection) is True
+        assert PrismaDBExceptionHandler.is_database_transport_error(no_db_connection) is True
