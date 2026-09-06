@@ -292,6 +292,19 @@ def test_require_explains_why_rust_did_not_handle_request(
         )
 
 
+@pytest.mark.asyncio
+async def test_arequire_explains_unavailable_native_binding() -> None:
+    endpoint: Final = runtime.EndpointBinding(route="messages", load=lambda: None, enabled=enabled)
+
+    with pytest.raises(RuntimeError, match=r"^native messages endpoint is unavailable$"):
+        await endpoint.arequire(
+            prepare=lambda: pytest.fail("must not prepare"),
+            call=lambda _binding, _request: pytest.fail("must not invoke"),
+            adapt=str,
+            error_context=context(),
+        )
+
+
 @pytest.mark.parametrize(
     ("state", "expected", "expected_events"),
     (
@@ -356,6 +369,68 @@ def test_native_endpoint_applies_partial_overrides_and_reset(monkeypatch: pytest
     endpoint.reset()
     assert endpoint.sync.load() is native_sync
     assert endpoint.asynchronous.load() is native_async
+
+
+def test_direct_endpoint_binding_rejects_native_state_controls() -> None:
+    endpoint: Final = runtime.EndpointBinding(route="test", load=object, enabled=enabled)
+
+    with pytest.raises(RuntimeError, match="only native Rust bridges support binding overrides"):
+        endpoint.override(object())
+    with pytest.raises(RuntimeError, match="only native Rust bridges support binding resets"):
+        endpoint.reset()
+
+
+@pytest.mark.parametrize(
+    ("enabled_state", "reason", "expected"),
+    (
+        pytest.param(False, None, runtime.PythonFallbackReason.NATIVE_DISABLED, id="disabled"),
+        pytest.param(True, "unsupported model", runtime.PythonFallbackReason.NATIVE_DECLINED, id="declined"),
+        pytest.param(True, None, None, id="accepted"),
+    ),
+)
+def test_assess_reports_binding_eligibility(
+    enabled_state: bool,
+    reason: str | None,
+    expected: runtime.PythonFallbackReason | None,
+) -> None:
+    binding: Final = object()
+    checked: list[object] = []
+    endpoint: Final = runtime.EndpointBinding(route="test", load=lambda: binding, enabled=lambda: enabled_state)
+
+    result: Final = endpoint.assess(check=lambda value: checked.append(value) or reason)
+
+    assert (result.reason if result is not None else None) is expected
+    assert (result.detail if result is not None else None) == reason
+    assert checked == ([binding] if enabled_state else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_dispatch_require_returns_adapted_native_success_without_exception_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    asynchronous: bool,
+) -> None:
+    monkeypatch.setattr(bindings, "get_native_bridge", lambda: None)
+    endpoint: Final = runtime.EndpointDispatch(
+        sync=runtime.EndpointBinding(route="test", load=object, enabled=enabled),
+        asynchronous=runtime.EndpointBinding(route="test", load=object, enabled=enabled),
+    )
+
+    async def acall(_binding: object, request: int) -> int:
+        return request * 2
+
+    result: Final = (
+        await endpoint.arequire(prepare=lambda: 3, call=acall, adapt=str, error_context=context())
+        if asynchronous
+        else endpoint.require(
+            prepare=lambda: 3,
+            call=lambda _binding, request: request * 2,
+            adapt=str,
+            error_context=context(),
+        )
+    )
+
+    assert result == "6"
 
 
 @pytest.mark.asyncio
@@ -479,7 +554,9 @@ async def test_preflight_runs_after_binding_selection_before_preparation(
     assert events == (
         ["load", "preflight", "prepare", "native"]
         if available and accepted
-        else ["load", "preflight", "python"] if available else ["load", "python"]
+        else ["load", "preflight", "python"]
+        if available
+        else ["load", "python"]
     )
 
 

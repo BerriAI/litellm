@@ -11,8 +11,8 @@ import pytest
 
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.timeouts import timeout_to_seconds
 
 # `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
 # function onto `litellm.ocr` and shadows the submodule, so import the modules
@@ -862,6 +862,25 @@ async def test_ocr_fallback_skips_native_preparation(
 
     assert response is expected
     fallback.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_aocr_rejects_empty_python_fallback_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_exception_type(**kwargs: object) -> CapturedException:
+        captured.update(kwargs)
+        return CapturedException("wrapped")
+
+    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", AsyncMock(return_value=None))
+
+    with pytest.raises(CapturedException, match="wrapped"):
+        await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
+
+    original: Final = captured["original_exception"]
+    assert isinstance(original, ValueError)
+    assert str(original) == "Got an unexpected None response from the OCR API: None"
 
 
 def test_ocr_provider_configs_expose_api_key_env_vars():
