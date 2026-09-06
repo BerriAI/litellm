@@ -6177,7 +6177,8 @@ class Router:
                         function_name="aretrieve_batch",
                     )
                     model_group: Final = requested_model_group or model_name["model_name"]
-                    new_kwargs[metadata_variable_name].setdefault("model_group", model_group)
+                    if not new_kwargs[metadata_variable_name].get("model_group"):
+                        new_kwargs[metadata_variable_name]["model_group"] = model_group
                     new_kwargs.pop("custom_llm_provider", None)
                     data.pop("custom_llm_provider", None)
                     return await litellm.aretrieve_batch(
