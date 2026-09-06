@@ -252,22 +252,18 @@ _OCI_FINISH_REASONS: Final = MappingProxyType(
 
 _OPENAI_FINISH_REASONS: Final = frozenset({"stop", "length", "tool_calls", "content_filter", "function_call"})
 
+_OCI_RAN_TO_COMPLETION_REASONS: Final = frozenset({"COMPLETE", "stop"})
+
 
 def _normalize_oci_finish_reason(raw: str | None, *, has_tool_calls: bool = False) -> str | None:
-    """Map an OCI finish reason to its OpenAI-standard equivalent.
-
-    OCI uses two vocabularies. Cohere sends ``COMPLETE`` / ``MAX_TOKENS`` /
-    ``TOOL_CALL(S)`` plus a long tail of error and cancel reasons, while GENERIC
-    already sends the OpenAI names and has to be passed through rather than
-    collapsed. Anything outside both sets becomes ``"stop"``, ``None`` stays
-    ``None`` so intermediate stream chunks stay open, and ``has_tool_calls``
-    upgrades ``stop`` to ``tool_calls`` for a Cohere tool turn, which OCI still
-    labels ``COMPLETE``.
+    """Cohere speaks ``COMPLETE`` / ``MAX_TOKENS`` / ``TOOL_CALL(S)`` plus a tail of error and
+    cancel reasons while GENERIC already speaks OpenAI, and only a turn that ran to completion
+    may be upgraded to ``tool_calls``, so an aborted one never invites a client to run the call.
     """
     if raw is None:
         return None
     normalized: Final = _OCI_FINISH_REASONS.get(raw, raw if raw in _OPENAI_FINISH_REASONS else "stop")
-    return "tool_calls" if has_tool_calls and normalized == "stop" else normalized
+    return "tool_calls" if has_tool_calls and raw in _OCI_RAN_TO_COMPLETION_REASONS else normalized
 
 
 def _synthesize_oci_tool_call_id(position: int, name: str, arguments: str) -> str:

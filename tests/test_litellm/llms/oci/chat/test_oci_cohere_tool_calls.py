@@ -502,6 +502,27 @@ class TestOCICohereToolCalls:
 
         assert chunks[-1].choices[0].finish_reason == "tool_calls"
 
+    @pytest.mark.parametrize(
+        "aborted_reason", ["ERROR", "ERROR_TOXIC", "ERROR_LIMIT", "USER_CANCEL", "CANCELLED"]
+    )
+    def test_cohere_aborted_tool_turn_still_reports_stop(self, aborted_reason: str):
+        """A turn OCI cut short is not a tool turn, however many tool deltas already went out."""
+        wrapper = OCIStreamWrapper(
+            completion_stream=MagicMock(), model="cohere.command-a-03-2025", logging_obj=MagicMock()
+        )
+        tool_calls_event = {
+            "apiFormat": "COHERE",
+            "text": "I will use the get_weather tool.",
+            "toolCalls": [{"name": "get_weather", "parameters": {"city": "Paris"}}],
+        }
+
+        chunks = [
+            wrapper.chunk_creator(f"data: {json.dumps(event)}")
+            for event in (tool_calls_event, {"apiFormat": "COHERE", "finishReason": aborted_reason})
+        ]
+
+        assert chunks[-1].choices[0].finish_reason == "stop"
+
     def test_cohere_non_streaming_tool_call_reports_tool_calls(self):
         """Same COMPLETE-on-a-tool-turn story on the non-streaming Cohere response."""
         body = {

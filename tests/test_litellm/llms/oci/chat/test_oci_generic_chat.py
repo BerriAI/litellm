@@ -472,13 +472,9 @@ class TestGpt5MaxCompletionTokens:
 
 
 class TestGenericFinishReasonFidelity:
-    """OCI GENERIC sends the OpenAI finish-reason names verbatim.
-
-    Captured against ``oci/meta.llama-3.3-70b-instruct`` in ``us-chicago-1``: a
-    tool-calling turn ends with ``"finishReason": "tool_calls"`` and a
-    max-token cut-off with ``"finishReason": "length"``, both lowercase.
-    Collapsing either to ``stop`` leaves an agent loop with no signal to run
-    the tool and hides truncation from the caller.
+    """``_TOOL_CALL_WIRE`` was captured against ``oci/meta.llama-3.3-70b-instruct`` in
+    ``us-chicago-1``, where a GENERIC tool-calling turn ends with ``"finishReason": "tool_calls"``
+    and a max-token cut-off with ``"finishReason": "length"``, both already lowercase.
     """
 
     _TOOL_CALL_WIRE = [
