@@ -101,6 +101,10 @@ class _CombinedChunkSplitter:
     @staticmethod
     def _is_combined(chunk: "ModelResponseStream") -> bool:
         """True if ``chunk`` carries response content AND a finish_reason."""
+        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+            openai_chat_refusal_text,
+        )
+
         choices: Final = _optional_attr_sequence(chunk, "choices")
         if not choices:
             return False
@@ -115,6 +119,7 @@ class _CombinedChunkSplitter:
             or _optional_attr(delta, "tool_calls")
             or _optional_attr(delta, "reasoning_content")
             or _optional_attr(delta, "thinking_blocks")
+            or openai_chat_refusal_text(delta)
         )
 
     _PAYLOAD_FIELD_GROUPS: "tuple[tuple[str, ...], ...]" = (
@@ -306,7 +311,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Synthesized compaction block from compact_20260112 polyfill (streaming).
         self.compaction_block = compaction_block
         self.iterations_usage = iterations_usage
-        self._refusal_text_parts: list[str] = []  # mutable-ok: accumulates streamed refusal delta text across chunks
+        self._refusal_text: str = ""
         self.sent_compaction_block: bool = False
         # Per-phase flags so the compaction block's start/delta/stop events
         # are emitted (and the public state machine is advanced) in
@@ -1001,7 +1006,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self,
         processed_chunk: ContentBlockDelta | MessageBlockDelta,
     ) -> ContentBlockDelta | MessageBlockDelta:
-        if processed_chunk.get("type") != "message_delta" or not self._refusal_text_parts:
+        if processed_chunk.get("type") != "message_delta" or not self._refusal_text:
             return processed_chunk
         delta: Final = cast(Mapping[str, object], processed_chunk["delta"])  # cast-ok: keys checked before use
         if delta.get("stop_reason") == "max_tokens":
@@ -1017,7 +1022,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 "delta": {  # mutable-ok: fresh message_delta payload; never mutated after construction
                     **delta,
                     "stop_reason": "refusal",
-                    "stop_details": refusal_stop_details("".join(self._refusal_text_parts)),
+                    "stop_details": refusal_stop_details(self._refusal_text),
                 },
             },
         )
@@ -1107,12 +1112,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        refusal_text: Final = openai_chat_refusal_text(chunk.choices[0].delta)
-        if refusal_text is not None:
-            self._refusal_text_parts.append(refusal_text)
-
         if chunk.choices[0].finish_reason is not None:
             return False
+
+        refusal_text: Final = openai_chat_refusal_text(chunk.choices[0].delta)
+        if refusal_text is not None:
+            self._refusal_text = self._refusal_text + refusal_text
 
         (
             block_type,

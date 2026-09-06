@@ -183,6 +183,10 @@ async def test_streaming_chat_refusal_parked_in_provider_specific_fields_is_emit
 
 
 def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved():
+    """Fake-streamed responses arrive as one chunk carrying both the delta and the
+    finish_reason. The refusal has to be split off and streamed as text, or the
+    client gets ``stop_reason: refusal`` over an empty content array.
+    """
     chunks = [
         _make_chunk(
             Delta(content=None, refusal="I cannot fulfill this request."),
@@ -193,6 +197,7 @@ def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved():
 
     events = _drain_sync(wrapper)
 
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
     message_delta = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["delta"]["stop_reason"] == "refusal"
     assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
@@ -202,7 +207,7 @@ def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved():
 async def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved_async():
     chunks = [
         _make_chunk(
-            Delta(content=None, refusal="I cannot fulfill this request."),
+            Delta(content=None, provider_specific_fields={"refusal": "I cannot fulfill this request."}),
             finish_reason="stop",
         )
     ]
@@ -210,6 +215,7 @@ async def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved_as
 
     events = await _drain_async(wrapper)
 
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
     message_delta = next(event for event in events if event["type"] == "message_delta")
     assert message_delta["delta"]["stop_reason"] == "refusal"
     assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
