@@ -155,4 +155,48 @@ describe("UISettings", () => {
     );
     expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
   });
+
+  it("saves the team admin editable field list when a supported field is ticked", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          field_schema: {
+            properties: {
+              team_admin_editable_team_fields: {
+                description: "Team settings fields a team admin may change",
+                type: "array",
+                items: { type: "string", enum: ["tpm_limit"] },
+              },
+            },
+          },
+          values: { team_admin_editable_team_fields: [] },
+        },
+      }),
+    );
+
+    render(<UISettings />);
+
+    expect(screen.getByText("Team settings fields a team admin may change")).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(screen.getByRole("checkbox", { name: "tpm_limit" }));
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { team_admin_editable_team_fields: ["tpm_limit"] },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith("Team admin editable fields updated successfully");
+  });
 });
