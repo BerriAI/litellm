@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   benchmarks:
+    if: ${{ !inputs.calibrate_boundary }}
     permissions:
       contents: read
       id-token: write
@@ -141,6 +142,7 @@ jobs:
           --confcutdir=tests/benchmarks/python_boundary
           tests/benchmarks/python_boundary/test_budgets.py
       - name: Measure boundary with CodSpeed
+        if: matrix.mode == 'simulation' || !inputs.calibrate_boundary
         uses: CodSpeedHQ/action@1c8ae4843586d3ba879736b7f6b7b0c990757fab # v4.12.1
         env:
           BOUNDARY_SELECTION: ${{ matrix.selection }}

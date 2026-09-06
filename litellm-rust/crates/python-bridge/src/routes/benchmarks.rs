@@ -61,7 +61,7 @@ impl TypedResponse {
 
 #[pyfunction]
 fn decode(#[pyo3(from_py_with = from_py)] value: Value) -> bool {
-    !value.is_null()
+    !std::hint::black_box(value).is_null()
 }
 
 #[pyfunction]
