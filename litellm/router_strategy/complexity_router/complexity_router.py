@@ -2835,8 +2835,9 @@ class ComplexityRouter(CustomLogger):
         where the prompt never arrives as messages.
 
         Probed on a COPY of request_kwargs because the owner pops routing bookkeeping off the
-        dict it is handed (`_target_order`, `_excluded_deployment_ids`), and this is a
-        speculative question about a model that may never be picked.
+        dict it is handed (`_target_order`, `_excluded_deployment_ids`,
+        `_retry_skipped_deployment_ids`), and this is a speculative question about a model
+        that may never be picked.
 
         Every way the owner says "nothing here can serve this" is a negative verdict: no healthy
         deployment for the group at all (BadRequestError, which ContextWindowExceededError

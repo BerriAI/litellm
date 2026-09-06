@@ -4889,7 +4889,7 @@ def _get_deployment_order(deployment: dict | Any) -> int | None:
     return order
 
 
-def _get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
+def get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
     if target_order is not None:
         return [d for d in healthy_deployments if _get_deployment_order(d) == target_order]
 
@@ -4908,7 +4908,7 @@ def _get_order_filtered_deployments(healthy_deployments: list[dict], target_orde
     return healthy_deployments
 
 
-def _get_excluded_filtered_deployments(
+def get_excluded_filtered_deployments(
     healthy_deployments: list[dict],
     excluded_deployment_ids: Iterable[str] | None = None,
 ) -> list:
@@ -4919,10 +4919,12 @@ def _get_excluded_filtered_deployments(
     across the remaining deployments in the same model group after one of them
     has failed.
 
-    If the filter would leave no deployments, an empty list is returned so the
-    caller raises its usual no-deployments error and the weighted-failover
-    helper falls through to the cross-group fallback path. Returning the
-    original unfiltered list here would re-include the just-failed deployment.
+    If the filter would leave no deployments, an empty list is returned and the
+    caller decides what that means. Weighted failover lets it raise the usual
+    no-deployments error and fall through to the cross-group fallback path; the
+    retry skip in `async_get_healthy_deployments` deliberately falls back to the
+    unfiltered list, so a request every deployment refused still comes back with
+    the provider's own error rather than a no-deployments one.
     """
     if not excluded_deployment_ids:
         return healthy_deployments
