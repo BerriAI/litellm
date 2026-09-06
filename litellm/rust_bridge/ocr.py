@@ -12,13 +12,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.azure_ai.ocr.common_utils import is_azure_document_intelligence_model
 from litellm.llms.base_llm.ocr.transformation import OCR_REQUEST_FORMAT_PARAM, BaseOCRConfig, OCRResponse
 from litellm.rust_bridge import configuration as _configuration
-from litellm.rust_bridge.bindings import UNCHANGED, NativeBinding, Unchanged
+from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.protocols import RustAocr, RustOcr
 from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt
 from litellm.rust_bridge.timeouts import timeout_to_seconds
-
-rust: Final = _configuration.rust
-rust_ocr_enabled: Final = _configuration.rust_ocr_enabled
 
 _OCR: Final[NativeBinding[RustOcr]] = NativeBinding(lambda native: native.ocr)
 _AOCR: Final[NativeBinding[RustAocr]] = NativeBinding(lambda native: native.aocr)
@@ -55,23 +52,6 @@ _RUST_OCR_PROVIDERS: Final = frozenset(
         "vertex_ai",
     }
 )
-
-
-def set_rust_ocr(
-    *,
-    ocr: RustOcr | None | Unchanged = UNCHANGED,
-    aocr: RustAocr | None | Unchanged = UNCHANGED,
-) -> None:
-    if not isinstance(ocr, Unchanged):
-        if ocr is None:
-            _OCR.reset()
-        else:
-            _OCR.override(ocr)
-    if not isinstance(aocr, Unchanged):
-        if aocr is None:
-            _AOCR.reset()
-        else:
-            _AOCR.override(aocr)
 
 
 def load_rust_ocr() -> RustOcr | None:
@@ -185,7 +165,7 @@ def attempt_ocr(
 ) -> DispatchResult[OCRResponse]:
     return attempt(
         load=_OCR.load,
-        enabled=rust_ocr_enabled(),
+        enabled=_configuration.rust_enabled(),
         prepare=lambda: _prepare_rust_ocr_call(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
@@ -211,7 +191,7 @@ async def aattempt_ocr(
 ) -> DispatchResult[OCRResponse]:
     return await aattempt(
         load=_AOCR.load,
-        enabled=rust_ocr_enabled(),
+        enabled=_configuration.rust_enabled(),
         prepare=lambda: _prepare_rust_ocr_call(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
