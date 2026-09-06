@@ -17,7 +17,7 @@ USER_TABLE = DAILY_SPEND_TABLES["user"]
 
 # Every nullable member of the unique constraint, so a test that only varied the provider
 # cannot pass while a sibling column still leaks a NULL into the conflict target.
-NULLABLE_KEY_COLUMNS = ("model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")
+NULLABLE_KEY_COLUMNS = ("model", "model_group", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")
 
 
 def tag_txn(**overrides):
@@ -78,6 +78,15 @@ def test_distinct_keys_are_not_merged_and_are_ordered_deterministically():
     assert merged == merge_by_conflict_key(TAG_TABLE, tuple(reversed(unordered)))
 
 
+def test_distinct_model_groups_are_not_merged():
+    merged = merge_by_conflict_key(
+        TAG_TABLE,
+        (tag_txn(model_group="public-a"), tag_txn(model_group="public-b")),
+    )
+
+    assert len(merged) == 2
+
+
 def test_one_statement_carries_every_row_in_the_batch():
     batch = merge_by_conflict_key(TAG_TABLE, tuple(tag_txn(tag=f"team-{i}") for i in range(100)))
 
@@ -98,7 +107,8 @@ def test_conflict_target_is_the_full_unique_constraint():
     conflict_target = re.search(r"ON CONFLICT \(([^)]*)\)", sql)
     assert conflict_target is not None
     assert conflict_target.group(1) == (
-        '"tag", "date", "api_key", "model", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint"'
+        '"tag", "date", "api_key", "model", "model_group", "custom_llm_provider", '
+        '"mcp_namespaced_tool_name", "endpoint"'
     )
 
 
