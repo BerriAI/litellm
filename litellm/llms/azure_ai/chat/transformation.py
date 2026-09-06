@@ -46,7 +46,19 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
 class AzureAIGPT5Config(OpenAIGPT5Config):
     @classmethod
     def _model_map_lookup_name(cls, model: str) -> str:
-        return model if model.startswith("azure_ai/") else f"azure_ai/{model}"
+        """Normalise a Foundry routing name to its cost-map key, when the map has one.
+
+        A Foundry deployment and its OpenAI-hosted namesake are different products with
+        different capabilities, so ``azure_ai/<model>`` is the entry to read whenever the map
+        carries it. Most gpt-5-family names have no ``azure_ai/`` row, though, and prefixing
+        those anyway costs them every flag: ``get_llm_provider`` re-resolves an ``azure_ai/``
+        name to the azure provider when a global AZURE_AI_API_BASE points at an
+        openai.azure.com host, ``azure/<model>`` is not a key either, so the lookup lands
+        nowhere and every effort answer degrades to False. A missing key defers to the base
+        resolver instead.
+        """
+        prefixed: Final = model if model.startswith("azure_ai/") else f"azure_ai/{model}"
+        return prefixed if prefixed in litellm.model_cost else super()._model_map_lookup_name(model)
 
 
 azureAIGPT5Config: Final = AzureAIGPT5Config()
