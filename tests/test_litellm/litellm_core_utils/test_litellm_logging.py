@@ -1,7 +1,9 @@
+import asyncio
 import contextlib
+import datetime
 import os
 import sys
-import asyncio
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -6418,9 +6420,11 @@ def test_get_standard_logging_object_payload_survives_logging_obj_without_timing
         ("X-MS-Request-ID", "headers"),
     ),
 )
-def test_failure_standard_logging_payload_captures_provider_request_id(logging_obj, header_name, header_source):
-    import datetime
-
+def test_failure_standard_logging_payload_captures_provider_request_id(
+    logging_obj: LitellmLogging,
+    header_name: str,
+    header_source: Literal["response", "litellm_response_headers", "headers"],
+):
     from litellm.litellm_core_utils.litellm_logging import (
         get_standard_logging_object_payload,
     )
@@ -6452,9 +6456,7 @@ def test_failure_standard_logging_payload_captures_provider_request_id(logging_o
     assert payload["error_information"]["error_provider_request_id"] == request_id
 
 
-def test_get_error_information_ignores_unsupported_headers():
-    import httpx
-
+def test_get_error_information_ignores_unsupported_headers() -> None:
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     request = httpx.Request("POST", "https://provider.example/v1/chat/completions")
@@ -6466,9 +6468,7 @@ def test_get_error_information_ignores_unsupported_headers():
     assert error_information["error_provider_request_id"] is None
 
 
-def test_get_error_information_uses_header_precedence_and_fallback():
-    import httpx
-
+def test_get_error_information_uses_header_precedence_and_fallback() -> None:
     from litellm.exceptions import RateLimitError
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -6491,7 +6491,7 @@ def test_get_error_information_uses_header_precedence_and_fallback():
     assert error_information["error_provider_request_id"] == "amazon-id"
 
 
-def test_get_error_information_ignores_malformed_headers():
+def test_get_error_information_ignores_malformed_headers() -> None:
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     provider_error = Exception("provider error")
