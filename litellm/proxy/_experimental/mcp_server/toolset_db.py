@@ -132,9 +132,14 @@ async def update_mcp_toolset(
     data: UpdateMCPToolsetRequest,
     touched_by: str,
 ) -> MCPToolset | None:
-    data_dict: Final = data.model_dump(exclude_none=True, exclude={"toolset_id"})
+    """A partial update: a field the caller left out keeps its stored value and a
+    field sent as null is cleared, where a null ``tools`` is an empty list and a null
+    ``toolset_name`` is ignored because a toolset always has a name."""
+    data_dict: Final = data.model_dump(exclude_unset=True, exclude={"toolset_id"})
     if "tools" in data_dict:
-        data_dict["tools"] = json.dumps(data_dict["tools"])
+        data_dict["tools"] = json.dumps(data_dict["tools"] or ())
+    if data_dict.get("toolset_name", "") is None:
+        _ = data_dict.pop("toolset_name")
     data_dict["updated_by"] = touched_by
     try:
         row: Final = await _toolset_table(prisma_client).update(
