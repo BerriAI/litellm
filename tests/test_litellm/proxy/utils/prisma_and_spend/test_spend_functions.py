@@ -6,7 +6,6 @@ Symbols pinned here:
   - ``update_spend_logs_job``
   - ``_monitor_spend_logs_queue``
   - ``_raise_failed_update_spend_exception``
-  - ``spend_log_is_queued``
 """
 
 from __future__ import annotations
@@ -23,7 +22,6 @@ from litellm.proxy.utils import (
     _monitor_spend_logs_queue,
     _raise_failed_update_spend_exception,
     drain_spend_logs_queue,
-    spend_log_is_queued,
     update_daily_tag_spend,
     update_spend,
     update_spend_logs_job,
@@ -631,16 +629,3 @@ def test_raise_failed_update_spend_exception_raises_original_error() -> None:
 
     with pytest.raises(ValueError, match="specific"):
         asyncio.run(_runner())
-
-
-@pytest.mark.asyncio
-async def test_spend_log_is_queued_matches_only_rows_awaiting_flush(
-    mock_prisma_client: Any, make_spend_log_row: Any
-) -> None:
-    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="batch_abc_batch_cost")]
-
-    assert await spend_log_is_queued(mock_prisma_client, "batch_abc_batch_cost") is True
-    assert await spend_log_is_queued(mock_prisma_client, "batch_abc") is False
-
-    mock_prisma_client.spend_log_transactions = []
-    assert await spend_log_is_queued(mock_prisma_client, "batch_abc_batch_cost") is False

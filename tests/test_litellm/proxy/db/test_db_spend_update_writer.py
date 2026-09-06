@@ -7,6 +7,7 @@ import re
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -2934,16 +2935,14 @@ async def test_commit_spend_updates_retries_deadlock_on_every_entity_path(monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "call_type, expects_flush",
-    [("aresponses", True), ("responses", True), ("aretrieve_batch", True), ("acompletion", False)],
+    [("aresponses", True), ("responses", True), ("acompletion", False)],
 )
 async def test_insert_spend_log_asks_for_an_immediate_flush_on_rows_other_workers_read_back(
     call_type: str, expects_flush: bool
 ):
     """
     A `previous_response_id` chained straight off the previous turn reads the DB, so a
-    Responses row cannot sit in this worker's queue until the monitor's next poll. A
-    batch's cost row is what another worker checks before charging the same batch again
-    (LIT-7048), so it cannot wait either.
+    Responses row cannot sit in this worker's queue until the monitor's next poll.
     """
     from litellm.proxy.utils import PrismaClient
 
@@ -2959,6 +2958,127 @@ async def test_insert_spend_log_asks_for_an_immediate_flush_on_rows_other_worker
     assert prisma.spend_log_transactions == [{"request_id": "req-1", "call_type": call_type}]
     assert PrismaClient.spend_log_flush_requested.is_set() is expects_flush
     PrismaClient.spend_log_flush_requested.clear()
+
+
+def _batch_cost_payload() -> dict:
+    return {
+        **_minimal_spend_payload(),
+        "request_id": "batch_abc_batch_cost",
+        "call_type": "aretrieve_batch",
+        "status": "success",
+    }
+
+
+def _spend_logs_prisma(inserted: int, existing: object) -> MagicMock:
+    prisma = _tool_usage_prisma()
+    prisma.jsonify_object = lambda data: dict(data)
+    prisma.db.litellm_spendlogs.create_many = AsyncMock(return_value=inserted)
+    prisma.db.litellm_spendlogs.find_unique = AsyncMock(return_value=existing)
+    return prisma
+
+
+async def _update_database_with(db_writer: DBSpendUpdateWriter, prisma: MagicMock, payload: dict) -> bool:
+    with (
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.disable_spend_logs", False
+        ),
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
+            "litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"
+        ),
+        patch(  # test-quality-ok: update_database imports the payload builder inside its body, no seam
+            "litellm.proxy.spend_tracking.spend_tracking_utils.get_logging_payload",
+            return_value=payload,
+        ),
+    ):
+        charged = await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"model": "gpt-5.6-luna", "call_type": "aretrieve_batch"},
+            completion_response=None,
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.25,
+        )
+        await asyncio.sleep(0)
+        return charged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("inserted", "existing", "charged"),
+    [
+        (1, None, True),
+        (0, SimpleNamespace(call_type="aretrieve_batch", status="success"), False),
+        (0, SimpleNamespace(call_type="aretrieve_batch", status="failure"), True),
+        (0, SimpleNamespace(call_type="aembedding", status="success"), True),
+        (0, None, True),
+    ],
+    ids=[
+        "first_retrieve_owns_the_row",
+        "another_retrieve_already_charged",
+        "failed_retrieve_holds_the_row",
+        "client_chosen_call_id_holds_the_row",
+        "row_gone_between_insert_and_lookup",
+    ],
+)
+async def test_update_database_charges_a_batch_only_from_the_retrieve_that_wrote_its_row(
+    inserted: int, existing: object, charged: bool
+):
+    """
+    Every retrieve of one batch shares one spend row, so the insert that lands first is
+    the charge and every later retrieve must leave the counters alone (LIT-7048). A row
+    written by anything but a successful retrieve, say a request whose client picked the
+    batch id as its call id, must not be able to take the charge away.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_prisma(inserted, existing)
+
+    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is charged
+
+    claimed_rows = prisma.db.litellm_spendlogs.create_many.await_args.kwargs
+    assert claimed_rows["skip_duplicates"] is True
+    assert [(row["request_id"], row["spend"]) for row in claimed_rows["data"]] == [("batch_abc_batch_cost", 0.25)]
+    assert prisma.spend_log_transactions == []
+    assert db_writer._batch_database_updates.await_count == (1 if charged else 0)
+
+
+@pytest.mark.asyncio
+async def test_update_database_queues_a_batch_cost_row_it_could_not_claim():
+    """An unreachable DB must not drop the batch's only spend row, nor its charge."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_prisma(0, None)
+    prisma.db.litellm_spendlogs.create_many = AsyncMock(side_effect=RuntimeError("db unreachable"))
+
+    assert await _update_database_with(db_writer, prisma, _batch_cost_payload()) is True
+
+    assert [row["request_id"] for row in prisma.spend_log_transactions] == ["batch_abc_batch_cost"]
+    assert db_writer._batch_database_updates.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [{**_batch_cost_payload(), "call_type": "acompletion"}, {**_batch_cost_payload(), "status": "failure"}],
+    ids=["not_a_batch_retrieve", "failed_batch_retrieve"],
+)
+async def test_update_database_queues_every_other_spend_row_for_the_next_flush(payload: dict):
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_prisma(1, None)
+
+    assert await _update_database_with(db_writer, prisma, payload) is True
+
+    prisma.db.litellm_spendlogs.create_many.assert_not_called()
+    assert prisma.spend_log_transactions == [payload]
+    assert db_writer._batch_database_updates.await_count == 1
 
 
 @pytest.mark.asyncio

@@ -1735,10 +1735,10 @@ def _retrieved_batch(
         endpoint="/v1/chat/completions",
         input_file_id="file-in",
         object="batch",
-        status=status,
+        status="validating",
         output_file_id=output_file_id,
         request_counts=counts,
-    )
+    ).model_copy(update={"status": status})
 
 
 class TestBatchCostIsFinal:
@@ -1750,8 +1750,9 @@ class TestBatchCostIsFinal:
     def test_in_flight_batch_is_not_final(self, status):
         assert bu.batch_cost_is_final(_retrieved_batch(status)) is False
 
-    def test_completed_with_output_is_final(self):
-        assert bu.batch_cost_is_final(_retrieved_batch("completed", output_file_id="file-out")) is True
+    @pytest.mark.parametrize("status", ["completed", "complete"])
+    def test_completed_with_output_is_final(self, status):
+        assert bu.batch_cost_is_final(_retrieved_batch(status, output_file_id="file-out")) is True
 
     def test_completed_without_output_and_unknown_counts_is_not_final(self):
         assert bu.batch_cost_is_final(_retrieved_batch("completed")) is False
@@ -1764,9 +1765,10 @@ class TestBatchCostIsFinal:
         counts = BatchRequestCounts(total=2, completed=2, failed=0)
         assert bu.batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is False
 
-    def test_completed_without_output_and_every_line_failed_is_final(self):
+    @pytest.mark.parametrize("status", ["completed", "complete"])
+    def test_completed_without_output_and_every_line_failed_is_final(self, status):
         counts = BatchRequestCounts(total=2, completed=0, failed=2)
-        assert bu.batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is True
+        assert bu.batch_cost_is_final(_retrieved_batch(status, counts=counts)) is True
 
     @pytest.mark.parametrize("status", ["failed", "expired", "cancelled"])
     def test_other_terminal_statuses_are_final(self, status):

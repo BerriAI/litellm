@@ -34,7 +34,6 @@ from litellm.proxy.spend_tracking.spend_log_error_logger import (
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _sanitize_error_information_for_spend_logs,
     get_request_model_access_groups,
-    get_spend_logs_id,
 )
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
@@ -46,9 +45,7 @@ from litellm.types.utils import (
 from litellm.utils import get_end_user_id_for_cost_tracking
 
 if TYPE_CHECKING:
-    from prisma.types import LiteLLM_SpendLogsWhereUniqueInput
-
-    from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.proxy.utils import ProxyLogging
 
 _UNATTRIBUTED_TRACKABLE_CALL_TYPES: Final[frozenset[str]] = frozenset(
     {
@@ -229,7 +226,6 @@ class _ProxyDBLogger(CustomLogger):
     ):
         from litellm.proxy.proxy_server import (
             increment_spend_counters,
-            prisma_client,
             proxy_logging_obj,
             update_cache,
         )
@@ -257,15 +253,15 @@ class _ProxyDBLogger(CustomLogger):
             if (
                 isinstance(completion_response, LiteLLMBatch)
                 and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
+                and not batch_cost_is_final(completion_response)
             ):
-                batch_spend_log_id: Final = get_spend_logs_id(
-                    CallTypes.aretrieve_batch.value, completion_response.model_dump(), kwargs
+                verbose_proxy_logger.debug(
+                    "Cost tracking deferred for batch %s still in status %s",
+                    completion_response.id,
+                    completion_response.status,
                 )
-                if not await _batch_cost_is_trackable_now(
-                    batch=completion_response, spend_log_id=batch_spend_log_id, prisma_client=prisma_client
-                ):
-                    await _release_budget_reservation(budget_reservation=budget_reservation)
-                    return
+                await _release_budget_reservation(budget_reservation=budget_reservation)
+                return
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
             team_id: Final = cast(str | None, metadata.get("user_api_key_team_id", None))
             org_id: Final = cast(str | None, metadata.get("user_api_key_org_id", None))
@@ -307,7 +303,7 @@ class _ProxyDBLogger(CustomLogger):
                     call_type=call_type,
                 ):
                     ## UPDATE DATABASE
-                    await _update_database_and_spend_counters(
+                    charged: Final = await _update_database_and_spend_counters(
                         proxy_logging_obj=proxy_logging_obj,
                         increment_spend_counters=increment_spend_counters,
                         user_api_key=user_api_key,
@@ -324,6 +320,8 @@ class _ProxyDBLogger(CustomLogger):
                         request_tags=tags,
                         model_access_groups=model_access_groups,
                     )
+                    if not charged:
+                        return
 
                     # update cache (fire-and-forget for backward compat:
                     # cached object fields, soft budget alerts, etc.)
@@ -509,42 +507,6 @@ def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
                     bucket[key] = value
 
 
-async def _batch_cost_is_trackable_now(
-    batch: LiteLLMBatch, spend_log_id: str | None, prisma_client: "PrismaClient | None"
-) -> bool:
-    """A batch is billed exactly once, from the first retrieve that sees it final.
-
-    Every retrieve of one batch shares a single spend row (its id plus the batch cost
-    suffix), so a poll that lands before the output exists would write that row at $0
-    and pin it there, and every retrieve after the first would add the cost to the
-    key, team, and user counters again.
-    """
-    if not batch_cost_is_final(batch):
-        verbose_proxy_logger.debug("Cost tracking deferred for batch %s still in status %s", batch.id, batch.status)
-        return False
-    if prisma_client is None or spend_log_id is None:
-        return True
-    if not await _spend_log_already_recorded(prisma_client=prisma_client, request_id=spend_log_id):
-        return True
-    verbose_proxy_logger.debug(
-        "Cost tracking skipped for batch %s: spend row %s already recorded", batch.id, spend_log_id
-    )
-    return False
-
-
-async def _spend_log_already_recorded(prisma_client: "PrismaClient", request_id: str) -> bool:
-    from litellm.proxy.utils import spend_log_is_queued
-
-    if await spend_log_is_queued(prisma_client, request_id):
-        return True
-    spend_log_row: Final[LiteLLM_SpendLogsWhereUniqueInput] = {"request_id": request_id}
-    try:
-        return await prisma_client.db.litellm_spendlogs.find_unique(where=spend_log_row) is not None
-    except Exception as e:  # noqa: BLE001  # prisma raises its own hierarchy; an unreadable DB must not drop the batch's only spend row
-        verbose_proxy_logger.warning("Could not check for an existing spend row %s, tracking anyway: %s", request_id, e)
-        return False
-
-
 def _is_unbilled_interaction_response(completion_response: object) -> bool:
     from litellm.interactions.background_cost_polling import missing_usage_is_expected
     from litellm.types.interactions import InteractionsAPIResponse
@@ -636,9 +598,9 @@ async def _update_database_and_spend_counters(
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
-) -> None:
+) -> bool:
     try:
-        await proxy_logging_obj.db_spend_update_writer.update_database(
+        charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
             response_cost=response_cost,
             user_id=user_id,
@@ -663,6 +625,9 @@ async def _update_database_and_spend_counters(
                         "Failed to invalidate budget reservation counters after release failed"
                     )
         raise
+    if not charged:
+        await _release_budget_reservation(budget_reservation=budget_reservation)
+        return False
 
     try:
         await increment_spend_counters(
@@ -688,6 +653,7 @@ async def _update_database_and_spend_counters(
             finally:
                 budget_reservation["finalized"] = True
         raise
+    return True
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:
