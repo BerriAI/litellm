@@ -40,17 +40,16 @@ class SharedRedisCounters:
     async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:
         self.set_cache(key, value)
 
-    def increment_cache(self, key: str, value: int, ttl: float | None = None, refresh_ttl: bool = False) -> int:
+    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
         current: Final = self.count(key) or 0
         assert isinstance(current, int)
-        incremented: Final = current + value
+        incremented: Final = max(0, current + value)
         self.encoded[key] = json.dumps(incremented)
-        if ttl is not None and (refresh_ttl or key not in self.ttls):
-            self.ttls[key] = ttl
+        self.ttls[key] = ttl
         return incremented
 
-    async def async_increment(self, key: str, value: float, ttl: int | None = None, refresh_ttl: bool = False) -> float:
-        return self.increment_cache(key, int(value), ttl, refresh_ttl)
+    async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
+        return self.increment_with_floor(key, value, ttl)
 
     def batch_get_cache(self, key_list: list[str], **kwargs: object) -> dict[str, object]:
         return {key: self.count(key) for key in key_list}
@@ -102,12 +101,14 @@ def test_sync_pick_reads_the_shared_counts() -> None:
 def test_redis_counts_keep_a_refreshed_ttl() -> None:
     shared: Final = SharedRedisCounters()
     worker: Final = _worker(shared)
+    key: Final = f"{GROUP}_request_count:dep-a"
+    shared.ttls[key] = 5
 
     worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
     worker.log_success_event(_call_kwargs("dep-a"), None, None, None)
 
-    assert shared.count(f"{GROUP}_request_count:dep-a") == 0
-    assert shared.ttls == {f"{GROUP}_request_count:dep-a": IN_FLIGHT_COUNT_TTL_SECONDS}
+    assert shared.count(key) == 0
+    assert shared.ttls == {key: IN_FLIGHT_COUNT_TTL_SECONDS}
 
 
 @pytest.mark.asyncio
@@ -129,7 +130,7 @@ class UnavailableRedis(SharedRedisCounters):
     def batch_get_cache(self, key_list: list[str], **kwargs: object) -> dict[str, object]:
         raise ConnectionError("redis is down")
 
-    def increment_cache(self, key: str, value: int, ttl: float | None = None, refresh_ttl: bool = False) -> int:
+    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
         raise ConnectionError("redis is down")
 
 
@@ -159,6 +160,7 @@ def test_a_shared_counter_that_expired_mid_request_cannot_go_negative() -> None:
 
     worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
 
+    assert shared.count(f"{GROUP}_request_count:dep-a") == 1
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 

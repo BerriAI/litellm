@@ -188,9 +188,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 self.router_cache.set_cache(key, 0, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
             if redis_cache is None:
                 return
-            shared: Final = redis_cache.increment_cache(key, delta, ttl=IN_FLIGHT_COUNT_TTL_SECONDS, refresh_ttl=True)
-            if shared < 0:
-                redis_cache.set_cache(key, 0, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
+            redis_cache.increment_with_floor(key, delta, IN_FLIGHT_COUNT_TTL_SECONDS)
         except Exception as e:
             _warn_unwritable(key, e)
 
@@ -208,10 +206,6 @@ class LeastBusyLoggingHandler(CustomLogger):
                 await self.router_cache.async_set_cache(key, 0, local_only=True, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
             if redis_cache is None:
                 return
-            shared: Final = await redis_cache.async_increment(
-                key, delta, ttl=IN_FLIGHT_COUNT_TTL_SECONDS, refresh_ttl=True
-            )
-            if shared < 0:
-                await redis_cache.async_set_cache(key, 0, ttl=IN_FLIGHT_COUNT_TTL_SECONDS)
+            await redis_cache.async_increment_with_floor(key, delta, IN_FLIGHT_COUNT_TTL_SECONDS)
         except Exception as e:
             _warn_unwritable(key, e)

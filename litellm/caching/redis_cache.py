@@ -20,6 +20,8 @@ from contextvars import ContextVar
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
@@ -80,10 +82,21 @@ class _AsyncRedisCommands(Protocol):
 
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
+    def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
+
 
 _BREAKER_GUARD_FRAME_NAMES: Final = frozenset(
     {"<lambda>", "wrapper", "_run_under_circuit_breaker", "_run_under_circuit_breaker_sync"}
 )
+
+_INCREMENT_WITH_FLOOR_LUA: Final = (
+    "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
+    "if count < 0 then redis.call('SET', KEYS[1], 0) count = 0 end "
+    "redis.call('EXPIRE', KEYS[1], ARGV[2]) "
+    "return count"
+)
+
+_LUA_COUNT: Final = TypeAdapter(int)
 
 
 def _get_call_stack_info(num_frames: int = 2) -> str:
@@ -680,7 +693,7 @@ class RedisCache(BaseCache):
             # NON blocking - notify users Redis is throwing an exception
             print_verbose(f"litellm.caching.caching: set() - Got exception from REDIS : {e}")
 
-    def increment_cache(self, key, value: int, ttl: float | None = None, refresh_ttl: bool = False, **kwargs) -> int:
+    def increment_cache(self, key, value: int, ttl: float | None = None, **kwargs) -> int:
         _redis_client: Final = self.redis_client
         start_time = time.time()
         set_ttl: Final = self.get_ttl(ttl=ttl)
@@ -701,7 +714,7 @@ class RedisCache(BaseCache):
             if set_ttl is not None:
                 # check if key already has ttl, if not -> set ttl
                 start_time = time.time()
-                current_ttl: Final = -1 if refresh_ttl else _redis_client.ttl(key)
+                current_ttl: Final = _redis_client.ttl(key)
                 end_time = time.time()
                 _duration = end_time - start_time
                 self.service_logger_obj.service_success_hook(
@@ -735,6 +748,20 @@ class RedisCache(BaseCache):
                 value,
             )
             raise e
+
+    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
+        """Add ``value`` to ``key``, clamp the result at zero, and refresh the TTL, in one Lua call.
+
+        A counter whose key expired while a request was still in flight would otherwise be
+        recreated negative by that request's decrement. Clamping inside the same call is what
+        keeps it safe: a separate corrective write could land after another pod's increment and
+        erase it. Returns the resulting count.
+        """
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        count: Final[object] = self.redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue]  # stubs omit eval
+            _INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl
+        )
+        return _LUA_COUNT.validate_python(count)
 
     @_redis_circuit_breaker_guard
     async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
@@ -1240,6 +1267,14 @@ class RedisCache(BaseCache):
         if isinstance(result, bytes):
             result = result.decode()
         return float(result)
+
+    @_redis_circuit_breaker_guard
+    async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
+        """Async twin of ``increment_with_floor``, sharing its Lua script and its guarantees."""
+        _redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        count: Final = await _redis_client.eval(_INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl)
+        return _LUA_COUNT.validate_python(count)
 
     async def flush_cache_buffer(self):
         print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")
