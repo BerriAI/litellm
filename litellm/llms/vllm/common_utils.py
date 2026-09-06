@@ -63,8 +63,13 @@ class VLLMModelInfo(BaseLLMModelInfo):
         endpoint: Final = "/v1/models"
 
         url: Final = _add_path_to_api_base(api_base, endpoint)
-        response: Final = litellm.module_level_client.get(
-            url=url,
+        response: Final = (
+            litellm.module_level_client.get(
+                url=url,
+                headers={"x-api-key": api_key},  # mutable-ok: optional authentication header
+            )
+            if api_key is not None
+            else litellm.module_level_client.get(url=url)
         )
 
         response.raise_for_status()
