@@ -4819,6 +4819,24 @@ async def _get_org_admin_org_ids(
     return org_ids if org_ids else None
 
 
+def _org_admin_membership_union_conditions(
+    org_admin_org_ids: list[str],  # mutable-ok: passed straight into a Prisma `in` filter
+    user_team_ids: list[str],  # mutable-ok: passed straight into a Prisma `in` filter
+) -> list[dict[str, object]]:  # mutable-ok: Prisma OR clauses are lists of dict-shaped filters
+    """(teams in the admin's orgs) OR (teams the caller is a member of).
+
+    Built for a self/bare org-admin query so teams in orgs where the caller is
+    only a member stay visible (LIT-3723). An org admin with no memberships
+    still matches their org teams, so this never collapses to an empty result.
+    """
+    union_or: Final[list[dict[str, object]]] = [  # mutable-ok: Prisma query filters are dict-shaped
+        {"organization_id": {"in": org_admin_org_ids}}  # mutable-ok: Prisma query filters are dict-shaped
+    ]
+    if user_team_ids:
+        union_or.append({"team_id": {"in": user_team_ids}})  # mutable-ok: Prisma query filters are dict-shaped
+    return union_or
+
+
 async def _build_team_list_where_conditions(
     prisma_client: PrismaClient,
     team_id: str | None,
@@ -4829,6 +4847,7 @@ async def _build_team_list_where_conditions(
     search: str | None = None,
     search_team_id_match: TeamIdSearchMatch = "exact",
     org_admin_org_ids: list[str] | None = None,
+    union_org_admin_membership: bool = False,
     user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> dict[str, object] | None:
@@ -4855,10 +4874,23 @@ async def _build_team_list_where_conditions(
             {"team_alias": {"contains": search, "mode": "insensitive"}},
         ]
 
+    # Self/bare org-admin query: union org teams with the caller's own
+    # memberships (LIT-3723) instead of intersecting. Gated off when an
+    # explicit org filter is supplied (it takes precedence) or for the
+    # deleted-table path (keeps current behavior).
+    union_org_ids: Final = (
+        org_admin_org_ids
+        if union_org_admin_membership
+        and org_admin_org_ids is not None
+        and not organization_id
+        and not use_deleted_table
+        else None
+    )
+
     if organization_id:
         where_conditions["organization_id"] = organization_id
-    elif org_admin_org_ids is not None:
-        # Org admin: always scope to their orgs, even when filtering by user_id.
+    elif org_admin_org_ids is not None and union_org_ids is None:
+        # Org admin cross-user query: scope strictly to their orgs.
         where_conditions["organization_id"] = {"in": org_admin_org_ids}
 
     if user_id:
@@ -4884,6 +4916,20 @@ async def _build_team_list_where_conditions(
 
         if use_deleted_table:
             where_conditions["members"] = {"has": user_id}
+        elif union_org_ids is not None:
+            # Self/bare org admin: (teams in my orgs) OR (teams I'm a member
+            # of), so teams in orgs where I'm only a member stay visible
+            # (LIT-3723). An org admin with no memberships must still see org
+            # teams, so do NOT early-return None here.
+            union_or: Final = _org_admin_membership_union_conditions(union_org_ids, user_team_ids)
+            search_or: Final = where_conditions.pop("OR", None)  # set above from `search`
+            if search_or is not None:
+                where_conditions["AND"] = [  # mutable-ok: Prisma query filters are dict-shaped
+                    {"OR": search_or},  # mutable-ok: Prisma query filters are dict-shaped
+                    {"OR": union_or},  # mutable-ok: Prisma query filters are dict-shaped
+                ]
+            else:
+                where_conditions["OR"] = union_or
         else:
             # When user_id is provided, filter by that user's direct team
             # memberships. For org admins the access control gate in
@@ -4988,20 +5034,24 @@ async def _enforce_list_team_v2_access(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
-) -> tuple[str | None, list[str] | None]:
+) -> tuple[str | None, list[str] | None, bool]:  # mutable-ok: org-id list flows into a Prisma `in` filter
     """Enforce access control for list_team_v2.
 
     - Proxy admins and admin viewers can query any teams.
     - Org admins can query teams within their organizations.
     - Regular users can only query their own teams.
 
-    Returns the (possibly overridden) user_id and org_admin_org_ids.
+    Returns the (possibly overridden) user_id, org_admin_org_ids, and
+    union_org_admin_membership — a flag set for a self/bare org-admin query
+    that tells the where-builder to union org teams with the caller's own
+    memberships instead of intersecting them.
     """
     is_proxy_admin: Final = _user_has_admin_view(user_api_key_dict)
     org_admin_org_ids: list[str] | None = None
+    union_org_admin_membership = False  # rebind-ok: set when the caller is a self/bare org-admin query
 
     if is_proxy_admin:
-        return user_id, org_admin_org_ids
+        return user_id, org_admin_org_ids, union_org_admin_membership
 
     # Always check org admin status so that even own-queries see
     # the full set of organisation teams, not just direct memberships.
@@ -5020,14 +5070,17 @@ async def _enforce_list_team_v2_access(
                 status_code=403,
                 detail={"error": "You can only view teams within your organizations."},
             )
-        # When the caller is an org admin querying their own teams (or no
-        # specific user), null out user_id so that
-        # _build_team_list_where_conditions scopes only by organization_id
-        # — org admins should see all teams in their orgs, not just teams
-        # they are a direct member of.  Keep user_id when the org admin
-        # explicitly queries a *different* user's teams.
+        # Self/bare org-admin query: union the admin's org teams with the
+        # caller's own memberships, so teams in orgs where they are only a
+        # member (not org admin) stay visible (LIT-3723). Keep user_id =
+        # caller for the membership lookup instead of nulling it; the
+        # where-builder unions on the flag. Keep user_id (and leave the flag
+        # False) when the org admin explicitly queries a *different* user's
+        # teams — that path stays org-scoped (intersection), the #25904
+        # cross-user boundary.
         if user_id is None or user_id == user_api_key_dict.user_id:
-            user_id = None
+            user_id = user_api_key_dict.user_id
+            union_org_admin_membership = True
         verbose_proxy_logger.debug(
             "list_team_v2: org admin access for user=%s, org_ids=%s, user_id_filter=%s",
             user_api_key_dict.user_id,
@@ -5047,7 +5100,7 @@ async def _enforce_list_team_v2_access(
         if user_id is None:
             user_id = user_api_key_dict.user_id
 
-    return user_id, org_admin_org_ids
+    return user_id, org_admin_org_ids, union_org_admin_membership
 
 
 @router.get(
@@ -5125,7 +5178,7 @@ async def list_team_v2(
         )
 
     # --- Access control ---
-    user_id, org_admin_org_ids = await _enforce_list_team_v2_access(
+    user_id, org_admin_org_ids, union_org_admin_membership = await _enforce_list_team_v2_access(
         user_api_key_dict=user_api_key_dict,
         user_id=user_id,
         organization_id=organization_id,
@@ -5157,6 +5210,7 @@ async def list_team_v2(
         search=search,
         search_team_id_match=search_team_id_match,
         org_admin_org_ids=org_admin_org_ids,
+        union_org_admin_membership=union_org_admin_membership,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
     )
@@ -5257,13 +5311,14 @@ async def _authorize_and_filter_teams(
     - Others: 401.
     """
     is_proxy_admin: Final = _user_has_admin_view(user_api_key_dict)
+    # Bound unconditionally: the org-admin branch below reads it outside the
+    # `not is_proxy_admin` guard.
+    is_own_query: Final = (
+        user_id is not None and user_api_key_dict.user_id is not None and user_api_key_dict.user_id == user_id
+    )
     allowed_org_ids: list[str] | None = None
 
     if not is_proxy_admin:
-        is_own_query: Final = (
-            user_id is not None and user_api_key_dict.user_id is not None and user_api_key_dict.user_id == user_id
-        )
-
         # Check if user is an org admin (even for own queries, so they see org teams)
         if user_api_key_dict.user_id is not None:
             caller_user: Final = await get_user_object(
@@ -5290,22 +5345,28 @@ async def _authorize_and_filter_teams(
                 },
             )
 
-    if allowed_org_ids is not None:
-        # Org admin: query DB for teams in their orgs
+    # An org admin's *own* query falls through to the membership path below:
+    # org-admin status must not clamp a user's own team list to their admin
+    # orgs, or teams in orgs where they are only a member disappear (LIT-3723).
+    is_org_admin_self_query: Final = allowed_org_ids is not None and bool(user_id) and is_own_query
+
+    if allowed_org_ids is not None and not is_org_admin_self_query:
+        # Org admin bare or cross-user query: query DB for teams in their orgs
         org_teams: Final = await _raw_team_db(TeamRepository(prisma_client)).find_many(
             where={"organization_id": {"in": allowed_org_ids}},
             include={"litellm_model_table": True},
         )
         if not user_id:
             return list(org_teams)
-        # Filter org teams to only those where the target user is a member
+        # Cross-user query: keep the org boundary (intersection) — #25904.
         return [
             team
             for team in org_teams
             if team.members_with_roles and any(m.get("user_id") == user_id for m in team.members_with_roles)
         ]
     elif user_id:
-        # Regular user: fetch all and filter by membership (Prisma can't filter JSON arrays)
+        # Regular user (or org admin querying themselves): fetch all and filter
+        # by membership (Prisma can't filter JSON arrays)
         response: Final = await _raw_team_db(TeamRepository(prisma_client)).find_many(
             include={"litellm_model_table": True}
         )
