@@ -1716,6 +1716,11 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        logging_obj.post_call(
+            original_response=response.text,
+            input="OCR document processing",
+            api_key=api_key,
+        )
         return self._transform_ocr_response(
             provider_config=provider_config,
             model=model,
@@ -1779,7 +1784,11 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        # Use async response transform for async operations
+        logging_obj.post_call(
+            original_response=response.text,
+            input="OCR document processing",
+            api_key=api_key,
+        )
         return await provider_config.async_transform_ocr_response(
             model=model,
             raw_response=response,
