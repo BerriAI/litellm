@@ -1975,10 +1975,7 @@ async def _user_api_key_auth_builder(
                 if (
                     user_obj is not None
                     and isinstance(user_obj.metadata, dict)
-                    and (
-                        user_obj.metadata.get("blocked") is True
-                        or user_obj.metadata.get("scim_active") is False
-                    )
+                    and (user_obj.metadata.get("blocked") is True or user_obj.metadata.get("scim_active") is False)
                 ):
                     if user_obj.metadata.get("blocked") is True:
                         raise Exception(

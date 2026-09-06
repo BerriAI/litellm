@@ -4428,7 +4428,7 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     aliases_doc_str = """Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)"""
     config_doc_str = """Optional[dict] - [DEPRECATED PARAM] User-specific config."""
     allowed_cache_controls_doc_str = """Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-"""
-    blocked_doc_str = """Optional[bool] - Whether the user is blocked from making requests."""
+    blocked_doc_str = """Optional[bool] - [Not Implemented Yet] Whether the user is blocked."""
     guardrails_doc_str = """Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user"""
     permissions_doc_str = (
         """Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking."""
