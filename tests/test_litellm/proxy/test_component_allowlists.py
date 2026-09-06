@@ -24,7 +24,6 @@ RDS IAM token when ``IAM_TOKEN_DB_AUTH`` is set).
 """
 
 import os
-import sys
 
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
 # reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
@@ -45,10 +44,6 @@ from fastapi.routing import Mount
 from prometheus_client import make_asgi_app
 
 # gateway/ and backend/ live at the repo root, not inside litellm/.
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
-
 from backend.routes.allowlist import (
     BACKEND_EXACT_PATHS,
     BACKEND_MOUNT_PATHS,

@@ -1,11 +1,6 @@
 """Unit tests for litellm.litellm_core_utils.completion_timeout.CompletionTimeout."""
 
-import os
-import sys
-
 import httpx
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.utils import supports_httpx_timeout

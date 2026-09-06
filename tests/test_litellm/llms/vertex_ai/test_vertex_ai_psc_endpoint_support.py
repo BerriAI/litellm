@@ -5,13 +5,7 @@ Tests that LiteLLM properly constructs URLs when using custom api_base
 for PSC endpoints.
 """
 
-import os
-import sys
 
-import pytest
-
-# Add the litellm package to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../../.."))
 
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 

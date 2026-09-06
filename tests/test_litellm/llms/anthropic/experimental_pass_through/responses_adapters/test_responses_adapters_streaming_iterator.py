@@ -4,11 +4,7 @@ Tests for AnthropicResponsesStreamWrapper
 """
 
 import asyncio
-import os
-import sys
 from types import SimpleNamespace
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../../..")))
 
 from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
     AnthropicResponsesStreamWrapper,
