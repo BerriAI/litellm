@@ -160,10 +160,10 @@ def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none
 def test_a_gpt_5_name_without_a_foundry_row_keeps_reading_its_own_entry(
     monkeypatch: pytest.MonkeyPatch, _local_model_cost_map
 ):
-    """gpt-6-astra is the only gpt-5-family name with an azure_ai/ row. Reading an azure_ai/ key for
-    the rest finds nothing, and an openai.azure.com base sends that name down the azure provider,
-    which has no key for it either, so every effort answer would silently fall back to false and
-    take temperature, top_p and logprobs down with it."""
+    """Most gpt-5-family names have no azure_ai/ row. Reading an azure_ai/ key for those finds
+    nothing, and an openai.azure.com base sends the name down the azure provider, which has no key
+    for it either, so every effort answer would silently fall back to false and take temperature,
+    top_p and logprobs down with it."""
     monkeypatch.setenv("AZURE_AI_API_BASE", "https://example-resource.openai.azure.com")
     monkeypatch.setenv("AZURE_AI_API_KEY", "placeholder")
 
