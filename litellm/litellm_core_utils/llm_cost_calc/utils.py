@@ -1645,6 +1645,9 @@ class CostCalculatorUtils:
             return azure_ai_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                size=resolved_size,
+                n=resolved_n,
+                optional_params=optional_params,
             )
         elif custom_llm_provider == litellm.LlmProviders.FAL_AI.value:
             from litellm.llms.fal_ai.cost_calculator import (
