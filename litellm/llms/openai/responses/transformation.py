@@ -149,7 +149,17 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             )
         except Exception:
             return True
-        return info["key"] in _bundled_openai_reasoning_models() or info.get("supports_reasoning") is True
+        declared: Final = info.get("supports_reasoning")
+        if declared is not None:
+            return declared
+        return info["key"] in _bundled_openai_reasoning_models()
+
+    @staticmethod
+    def _requests_reasoning_effort(reasoning: object) -> bool:
+        effort: Final = (
+            reasoning.get("effort") if isinstance(reasoning, Mapping) else getattr(reasoning, "effort", None)
+        )
+        return effort is not None
 
     @staticmethod
     def _enforce_min_max_output_tokens(max_output_tokens: "int | None") -> "int | None":
@@ -202,7 +212,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
         if (
             self.custom_llm_provider == LlmProviders.OPENAI
-            and params.get("reasoning") is not None
+            and self._requests_reasoning_effort(params.get("reasoning"))
             and not self._supports_reasoning_param(model=model)
         ):
             if drop_params or litellm.drop_params:
@@ -210,7 +220,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             else:
                 raise litellm.UnsupportedParamsError(
                     message=(
-                        f"{model} doesn't support the `reasoning` parameter "
+                        f"{model} doesn't support `reasoning.effort` "
                         "(its model cost map entry lacks `supports_reasoning`). "
                         "To drop unsupported params set `litellm.drop_params = True`"
                     ),
