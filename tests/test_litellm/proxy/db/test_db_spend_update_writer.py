@@ -2977,10 +2977,12 @@ def _spend_logs_prisma(inserted: int, existing: object) -> MagicMock:
     return prisma
 
 
-async def _update_database_with(db_writer: DBSpendUpdateWriter, prisma: MagicMock, payload: dict) -> bool:
+async def _update_database_with(
+    db_writer: DBSpendUpdateWriter, prisma: MagicMock, payload: dict, disable_spend_logs: bool = False
+) -> bool:
     with (
         patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
-            "litellm.proxy.proxy_server.disable_spend_logs", False
+            "litellm.proxy.proxy_server.disable_spend_logs", disable_spend_logs
         ),
         patch(  # test-quality-ok: update_database reads this proxy_server global at call time, no seam
             "litellm.proxy.proxy_server.prisma_client", prisma
@@ -3014,14 +3016,16 @@ async def _update_database_with(db_writer: DBSpendUpdateWriter, prisma: MagicMoc
     ("inserted", "existing", "charged"),
     [
         (1, None, True),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="success"), False),
-        (0, SimpleNamespace(call_type="aretrieve_batch", status="failure"), True),
-        (0, SimpleNamespace(call_type="aembedding", status="success"), True),
+        (0, SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25), False),
+        (0, SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.0), True),
+        (0, SimpleNamespace(call_type="aretrieve_batch", status="failure", spend=0.0), True),
+        (0, SimpleNamespace(call_type="aembedding", status="success", spend=0.25), True),
         (0, None, True),
     ],
     ids=[
         "first_retrieve_owns_the_row",
         "another_retrieve_already_charged",
+        "an_older_proxy_left_a_zero_row_while_the_batch_ran",
         "failed_retrieve_holds_the_row",
         "client_chosen_call_id_holds_the_row",
         "row_gone_between_insert_and_lookup",
@@ -3033,8 +3037,9 @@ async def test_update_database_charges_a_batch_only_from_the_retrieve_that_wrote
     """
     Every retrieve of one batch shares one spend row, so the insert that lands first is
     the charge and every later retrieve must leave the counters alone (LIT-7048). A row
-    written by anything but a successful retrieve, say a request whose client picked the
-    batch id as its call id, must not be able to take the charge away.
+    that recorded no charge must not be able to take the charge away: neither one a
+    client planted under the batch id, nor the $0 row a pre-upgrade proxy wrote every
+    time it polled the batch while it was still running.
     """
     db_writer = DBSpendUpdateWriter()
     db_writer._batch_database_updates = AsyncMock()
@@ -3047,6 +3052,47 @@ async def test_update_database_charges_a_batch_only_from_the_retrieve_that_wrote
     assert [(row["request_id"], row["spend"]) for row in claimed_rows["data"]] == [("batch_abc_batch_cost", 0.25)]
     assert prisma.spend_log_transactions == []
     assert db_writer._batch_database_updates.await_count == (1 if charged else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("inserted", "existing", "charged"),
+    [
+        (1, None, True),
+        (0, SimpleNamespace(call_type="aretrieve_batch", status="success", spend=0.25), False),
+    ],
+    ids=["first_retrieve_owns_the_row", "another_retrieve_already_charged"],
+)
+async def test_update_database_charges_a_batch_once_even_with_spend_logs_disabled(
+    inserted: int, existing: object, charged: bool
+):
+    """
+    disable_spend_logs drops the per-request logs, not the batch's charge, so the one row
+    that makes a batch chargeable exactly once is still written and still read back.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_prisma(inserted, existing)
+
+    assert await _update_database_with(db_writer, prisma, _batch_cost_payload(), True) is charged
+
+    assert prisma.db.litellm_spendlogs.create_many.await_count == 1
+    assert db_writer._batch_database_updates.await_count == (1 if charged else 0)
+
+
+@pytest.mark.asyncio
+async def test_update_database_writes_no_ordinary_spend_row_with_spend_logs_disabled():
+    """The batch carve-out above stays a carve-out: every other row still goes unwritten."""
+    db_writer = DBSpendUpdateWriter()
+    db_writer._batch_database_updates = AsyncMock()
+    prisma = _spend_logs_prisma(1, None)
+    payload = {**_batch_cost_payload(), "call_type": "acompletion"}
+
+    assert await _update_database_with(db_writer, prisma, payload, True) is True
+
+    prisma.db.litellm_spendlogs.create_many.assert_not_called()
+    assert prisma.spend_log_transactions == []
+    assert db_writer._batch_database_updates.await_count == 1
 
 
 @pytest.mark.asyncio
