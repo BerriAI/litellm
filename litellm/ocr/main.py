@@ -31,8 +31,10 @@ from litellm.llms.base_llm.ocr.transformation import (
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
 from litellm.rust_bridge.request import (
+    NativeRequestCapabilities,
     NativeRequestOptions,
     PreparedNativeCall,
+    request_context,
     vertex_options,
 )
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -47,16 +49,17 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 @dataclass
 class _PreparedOCRRequest:
     model: str
-    document: dict[str, Any]
+    document: dict[str, Any]  # mutable-ok: public OCR document shape is a mutable SDK dictionary
     api_key: str | None
     api_base: str | None
     custom_llm_provider: str
-    extra_headers: dict[str, object] | None
+    extra_headers: dict[str, object] | None  # mutable-ok: preserves the caller-owned SDK header contract
     provider_config: BaseOCRConfig
-    optional_params: dict[str, object]
-    litellm_params: dict[str, object]
+    optional_params: dict[str, object]  # mutable-ok: provider mapping consumes an owned parameter copy
+    litellm_params: dict[str, object]  # mutable-ok: preserves the existing SDK parameter contract
     effective_timeout: float | httpx.Timeout
     litellm_logging_obj: LiteLLMLoggingObj
+    execution_mode: str = "sync"
 
 
 def _prepare_ocr_request(
@@ -68,6 +71,7 @@ def _prepare_ocr_request(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     kwargs: dict[str, object],
+    execution_mode: str = "sync",
 ) -> _PreparedOCRRequest:
     litellm_logging_obj: Final = cast(LiteLLMLoggingObj, kwargs.pop("litellm_logging_obj"))
     litellm_call_id: Final = cast(str | None, kwargs.get("litellm_call_id", None))
@@ -177,13 +181,14 @@ def _prepare_ocr_request(
         litellm_params=dict(litellm_params),
         effective_timeout=effective_timeout,
         litellm_logging_obj=litellm_logging_obj,
+        execution_mode=execution_mode,
     )
 
 
 def _rust_bridge_optional_params(
     prepared_request: _PreparedOCRRequest,
     resolve_secret: Callable[[str], str | None],
-) -> dict[str, object]:
+) -> dict[str, object]:  # mutable-ok: returns an owned provider-parameter copy
     optional_params: Final = dict(prepared_request.optional_params)
     if prepared_request.custom_llm_provider == "vertex_ai":
         vertex_project: Final = (
@@ -271,6 +276,21 @@ def _prepare_rust_ocr_call(
                 dict[str, object], resolved_headers
             ),
             timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
+        ),
+        context=request_context(
+            logging_obj=prepared_request.litellm_logging_obj,
+            request_model=getattr(prepared_request.litellm_logging_obj, "model", prepared_request.model),
+            litellm_params=prepared_request.litellm_params,
+            capabilities=NativeRequestCapabilities(
+                execution_mode=prepared_request.execution_mode,
+                input_source_kind=str(prepared_request.document.get("type") or "unknown"),
+                request_format=(
+                    value
+                    if isinstance((value := prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM)), str)
+                    else None
+                ),
+                native_response_format=(prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native"),
+            ),
         ),
     )
 
@@ -422,6 +442,7 @@ async def aocr(
             custom_llm_provider=custom_llm_provider,
             extra_headers=extra_headers,
             kwargs=kwargs,
+            execution_mode="async",
         )
         model = prepared.model
         custom_llm_provider = prepared.custom_llm_provider
@@ -445,7 +466,7 @@ async def aocr(
                 litellm_params=prepared.litellm_params,
             )
             response: Final = await pending if asyncio.iscoroutine(pending) else pending
-            if response is None:
+            if response is None:  # pyright: ignore[reportUnnecessaryComparison]  # provider adapters can violate their declared return type
                 raise ValueError(f"Got an unexpected None response from the OCR API: {response}")
             return response
 

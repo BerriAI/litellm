@@ -71,7 +71,9 @@ class BaseConfig(ABC):
         pass
 
     @classmethod
-    def get_config_for_model(cls, model: str) -> dict[str, object]:
+    def get_config_for_model(
+        cls, model: str
+    ) -> dict[str, object]:  # mutable-ok: callers merge provider defaults into a request copy
         return TypeAdapter(dict[str, object]).validate_python(cls.get_config())
 
     @classmethod

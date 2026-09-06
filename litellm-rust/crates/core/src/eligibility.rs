@@ -6,7 +6,6 @@ pub enum NativeRouteDecline {
     Streaming,
     AgenticHook,
     CustomClient,
-    NativeResponseFormat,
 }
 
 impl NativeRouteDecline {
@@ -16,7 +15,6 @@ impl NativeRouteDecline {
             Self::Streaming => "native streaming is unavailable",
             Self::AgenticHook => "native agentic hooks are unavailable",
             Self::CustomClient => "native custom clients are unavailable",
-            Self::NativeResponseFormat => "native OCR response format is unavailable",
         }
     }
 }
@@ -37,8 +35,7 @@ pub fn native_route_decline(
     if capabilities.has_custom_client {
         return Some(NativeRouteDecline::CustomClient);
     }
-    (capabilities.request_format.as_deref() == Some("native"))
-        .then_some(NativeRouteDecline::NativeResponseFormat)
+    None
 }
 
 #[cfg(test)]
@@ -52,6 +49,7 @@ mod tests {
             has_agentic_hook: true,
             has_custom_client: true,
             request_format: Some("native".into()),
+            ..Default::default()
         };
         assert_eq!(
             native_route_decline(false, &all_unsupported),
@@ -83,13 +81,6 @@ mod tests {
                     ..Default::default()
                 },
                 NativeRouteDecline::CustomClient,
-            ),
-            (
-                RequestCapabilities {
-                    request_format: Some("native".into()),
-                    ..Default::default()
-                },
-                NativeRouteDecline::NativeResponseFormat,
             ),
         ];
         for (capabilities, expected) in cases {

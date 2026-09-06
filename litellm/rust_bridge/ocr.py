@@ -6,7 +6,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, TypeVar
 
 from . import configuration as _configuration
-from .bindings import UNCHANGED, Unchanged
 from .protocols import RustAocr, RustOcr, RustRouteDecline
 from .request import NativeOCRRequest, PreparedNativeCall, call_native
 from .runtime import (
@@ -16,8 +15,6 @@ from .runtime import (
     assess_route,
 )
 
-rust_ocr_enabled = _configuration.rust_ocr_enabled
-rust = _configuration.rust
 ResultT = TypeVar("ResultT")
 
 
@@ -25,38 +22,15 @@ _OCR: Final[EndpointDispatch[RustOcr, RustAocr]] = EndpointDispatch.native(
     route="ocr",
     sync=lambda native: native.ocr,
     asynchronous=lambda native: native.aocr,
-    enabled=_configuration.rust_ocr_enabled,
+    enabled=_configuration.rust_enabled,
 )
 
 
 _PREFLIGHT: Final[EndpointBinding[RustRouteDecline]] = EndpointBinding.native(
     route="ocr",
     select=lambda native: native.ocr_decline,
-    enabled=_configuration.rust_ocr_enabled,
+    enabled=_configuration.rust_enabled,
 )
-
-
-def set_rust_ocr(
-    *,
-    ocr: RustOcr | None | Unchanged = UNCHANGED,
-    aocr: RustAocr | None | Unchanged = UNCHANGED,
-    decline: RustRouteDecline | None | Unchanged = UNCHANGED,
-) -> None:
-    if not isinstance(decline, Unchanged):
-        if decline is None:
-            _PREFLIGHT.reset()
-        else:
-            _PREFLIGHT.override(decline)
-    if not isinstance(ocr, Unchanged):
-        if ocr is None:
-            _OCR.sync.reset()
-        else:
-            _OCR.sync.override(ocr)
-    if not isinstance(aocr, Unchanged):
-        if aocr is None:
-            _OCR.asynchronous.reset()
-        else:
-            _OCR.asynchronous.override(aocr)
 
 
 def load_rust_ocr() -> RustOcr | None:
