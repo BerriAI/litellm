@@ -11,14 +11,30 @@ if TYPE_CHECKING:
 
 OPENAI_MAX_PROMPT_CACHE_KEY_LENGTH: Final = 64
 
-_EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+# Weakest to strongest. ``none`` is deliberately absent: it is an off switch rather than a tier, so
+# leaving it out of the ladder is what keeps it from ever being chosen for a caller who asked to think.
+_EFFORT_STRENGTH_ORDER: Final[tuple[str, ...]] = ("minimal", "low", "medium", "high", "xhigh", "max")
+
+# Where a tier lands when the deployment's accepted set cannot be read at all. Only the tiers that
+# shipped with a floor keep one; every other tier keeps the level the caller asked for.
+_EFFORT_BLIND_FALLBACK: Final[Mapping[str, str]] = MappingProxyType(
     {
-        "max": ("max", "xhigh", "high"),
-        "xhigh": ("xhigh", "high"),
-        "minimal": ("minimal", "low"),
+        "max": "high",
+        "xhigh": "high",
+        "minimal": "low",
     }
 )
-_THINKING_OFF: Final = "none"
+
+
+def _degradation_chain(effort: str) -> tuple[str, ...]:
+    """Nearest-first search order for one ask: the level itself, then weaker tiers, then stronger.
+
+    Lowering is preferred to raising because a tier the deployment does not accept is a hard 400,
+    while a weaker one costs thinking budget rather than the request. The floor of the ladder has
+    nothing weaker to fall to, so ``minimal`` climbs, which is the order it shipped with.
+    """
+    index: Final = _EFFORT_STRENGTH_ORDER.index(effort)
+    return (*_EFFORT_STRENGTH_ORDER[index::-1], *_EFFORT_STRENGTH_ORDER[index + 1 :])
 
 
 def prompt_cache_key_from_user_id(user_id: object) -> str | None:
@@ -50,33 +66,35 @@ def normalize_reasoning_effort_value(
     model: str,
     custom_llm_provider: str | None = None,
 ) -> str:
-    """Lower a tier the deployment does not accept to the nearest one it does, leaving others alone.
+    """Resolve a tier against the levels the deployment accepts, to the nearest one it does.
 
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
     the proxy advertises is a level this path forwards.
 
-    A deployment that refuses every step of a chain falls back to an accepted level read off that
-    same set rather than to an assumed one, since an entry naming its levels outright can exclude
-    the tiers the per-level flags treat as unconditional. ``none`` is never that fallback and is
-    never degraded to, being an off switch rather than a tier; an always-on-thinking model is
-    handled where the thinking block is built. A deployment accepting no tier at all keeps the
-    chain's floor, which is what every deployment degraded to before there was anything to ask.
+    Every tier is resolved, not just the ones with an opt-in flag. An entry naming its levels
+    outright can omit ``high``, ``medium`` or ``low``, and a level an entry omits is a level it
+    rejects, so the tier the caller asked for cannot be what decides whether the declaration is
+    read. ``none`` is never degraded to and is never chosen, being an off switch rather than a
+    tier; an always-on-thinking model is handled where the thinking block is built.
+
+    A deployment the map cannot answer for keeps the historical floor on the three tiers that
+    shipped with one and the caller's own level on the rest, since there is nothing to resolve
+    against and lowering blind would weaken deployments that never asked for it.
     """
-    chain: Final = _EFFORT_DEGRADATION_CHAIN.get(effort)
-    if chain is None:
+    if effort not in _EFFORT_STRENGTH_ORDER:
         return effort
 
     from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
     from litellm.utils import get_model_info
 
+    blind_fallback: Final = _EFFORT_BLIND_FALLBACK.get(effort, effort)
     try:
         model_info: Final[ModelInfo] = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
-        return chain[-1]
+        return blind_fallback
 
     supported: Final = resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True)
     if not supported:
-        return chain[-1]
+        return blind_fallback
 
-    accepted_tiers: Final = tuple(level for level in supported if level != _THINKING_OFF)
-    return next((level for level in (*chain, *accepted_tiers) if level in supported), chain[-1])
+    return next((level for level in _degradation_chain(effort) if level in supported), blind_fallback)

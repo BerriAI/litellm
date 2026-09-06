@@ -331,3 +331,55 @@ class TestADeclarationDisjointFromTheChain:
         what every deployment got before the resolver was consulted. Dropping the parameter outright
         is the real answer and belongs with the callers that build the request."""
         assert normalize_reasoning_effort_value(effort, declared_effort_entry, "synthetic") == expected
+
+
+class TestEveryTierIsResolvedAgainstTheDeclaration:
+    """A declaration has to bind for the tier the caller actually asked for.
+
+    ``max``, ``xhigh`` and ``minimal`` were the only tiers ever resolved against a deployment's
+    accepted set; every other level returned before the entry was read, so an entry declaring
+    ``low``, ``medium`` and ``xhigh`` still received ``high`` and answered 400. Which tier the
+    caller asked for cannot be what decides whether the declaration is consulted, because the
+    levels an entry omits are exactly the levels it rejects.
+    """
+
+    DECLARED_LEVELS = ("low", "medium", "xhigh")
+
+    @pytest.mark.parametrize("declared_effort_entry", [DECLARED_LEVELS], indirect=True)
+    def test_a_declaration_omitting_high_is_not_sent_high(self, declared_effort_entry):
+        """The reported case: a vocabulary of low, medium and xhigh, asked for ``high``. ``medium``
+        is the nearest level it accepts, since lowering costs thinking budget where raising to
+        ``xhigh`` would spend more than the caller asked for."""
+        assert normalize_reasoning_effort_value("high", declared_effort_entry, "synthetic") == "medium"
+
+    @pytest.mark.parametrize("declared_effort_entry", [DECLARED_LEVELS], indirect=True)
+    @pytest.mark.parametrize(
+        "effort, expected",
+        [
+            ("max", "xhigh"),
+            ("xhigh", "xhigh"),
+            ("high", "medium"),
+            ("medium", "medium"),
+            ("low", "low"),
+            ("minimal", "low"),
+        ],
+    )
+    def test_every_tier_lands_on_a_declared_level(self, declared_effort_entry, effort, expected):
+        assert normalize_reasoning_effort_value(effort, declared_effort_entry, "synthetic") == expected
+
+    @pytest.mark.parametrize("declared_effort_entry", [DECLARED_LEVELS], indirect=True)
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_no_tier_can_leave_the_declaration(self, declared_effort_entry, effort):
+        """The table above as a property: nothing the caller can ask for resolves to a level the
+        entry did not declare."""
+        assert normalize_reasoning_effort_value(effort, declared_effort_entry, "synthetic") in self.DECLARED_LEVELS
+
+    @pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_a_model_the_map_does_not_describe_still_keeps_its_historical_answer(
+        self, local_model_cost_map, effort
+    ):
+        """Resolving a tier must not start degrading deployments the map cannot answer for. An
+        unmapped model keeps the floor on the three tiers that shipped with one and the caller's own
+        level on the rest, which is what it returned before."""
+        expected = {"max": "high", "xhigh": "high", "minimal": "low"}.get(effort, effort)
+        assert normalize_reasoning_effort_value(effort, "totally-made-up-model-xyz", "openai") == expected
