@@ -22,6 +22,7 @@ export const UPDATED_AT_COLUMN_ID = "model_info_updated_at";
 export const COSTS_COLUMN_ID = "input_cost";
 export const TEAM_ID_COLUMN_ID = "model_info_team_id";
 export const ACCESS_GROUPS_COLUMN_ID = "model_info_access_groups";
+export const TAGS_COLUMN_ID = "model_info_tags";
 export const STATUS_COLUMN_ID = "model_info_db_model";
 
 const COLUMN_ID_TO_SERVER_SORT_FIELD: Record<string, string> = {
@@ -243,6 +244,38 @@ function AccessGroupsCell({ accessGroups }: { accessGroups: string[] | null }) {
   );
 }
 
+function TagsCell({ tags }: { tags: string[] | null }) {
+  if (!tags || tags.length === 0) {
+    return <span className="text-sm text-muted-foreground">-</span>;
+  }
+
+  const [first, ...overflow] = tags;
+
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      <Badge variant="outline" className="max-w-36 truncate border-purple-200 bg-purple-50 font-normal text-purple-600">
+        {first}
+      </Badge>
+      {overflow.length > 0 && (
+        <CellTooltip
+          content={
+            <div className="flex max-w-[280px] flex-col gap-0.5">
+              {overflow.map((tag) => (
+                <span key={tag}>{tag}</span>
+              ))}
+            </div>
+          }
+          trigger={
+            <Badge variant="outline" className="shrink-0 cursor-default font-normal">
+              +{overflow.length} more
+            </Badge>
+          }
+        />
+      )}
+    </div>
+  );
+}
+
 interface ModelRowActionsProps {
   model: ModelData;
   userRole: string;
@@ -449,6 +482,16 @@ export const getModelsTableColumns = ({
     size: 200,
     minSize: 120,
     cell: ({ row }) => <AccessGroupsCell accessGroups={row.original.model_info.access_groups} />,
+  },
+  {
+    id: TAGS_COLUMN_ID,
+    accessorFn: (row) => row.tags ?? [],
+    meta: { title: "Tags", skeleton: "chips" },
+    header: "Tags",
+    enableSorting: false,
+    size: 200,
+    minSize: 120,
+    cell: ({ row }) => <TagsCell tags={row.original.tags} />,
   },
   {
     id: STATUS_COLUMN_ID,
