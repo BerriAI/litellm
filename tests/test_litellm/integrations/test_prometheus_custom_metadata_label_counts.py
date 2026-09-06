@@ -157,3 +157,29 @@ def test_virtual_key_rate_limit_metrics_preserve_zero_remaining_values(
     assert any(sample.value == 0 for sample in token_samples)
     assert not any(sample.value == sys.maxsize for sample in request_samples)
     assert not any(sample.value == sys.maxsize for sample in token_samples)
+
+
+def test_increment_deployment_cooled_down_accepts_custom_metadata_labels(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
+
+    with caplog.at_level(logging.ERROR):
+        prometheus_logger.increment_deployment_cooled_down(
+            litellm_model_name="gpt-4o-mini",
+            model_id="model-123",
+            api_base="https://api.openai.com",
+            api_provider="openai",
+            exception_status="429",
+        )
+
+    assert "Incorrect label count" not in caplog.text
+    samples = _metric_samples("litellm_deployment_cooled_down_total")
+    assert any(
+        sample.labels.get("litellm_model_name") == "gpt-4o-mini"
+        and sample.labels.get("exception_status") == "429"
+        and "metadata_department" in sample.labels
+        and "metadata_environment" in sample.labels
+        and sample.value == 1
+        for sample in samples
+    )
