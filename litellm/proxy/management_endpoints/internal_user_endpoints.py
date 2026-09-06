@@ -174,6 +174,19 @@ def _strip_password_from_response(response) -> None:
             response["data"].__dict__.pop("password", None)
 
 
+def _safe_parse_user_metadata(raw_meta: object) -> dict:  # mutable-ok: returns a detached metadata dictionary
+    if isinstance(raw_meta, str):
+        try:
+            parsed: Final = json.loads(raw_meta)
+            if isinstance(parsed, dict):
+                return dict(parsed)  # mutable-ok: detached copy of user metadata
+        except (json.JSONDecodeError, TypeError):
+            pass
+    elif isinstance(raw_meta, dict):
+        return dict(raw_meta)  # mutable-ok: detached copy of user metadata
+    return {}  # mutable-ok: default empty user metadata
+
+
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
     if "user_id" in data_json and data_json["user_id"] is None:
         data_json["user_id"] = str(uuid.uuid4())
@@ -208,14 +221,9 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
 
     data_json.pop("teams", None)  # handled separately
     if data.blocked is not None:
-        if "metadata" not in data_json or data_json["metadata"] is None:
-            data_json["metadata"] = {}
-        elif isinstance(data_json["metadata"], str):
-            try:
-                data_json["metadata"] = json.loads(data_json["metadata"])
-            except (json.JSONDecodeError, TypeError):
-                data_json["metadata"] = {}
-        data_json["metadata"]["blocked"] = data.blocked
+        user_metadata: Final = _safe_parse_user_metadata(data_json.get("metadata"))
+        user_metadata["blocked"] = data.blocked
+        data_json["metadata"] = user_metadata  # rebind-ok: updating payload metadata field
     return data_json
 
 
@@ -1499,7 +1507,9 @@ async def _update_single_user_helper(
 
     if user_request.blocked is not None or "blocked" in data_json:
         if "metadata" not in non_default_values or non_default_values["metadata"] is None:
-            non_default_values["metadata"] = existing_metadata.copy() if existing_metadata else {}
+            non_default_values["metadata"] = (
+                existing_metadata.copy() if existing_metadata else {}
+            )  # mutable-ok: metadata fallback
         non_default_values["metadata"]["blocked"] = user_request.blocked
 
     # Ensure blocked is never forwarded to Prisma's LiteLLM_UserTable update
