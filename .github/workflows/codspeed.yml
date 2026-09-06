@@ -35,7 +35,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -43,6 +42,9 @@ concurrency:
 
 jobs:
   benchmarks:
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -98,6 +100,9 @@ jobs:
             --codspeed
 
   e2e-walltime:
+    permissions:
+      contents: read
+      id-token: write
     runs-on: codspeed-macro
     timeout-minutes: 30
 
