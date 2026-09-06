@@ -22,6 +22,7 @@ from typing import (
     TypedDict,
 )
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
@@ -447,6 +448,28 @@ class RateLimitResponseWithDescriptors(TypedDict):
     response: RateLimitResponse
 
 
+class RateLimitDemotionPolicy(BaseModel):
+    """
+    Soft rate limiting: tag admitted requests that approach their rate
+    limits for downstream priority demotion. ``demote_at`` is the saturation
+    fraction (used/limit, max across the caller's checked windows) at or
+    above which ``demotion_headers`` are merged into the request's
+    ``extra_headers`` so they reach the upstream inference server, e.g.
+    llm-d's inference gateway schedules a request carrying
+    ``x-llm-d-inference-objective: best_effort`` at best-effort priority.
+    Over-limit requests are rejected with a 429 as usual.
+
+    Configured globally under ``general_settings.rate_limit_demotion`` or
+    per virtual key via ``metadata.rate_limit_demotion``; a key-level policy
+    replaces the global one.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    demote_at: float = Field(gt=0.0)
+    demotion_headers: Mapping[str, str]
+
+
 class _RateLimitDescriptorSink(Protocol):
     def append(self, descriptor: RateLimitDescriptor, /) -> None: ...
 
@@ -580,6 +603,43 @@ def _parse_output_cap_value(raw_value: object) -> int | None:
         return int(float(raw_value))
     except (ValueError, OverflowError):
         return None
+
+
+def _general_settings_rate_limit_demotion() -> object:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("rate_limit_demotion")
+
+
+def _resolve_demotion_policy(user_api_key_dict: UserAPIKeyAuth) -> RateLimitDemotionPolicy | None:
+    metadata: Final = user_api_key_dict.metadata or {}
+    raw: Final = metadata.get("rate_limit_demotion") or _general_settings_rate_limit_demotion()
+    if raw is None:
+        return None
+    try:
+        return RateLimitDemotionPolicy.model_validate(raw)
+    except ValidationError as e:
+        verbose_proxy_logger.warning("Ignoring invalid rate_limit_demotion config, demotion disabled: %s", e)
+        return None
+
+
+def _max_rate_limit_saturation(response: RateLimitResponse | None) -> float | None:
+    if response is None:
+        return None
+    used_fractions: Final = tuple(
+        (status["current_limit"] - status["limit_remaining"]) / status["current_limit"]
+        for status in response["statuses"]
+        if status["current_limit"] > 0
+    )
+    return max(used_fractions, default=None)
+
+
+def _apply_demotion_headers(
+    data: Mapping[str, object], policy: RateLimitDemotionPolicy
+) -> dict[str, object]:  # mutable-ok: async_pre_call_hook's contract returns the replacement request dict
+    existing: Final = data.get("extra_headers")
+    existing_headers: Final[Mapping[str, object]] = existing if isinstance(existing, Mapping) else {}
+    return {**data, "extra_headers": {**existing_headers, **policy.demotion_headers}}
 
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
@@ -3401,6 +3461,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Pre-call hook to check rate limits before making the API call.
         Supports dynamic rate limiting based on deployment health.
+
+        With a :class:`RateLimitDemotionPolicy` in effect, an admitted
+        request at or above ``demote_at`` saturation is tagged with the
+        policy's headers.
         """
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
@@ -3418,6 +3482,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 data=data,
                 call_type=call_type,
             )
+
+        await self._enforce_pre_call_rate_limits(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type=call_type,
+        )
+
+        demotion_policy: Final = _resolve_demotion_policy(user_api_key_dict)
+        if demotion_policy is None:
+            return None
+        saturation: Final = _max_rate_limit_saturation(stash.rate_limit_response)
+        if saturation is None or saturation < demotion_policy.demote_at:
+            return None
+        return _apply_demotion_headers(data, demotion_policy)
+
+    async def _enforce_pre_call_rate_limits(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        data: dict,  # mutable-ok: enforcement writes the implicit output cap into the request body in place
+        call_type: str,
+    ) -> None:
+        stash: Final = claim_request_stash_for_data(data)
 
         # Get rate limit types from metadata
         metadata: Final = user_api_key_dict.metadata or {}
