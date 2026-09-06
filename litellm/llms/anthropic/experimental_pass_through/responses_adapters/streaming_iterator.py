@@ -54,7 +54,7 @@ class AnthropicResponsesStreamWrapper:
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque[dict[str, object]] = deque()
-        self._refusal_text_parts: list[str] = []  # mutable-ok: accumulates streamed refusal delta text across chunks
+        self._refusal_text: str = ""
         self._sync_responses_iterator: Iterator[object] | None = None
 
     def _make_message_start(self) -> dict[str, object]:
@@ -142,7 +142,7 @@ class AnthropicResponsesStreamWrapper:
             delta = getattr(event, "delta", "") or (event.get("delta", "") if isinstance(event, dict) else "")
             if not isinstance(delta, str) or not delta:
                 return
-            self._refusal_text_parts.append(delta)
+            self._refusal_text = self._refusal_text + delta
             item_id = getattr(event, "item_id", None) or (event.get("item_id") if isinstance(event, dict) else None)
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:
@@ -241,7 +241,7 @@ class AnthropicResponsesStreamWrapper:
                 event.get("response") if isinstance(event, dict) else None
             )
             output: Final = (getattr(response_obj, "output", None) or ()) if response_obj is not None else ()
-            refusal_text: Final = responses_output_refusal_text(output) or ("".join(self._refusal_text_parts) or None)
+            refusal_text: Final = responses_output_refusal_text(output) or (self._refusal_text or None)
             status: Final = getattr(response_obj, "status", None) if response_obj is not None else None
             has_tool_call: Final = any(
                 getattr(item, "type", None) == "function_call"
