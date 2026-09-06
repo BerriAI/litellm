@@ -7,9 +7,8 @@ import os
 import stat
 import threading
 from collections.abc import Callable, Mapping
-from os import fdopen as real_fdopen
 from pathlib import Path
-from typing import IO, Final
+from typing import Final
 
 import httpx
 import pytest
@@ -34,6 +33,8 @@ from tests.test_litellm.llms.base_llm.auth.test_token_exchange import (
     make_spec,
     token_response,
 )
+
+real_write_bytes: Final = Path.write_bytes
 
 
 class SingleUsePoster:
@@ -130,21 +131,11 @@ def test_a_write_that_only_fails_on_close_leaves_no_staging_file(tmp_path: Path,
     """A token is small enough to sit in the handle's buffer until it closes, so a full disk surfaces
     at close rather than at ``write()``, and the staging file left behind would still hold the token."""
 
-    class FailsOnClose:
-        def __init__(self, handle: IO[bytes]) -> None:
-            self._handle: Final = handle
+    def write_bytes_then_run_out_of_space(path: Path, data: bytes) -> int:
+        real_write_bytes(path, data)
+        raise OSError(errno.ENOSPC, "No space left on device")
 
-        def __enter__(self) -> "FailsOnClose":
-            return self
-
-        def __exit__(self, *_: object) -> None:
-            self._handle.close()
-            raise OSError(errno.ENOSPC, "No space left on device")
-
-        def write(self, data: bytes) -> int:
-            return self._handle.write(data)
-
-    monkeypatch.setattr(os, "fdopen", lambda descriptor, mode: FailsOnClose(real_fdopen(descriptor, mode)))
+    monkeypatch.setattr(Path, "write_bytes", write_bytes_then_run_out_of_space)
     store = FileTokenStore(tmp_path)
 
     store.save(

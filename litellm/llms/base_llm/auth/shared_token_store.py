@@ -77,10 +77,10 @@ def _write_token_file(directory: Path, key: str, body: bytes) -> None:
     reaches the disk when the handle closes: nothing else sweeps this directory, and that file holds
     a token that still works. The rename leaves nothing behind for the unlink to find."""
     descriptor, name = tempfile.mkstemp(dir=directory, prefix=f"{key}.")
+    os.close(descriptor)
     staged: Final = Path(name)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(body)
+        staged.write_bytes(body)
         os.replace(staged, directory / f"{key}.json")
     finally:
         _unlink(staged)
