@@ -5,11 +5,12 @@ from typing import Final, Protocol
 from pydantic import BaseModel
 
 from batch_client import BatchObject, FileDeleteResponse
+from capabilities import is_managed_id
 from e2e_http import NetworkError, RateLimitedError, Result, Success, UnknownApiError
 
 CLEANUP_DELAYS: Final = (1.0, 2.0, 4.0)
 BATCH_TERMINAL_STATUSES: Final = frozenset({"completed", "failed", "expired", "cancelled"})
-BATCH_CANCEL_TIMEOUT_SECONDS: Final = 600.0
+BATCH_CANCEL_TIMEOUT_SECONDS: Final = 660.0
 BATCH_CANCEL_POLL_SECONDS: Final = 10.0
 
 
@@ -62,11 +63,14 @@ def cleanup_batch(
     wait: Callable[[float], None] = sleep,
     clock: Callable[[], float] = monotonic,
 ) -> None:
+    needs_terminal_state: Final = is_managed_id(batch_id)
     fetched: Final = _require_cleanup_success(
         cleanup_result(lambda: client.retrieve_batch(batch_id, key=key, provider=provider)),
         f"Retrieve batch {batch_id} for cleanup",
     )
     if fetched.status in BATCH_TERMINAL_STATUSES:
+        return
+    if fetched.status == "cancelling" and not needs_terminal_state:
         return
     if fetched.status != "cancelling":
         result: Final = cleanup_result(lambda: client.cancel_batch(batch_id, key=key, provider=provider))
@@ -75,6 +79,8 @@ def cleanup_batch(
             assert cancelled.status in BATCH_TERMINAL_STATUSES | {"cancelling"}, (
                 f"Cancel batch {batch_id} left status {cancelled.status}"
             )
+            if not needs_terminal_state:
+                return
     deadline: Final = clock() + BATCH_CANCEL_TIMEOUT_SECONDS
     while True:
         current = _require_cleanup_success(
@@ -84,6 +90,8 @@ def cleanup_batch(
         if current.status in BATCH_TERMINAL_STATUSES:
             return
         assert current.status == "cancelling", f"Cancel batch {batch_id} left status {current.status}"
+        if not needs_terminal_state:
+            return
         assert clock() < deadline, (
             f"Batch {batch_id} cancellation did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s"
         )

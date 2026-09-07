@@ -12,6 +12,8 @@ from e2e_http import NetworkError, RateLimitedError, Result, Success, UnknownApi
 from lifecycle import ResourceManager
 from models import KeyGenerateBody
 
+MANAGED_BATCH_ID: Final = "bGl0ZWxsbV9wcm94eTtiYXRjaC0x"
+
 
 @dataclass
 class CleanupClient:
@@ -122,8 +124,8 @@ class TestBatchCancellation:
     def test_cancelling_batch_is_polled_until_terminal_without_cancelling_again(self) -> None:
         client: Final = CleanupClient(batches=iter((batch("cancelling"), batch("cancelling"), batch("cancelled"))))
         delays: Final[list[float]] = []
-        cleanup_batch(client, "batch-1", key="test-key", wait=delays.append)
-        assert client.calls == ["retrieve None batch-1"] * 3
+        cleanup_batch(client, MANAGED_BATCH_ID, key="test-key", wait=delays.append)
+        assert client.calls == [f"retrieve None {MANAGED_BATCH_ID}"] * 3
         assert delays == [10.0]
 
     def test_cancellation_timeout_is_reported_but_file_and_key_cleanup_still_run(self) -> None:
@@ -134,13 +136,13 @@ class TestBatchCancellation:
         manager: Final = ResourceManager(client=client, strict_cleanup=True)
         key: Final = manager.key()
         manager.defer(lambda: cleanup_file(client, "file-1", key=key))
-        manager.defer(lambda: cleanup_batch(client, "batch-1", key=key, clock=lambda: next(ticks)))
+        manager.defer(lambda: cleanup_batch(client, MANAGED_BATCH_ID, key=key, clock=lambda: next(ticks)))
         with pytest.raises(ExceptionGroup) as caught:
             manager.teardown()
         assert "cancellation did not finish" in str(caught.value.exceptions[0])
         assert client.calls == [
-            "retrieve None batch-1",
-            "retrieve None batch-1",
+            f"retrieve None {MANAGED_BATCH_ID}",
+            f"retrieve None {MANAGED_BATCH_ID}",
             "delete None file-1",
             "delete key test-key",
         ]
@@ -156,7 +158,7 @@ class TestBatchCancellation:
             batches=iter((batch("in_progress"), batch("cancelled"))), cancellations=iter((batch("cancelling"),))
         )
         cleanup_batch(client, "batch-1", key="test-key", provider="azure")
-        assert client.calls == ["retrieve azure batch-1", "cancel azure batch-1", "retrieve azure batch-1"]
+        assert client.calls == ["retrieve azure batch-1", "cancel azure batch-1"]
 
     @pytest.mark.parametrize("status", ["completed", "in_progress"])
     def test_cancellation_conflict_is_accepted_only_when_batch_became_inactive(self, status: str) -> None:

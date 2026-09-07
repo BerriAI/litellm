@@ -129,8 +129,9 @@ provider when deleted. Model-encoded and managed file IDs route themselves
 File deletion and batch cancellation check their responses and retry transient
 failures up to three times. Teardown attempts every registered cleanup before
 reporting failures as test errors. Already deleted files and batches that are
-terminal are safe to clean up again. Cancellation polls for up to ten minutes
-before input deletion, because accepting cancellation does not finish it
+terminal are safe to clean up again. Managed batch cancellation polls for up to eleven minutes
+before input deletion: the ten-minute provider window plus a propagation margin.
+Raw and model-encoded inputs can be deleted after cancellation is accepted
 
 Azure input uploads request `expires_after` anchored to `created_at` with
 `seconds=1209600`, and the lifecycle tests check the returned expiry. This is a
