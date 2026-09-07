@@ -598,6 +598,16 @@ class TestPartitionedSpendLogsDriftFilter:
         )
         assert filter_partitioned_spend_logs_diff(sql).strip() == ""
 
+    def test_a_comma_inside_a_string_default_is_not_a_clause_separator(self):
+        """Splitting inside a quoted default would rewrite the value Postgres stores."""
+        sql = (
+            'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN "tags" TEXT DEFAULT \'a,b\', '
+            'DROP CONSTRAINT "LiteLLM_SpendLogs_pkey";\n'
+        )
+        filtered = filter_partitioned_spend_logs_diff(sql)
+        assert "DEFAULT 'a,b'" in filtered
+        assert "DROP CONSTRAINT" not in filtered
+
     def test_other_tables_are_untouched_when_schema_qualified(self):
         sql = (
             'ALTER TABLE "public"."LiteLLM_TeamTable" DROP CONSTRAINT '

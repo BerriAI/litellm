@@ -7,8 +7,9 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass, replace
+from itertools import accumulate
 from pathlib import Path
-from typing import Optional
+from typing import Final, NamedTuple, Optional
 
 from litellm_proxy_extras import prisma_toolchain
 from litellm_proxy_extras._logging import logger
@@ -79,11 +80,6 @@ class _MigrateAttemptBudget:
         return replace(self, recoveries=self.recoveries | {recovery})
 
 
-# Prisma qualifies DDL with the datasource schema when it is not the default,
-# which LiteLLM supports through the `schema` URL parameter (see
-# _prisma_schema_param). Match the qualified and bare spellings alike, plus the
-# ONLY that dump-shaped scripts carry, so the guard below does not depend on
-# which one the drift script happens to use.
 _QUALIFIED_SPEND_LOGS = r'(?:ONLY\s+)?(?:(?:"[^"]+"|\w+)\s*\.\s*)?"LiteLLM_SpendLogs'
 _SPEND_LOGS_ALTER_RE = re.compile(
     r'^ALTER\s+TABLE\s+' + _QUALIFIED_SPEND_LOGS + r'"\s', re.IGNORECASE
@@ -116,33 +112,40 @@ def _without_sql_comments(statement: str) -> str:
     ).strip()
 
 
-def _split_alter_clauses(body: str) -> list[str]:
-    """Split an ALTER TABLE clause list on its top-level commas.
+class _ClauseScan(NamedTuple):
+    depth: int
+    in_identifier: bool
+    in_string: bool
+    ends_clause: bool
 
-    Commas inside parentheses (`PRIMARY KEY ("request_id", "startTime")`) and
-    inside quoted identifiers separate nothing, so only depth-zero commas
-    outside quotes end a clause. Splitting on the comma itself rather than on
-    `",\n"` keeps the guard working whichever way the drift script wraps
-    lines -- one clause per line, all on one line, or with trailing spaces.
-    """
-    clauses = []
-    depth = 0
-    quoted = False
-    start = 0
-    for i, ch in enumerate(body):
-        if ch == '"':
-            quoted = not quoted
-        elif quoted:
-            continue
-        elif ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        elif ch == "," and depth == 0:
-            clauses.append(body[start:i])
-            start = i + 1
-    clauses.append(body[start:])
-    return clauses
+
+_CLAUSE_SCAN_START: Final = _ClauseScan(0, False, False, False)
+
+
+def _scan_clause_char(state: _ClauseScan, char: str) -> _ClauseScan:
+    if state.in_string:
+        return _ClauseScan(state.depth, False, char != "'", False)
+    if state.in_identifier:
+        return _ClauseScan(state.depth, char != '"', False, False)
+    if char == "'":
+        return _ClauseScan(state.depth, False, True, False)
+    if char == '"':
+        return _ClauseScan(state.depth, True, False, False)
+    if char == "(":
+        return _ClauseScan(state.depth + 1, False, False, False)
+    if char == ")":
+        return _ClauseScan(state.depth - 1, False, False, False)
+    return _ClauseScan(state.depth, False, False, char == "," and state.depth == 0)
+
+
+def _split_alter_clauses(body: str) -> tuple[str, ...]:
+    """Split an ALTER TABLE clause list on its top-level commas, ignoring those
+    inside parentheses, quoted identifiers and string literals."""
+    scans: Final = tuple(accumulate(body, _scan_clause_char, initial=_CLAUSE_SCAN_START))
+    separators: Final = tuple(i for i, scan in enumerate(scans[1:]) if scan.ends_clause)
+    starts: Final = (0,) + tuple(i + 1 for i in separators)
+    ends: Final = separators + (len(body),)
+    return tuple(body[start:end] for start, end in zip(starts, ends))
 
 
 def _without_spend_logs_pk_clauses(statement: str) -> Optional[str]:
