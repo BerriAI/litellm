@@ -2128,7 +2128,7 @@ def _complete_opencode(ctx: _CompletionDispatchContext) -> _CompletionDispatchRe
             input=messages,
             api_key=api_key,
             original_response=str(e),
-            additional_args={"headers": headers},
+            additional_args={"headers": headers},  # mutable-ok: post_call takes a dict, as every sibling helper
         )
         raise e
 

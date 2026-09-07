@@ -36,7 +36,7 @@ class OpenCodeResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self, headers: Mapping[str, object], model: str, litellm_params: GenericLiteLLMParams | None
     ) -> dict:  # mutable-ok: signature is fixed by BaseResponsesAPIConfig.validate_environment
         resolved_params: Final = litellm_params or GenericLiteLLMParams()
-        base_headers: Final[Mapping[str, object]] = {
+        base_headers: Final[Mapping[str, object]] = {  # mutable-ok: validate_environment must return a dict
             "Content-Type": "application/json",
             **headers,
             "Authorization": f"Bearer {resolve_opencode_api_key(resolved_params.api_key)}",

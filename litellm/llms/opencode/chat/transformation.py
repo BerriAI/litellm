@@ -172,7 +172,9 @@ class OpenCodeZenGeminiChatConfig(GoogleAIStudioGeminiConfig):
         VertexGeminiConfig.transform_request raises NotImplementedError because Vertex builds its
         body in a bespoke handler, so reuse the shared Gemini body builder that handler calls.
         """
-        from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
+        from litellm.llms.vertex_ai.gemini.transformation import (
+            _transform_request_body,  # pyright: ignore[reportPrivateUsage]  # see docstring
+        )
 
         cached_content: Final = optional_params.get("cached_content")
         return _transform_request_body(
@@ -199,7 +201,7 @@ class OpenCodeZenGeminiChatConfig(GoogleAIStudioGeminiConfig):
         an `x-api-key` and a `?key=` query parameter all come back as `Missing API key`.
         """
         resolved_key: Final = resolve_opencode_api_key(api_key if isinstance(api_key, str) else None)
-        base_headers: Final[Mapping[str, object]] = dict(
+        base_headers: Final[Mapping[str, object]] = dict(  # mutable-ok: validate_environment must return a dict
             chain(
                 (("Content-Type", "application/json"),),
                 headers.items() if headers else (),

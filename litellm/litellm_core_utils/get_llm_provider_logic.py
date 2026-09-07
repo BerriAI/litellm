@@ -839,12 +839,16 @@ def _get_openai_compatible_provider_info(
         (
             api_base,  # rebind-ok: resolution chain returns these params
             dynamic_api_key,  # rebind-ok: resolution chain returns these params
-        ) = litellm.OpenCodeZenChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        ) = litellm.OpenCodeZenChatConfig()._get_openai_compatible_provider_info(  # pyright: ignore[reportPrivateUsage]  # as every sibling provider
+            api_base, api_key
+        )
     elif custom_llm_provider == "opencode_go":
         (
             api_base,  # rebind-ok: resolution chain returns these params
             dynamic_api_key,  # rebind-ok: resolution chain returns these params
-        ) = litellm.OpenCodeGoChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        ) = litellm.OpenCodeGoChatConfig()._get_openai_compatible_provider_info(  # pyright: ignore[reportPrivateUsage]  # as every sibling provider
+            api_base, api_key
+        )
     elif custom_llm_provider == "inception":
         (
             api_base,

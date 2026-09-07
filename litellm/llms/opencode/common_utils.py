@@ -40,7 +40,7 @@ def with_opencode_session_header(
     """Stamp the session header onto already-authenticated headers, leaving a caller's own value alone."""
     session_id: Final = None if has_opencode_session_header(headers) else resolve_opencode_session_id(litellm_params)
     stamped: Final = () if session_id is None else ((OPENCODE_SESSION_HEADER, session_id),)
-    return dict(chain(headers.items(), stamped))
+    return dict(chain(headers.items(), stamped))  # mutable-ok: callers hand this to validate_environment
 
 
 def opencode_endpoint_for_model(provider: str, model: str) -> str:
