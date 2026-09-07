@@ -4440,13 +4440,28 @@ class TestStrategyRouterWriteValidation:
     class _FakeTx:
         """Stands in for a prisma transaction: records raw statements and returns encrypted-model candidates."""
 
-        def __init__(self, db_models: list[str]) -> None:
+        def __init__(self, db_models: list[str], tuning_rows: list[dict[str, object]] | None = None) -> None:
             self.db_models = db_models
+            self.tuning_rows = tuning_rows or []
             self.raw_calls: list[tuple[str, tuple[object, ...]]] = []
-            self.litellm_proxymodeltable = MagicMock(create=AsyncMock(), update=AsyncMock())
+            self.litellm_proxymodeltable = MagicMock(
+                create=AsyncMock(),
+                update=AsyncMock(),
+                find_many=AsyncMock(
+                    return_value=tuple(
+                        LiteLLM_ProxyModelTable.model_validate(row) for row in self.tuning_rows
+                    )
+                ),
+            )
+
+        @property
+        def db(self) -> "TestStrategyRouterWriteValidation._FakeTx":
+            return self
 
         async def query_raw(self, sql: str, *args: object) -> list[dict[str, object]]:
             self.raw_calls.append((sql, args))
+            if "AS litellm_params" in sql:
+                return [row for row in self.tuning_rows if row.get("model_id") != args[0]]
             return [{"model": model} for model in self.db_models] if "AS model" in sql else []
 
         async def __aenter__(self) -> "TestStrategyRouterWriteValidation._FakeTx":
@@ -4458,9 +4473,11 @@ class TestStrategyRouterWriteValidation:
     class _FakeDb:
         """Stands in for prisma_client: the plain client and the transaction it opens are told apart by identity."""
 
-        def __init__(self, db_models: list[str], existing_row: object = None) -> None:
+        def __init__(
+            self, db_models: list[str], existing_row: object = None, tuning_rows: list[dict[str, object]] | None = None
+        ) -> None:
             self.db = self
-            self.tx_obj = TestStrategyRouterWriteValidation._FakeTx(db_models)
+            self.tx_obj = TestStrategyRouterWriteValidation._FakeTx(db_models, tuning_rows=tuning_rows)
             self.litellm_proxymodeltable = MagicMock(
                 create=AsyncMock(), update=AsyncMock(), find_unique=AsyncMock(return_value=existing_row)
             )
@@ -4616,6 +4633,167 @@ class TestStrategyRouterWriteValidation:
         assert "AS model" in count_sql
         assert capability is not None
         assert capability.sql_config_predicate.split("{config}")[-1].strip() in count_sql
+
+    _TUNED_A = {"classifier_type": "heuristic", "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"}}
+    _TUNED_A_EDITED = {**_TUNED_A, "dimension_weights": {"codePresence": 0.9}}
+    _TUNED_B = {"classifier_type": "heuristic", "tiers": {"SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4.1"}}
+    _TUNED_B_EDITED = {**_TUNED_B, "tiers": {"SIMPLE": "gpt-4o", "MEDIUM": "gpt-4.1"}}
+
+    @staticmethod
+    def _db_router_row(model_id: str, config: Mapping[str, object]) -> dict[str, object]:
+        return {
+            "model_name": f"router-{model_id}",
+            "litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": dict(config)},
+            "model_info": {"id": model_id, "db_model": True},
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "limit,baseline_rows,live_rows,candidate_id,candidate_config,expected",
+        [
+            (1, ["a", "b"], {"a": "_TUNED_A", "b": "_TUNED_B"}, "a", "_TUNED_A", "allowed"),
+            (1, ["a", "b"], {"a": "_TUNED_A", "b": "_TUNED_B"}, "a", "_TUNED_A_EDITED", "allowed"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "a", "_TUNED_A_EDITED", "allowed"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_TUNED_B_EDITED", "refused"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "c", "_TUNED_B", "refused"),
+            (1, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_TUNED_B", "allowed"),
+            (None, ["a", "b"], {"a": "_TUNED_A_EDITED", "b": "_TUNED_B"}, "b", "_TUNED_B_EDITED", "allowed"),
+            (1, [], {}, "c", "_TUNED_B", "allowed"),
+        ],
+    )
+    async def test_slot_enforces_baseline_relative_tuning_quota(
+        self,
+        limit: int | None,
+        baseline_rows: list[str],
+        live_rows: Mapping[str, str],
+        candidate_id: str,
+        candidate_config: str,
+        expected: str,
+    ) -> None:
+        """Without the license, one router may move off its recorded tuning baseline and keep being edited;
+        a change to a second router, or a second new tuned router, is refused. Unchanged baselines and
+        reverts to baseline are never counted, and a license lifts every check."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
+        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+
+        configs = {
+            "_TUNED_A": self._TUNED_A,
+            "_TUNED_A_EDITED": self._TUNED_A_EDITED,
+            "_TUNED_B": self._TUNED_B,
+            "_TUNED_B_EDITED": self._TUNED_B_EDITED,
+        }
+        baselines = snapshot_tuning_baselines(
+            [self._db_router_row(row_id, configs["_TUNED_A" if row_id == "a" else "_TUNED_B"]) for row_id in baseline_rows]
+        )
+        effective_params = {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": configs[candidate_config],
+        }
+        # The other routers live in the DB, so the slot must read them under its own lock rather than
+        # trusting this pod's in-memory router: another pod's write is invisible to that list.
+        fake = self._FakeDb(
+            [],
+            tuning_rows=[
+                {
+                    "model_id": row_id,
+                    "model_name": f"router-{row_id}",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": configs[name],
+                    },
+                }
+                for row_id, name in live_rows.items()
+            ],
+        )
+        with (
+            patch("litellm.proxy.proxy_server._license_check.auto_router_capability_limit", lambda: limit),  # test-quality-ok: the guard reads the proxy license singleton with no injection seam
+            patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: the guard reads the proxy router global with no injection seam
+            patch("litellm.proxy.proxy_server.heuristic_v1_tuning_baselines", baselines),  # test-quality-ok: baselines are a startup-loaded proxy global with no injection seam
+        ):
+            if expected == "refused":
+                with pytest.raises(HTTPException) as exc_info:
+                    async with _auto_router_capability_slot(fake, effective_params=effective_params, model_id=candidate_id):
+                        pass
+                assert exc_info.value.status_code == 403
+                assert "changed heuristic scorer settings or tier models" in str(exc_info.value.detail)
+                assert "'auto_router' feature lifts the limit" in str(exc_info.value.detail)
+                return
+            async with _auto_router_capability_slot(fake, effective_params=effective_params, model_id=candidate_id) as table:
+                assert hasattr(table, "create")
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_refuses_a_second_tuned_heuristic_v1_router_without_a_model_id(self) -> None:
+        """A create request carries no model_info at all, yet the quota still judges it: Deployment mints the
+        row id before the slot is entered, so a second tuned router is refused before its DB write."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+        from litellm.router_utils.auto_router_tuning_baseline import snapshot_tuning_baselines
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        baselines = snapshot_tuning_baselines([self._db_router_row("a", self._TUNED_A)])
+        fake = self._FakeDb(
+            [],
+            tuning_rows=[
+                {
+                    "model_id": "a",
+                    "model_name": "router-a",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": self._TUNED_A_EDITED,
+                    },
+                }
+            ],
+        )
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", fake),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server._license_check.auto_router_capability_limit", lambda: 1),  # test-quality-ok: endpoint reads proxy server globals with no injection seam
+            patch("litellm.proxy.proxy_server.heuristic_v1_tuning_baselines", baselines),  # test-quality-ok: baselines are a startup-loaded proxy global with no injection seam
+            patch(  # test-quality-ok: prior auth check needs a live DB; only the tuning quota is under test
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(  # test-quality-ok: params are encrypted before the slot is entered; no master key in this test
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                lambda value, new_encryption_key=None: value,
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="second-tuned",
+                        litellm_params=LiteLLM_Params(
+                            model="auto_router/complexity_router", complexity_router_config=self._TUNED_B
+                        ),
+                    ),
+                    user_api_key_dict=admin,
+                )
+            assert exc_info.value.code == "403"
+            assert "changed heuristic scorer settings or tier models" in str(exc_info.value.message)
+            fake.tx_obj.litellm_proxymodeltable.create.assert_not_awaited()
+            fake.litellm_proxymodeltable.create.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_slot_skips_tuning_quota_when_no_baseline_is_loaded(self) -> None:
+        """No baseline (DB-less proxy, or the startup read failed) means the gate cannot judge, so it does not."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import _auto_router_capability_slot
+
+        fake = self._FakeDb([])
+        with (
+            patch("litellm.proxy.proxy_server._license_check.auto_router_capability_limit", lambda: 1),  # test-quality-ok: the guard reads the proxy license singleton with no injection seam
+            patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: the guard reads the proxy router global with no injection seam
+            patch("litellm.proxy.proxy_server.heuristic_v1_tuning_baselines", None),  # test-quality-ok: baselines are a startup-loaded proxy global with no injection seam
+        ):
+            async with _auto_router_capability_slot(
+                fake,
+                effective_params={"model": "auto_router/complexity_router", "complexity_router_config": self._TUNED_B},
+                model_id="c",
+            ) as table:
+                assert hasattr(table, "create")
 
     @pytest.mark.asyncio
     async def test_team_model_bookkeeping_runs_after_the_slot_is_released(self) -> None:

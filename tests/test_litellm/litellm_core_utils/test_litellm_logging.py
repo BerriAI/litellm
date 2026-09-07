@@ -16,7 +16,10 @@ from litellm._logging import session_id_var, trace_id_var
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
-from litellm.litellm_core_utils.litellm_logging import set_callbacks
+from litellm.litellm_core_utils.litellm_logging import (
+    _get_status_fields,
+    set_callbacks,
+)
 from litellm.types.utils import ModelResponse, TextCompletionResponse
 
 
@@ -627,6 +630,86 @@ class TestRetrieveBatchCostPassesModelIdentity:
         assert captured["model_name"] == "bedrock/global.anthropic.claude-sonnet-4-6"
         assert captured["model_info"] is not None
         assert captured["model_info"]["input_cost_per_token"] == 0.0
+
+
+class TestRetrieveBatchPricesOnlyFinalBatches:
+    """Regression (LIT-7048): retrieving a provider-id batch priced it on every poll.
+
+    Every retrieve of one batch logs under the same spend row, so pricing a poll
+    that landed before the output existed wrote that row at $0 and pinned it there.
+    Only a final batch gets priced; an in-flight poll carries no cost at all.
+    """
+
+    @staticmethod
+    def _logging_obj() -> LitellmLogging:
+        obj = LitellmLogging(
+            model="gpt-5.6-luna",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-2",
+            function_id="f",
+        )
+        obj.custom_llm_provider = "openai"
+        return obj
+
+    @staticmethod
+    def _batch(status: str, output_file_id: str | None):
+        from litellm.types.utils import LiteLLMBatch
+
+        return LiteLLMBatch(
+            id="batch_6a9c99e185588190877d391f8b9d7f8a",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-in",
+            object="batch",
+            status="validating",
+            output_file_id=output_file_id,
+        ).model_copy(update={"status": status})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("status", "output_file_id"),
+        [("validating", None), ("in_progress", None), ("finalizing", None), ("completed", None), ("complete", None)],
+    )
+    async def test_non_final_batch_is_not_priced(self, monkeypatch, status, output_file_id) -> None:
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        handle_completed_batch = AsyncMock()
+        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        batch = self._batch(status, output_file_id)
+
+        await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
+
+        handle_completed_batch.assert_not_awaited()
+        assert "response_cost" not in batch._hidden_params
+
+    @pytest.mark.asyncio
+    async def test_completed_batch_with_output_is_priced(self, monkeypatch) -> None:
+        from litellm.batches.batch_utils import BatchCostUsageResult
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+        from litellm.types.utils import Usage
+
+        handle_completed_batch = AsyncMock(
+            return_value=BatchCostUsageResult(
+                cost=8e-06,
+                usage=Usage(prompt_tokens=26, completion_tokens=9, total_tokens=35),
+                models=["gpt-5.6-luna"],
+                successful_requests=2,
+                failed_requests=0,
+            )
+        )
+        monkeypatch.setattr(logging_module, "_handle_completed_batch", handle_completed_batch)
+        batch = self._batch("completed", "file-out")
+
+        await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
+
+        handle_completed_batch.assert_awaited_once()
+        assert batch._hidden_params["response_cost"] == 8e-06
+        assert batch.usage is not None
+        assert batch.usage.total_tokens == 35
 
 
 class TestAnthropicPassthroughCustomPricing:
@@ -6441,3 +6524,45 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
 
     assert isinstance(swapped_result, EmbeddingResponse)
     assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervened():
+    """LIT-6894: a non-blocking flagged verdict must outrank success in the
+    request-level guardrail_status but never mask an intervention."""
+    flagged = {"guardrail_status": "guardrail_flagged"}
+
+    assert _get_status_fields(
+        "success", [{"guardrail_status": "success"}, flagged], None
+    )["guardrail_status"] == "guardrail_flagged"
+    assert _get_status_fields(
+        "success", [flagged, {"guardrail_status": "guardrail_intervened"}], None
+    )["guardrail_status"] == "guardrail_intervened"
+
+
+def test_get_error_information_redacts_provider_key_from_upstream_url():
+    """A pass-through upstream failure logs the httpx traceback, whose message
+    quotes the upstream URL with the provider key in its query string. That
+    key must never reach spend logs or logging callbacks."""
+    import traceback
+
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    provider_key = "AIza" + "S" * 35
+    upstream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key={provider_key}"
+    response = httpx.Response(400, request=httpx.Request("POST", upstream_url))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as caught:
+        upstream_error = caught
+        upstream_traceback = traceback.format_exc()
+    assert provider_key in upstream_traceback
+
+    result = StandardLoggingPayloadSetup.get_error_information(
+        original_exception=upstream_error, traceback_str=upstream_traceback
+    )
+
+    assert provider_key not in result["traceback"]
+    assert provider_key not in result["error_message"]
+    assert "REDACTED" in result["traceback"]
+    assert "REDACTED" in result["error_message"]
+    assert result["error_code"] == "400"

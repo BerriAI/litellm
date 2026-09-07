@@ -2568,6 +2568,8 @@ class ProxyLogging:
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
 
+        redacted_traceback_str: Final = _redact_string(traceback_str) if traceback_str is not None else None
+
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: HTTPException | None = None
 
@@ -2586,7 +2588,7 @@ class ProxyLogging:
                             request_data=request_data,
                             user_api_key_dict=user_api_key_dict,
                             original_exception=original_exception,
-                            traceback_str=traceback_str,
+                            traceback_str=redacted_traceback_str,
                         )
                         # If callback returned an HTTPException, use it (first one wins)
                         if isinstance(hook_result, HTTPException) and transformed_exception is None:

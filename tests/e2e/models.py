@@ -35,6 +35,8 @@ class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
+    wandb_api_key: str | None = None
+    weave_project_id: str | None = None
 
 
 class KeyLoggingCallback(BaseModel):
@@ -83,6 +85,16 @@ class KeyGenerateResponse(BaseModel):
 
 class KeyRegenerateBody(BaseModel):
     key: str
+    grace_period: str | None = None
+
+
+class KeyResetSpendBody(BaseModel):
+    reset_to: float
+
+
+class KeyResetSpendResponse(BaseModel):
+    spend: float
+    previous_spend: float
 
 
 class KeyDeleteBody(BaseModel):
@@ -171,6 +183,7 @@ class ChatMessage(BaseModel):
 
 class CacheControl(BaseModel):
     type: str = "ephemeral"
+    ttl: str | None = None
 
 
 class TextBlock(BaseModel):

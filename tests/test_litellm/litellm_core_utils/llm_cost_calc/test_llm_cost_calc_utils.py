@@ -2008,7 +2008,14 @@ def test_generic_cost_per_token_azure_gpt56(_local_model_cost_map,
     assert round(completion_cost, 10) == round(output_cost * completion_tokens, 10)
 
 
-@pytest.mark.parametrize("model,zone_multiplier", [("azure/gpt-6-astra", 1.0), ("azure/us/gpt-6-astra", 1.1)])
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,zone_multiplier",
+    [
+        ("azure/gpt-6-astra", "azure", 1.0),
+        ("azure/us/gpt-6-astra", "azure", 1.1),
+        ("azure_ai/gpt-6-astra", "azure_ai", 1.0),
+    ],
+)
 @pytest.mark.parametrize(
     "prompt_tokens,input_side_multiplier,output_multiplier",
     [(100000, 1.0, 1.0), (300000, 2.0, 1.5)],
@@ -2016,6 +2023,7 @@ def test_generic_cost_per_token_azure_gpt56(_local_model_cost_map,
 def test_generic_cost_per_token_azure_gpt_6_astra_foundry_price_sheet(
     _local_model_cost_map,
     model,
+    custom_llm_provider,
     zone_multiplier,
     prompt_tokens,
     input_side_multiplier,
@@ -2023,7 +2031,8 @@ def test_generic_cost_per_token_azure_gpt_6_astra_foundry_price_sheet(
 ):
     """Microsoft Foundry sells gpt-6-astra at the OpenAI rates: $10 input, $1 cache read, $12.50 cache write,
     $50 output per 1M tokens on Standard Global, with the input side doubling and output 1.5x above 272K
-    prompt tokens. Standard US Data Zone carries the usual 10% uplift on every rate.
+    prompt tokens. Standard US Data Zone carries the usual 10% uplift on every rate. A Foundry
+    deployment reached through the azure_ai route bills the same Standard Global sheet.
     """
     cached_tokens = 50000
     cache_write_tokens = 40000
@@ -2041,7 +2050,7 @@ def test_generic_cost_per_token_azure_gpt_6_astra_foundry_price_sheet(
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
         usage=usage,
-        custom_llm_provider="azure",
+        custom_llm_provider=custom_llm_provider,
     )
 
     input_side = zone_multiplier * input_side_multiplier
@@ -2049,6 +2058,18 @@ def test_generic_cost_per_token_azure_gpt_6_astra_foundry_price_sheet(
         input_side * (text_tokens * 1e-5 + cached_tokens * 1e-6 + cache_write_tokens * 1.25e-5)
     )
     assert completion_cost == pytest.approx(zone_multiplier * output_multiplier * completion_tokens * 5e-5)
+
+
+def test_generic_cost_per_token_azure_ai_gpt_6_astra_flex_bills_the_standard_rate(_local_model_cost_map):
+    usage = Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100)
+
+    standard = generic_cost_per_token(model="azure_ai/gpt-6-astra", usage=usage, custom_llm_provider="azure_ai")
+    flex = generic_cost_per_token(
+        model="azure_ai/gpt-6-astra", usage=usage, custom_llm_provider="azure_ai", service_tier="flex"
+    )
+
+    assert flex == standard
+    assert standard == pytest.approx((1000 * 1e-05, 100 * 5e-05))
 
 
 @pytest.mark.parametrize(

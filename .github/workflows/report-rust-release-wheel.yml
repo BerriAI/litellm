@@ -24,8 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      issues: write # PR comments use the issues API
-      pull-requests: read # Current-head validation rejects stale workflow runs
+      pull-requests: write
 
     steps:
       - name: Link release wheel report on PR
