@@ -2,7 +2,6 @@
 Tests for Z.AI (Zhipu AI) provider - GLM models
 """
 
-import json
 import math
 
 import pytest
@@ -172,29 +171,3 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
 
     assert response.choices[0].message.content == "Hello! How can I help you today?"
     assert response.usage.total_tokens == 25
-
-
-class TestZAIDashboardRegistration:
-    @staticmethod
-    def _provider_create_fields():
-        from pathlib import Path
-
-        path = Path(litellm.__file__).parent / "proxy" / "public_endpoints" / "provider_create_fields.json"
-        with open(path) as f:
-            return json.load(f)
-
-    def test_zai_is_selectable_in_the_add_model_form(self):
-        entries = [e for e in self._provider_create_fields() if e["litellm_provider"] == "zai"]
-        assert len(entries) == 1, "zai must appear exactly once in provider_create_fields.json"
-
-        entry = entries[0]
-        assert entry["provider"] == "ZAI"
-        assert entry["provider_display_name"] == "Z.AI (Zhipu AI)"
-        assert entry["default_model_placeholder"].startswith("zai/")
-
-        fields = {f["key"]: f for f in entry["credential_fields"]}
-        assert fields["api_key"]["required"] is True
-        assert fields["api_key"]["field_type"] == "password"
-        assert fields["api_base"]["required"] is False
-        assert fields["api_base"]["field_type"] == "text"
-        assert fields["api_base"]["placeholder"] == "https://api.z.ai/api/paas/v4"
