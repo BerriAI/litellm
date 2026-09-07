@@ -642,12 +642,13 @@ def _iter_openai_jsonl_entries(
 ) -> Iterator[dict[str, Any]]:
     for lineno, line in _iter_numbered_openai_jsonl_lines(openai_file_content):
         try:
-            yield json.loads(line)
+            entry: dict[str, Any] = json.loads(line)
         except json.JSONDecodeError as e:
             raise VertexAIError(
                 status_code=400,
                 message=f"Invalid JSON on line {lineno} of batch input file: {e.msg}",
             ) from e
+        yield entry
 
 
 def _parse_vertex_batch_output_row(line: str) -> _VertexBatchRow:
