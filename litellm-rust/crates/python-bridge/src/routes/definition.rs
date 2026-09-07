@@ -222,11 +222,7 @@ mod tests {
             let module = PyModule::new(py, "routes").expect("module should be created");
             crate::routes::register(&module).expect("routes should register");
             let routes = [
-                (
-                    "ocr",
-                    "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
-                ),
+                ("ocr", "aocr", "(boundary)"),
                 (
                     "transcription",
                     "atranscription",
@@ -311,7 +307,7 @@ mod tests {
                 .expect("kwargs should accept extra_headers");
             let document = PyDict::new(py);
 
-            for (sync_name, async_name) in [("ocr", "aocr"), ("transcription", "atranscription")] {
+            for (sync_name, async_name) in [("transcription", "atranscription")] {
                 let sync_error = module
                     .getattr(sync_name)
                     .and_then(|function| function.call(("model", &document), Some(&kwargs)))

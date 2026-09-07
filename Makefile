@@ -11,7 +11,7 @@
 	lint-test-quality lint-test-quality-budget-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
-	lint-install lint-fetch-base bootstrap install-rust-python-test-deps test-rust-python lint-rust-python-fixtures
+	lint-install lint-fetch-base bootstrap install-rust-python-test-deps test-rust-python test-rust-ocr lint-rust-python-fixtures
 
 # Default target
 help:
@@ -57,6 +57,7 @@ help:
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
 	@echo "  make test-rust-python   - Run ignored Python-integrated Cargo tests"
+	@echo "  make test-rust-ocr      - Build a wheel and require native OCR pytest acceptance"
 	@echo "  make lint-rust-python-fixtures - Check Rust test Python fixtures with Ruff"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
@@ -306,6 +307,23 @@ test-rust-extension:
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
+
+test-rust-ocr:
+	@temporary=$$(mktemp -d) && \
+	trap 'rm -rf "$$temporary"' EXIT HUP INT TERM && \
+	if [ -n "$(RUST_OCR_WHEEL)" ]; then \
+		wheel="$(RUST_OCR_WHEEL)"; \
+	else \
+		$(UV) build --wheel --out-dir "$$temporary/wheels" || exit $$?; \
+		set -- "$$temporary"/wheels/*.whl; \
+		[ "$$#" -eq 1 ] || exit 1; \
+		wheel="$$1"; \
+	fi && \
+	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --no-default-groups --group dev --extra proxy && \
+	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$wheel" && \
+	LITELLM_LOCAL_MODEL_COST_MAP=True "$$temporary/venv/bin/python" -I -c 'from litellm.rust_bridge import _native; assert callable(_native.ocr) and callable(_native.aocr)' && \
+	LITELLM_REQUIRE_NATIVE_OCR=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
+	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib tests/test_litellm/ocr/test_rust_bridge.py -v
 
 test-rust-python: install-rust-python-test-deps
 	@python=$$($(UV_RUN) python -c 'import sys; print(sys.executable)') && \

@@ -20,7 +20,20 @@ where
     T: Serialize + Send + 'static,
     F: Future<Output = Result<T, Error>> + Send + 'static,
 {
-    run_sync_on(
+    let result = run_sync_value(py, future, map_error)?;
+    Pythonized(result).into_pyobject(py).map(Bound::unbind)
+}
+
+pub(crate) fn run_sync_value<T, F>(
+    py: Python<'_>,
+    future: F,
+    map_error: fn(Error) -> PyErr,
+) -> PyResult<T>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+{
+    run_sync_value_on(
         py,
         pyo3_async_runtimes::tokio::get_runtime(),
         future,
@@ -28,14 +41,14 @@ where
     )
 }
 
-fn run_sync_on<T, F>(
+fn run_sync_value_on<T, F>(
     py: Python<'_>,
     runtime: &Runtime,
     future: F,
     map_error: fn(Error) -> PyErr,
-) -> PyResult<Py<PyAny>>
+) -> PyResult<T>
 where
-    T: Serialize + Send + 'static,
+    T: Send + 'static,
     F: Future<Output = Result<T, Error>> + Send + 'static,
 {
     if Handle::try_current().is_ok() {
@@ -45,8 +58,7 @@ where
     }
 
     let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
-    let result = map_core_result(result, map_error)?;
-    Pythonized(result).into_pyobject(py).map(Bound::unbind)
+    map_core_result(result, map_error)
 }
 
 pub(crate) fn run_async<T, F>(
@@ -63,6 +75,15 @@ where
         let result = map_core_result(result, map_error)?;
         Ok(Pythonized(result))
     })
+}
+
+pub(crate) async fn run_async_value<T, F>(future: F, map_error: fn(Error) -> PyErr) -> PyResult<T>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+{
+    let result = catch_future_panic(future).await?;
+    map_core_result(result, map_error)
 }
 
 fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -> PyResult<T> {
@@ -256,7 +277,7 @@ mod tests {
             .build()
             .expect("runtime should build");
         Python::attach(|py| {
-            let result = run_sync_on(
+            let result = run_sync_value_on(
                 py,
                 &runtime,
                 async {
@@ -265,7 +286,7 @@ mod tests {
                 },
                 runtime_error,
             );
-            assert!(extract_bool(py, result));
+            assert!(result.expect("route should complete"));
         });
     }
 

@@ -35,6 +35,8 @@ def logger_for(callbacks=(), stream=False, input_callbacks=(), sync_callbacks=()
 async def real_pre_call_logging(owners):
     retained = []
     observed = []
+    snapshots = []
+    order = []
     ignored = {"replacement": True}
     metadata = {"secret": "private", "keep": []}
     removed = object()
@@ -42,11 +44,13 @@ async def real_pre_call_logging(owners):
 
     class Retain(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
+            order.append("retain")
             retained.append(kwargs)
             return ignored
 
     class Mutate(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
+            order.append("mutate")
             kwargs["normalized"] = "normalized"
             assert kwargs.pop("remove") is removed
             kwargs["retained_metadata"]["secret"] = "masked"
@@ -54,12 +58,24 @@ async def real_pre_call_logging(owners):
 
     class Fail(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
+            order.append("fail")
             kwargs["lock"] = lock
             kwargs["retained_metadata"]["keep"].append("before failure")
             raise RuntimeError("expected pre-call callback failure")
 
     class Observe(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
+            order.append("observe")
+            snapshots.append(
+                (
+                    kwargs.get("normalized"),
+                    "remove" in kwargs,
+                    kwargs["retained_metadata"]["secret"],
+                    tuple(kwargs["retained_metadata"]["keep"]),
+                    "lock" in kwargs,
+                    "replacement" in kwargs,
+                )
+            )
             observed.append((kwargs, messages))
 
     logger = logger_for(input_callbacks=[Retain(), Mutate(), Fail(), Observe()])
@@ -72,7 +88,9 @@ async def real_pre_call_logging(owners):
         assert owner.invoke() is None
     finally:
         owner.close()
-    assert retained == [details] and observed == [(details, messages)]
+    assert order == ["retain", "mutate", "fail", "observe"]
+    assert snapshots == [("normalized", False, "masked", ("before failure",), True, False)]
+    assert len(retained) == len(observed) == 1
     assert retained[0] is details and observed[0][0] is details
     assert observed[0][1] is messages and details["input"] is messages
     assert details["additional_args"] is additional

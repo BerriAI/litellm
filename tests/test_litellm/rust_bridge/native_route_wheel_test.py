@@ -10,11 +10,13 @@ import sys
 import tempfile
 import threading
 import zipfile
+from dataclasses import dataclass
 from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socket import socket as Socket
 from typing import Final
+from urllib.error import HTTPError
 
 REQUEST_STARTED: Final = threading.Event()
 REQUEST_CANCELLED: Final = threading.Event()
@@ -123,20 +125,54 @@ def load_native(native_path: Path) -> object:
     return native_module
 
 
+@dataclass(frozen=True)
+class OCRBoundary:
+    api_base: str
+    outcome: str
+
+    def prepare(self) -> dict[str, object]:
+        return {
+            "model": "mistral-ocr-latest",
+            "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
+            "include_image_base64": True,
+        }
+
+    async def aprepare(self) -> dict[str, object]:
+        return self.prepare()
+
+    def encode(self, roots: dict[str, object]) -> tuple[str, list[tuple[bytes, bytes]], bytes, float]:
+        return (
+            f"{self.api_base}/v1/ocr",
+            [
+                (b"authorization", b"Bearer sk-native"),
+                (b"content-type", b"application/json"),
+                (b"x-test-route", b"ocr"),
+                (b"x-test-outcome", self.outcome.encode()),
+            ],
+            json.dumps(roots).encode(),
+            3.0,
+        )
+
+    def finish(self, wire: tuple[int, list[tuple[bytes, bytes]], bytes]) -> object:
+        status, headers, content = wire
+        assert (b"content-type", b"application/json") in headers
+        if status != 200:
+            assert content == b'{"error":"native-rate-limit"}'
+            raise HTTPError(f"{self.api_base}/v1/ocr", status, "native-rate-limit", HTTPMessage(), None)
+        return json.loads(content)
+
+    async def afinish(self, wire: tuple[int, list[tuple[bytes, bytes]], bytes]) -> object:
+        return self.finish(wire)
+
+
 def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
+    if route == "ocr":
+        return {"boundary": OCRBoundary(api_base, outcome)}
     common: Final = {
         "api_base": api_base,
         "extra_headers": {"x-test-outcome": outcome, "x-test-route": route},
         "timeout_seconds": 3.0,
     }
-    if route == "ocr":
-        return common | {
-            "model": "mistral-ocr-latest",
-            "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
-            "api_key": "sk-native",
-            "custom_llm_provider": "mistral",
-            "optional_params": {"include_image_base64": True},
-        }
     if route == "transcription":
         return common | {
             "model": "mistral.voxtral-mini-3b-2507",
@@ -192,7 +228,11 @@ def success_value(route: str, response: dict[object, object]) -> object:
 
 
 def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
-    if route in {"ocr", "chat_completions"}:
+    if route == "ocr":
+        if not isinstance(error, HTTPError) or error.code != 429:
+            raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
+        return
+    if route == "chat_completions":
         upstream_error: Final = native.RustUpstreamError
         if not isinstance(error, upstream_error) or error.args[0] != 429:
             raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
@@ -207,7 +247,7 @@ def exercise_sync(native: object, api_base: str) -> None:
         assert_success(route, function(**route_kwargs(route, api_base, "success")))
         try:
             function(**route_kwargs(route, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
+        except (HTTPError, RuntimeError, native.RustUpstreamError) as error:
             assert_rate_limit(native, route, error)
         else:
             raise AssertionError(f"{route} accepted a 429 response")
@@ -219,7 +259,7 @@ async def exercise_async(native: object, api_base: str) -> None:
         assert_success(route, await function(**route_kwargs(route, api_base, "success")))
         try:
             await function(**route_kwargs(route, api_base, "429"))
-        except (RuntimeError, native.RustUpstreamError) as error:
+        except (HTTPError, RuntimeError, native.RustUpstreamError) as error:
             assert_rate_limit(native, route, error)
         else:
             raise AssertionError(f"a{route} accepted a 429 response")
@@ -227,12 +267,7 @@ async def exercise_async(native: object, api_base: str) -> None:
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:
     responses: Final = await asyncio.wait_for(
-        asyncio.gather(
-            *(
-                native.amessages(**route_kwargs("messages", api_base, "success"))
-                for _ in range(32)
-            )
-        ),
+        asyncio.gather(*(native.amessages(**route_kwargs("messages", api_base, "success")) for _ in range(32))),
         timeout=15,
     )
     for response in responses:

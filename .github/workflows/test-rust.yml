@@ -4,6 +4,13 @@ on:
   push:
     paths:
       - "litellm-rust/**"
+      - "litellm/rust_bridge/**"
+      - "litellm/ocr/**"
+      - "litellm/llms/base_llm/ocr/**"
+      - "litellm/llms/custom_httpx/llm_http_handler.py"
+      - "tests/test_litellm/ocr/**"
+      - "tests/test_litellm/conftest.py"
+      - "Makefile"
       - ".cargo/**"
       - "pyproject.toml"
       - "uv.lock"
@@ -21,6 +28,13 @@ on:
       - "litellm_**"
     paths:
       - "litellm-rust/**"
+      - "litellm/rust_bridge/**"
+      - "litellm/ocr/**"
+      - "litellm/llms/base_llm/ocr/**"
+      - "litellm/llms/custom_httpx/llm_http_handler.py"
+      - "tests/test_litellm/ocr/**"
+      - "tests/test_litellm/conftest.py"
+      - "Makefile"
       - ".cargo/**"
       - "pyproject.toml"
       - "uv.lock"
@@ -127,6 +141,9 @@ jobs:
           --config-setting "maturin.build-args=--features panic-test,extension-module"
 
       - run: python .github/scripts/smoke_test_native_wheel.py panic-dist/*.whl
+
+      - name: Require native OCR pytest acceptance
+        run: make test-rust-ocr RUST_OCR_WHEEL="$(realpath dist/*.whl)"
 
       - name: Check Python fixtures for Cargo tests
         run: make lint-rust-python-fixtures

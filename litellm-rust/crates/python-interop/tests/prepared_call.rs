@@ -6,7 +6,7 @@ use rstest::rstest;
 #[path = "support/mod.rs"]
 mod support;
 
-use support::python::{InitializedPython, initialized_python, item, scope};
+use support::python::{InitializedPython, initialized_python, item, run_fixture, scope};
 
 #[rstest]
 fn retains_aliases_mutations_and_original_result(
@@ -272,6 +272,55 @@ fn prepare_pre_call(
 }
 
 #[rstest]
+fn checked_runner_rejects_unhandled_background_failures(
+    initialized_python: &InitializedPython,
+) -> PyResult<()> {
+    let _ = initialized_python;
+    Python::attach(|py| {
+        let globals = PyDict::new(py);
+        run_fixture(
+            py,
+            &globals,
+            include_str!("fixtures/callback_lifecycle.py"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/callback_lifecycle.py"
+            ),
+        )?;
+        py.run(
+            c"
+async def fail():
+    raise RuntimeError('background task regression')
+
+for cyclic in (False, True):
+    for handled in (False, True):
+        async def scenario(cyclic=cyclic, handled=handled):
+            task = asyncio.create_task(fail())
+            if cyclic:
+                task.cycle = task
+            await checkpoint()
+            assert task.done()
+            if handled:
+                with TestCase().assertRaisesRegex(RuntimeError, 'background task regression'):
+                    task.result()
+            del task
+
+        owners = ReferenceFactory()
+        if handled:
+            run_checked(owners, scenario())
+        else:
+            with TestCase().assertRaisesRegex(
+                AssertionError, r'unhandled background failures: .*background task regression'
+            ):
+                run_checked(owners, scenario())
+",
+            Some(&globals),
+            None,
+        )
+    })
+}
+
+#[rstest]
 #[ignore = "requires the repository Python environment and LiteLLM on PYTHONPATH"]
 fn real_ocr_logging_preserves_execution_roots_and_continues_after_error(
     initialized_python: &InitializedPython,
@@ -285,15 +334,20 @@ from datetime import datetime
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 
+order = []
+
 class Retain(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
+        order.append('retain')
         self.view = kwargs['additional_args']
         self.headers = self.view['headers']
         self.body = self.view['complete_input_dict']
+        self.snapshot = (self.headers['X-Trace'], self.body['document']['value'])
         return {'ignored_replacement': True}
 
 class MutateThenFail(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
+        order.append('mutate_then_fail')
         view = kwargs['additional_args']
         view['headers']['X-Trace'] = 'mutated'
         view['complete_input_dict']['document']['value'] = 'mutated'
@@ -303,7 +357,13 @@ class MutateThenFail(CustomLogger):
 
 class Observe(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
+        order.append('observe')
         self.view = kwargs['additional_args']
+        self.snapshot = (
+            tuple(sorted(self.view['headers'].items())),
+            self.view['complete_input_dict'].get('replacement'),
+            'document' in self.view['complete_input_dict'],
+        )
 
 first = Retain()
 last = Observe()
@@ -338,6 +398,9 @@ logger = Logging(
         );
         py.run(
             c"
+assert order == ['retain', 'mutate_then_fail', 'observe']
+assert first.snapshot == ('original', 'original')
+assert last.snapshot == ((('X-Trace', 'replacement'),), True, False)
 assert first.view is last.view
 assert first.body['document'] is document
 assert first.body['alias'] is document

@@ -661,15 +661,19 @@ async def detached_work_after_error(owners):
 
 def run_checked(owners, scenario):
     baseline = owners.live
+    background_failures = []
 
     async def run():
+        asyncio.get_running_loop().set_exception_handler(lambda loop, context: background_failures.append(context))
         await asyncio.wait_for(scenario, timeout=15)
+        gc.collect()
         assert owners.live == baseline
         pending = asyncio.all_tasks() - {asyncio.current_task()}
         assert not pending, f"undrained tasks: {pending}"
 
     asyncio.run(run())
     gc.collect()
+    assert not background_failures, f"unhandled background failures: {background_failures}"
     assert owners.live == baseline
 
 

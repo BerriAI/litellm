@@ -73,7 +73,28 @@ make lint-rust-python-fixtures
 `lint-rust-python-fixtures` runs pinned Ruff lint and formatting checks without
 syncing the project environment
 
-These tests validate retained callback identity, mutation, invocation context,
+Run the native OCR acceptance gate from the repository root:
+
+```bash
+make test-rust-ocr
+```
+
+This builds the current release wheel, installs locked SDK dependencies, the
+`dev` test group, and the `proxy` extra in a temporary Python 3.12 environment,
+then installs the wheel without resolving dependencies again. The proxy extra
+is needed by the shared pytest fixtures. Python isolated mode and pytest's
+importlib mode keep the checkout from shadowing the installed wheel
+
+The gate checks that native `ocr` and `aocr` are importable, then runs
+`tests/test_litellm/ocr/test_rust_bridge.py` with
+`LITELLM_REQUIRE_NATIVE_OCR=1`, so unavailable native OCR fails instead of
+skipping. CI uses `make test-rust-ocr RUST_OCR_WHEEL=/absolute/path/to/current.whl`
+to test the release wheel it just built. The stdlib-only
+`native_route_wheel_test.py` also exercises sync/async OCR through a small
+boundary, including 429 handling in `finish`/`afinish`, alongside the other
+native routes
+
+The Python-integrated Cargo tests validate retained callback identity, mutation, invocation context,
 and ownership against Python behavior, including existing LiteLLM components.
 They do not wire retained callbacks into production routes or change provider
 preparation, authentication, HTTP transport, or response transformation
