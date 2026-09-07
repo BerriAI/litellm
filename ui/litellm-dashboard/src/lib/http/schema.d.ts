@@ -23306,6 +23306,11 @@ export interface components {
             baseline_spend: number;
             cache: components["schemas"]["AutoRouterCacheStats"];
             /**
+             * Classifier Cost
+             * @description Recorded LLM classifier cost already included in spend; null when any session turns predate subtotal recording, and zero for an empty window
+             */
+            classifier_cost: number | null;
+            /**
              * Router Name
              * @description The auto-router alias requests were sent to
              */
@@ -23361,6 +23366,11 @@ export interface components {
              */
             baseline_spend: number;
             cache: components["schemas"]["AutoRouterCacheStats"];
+            /**
+             * Classifier Cost
+             * @description Recorded LLM classifier cost already included in spend; null when any session turns predate subtotal recording, and zero for an empty window
+             */
+            classifier_cost: number | null;
             /**
              * Saved Pct
              * @description saved_spend over baseline_spend, as a percentage
