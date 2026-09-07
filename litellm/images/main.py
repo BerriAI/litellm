@@ -34,6 +34,9 @@ from openai.types.audio.transcription_create_params import FileTypes
 # BFL handlers
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
+
+# ModelScope handler
+from litellm.llms.modelscope.image_generation.handler import modelscope_image_generation
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -413,6 +416,25 @@ def image_generation(
             if model is None:
                 raise Exception("Model needs to be set for black_forest_labs")
             return bfl_image_generation.image_generation(
+                model=model,
+                prompt=prompt,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                client=client,
+                aimg_generation=aimg_generation,
+            )
+        elif custom_llm_provider == "modelscope":
+            if model is None:
+                raise Exception("Model needs to be set for modelscope")
+            if api_base is not None and api_key is None:
+                raise ValueError("api_key must be provided when api_base is overridden for modelscope")
+            litellm_params_dict["api_key"] = api_key
+            litellm_params_dict["api_base"] = api_base
+            return modelscope_image_generation.image_generation(
                 model=model,
                 prompt=prompt,
                 model_response=model_response,

@@ -1250,6 +1250,8 @@ modelscope_models: Final[set] = set(
         "Qwen/QwQ-32B-Preview",
         "Qwen/QVQ-72B-Preview",
         "Qwen/Qwen-Image-Edit",
+        "Qwen/Qwen-Image-Edit-2511",
+        "Qwen/Qwen-Image-2512",
         # DeepSeek series models
         "deepseek-ai/DeepSeek-R1-0528",
         "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
