@@ -2,6 +2,7 @@
 Z.AI OpenAI-compatible Responses API transformation config.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -26,35 +27,38 @@ class ZAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.ZAI
 
+    @staticmethod
+    def get_api_key(api_key: str | None = None) -> str | None:
+        return api_key or get_secret_str("ZAI_API_KEY") or litellm.api_key
+
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: Mapping[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict[str, str]:
-        litellm_params = litellm_params or GenericLiteLLMParams()
+    ) -> dict[str, str]:  # mutable-ok: the responses handler owns and mutates the returned headers dict
+        request_api_key: Final = litellm_params.api_key if litellm_params is not None else None
+        resolved_params: Final = GenericLiteLLMParams(api_key=self.get_api_key(api_key=request_api_key))
 
-        api_key: Final = litellm_params.api_key or get_secret_str("ZAI_API_KEY") or litellm.api_key
-
-        headers.setdefault("Content-Type", "application/json")
-        if api_key is not None:
-            headers["Authorization"] = f"Bearer {api_key}"
-        return headers
+        return super().validate_environment(
+            headers=headers,
+            model=model,
+            litellm_params=resolved_params,
+        )
 
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict[str, object],
+        litellm_params: Mapping[str, object],
     ) -> str:
         # ``litellm_params.api_base`` can carry the Z.AI chat-completions base
         # (``/api/paas/v4``) when the generic provider resolver pre-fills it from
         # the chat config. Z.AI serves Responses on a different base, so ignore
         # the chat-only bases and use the Responses base instead.
-        normalized_api_base = (api_base or "").rstrip("/")
+        normalized_api_base: Final = (api_base or "").rstrip("/")
         chat_base_passed_in: Final = normalized_api_base.endswith(self._ZAI_CHAT_API_BASE_SUFFIXES)
-        base_url = api_base if api_base and not chat_base_passed_in else "https://api.z.ai/api/v1"
+        base_url: Final = normalized_api_base if api_base and not chat_base_passed_in else "https://api.z.ai/api/v1"
 
-        base_url = base_url.rstrip("/")
         if base_url.endswith("/responses"):
             return base_url
         return f"{base_url}/responses"

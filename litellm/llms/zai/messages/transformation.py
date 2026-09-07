@@ -2,6 +2,7 @@
 Z.AI Anthropic-compatible messages transformation config.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -36,51 +37,36 @@ class ZAIAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict[str, str],
+        headers: Mapping[str, str],
         model: str,
-        messages: list[dict[str, object]],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        messages: list[Mapping[str, object]],  # mutable-ok: matches the pass-through handler's message list contract
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict[str, str], str | None]:
-        dynamic_api_key: Final = self.get_api_key(api_key=api_key)
-        header_names: Final = {header_name.lower() for header_name in headers}
-
-        if "x-api-key" not in header_names and "authorization" not in header_names and dynamic_api_key is not None:
-            headers["x-api-key"] = dynamic_api_key
-
-        if "anthropic-version" not in headers:
-            headers["anthropic-version"] = "2023-06-01"
-        if "content-type" not in headers:
-            headers["content-type"] = "application/json"
-
-        headers = self._update_headers_with_anthropic_beta(
+    ) -> tuple[dict[str, str], str | None]:  # mutable-ok: the handler owns and mutates the returned headers dict
+        return super().validate_anthropic_messages_environment(
             headers=headers,
+            model=model,
+            messages=messages,
             optional_params=optional_params,
-            custom_llm_provider=self.custom_llm_provider or "zai",
+            litellm_params=litellm_params,
+            api_key=self.get_api_key(api_key=api_key),
+            api_base=api_base,
         )
-
-        return headers, api_base
 
     def get_complete_url(
         self,
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        base_url = self.get_api_base(api_base=api_base).rstrip("/")
+        raw_base_url: Final = self.get_api_base(api_base=api_base).rstrip("/")
+        root_url: Final = raw_base_url.removesuffix("/v1/messages").removesuffix("/v1").removesuffix("/beta")
 
-        if base_url.endswith("/v1/messages"):
-            return base_url
-        base_url = base_url.removesuffix("/v1/messages")
-        base_url = base_url.removesuffix("/v1")
-        base_url = base_url.removesuffix("/beta")
-
-        if not base_url.endswith("/anthropic") and "/anthropic/" not in base_url:
-            base_url = f"{base_url}/anthropic"
-
-        return f"{base_url}/v1/messages"
+        if root_url.endswith("/anthropic") or "/anthropic/" in root_url:
+            return f"{root_url}/v1/messages"
+        return f"{root_url}/anthropic/v1/messages"
