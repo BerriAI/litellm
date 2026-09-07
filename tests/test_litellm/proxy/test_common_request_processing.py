@@ -2,7 +2,7 @@ import asyncio
 import copy
 import datetime
 import json
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -375,6 +375,75 @@ class TestProxyBaseLLMRequestProcessing:
         # audit body, which needs to stay plain-JSON-serializable end to end.
         assert "litellm_logging_obj" not in persisted_body
         json.dumps(persisted_body)
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_arms_auto_router_compression_before_guardrails(
+        self, monkeypatch
+    ):
+        """arm_pre_call must run before pre_call_hook: an auto router's own compression
+        policy has to be in `data["metadata"]` (naming the model-side guardrail so it
+        runs even if it isn't default_on) by the time guardrails see the request."""
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.proxy.guardrails import guardrail_registry
+
+        # The model hop is only armed for a name that resolves to an active compression
+        # guardrail, so arming it has to have a real one to resolve to.
+        class _FakeCompressionGuardrail(CustomGuardrail):
+            pass
+
+        monkeypatch.setitem(guardrail_registry.guardrail_class_registry, "headroom", _FakeCompressionGuardrail)
+        active_guardrail = _FakeCompressionGuardrail(guardrail_name="headroom-model")
+        litellm.logging_callback_manager.add_litellm_callback(active_guardrail)
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return {"model": "smart-router", "messages": [{"role": "user", "content": "hi"}]}
+
+        seen_metadata: dict = {}
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            seen_metadata.update(data.get("metadata") or {})
+            return data
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+
+        fake_llm_router = MagicMock()
+        fake_llm_router.get_model_list.return_value = [
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "auto_router_routing_compression": "none",
+                    "auto_router_model_compression": "headroom-model",
+                },
+            }
+        ]
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+
+        try:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=mock_proxy_config,
+                route_type="acompletion",
+                llm_router=fake_llm_router,
+            )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(active_guardrail)
+
+        assert seen_metadata.get("guardrails") == ["headroom-model"]
 
     def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
         mock_set_active_span_tag = MagicMock(return_value=True)
@@ -1739,6 +1808,146 @@ class TestCommonRequestProcessingHelpers:
         custom_headers = {"X-Custom-Header": "TestValue"}
         response = await create_response(mock_generator(), "text/event-stream", custom_headers)
         assert response.headers["x-custom-header"] == "TestValue"
+
+    async def test_create_streaming_response_refresh_headers_after_first_chunk(self):
+        """LIT-6767: headers a caller can only resolve once the first chunk exists.
+
+        A pre-first-chunk fallback replaces the deployment while the response
+        headers are still uncommitted, so ``refresh_headers`` is consulted after
+        the first chunk is buffered and its result wins.
+        """
+
+        async def mock_generator():
+            yield 'data: {"content": "data"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        refresh_headers: Final = AsyncMock(
+            return_value={"x-litellm-model-id": "fallback-deployment", "llm_provider-x-request-id": "req-FALLBACK"}
+        )
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment", "llm_provider-x-request-id": "req-FAILED"},
+            refresh_headers=refresh_headers,
+        )
+        assert isinstance(response, StreamingResponse)
+        assert refresh_headers.await_count == 1
+        assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+        assert response.headers["llm_provider-x-request-id"] == "req-FALLBACK"
+        # the buffering headers are still applied on top of the refreshed set
+        assert response.headers["x-accel-buffering"] == "no"
+        assert response.headers["cache-control"] == "no-cache"
+
+    async def test_create_streaming_response_refreshes_only_after_the_first_chunk(self):
+        """LIT-6767: the refresh has to be consulted after the generator produced a chunk.
+
+        A pre-first-chunk fallback only repoints the response while that first chunk is
+        being produced, so a refresh consulted any earlier still describes the attempt
+        that failed and the headers go out wrong.
+        """
+        first_chunk_produced: Final = asyncio.Event()
+
+        async def mock_generator():
+            first_chunk_produced.set()
+            yield 'data: {"content": "data"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        async def refresh_headers():
+            served = "fallback-deployment" if first_chunk_produced.is_set() else "failed-deployment"
+            return {"x-litellm-model-id": served}
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+            refresh_headers=refresh_headers,
+        )
+        assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+
+    async def test_create_streaming_response_empty_stream_uses_refreshed_headers(self):
+        """LIT-6767: a fallback that served nothing still gets to name itself.
+
+        The empty-generator branch returns its own StreamingResponse, so it needs the
+        refreshed headers too or the client is told the failed deployment answered.
+        """
+
+        async def mock_generator():
+            return
+            yield  # make it an async generator
+
+        async def refresh_headers():
+            return {"x-litellm-model-id": "fallback-deployment"}
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+            refresh_headers=refresh_headers,
+        )
+        assert isinstance(response, StreamingResponse)
+        assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+        assert response.headers["x-accel-buffering"] == "no"
+
+    async def test_create_streaming_response_without_refresh_headers_is_unchanged(self):
+        """LIT-6767: the default keeps the caller-supplied headers verbatim."""
+
+        async def mock_generator():
+            yield 'data: {"content": "data"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+        )
+        assert response.headers["x-litellm-model-id"] == "failed-deployment"
+
+    async def test_create_streaming_response_refresh_headers_failure_keeps_stream(self):
+        """LIT-6767: the first chunk is already paid for, so a failing refresh
+        falls back to the caller's headers instead of erroring the stream."""
+
+        async def mock_generator():
+            yield 'data: {"content": "data"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        async def refresh_headers():
+            raise RuntimeError("boom")
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+            refresh_headers=refresh_headers,
+        )
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.headers["x-litellm-model-id"] == "failed-deployment"
+        assert await self.consume_stream(response) == [
+            'data: {"content": "data"}\n\n',
+            "data: [DONE]\n\n",
+        ]
+
+    async def test_create_response_first_chunk_error_uses_refreshed_headers(self):
+        """LIT-6767: the JSON error response built from a bad first chunk carries
+        the refreshed headers too, so it cannot describe a deployment that no
+        longer served the request."""
+
+        async def mock_generator():
+            yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
+            yield "data: [DONE]\n\n"
+
+        async def refresh_headers():
+            return {"x-litellm-model-id": "fallback-deployment"}
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+            refresh_headers=refresh_headers,
+        )
+        assert isinstance(response, JSONResponse)
+        assert response.headers["x-litellm-model-id"] == "fallback-deployment"
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
         """Regression for #28384: every StreamingResponse create_response returns
@@ -7945,3 +8154,108 @@ class TestDetachedStreamFailureHook:
         await logging_obj._on_detached_stream_failure(failure)
 
         assert [call["original_exception"] for call in recorder.calls] == [failure]
+
+
+class TestStreamingResponseHeadersFollowFallback:
+    """LIT-6767: the streaming branch has to publish the deployment that served the stream."""
+
+    @staticmethod
+    def _fallback_adopting_stream():
+        class _Stream:
+            def __init__(self) -> None:
+                self._hidden_params = {
+                    "model_id": "failed-deployment",
+                    "api_base": "http://127.0.0.1:20769/v1",
+                    "additional_headers": {"llm_provider-stale-marker": "failed-deployment"},
+                }
+                self.fallback_headers_adopted = False
+
+            def adopt(self) -> None:
+                self._hidden_params = {
+                    "model_id": "served-deployment",
+                    "api_base": "https://api.openai.com",
+                    "additional_headers": {"llm_provider-x-request-id": "req-SERVED"},
+                }
+                self.fallback_headers_adopted = True
+
+        return _Stream()
+
+    @pytest.mark.asyncio
+    async def test_streaming_headers_name_the_deployment_that_served(self, monkeypatch):
+        """A pre-first-chunk fallback repoints the stream while the headers are still
+        uncommitted, so the published headers must describe the fallback, not the attempt
+        the Router picked first."""
+        stream = self._fallback_adopting_stream()
+
+        def select_data_generator(**kwargs):
+            async def generator():
+                stream.adopt()
+                yield 'data: {"choices": [{"delta": {"content": "OK"}}]}\n\n'
+                yield "data: [DONE]\n\n"
+
+            return generator()
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "lit-6767-call"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "oa-midfail", "stream": True, "litellm_logging_obj": logging_obj}
+        )
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(
+            side_effect=lambda data, user_api_key_dict, response: response
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-callback-header": "kept"}
+        )
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                return stream
+
+            return call()
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing, "route_request", fake_route_request
+        )
+
+        result = await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=select_data_generator,
+            is_streaming_request=True,
+            skip_pre_call_logic=True,
+        )
+
+        assert isinstance(result, StreamingResponse)
+        assert result.headers["x-litellm-model-id"] == "served-deployment"
+        assert result.headers["x-litellm-model-api-base"] == "https://api.openai.com"
+        assert result.headers["llm_provider-x-request-id"] == "req-SERVED"
+        assert "llm_provider-stale-marker" not in result.headers
+        assert result.headers["x-callback-header"] == "kept"
+
+
+class TestPassthroughHeadersAcceptImmutableMappings:
+    """LIT-6767: the streaming branch now hands the passthrough helpers an immutable mapping."""
+
+    def test_merge_passthrough_streaming_headers_accepts_a_read_only_mapping(self):
+        merged = ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
+            response_headers=httpx.Headers({"content-type": "text/event-stream", "transfer-encoding": "chunked"}),
+            custom_headers=MappingProxyType({"x-litellm-model-id": "served-deployment"}),
+        )
+
+        assert merged["x-litellm-model-id"] == "served-deployment"
+        assert merged["content-type"] == "text/event-stream"
+        # the excluded hop-by-hop header is still dropped
+        assert "transfer-encoding" not in merged

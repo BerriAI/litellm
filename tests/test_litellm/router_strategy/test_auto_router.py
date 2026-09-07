@@ -316,6 +316,11 @@ class TestAutoRouter:
 
 semantic_router = pytest.importorskip("semantic_router", reason="auto-router needs the semantic-router extra")
 
+# SemanticRouter(auto_sync="local") calls the encoder's sync embedding path twice per build:
+# once to probe the encoder's output dimension, once to embed ROUTER_CONFIG's one route's
+# utterances.
+_EMBEDDING_CALLS_PER_ROUTELAYER_BUILD: Final = 2
+
 ROUTER_CONFIG: Final = json.dumps(
     {
         "routes": [
@@ -604,3 +609,164 @@ class TestAutoRouterAttributesItsEmbeddingSpend:
         assert router.aembedding_kwargs["proxy_server_request"] == {
             "body": {"model": "text-embedding-3-small", "input": ["fix this stack trace"]}
         }
+
+
+class ThreadTrackingEmbeddingRouter(StubEmbeddingRouter):
+    """Records which OS thread and how many times `embedding()` was called during a build."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.embedding_call_threads: list[int] = []
+
+    def embedding(self, input: list[str], model: str, **kwargs: Any) -> Any:
+        import threading
+
+        self.embedding_call_threads.append(threading.get_ident())
+        return super().embedding(input, model, **kwargs)
+
+
+class TestAutoRouterColdStartDoesNotBlockTheEventLoop:
+    """The first request through a fresh alias builds the route layer off the event loop thread,
+    and concurrent first requests build it exactly once."""
+
+    @pytest.mark.asyncio
+    async def test_should_build_the_routelayer_on_a_worker_thread_not_the_event_loop_thread(self):
+        import threading
+
+        embedding_router: Final = ThreadTrackingEmbeddingRouter()
+        auto_router: Final = _auto_router(None, litellm_router_instance=embedding_router)
+        event_loop_thread: Final = threading.get_ident()
+
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert result is not None
+        assert len(embedding_router.embedding_call_threads) == _EMBEDDING_CALLS_PER_ROUTELAYER_BUILD
+        assert set(embedding_router.embedding_call_threads) == {embedding_router.embedding_call_threads[0]}
+        assert embedding_router.embedding_call_threads[0] != event_loop_thread
+
+    @pytest.mark.asyncio
+    async def test_should_build_the_routelayer_exactly_once_under_concurrent_cold_start_requests(self):
+        embedding_router: Final = ThreadTrackingEmbeddingRouter()
+        auto_router: Final = _auto_router(None, litellm_router_instance=embedding_router)
+
+        results: Final = await asyncio.gather(
+            *(
+                auto_router.async_pre_routing_hook(
+                    model="my-auto-router",
+                    request_kwargs={},
+                    messages=[{"role": "user", "content": "fix this stack trace"}],
+                )
+                for _ in range(10)
+            )
+        )
+
+        assert all(result is not None for result in results)
+        assert len(embedding_router.embedding_call_threads) == _EMBEDDING_CALLS_PER_ROUTELAYER_BUILD
+
+    @pytest.mark.asyncio
+    async def test_should_not_duplicate_the_build_when_a_caller_is_cancelled_mid_build(self):
+        """A caller arriving while the first is cancelled mid-build must reuse it, not duplicate it."""
+        import threading
+
+        class BlockingEmbeddingRouter(ThreadTrackingEmbeddingRouter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def embedding(self, input: list[str], model: str, **kwargs: Any) -> Any:
+                self.started.set()
+                self.release.wait(timeout=5)
+                return super().embedding(input, model, **kwargs)
+
+        embedding_router: Final = BlockingEmbeddingRouter()
+        auto_router: Final = _auto_router(None, litellm_router_instance=embedding_router)
+
+        first_call: Final = asyncio.ensure_future(
+            auto_router.async_pre_routing_hook(
+                model="my-auto-router",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "fix this stack trace"}],
+            )
+        )
+        while not embedding_router.started.is_set():
+            await asyncio.sleep(0.01)
+
+        first_call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_call
+
+        second_call: Final = asyncio.ensure_future(
+            auto_router.async_pre_routing_hook(
+                model="my-auto-router",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "fix this stack trace"}],
+            )
+        )
+        await asyncio.sleep(0.01)  # let the second call observe the still-running build
+        embedding_router.release.set()
+        result: Final = await second_call
+
+        assert result is not None
+        assert len(embedding_router.embedding_call_threads) == _EMBEDDING_CALLS_PER_ROUTELAYER_BUILD
+
+    @pytest.mark.asyncio
+    async def test_should_clear_a_failed_build_even_with_no_caller_left_to_observe_it(self):
+        """A build failing after its only caller was cancelled must still clear, not stay cached."""
+        import threading
+
+        class FailsOnFirstAttemptEmbeddingRouter(ThreadTrackingEmbeddingRouter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.started = threading.Event()
+                self.release = threading.Event()
+                self.attempts = 0
+
+            def embedding(self, input: list[str], model: str, **kwargs: Any) -> Any:
+                self.attempts += 1
+                attempt = self.attempts
+                self.started.set()
+                self.release.wait(timeout=5)
+                if attempt == 1:
+                    raise ValueError("boom")
+                return super().embedding(input, model, **kwargs)
+
+        embedding_router: Final = FailsOnFirstAttemptEmbeddingRouter()
+        auto_router: Final = _auto_router(None, litellm_router_instance=embedding_router)
+
+        first_call: Final = asyncio.ensure_future(
+            auto_router.async_pre_routing_hook(
+                model="my-auto-router",
+                request_kwargs={},
+                messages=[{"role": "user", "content": "fix this stack trace"}],
+            )
+        )
+        while not embedding_router.started.is_set():
+            await asyncio.sleep(0.01)
+        first_call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await first_call
+
+        # Nobody awaits the build now. Let the first attempt fail on its own.
+        embedding_router.release.set()
+        build_task = auto_router._routelayer_build_task
+        assert build_task is not None
+        while not build_task.done():
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.01)  # let the done-callback (scheduled via call_soon) run
+
+        assert auto_router._routelayer_build_task is None
+
+        embedding_router.started.clear()
+        embedding_router.release.clear()
+        result: Final = await auto_router.async_pre_routing_hook(
+            model="my-auto-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "fix this stack trace"}],
+        )
+
+        assert result is not None

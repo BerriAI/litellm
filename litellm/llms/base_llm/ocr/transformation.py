@@ -33,6 +33,8 @@ OCR_REQUEST_FORMAT_HEADER: Final = "x-req-format"
 
 PROVIDER_NATIVE_RESPONSE_KEY: Final = "provider_native_response"
 
+HEALTH_CHECK_PDF_DATA_URI: Final = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlIC9QYWdlCi9QYXJlbnQgMSAwIFIKL01lZGlhQm94IFswIDAgNjEyIDc5Ml0KL0NvbnRlbnRzIDQgMCBSCi9SZXNvdXJjZXMgPDwvRm9udCA8PC9GMSAyIDAgUj4+Pj4+PgplbmRvYmoKNCAwIG9iago8PC9MZW5ndGggNDQ+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjEwMCA3MDAgVGQKKHRlc3QpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKMiAwIG9iago8PC9UeXBlIC9Gb250Ci9TdWJ0eXBlIC9UeXBlMQovQmFzZUZvbnQgL0hlbHZldGljYT4+CmVuZG9iagoxIDAgb2JqCjw8L1R5cGUgL1BhZ2VzCi9LaWRzIFszIDAgUl0KL0NvdW50IDE+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlIC9DYXRhbG9nCi9QYWdlcyAxIDAgUj4+CmVuZG9iagp0cmFpbGVyCjw8L1NpemUgNgovUm9vdCA1IDAgUj4+CnN0YXJ0eHJlZgozMjQKJSVFT0Y="
+
 
 def parse_ocr_request_format(value: object) -> OCRRequestFormat:
     if value == "litellm":
@@ -141,6 +143,16 @@ class BaseOCRConfig:
         Return the provider-specific API key environment variable name, if any.
         """
         return None
+
+    def supports_rust_bridge(self) -> bool:
+        """Whether the Rust OCR bridge may serve this config when it is enabled for the provider."""
+        return True
+
+    def get_health_check_document(self) -> DocumentType:
+        return {  # mutable-ok: litellm.aocr rejects any document that is not a dict
+            "type": "document_url",
+            "document_url": HEALTH_CHECK_PDF_DATA_URI,
+        }
 
     def map_ocr_params(
         self,
