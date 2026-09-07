@@ -602,7 +602,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._composed_output.extend(_output_items(response))
         self._composed_output.extend(self._pending_mcp_call_items)
         self._output_index_offset += width + len(self._pending_mcp_call_items)
-        self._pending_mcp_call_items = []
+        self._pending_mcp_call_items.clear()
         self._round_max_output_index = -1
 
     async def _compose_round_chunk(self, chunk: ResponsesAPIStreamingResponse) -> ResponsesAPIStreamingResponse | None:
@@ -648,7 +648,10 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 *self._composed_output,
                 *_output_items(response_obj),
             ]
-            _set_event_field(chunk, "response", response_obj.model_copy(update={"output": merged_output}))
+            merged_response: Final = response_obj.model_copy(
+                update={"output": merged_output}  # mutable-ok: pydantic's update argument must be a dict
+            )
+            _set_event_field(chunk, "response", merged_response)
         return chunk
 
     async def _process_base_iterator_chunk(self) -> ResponsesAPIStreamingResponse:
@@ -769,11 +772,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     call_items[tool_call_id] = (item_id, output_index)
                     self.tool_execution_events.append(
                         OutputItemAddedEvent.model_validate(
-                            {
+                            {  # mutable-ok: consumed once by model_validate
                                 "type": ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
                                 "sequence_number": len(self.tool_execution_events) + 1,
                                 "output_index": output_index,
-                                "item": {
+                                "item": {  # mutable-ok: consumed once by model_validate
                                     "id": item_id,
                                     "type": "mcp_call",
                                     "status": "in_progress",
@@ -850,7 +853,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 from litellm.types.llms.openai import OutputItemDoneEvent
 
                 mcp_call_item = BaseLiteLLMOpenAIResponseObject(
-                    **{
+                    **{  # mutable-ok: consumed once by the model constructor
                         "id": item_id,
                         "type": "mcp_call",
                         "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
