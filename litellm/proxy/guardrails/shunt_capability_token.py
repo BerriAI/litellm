@@ -2,15 +2,9 @@
 Mints and opens the short-lived credential a shunt-generated command carries to authenticate
 its own call back into `/v1/bulk_read` / `/v1/code_write`.
 
-Embedding the caller's real API key in the generated command (an earlier version of this) put
-that key in the model's response and the conversation history. Reading an Anthropic-flavored
-env var off the client's shell (a later version) only ever worked for Claude Code, since no
-other client has a reason to export `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`. This module
-mints, at rewrite time, a token that identifies the caller by a reference to their existing key
-rather than the key itself, sealed with the proxy's own encryption helper (the same primitive
-`gateway_dcr_flow.py`'s `_seal`/`_open_sealed` use) and given a short expiry. The generated
-command carries it in an `Authorization` header, the same transport every other sealed token in
-this proxy already uses -- never a URL query string, which routinely ends up in access logs.
+Identifies the caller by a reference to their existing key rather than the key itself, sealed
+with the proxy's own encryption helper and given a short expiry, carried in an `Authorization`
+header rather than a URL query string (which routinely ends up in access logs).
 
 Deliberately not single-use: an agent retries a timed-out or interrupted Bash command, and a
 single-use guard would turn that ordinary retry into a permanent 401. The token's only defense
@@ -32,12 +26,9 @@ TOKEN_TTL_SECONDS: Final = 120
 class ShuntCapabilityGrant(BaseModel):
     """What the sealed token attests: the caller to bill this call to, and until when it's valid.
 
-    ``key_hash`` is the same hashed value already stored as ``UserAPIKeyAuth.api_key`` for a
-    DB-backed key, so opening the token is a plain ``get_key_object`` lookup, not a new identity
-    scheme. ``is_master_key`` covers the one caller with no such row: master-key auth stores a
-    stable alias there instead (see ``LITELLM_PROXY_MASTER_KEY_ALIAS``), so the grant carries the
-    real master key itself to hand back to the worker call, sealed the same as everything else
-    here rather than embedded in the clear.
+    Exactly one of `key_hash` (the same hash `UserAPIKeyAuth.api_key` already stores for a
+    DB-backed key) or `master_key` (the real master key, for the one caller with no such row)
+    is set.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

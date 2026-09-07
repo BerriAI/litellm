@@ -1,17 +1,13 @@
 """
 Server-side port of Spotify's ``shunt`` Claude Code plugin
-(https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90),
-as an auto-router preset rather than a client-side plugin.
+(https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90).
 
-shunt intercepts large file reads and boilerplate generation at the client via Claude Code
-``PreToolUse`` hooks and delegates them to a cheap worker model. This module does the same
-decision on the proxy instead: it arms via ``auto_router_shunt_min_lines`` /
-``auto_router_shunt_bulk_read_model`` / ``auto_router_shunt_code_write_model`` on an
-auto-router marker deployment (the same "read `litellm_params` off the resolved deployment, no
-``guardrails:`` config entry needed" shape as ``auto_router_compression.py``), then a single
-always-on ``ShuntGuardrail`` callback injects ``bulk_read``/``code_write`` tool definitions
-pre-call and rewrites large ``Read``/``Bash``/``bulk_read``/``code_write`` tool_use blocks
-post-call so the file bytes and generated code never reach the routed model's context.
+Arms via ``auto_router_shunt_min_lines`` / ``auto_router_shunt_bulk_read_model`` /
+``auto_router_shunt_code_write_model`` on an auto-router marker's ``litellm_params`` (same
+resolution shape as ``auto_router_compression.py``). The always-on ``ShuntGuardrail`` injects
+``bulk_read``/``code_write`` tool definitions pre-call and rewrites large
+``Read``/``Bash``/``bulk_read``/``code_write`` tool_use blocks post-call, so the file bytes and
+generated code never reach the routed model's context.
 """
 
 import json
@@ -42,11 +38,7 @@ class ShuntConfig:
 
 
 def _simple_tier_model(litellm_params: Mapping[str, object]) -> str | None:
-    """The first model in the router's SIMPLE tier, or None.
-
-    The cheapest tier the router already has, which is what the UI and the preset docs promise
-    an unset worker model falls back to.
-    """
+    """The router's SIMPLE tier model, the fallback the UI promises for an unset worker model."""
     config: Final = litellm_params.get("complexity_router_config")
     if not isinstance(config, Mapping):
         return None
@@ -64,11 +56,10 @@ def _simple_tier_model(litellm_params: Mapping[str, object]) -> str | None:
 def _config_from_litellm_params(
     litellm_params: Mapping[str, object], *, default_model: str | None
 ) -> ShuntConfig | None:
-    """The marker's shunt config, or None when `auto_router_shunt_min_lines` is absent.
+    """The marker's shunt config, or None when unarmed or its worker models resolve to nothing.
 
-    An unset worker model falls back to the SIMPLE tier first, then the router's default model.
-    Returns None rather than a config naming no model at all: arming shunt with an empty worker
-    model would rewrite reads into calls that can only fail, which is worse than not arming.
+    An unset worker model falls back to the SIMPLE tier, then the router's default model; if
+    neither resolves, this returns None rather than a config naming no model at all.
     """
     raw_min_lines: Final = litellm_params.get("auto_router_shunt_min_lines")
     if not isinstance(raw_min_lines, int):
@@ -131,6 +122,7 @@ def _config_from_marker(litellm_params: Mapping[str, object]) -> ShuntConfig | N
 # is no client-side plugin here for a skill file to live in.
 BULK_READ_TOOL_NAME: Final = "bulk_read"
 CODE_WRITE_TOOL_NAME: Final = "code_write"
+_SHUNT_TOOL_NAMES: Final = frozenset({BULK_READ_TOOL_NAME, CODE_WRITE_TOOL_NAME})
 
 # JSON source, not dict literals: these go straight into the outbound payload, so they must stay
 # plain JSON-serializable dicts, and parsing keeps one construction site instead of a suppression
@@ -246,14 +238,15 @@ class _ShuntEndpoints:
     capability_token: str
 
 
-def _mint_caller_capability_token(user_api_key_dict: "UserAPIKeyAuth") -> str:
-    """Seal a short-lived grant identifying this request's caller.
+def _mint_caller_capability_token(user_api_key_dict: "UserAPIKeyAuth") -> str | None:
+    """Seal a short-lived grant identifying this request's caller, or None if it can't be.
 
-    ``UserAPIKeyAuth.api_key`` is already the hashed token for a DB-backed virtual key
-    (`_safe_hash_litellm_api_key` on the model itself), so the common case just carries that
-    hash forward. Master-key auth is the one caller with no such row: it stores a stable alias
-    there instead (`LITELLM_PROXY_MASTER_KEY_ALIAS`), so that case carries the real master key,
-    itself sealed rather than embedded in the clear, for the worker endpoint to compare directly.
+    `UserAPIKeyAuth.api_key` is already the hashed token for a DB-backed virtual key, so the
+    common case carries that hash forward. Master-key auth stores a stable alias there instead
+    (`LITELLM_PROXY_MASTER_KEY_ALIAS`), so that case seals the real master key itself for the
+    worker endpoint to compare directly. A JWT- or custom-auth-admitted caller can carry
+    neither; None there rather than raising, since an already-answered request must not fail
+    over an optimization that couldn't run.
     """
     from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
     from litellm.proxy.guardrails.shunt_capability_token import mint_shunt_capability_token
@@ -261,6 +254,8 @@ def _mint_caller_capability_token(user_api_key_dict: "UserAPIKeyAuth") -> str:
 
     if user_api_key_dict.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS and master_key is not None:
         return mint_shunt_capability_token(key_hash=None, master_key=master_key)
+    if not user_api_key_dict.api_key:
+        return None
     return mint_shunt_capability_token(key_hash=user_api_key_dict.api_key, master_key=None)
 
 
@@ -269,19 +264,19 @@ def _endpoints_for_request(
 ) -> "_ShuntEndpoints | None":
     """Where this request's generated curl commands should point, or None if unreachable.
 
-    None when the base URL can't be recovered, since a generated command could then not reach
-    this proxy at all; the tool_use is left unmodified rather than shipped broken. The caller's
-    own credential never appears in the generated command: instead a short-lived capability
-    token identifying the caller is minted here and carried in the command's `Authorization`
-    header, so the worker call authenticates without the real key ever entering the model's
-    response, the conversation history, or (unlike a query-string token) an access log line.
+    None when the base URL can't be recovered or no capability token can be minted for this
+    caller, since a generated command could then not authenticate; the tool_use is left
+    unmodified rather than shipped broken. The token carries the caller's identity by reference
+    (never the real credential) in the command's `Authorization` header, never a query string.
 
-    The request's own tags ride along in the query string, because the worker endpoints resolve
-    the marker again from scratch: a marker armed only under a tag would otherwise be invisible
-    to them and the delegated call would 400, even though this rewrite matched that marker.
+    Tags ride along in the query string because the worker endpoints re-resolve the marker from
+    scratch; without them a tag-scoped marker would 400 there even though this rewrite matched it.
     """
     base_url: Final = _request_base_url(data)
     if base_url is None:
+        return None
+    capability_token: Final = _mint_caller_capability_token(user_api_key_dict)
+    if capability_token is None:
         return None
     from urllib.parse import urlencode
 
@@ -293,7 +288,7 @@ def _endpoints_for_request(
     return _ShuntEndpoints(
         bulk_read_url=f"{base_url}/v1/bulk_read?{query}",
         code_write_url=f"{base_url}/v1/code_write?{query}",
-        capability_token=_mint_caller_capability_token(user_api_key_dict),
+        capability_token=capability_token,
     )
 
 
@@ -490,7 +485,7 @@ def caller_owns_shunt_tool_name(tools: object) -> bool:
     if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
         return False
     declared: Final = frozenset(name for name in (_declared_tool_name(tool) for tool in tools) if name is not None)
-    return not declared.isdisjoint({BULK_READ_TOOL_NAME, CODE_WRITE_TOOL_NAME})
+    return not declared.isdisjoint(_SHUNT_TOOL_NAMES)
 
 
 def _tools_payload(
@@ -573,16 +568,14 @@ class ShuntGuardrail(CustomLogger):
     ) -> "AsyncGenerator[ModelResponseStream, None]":
         """Buffer the whole stream, rewrite any shunt-shaped tool_use, then replay it.
 
-        Buffer-then-replay, not per-fragment rewriting, matching `tool_permission.py`'s own
-        streaming hook: `input_json_delta` fragments split mid-token (confirmed against a real
-        Anthropic trace during design), so a tool_use's `input` can only be read once its
-        `content_block_stop` has arrived. Unlike that guardrail, an unparseable or unassemblable
-        stream is passed through unmodified rather than raised on: shunt is an optimization, not
-        a safety control, so a request should never fail because this rewrite couldn't run.
+        Buffer-then-replay, matching `tool_permission.py`'s own streaming hook: `input_json_delta`
+        fragments split mid-token, so a tool_use's `input` is only readable once its
+        `content_block_stop` arrives. Unlike that guardrail, an unparseable stream passes through
+        untouched rather than raising, since shunt is an optimization, not a safety control.
 
-        The declared return type matches the base class and `tool_permission.py`'s own override:
-        on the Anthropic path this actually yields raw `bytes` SSE frames, not
-        `ModelResponseStream` objects, the same documented mismatch `tool_permission.py` carries.
+        Declared return type matches the base class and `tool_permission.py`'s own override; on
+        the Anthropic path this actually yields raw `bytes` SSE frames, the same mismatch that
+        guardrail's own override carries.
         """
         from litellm.main import stream_chunk_builder
         from litellm.proxy.guardrails.anthropic_sse import (
@@ -592,11 +585,10 @@ class ShuntGuardrail(CustomLogger):
         )
         from litellm.types.utils import ModelResponse, TextCompletionResponse
 
-        # Declared element type matches `tool_permission.py`'s own override rather than the
-        # `object` the raw-SSE path really carries: see the docstring's note on that mismatch.
+        # Typed as ModelResponseStream, though the raw-SSE path really carries bytes here.
         all_chunks: Final[
             list[ModelResponseStream]
-        ] = [  # mutable-ok: stream_chunk_builder/is_raw_sse_stream both take a concrete list
+        ] = [  # mutable-ok: stream_chunk_builder/is_raw_sse_stream take a list
             chunk async for chunk in response
         ]
 

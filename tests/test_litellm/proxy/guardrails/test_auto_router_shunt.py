@@ -540,3 +540,32 @@ class TestAsyncPostCallSuccessHookOpenAIShape:
             data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         assert result.choices[0].message.content == "hi"
+
+
+# Regression: a caller with no DB-backed key hash (JWT/custom-auth admission, where
+# UserAPIKeyAuth.api_key can be None) crashed mint_shunt_capability_token's exactly-one-of
+# check instead of leaving the tool_use untouched.
+class TestCallerWithNoMintableIdentity:
+    def _config(self) -> ShuntConfig:
+        return ShuntConfig(min_lines=350, bulk_read_model="claude-haiku-4-5", code_write_model="claude-haiku-4-5")
+
+    def _armed_request_data(self) -> dict:
+        return {
+            "model": "shunt",
+            "proxy_server_request": {"url": "http://localhost:4000/v1/messages"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_none_api_key_leaves_the_response_untouched_rather_than_raising(self, monkeypatch):
+        import litellm.proxy.guardrails.auto_router_shunt as mod
+
+        monkeypatch.setattr(mod, "_resolve_shunt_config", lambda data: self._config())
+        guardrail = mod.ShuntGuardrail()
+        jwt_admitted_caller = UserAPIKeyAuth(api_key=None)
+        response = {
+            "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "litellm/router.py"}}]
+        }
+        result = await guardrail.async_post_call_success_hook(
+            data=self._armed_request_data(), user_api_key_dict=jwt_admitted_caller, response=response
+        )
+        assert result["content"][0]["name"] == "Read"

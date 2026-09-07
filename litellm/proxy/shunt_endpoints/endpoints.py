@@ -1,18 +1,11 @@
 """
-`/v1/bulk_read` and `/v1/code_write`: the worker endpoints shunt's generated Bash commands
-call. See `auto_router_shunt.py`'s module docstring for the source this ports.
+`/v1/bulk_read` and `/v1/code_write`: the worker endpoints shunt's generated Bash commands call.
 
-Each request names the auto-router marker it belongs to (`router=<model_alias>`, the same
-value the client originally called), so the worker model is the one configured on that
-marker's `auto_router_shunt_bulk_read_model` / `auto_router_shunt_code_write_model`, not a
-model chosen by the caller. The call goes through `llm_router.acompletion`, not
-`litellm.acompletion` directly, so worker-model spend is tracked and budgeted against the
-caller's key/team exactly like any other request.
-
-Auth is the short-lived capability token minted at rewrite time
-(`shunt_capability_token.py`), not a normal virtual key: these routes exist only to be hit by
-a shunt-generated command, never called directly, so `user_api_key_auth`'s full DB-backed path
-is the wrong tool here and the token is the only credential accepted.
+Each request names the auto-router marker it belongs to (`router=<model_alias>`), so the
+worker model is whatever that marker's `auto_router_shunt_bulk_read_model` /
+`auto_router_shunt_code_write_model` configures, not one the caller chooses. Auth is the
+short-lived capability token minted at rewrite time (`shunt_capability_token.py`), not a
+normal virtual key: only a shunt-generated command should ever call these routes.
 """
 
 from collections.abc import Sequence
@@ -35,7 +28,7 @@ from litellm.proxy.shunt_endpoints.worker import (
     build_code_write_message,
     strip_code_fences,
 )
-from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage, ChatCompletionUserMessage
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -63,11 +56,16 @@ async def _caller_from_capability_token(authorization: Annotated[str | None, Hea
         raise HTTPException(status_code=401, detail="Invalid or expired shunt capability token")
 
     if grant.master_key is not None:
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
         from litellm.proxy.proxy_server import master_key
 
         if master_key is None or grant.master_key != master_key:
             raise HTTPException(status_code=401, detail="Invalid or expired shunt capability token")
-        return UserAPIKeyAuth(api_key=grant.master_key, user_role=LitellmUserRoles.PROXY_ADMIN)
+        # The alias substitutes for the real master key here for the same reason normal
+        # master-key auth substitutes it (user_api_key_auth.py): neither the key nor a
+        # reversible derivation of it should reach spend logs, Prometheus labels, or any raw-
+        # metadata logging callback the worker call's own metadata is later forwarded to.
+        return UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN)
 
     if grant.key_hash is None:
         raise HTTPException(status_code=401, detail="Invalid or expired shunt capability token")
@@ -129,27 +127,40 @@ async def _worker_text(
 ) -> str:
     """The worker model's reply text, or a 502 if it produced none.
 
-    One call site for both endpoints: they differ only in model, system prompt, and message, so
-    the `acompletion` shape (temperature, non-streaming, caller attribution) lives here once.
+    One call site for both endpoints, since they differ only in model, system prompt, and
+    message. Attribution reuses the proxy's own key-metadata builder so the call is billed and
+    budgeted against the calling key/user/team/org like a normal request.
 
-    Attribution reuses the proxy's own key-metadata builder rather than hand-picking a couple of
-    fields, so the worker call is billed and budgeted against the calling key, user, team, and
-    org exactly like a normal request instead of only carrying a team id.
+    `proxy_logging_obj.pre_call_hook` runs first: `llm_router.acompletion` alone skips every
+    rate-limit and budget callback, since those register as `async_pre_call_hook` and only
+    `/chat/completions` and friends normally walk that list before routing. Without this call a
+    caller already over budget or rate-limited could keep spending through this endpoint.
     """
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
     system: Final = ChatCompletionSystemMessage(role="system", content=system_prompt)
     user: Final = ChatCompletionUserMessage(role="user", content=message)
+    messages: Final[
+        list[AllMessageValues]
+    ] = [  # mutable-ok: shared between pre_call_hook and acompletion, both take a list
+        system,
+        user,
+    ]
     key_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
         user_api_key_dict=user_api_key_dict
     )
+    metadata: Final = {**key_metadata, "user_api_key": user_api_key_dict.api_key}  # mutable-ok: same
+    request_data: Final = {  # mutable-ok: pre_call_hook's own signature takes a plain dict
+        "model": model,
+        "messages": messages,
+        "metadata": metadata,
+    }
+    await proxy_logging_obj.pre_call_hook(
+        user_api_key_dict=user_api_key_dict, data=request_data, call_type="acompletion"
+    )
+
     response: Final = await llm_router.acompletion(
-        model=model,
-        messages=[system, user],  # mutable-ok: acompletion's own signature takes a concrete list
-        temperature=WORKER_TEMPERATURE,
-        stream=False,
-        metadata={  # mutable-ok: same
-            **key_metadata,
-            "user_api_key": user_api_key_dict.api_key,
-        },
+        model=model, messages=messages, temperature=WORKER_TEMPERATURE, stream=False, metadata=metadata
     )
     text: Final = response.choices[0].message.content
     if not isinstance(text, str):
@@ -186,7 +197,7 @@ async def bulk_read(
     question: Annotated[str, Form()],
     paths: Annotated[list[UploadFile], File()],  # mutable-ok: FastAPI requires a list for a repeated file field
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_caller_from_capability_token)],
-    tags: Annotated[list[str] | None, Query()] = None,
+    tags: Annotated[list[str] | None, Query()] = None,  # mutable-ok: FastAPI requires a list for a repeated query param
 ) -> str:
     """Summarize or answer a question about one or more files via a cheap worker model.
 
@@ -225,7 +236,7 @@ async def code_write(
     spec: Annotated[str, Form()],
     reference: Annotated[UploadFile, File()],
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_caller_from_capability_token)],
-    tags: Annotated[list[str] | None, Query()] = None,
+    tags: Annotated[list[str] | None, Query()] = None,  # mutable-ok: FastAPI requires a list for a repeated query param
 ) -> str:
     """Generate boilerplate code matching a reference file's patterns, via a cheap worker model.
 

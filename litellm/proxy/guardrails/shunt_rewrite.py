@@ -1,15 +1,10 @@
 """
 Decides which tool_use blocks shunt rewrites, and builds the Bash command that replaces them.
 
-Ports two decisions from Spotify's shunt plugin (see auto_router_shunt.py's module docstring):
-`check-file-size`'s "is this an untargeted Read on a large file" gate, and
-`check-bash-read`'s "is this cat/head/tail/less/more on a bare file path" parser, including its
-documented parser bug (an option-value token like the `5` in `head -n 5 file` is mistaken for
-the path). shunt's version tolerates that bug because its hook runs on the file's own machine
-and checks the guessed path exists before blocking; a misparse then falls through to `allow`,
-leaving the original command untouched. This module has no filesystem access to make that same
-check, so it must never rewrite a command it isn't sure it parsed correctly — see
-`extract_bare_read_path`'s docstring for how the port preserves shunt's fail-safe direction.
+Ports two decisions from Spotify's shunt plugin: `check-file-size`'s "is this an untargeted
+Read on a large file" gate, and `check-bash-read`'s "is this cat/head/tail/less/more on a bare
+file path" parser (see `extract_bare_read_path` for its documented parser bug and how this port
+handles it, since this module has no filesystem to fall back on if a rewrite is wrong).
 """
 
 import re
@@ -35,23 +30,14 @@ def is_targeted_read(offset: object, limit: object) -> bool:
 def extract_bare_read_path(command: str) -> str | None:
     """The file path a bare `cat`/`head`/`tail`/`less`/`more` command reads, or None.
 
-    None means "do not rewrite this command": either it isn't a bulk read (piped, redirected,
-    not one of the five commands), or no non-flag argument was found.
+    None means don't rewrite: piped/redirected, not one of the five commands, or no non-flag
+    argument found. shunt's own parser misreads a flag's value token as the path (the `5` in
+    `head -n 5 file`), tolerable there since its hook runs on the file's own machine and can
+    check the guessed path exists before blocking. This port has no filesystem for that check,
+    so a bare numeric token (every flag value in these commands' option sets happens to be one)
+    is skipped rather than returned, fixing shunt's documented bug instead of reproducing it.
 
-    shunt's own parser walks flags as if none of them take a value, which misreads a flag's
-    value token as the path — e.g. the `5` in `head -n 5 file`. shunt tolerates this because its
-    hook runs on the file's own machine and checks the guessed path actually exists before
-    blocking; a nonexistent guess falls through to `allow`, leaving the original command
-    untouched. This port has no filesystem to make that same check, so it cannot rely on a
-    downstream existence check to catch a bad guess — treating a wrong guess as the real path
-    would rewrite the command against a file the model never named. A bare numeric token (as
-    every flag value in the five commands' own option sets happens to be — `-n`, `head -c`,
-    `tail -n +N`) is skipped as a likely flag value rather than returned, which fixes shunt's
-    documented bug for exactly the case it names rather than reproducing it. A path made only
-    of digits (or `tail`'s `+N` follow-from-line syntax) is stripped either way, matching
-    shunt's own scope: neither version claims to handle a bare-numeric filename correctly.
-
-    Like shunt's own bash word-splitting, this does not handle a quoted path containing spaces
+    Like shunt's own bash word-splitting, a quoted path containing spaces is not handled
     (`cat "my file.txt"` returns `"my`) — matching parity, not a regression.
     """
     if _PIPE_OR_REDIRECT_PATTERN.search(command):
