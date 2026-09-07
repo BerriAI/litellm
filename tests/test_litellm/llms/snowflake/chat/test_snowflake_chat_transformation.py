@@ -17,7 +17,7 @@ import pytest
 import litellm
 from litellm import completion, acompletion
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.llms.snowflake.chat.transformation import SnowflakeConfig
+from litellm.llms.snowflake.chat.transformation import SnowflakeConfig, SnowflakeStreamingHandler
 from litellm.types.utils import ModelResponse
 
 
@@ -114,8 +114,7 @@ class TestSnowflakeToolTransformation:
             )
 
             assert transformed_request["tool_choice"] == value, (
-                f"tool_choice='{value}' should pass through unchanged, "
-                f"got {transformed_request['tool_choice']}"
+                f"tool_choice='{value}' should pass through unchanged, got {transformed_request['tool_choice']}"
             )
 
     def test_transform_response_with_tool_calls(self):
@@ -159,9 +158,7 @@ class TestSnowflakeToolTransformation:
             headers={"Content-Type": "application/json"},
         )
 
-        model_response = ModelResponse(
-            choices=[litellm.Choices(index=0, message=litellm.Message())]
-        )
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
 
         logging_obj = MagicMock()
 
@@ -232,9 +229,7 @@ class TestSnowflakeToolTransformation:
             headers={"Content-Type": "application/json"},
         )
 
-        model_response = ModelResponse(
-            choices=[litellm.Choices(index=0, message=litellm.Message())]
-        )
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
 
         logging_obj = MagicMock()
 
@@ -280,9 +275,7 @@ class TestSnowflakeToolTransformation:
             headers={"Content-Type": "application/json"},
         )
 
-        model_response = ModelResponse(
-            choices=[litellm.Choices(index=0, message=litellm.Message())]
-        )
+        model_response = ModelResponse(choices=[litellm.Choices(index=0, message=litellm.Message())])
 
         logging_obj = MagicMock()
 
@@ -300,10 +293,7 @@ class TestSnowflakeToolTransformation:
 
         # Verify standard response works
         assert isinstance(result, ModelResponse)
-        assert (
-            result.choices[0].message.content
-            == "Hello! I'm doing well, thank you for asking."
-        )
+        assert result.choices[0].message.content == "Hello! I'm doing well, thank you for asking."
 
     def test_get_supported_openai_params_includes_tools(self):
         """
@@ -316,6 +306,385 @@ class TestSnowflakeToolTransformation:
         assert "tool_choice" in supported_params
         assert "temperature" in supported_params
         assert "max_tokens" in supported_params
+
+
+class TestSnowflakeCortexClaudeFixes:
+    def setup_method(self):
+        self.config = SnowflakeConfig()
+
+    @staticmethod
+    def _transform(messages, optional_params=None):
+        return SnowflakeConfig().transform_request(
+            model="snowflake/claude-sonnet-4-6",
+            messages=messages,
+            optional_params=optional_params or {},
+            litellm_params={},
+            headers={},
+        )
+
+    def test_thinking_is_offered_on_every_claude_model(self):
+        """Cortex documents extended thinking (budget_tokens) for Claude generally, so a
+        4.6-only gate would silently drop it on the models that do support it."""
+        for model in (
+            "snowflake/claude-sonnet-4-6",
+            "snowflake/claude-sonnet-4-5",
+            "snowflake/claude-3-7-sonnet",
+            "snowflake/claude-4-opus",
+        ):
+            assert "thinking" in self.config.get_supported_openai_params(model), model
+        assert "thinking" not in self.config.get_supported_openai_params("snowflake/llama3.1-70b")
+
+    def test_system_blocks_preserve_cache_control_and_strip_ttl(self):
+        body = self._transform(
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are helpful",
+                            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                        }
+                    ],
+                },
+                {"role": "user", "content": "hi"},
+            ]
+        )
+        assert body["system"] == [{"type": "text", "text": "You are helpful", "cache_control": {"type": "ephemeral"}}]
+
+    def test_direct_system_param_is_normalized(self):
+        body = self._transform(
+            [{"role": "user", "content": "hi"}],
+            {"system": [{"type": "text", "text": "direct", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]},
+        )
+        assert body["system"] == [{"type": "text", "text": "direct", "cache_control": {"type": "ephemeral"}}]
+
+    def test_message_and_tool_cache_control_are_normalized(self):
+        body = self._transform(
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+                }
+            ],
+            {
+                "tools": [
+                    {
+                        "name": "f",
+                        "input_schema": {"type": "object", "properties": {}},
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ]
+            },
+        )
+        assert body["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+        assert body["tools"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_extra_body_message_override_is_normalized(self):
+        body = self._transform(
+            [{"role": "user", "content": "original"}],
+            {
+                "extra_body": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "override",
+                                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+        assert body["messages"][0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_image_blocks_are_converted_to_anthropic_source(self):
+        body = self._transform(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,ZmFrZQ==", "format": "image/jpeg"},
+                        }
+                    ],
+                }
+            ]
+        )
+        assert body["messages"][0]["content"] == [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "ZmFrZQ=="}}
+        ]
+
+    def test_tool_result_image_list_is_converted(self):
+        body = self._transform(
+            [
+                {"role": "user", "content": "look"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}}],
+                },
+            ]
+        )
+        assert body["messages"][2]["content"][0]["content"] == [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}}
+        ]
+
+    def test_tool_result_preserves_cache_control(self):
+        """A cache breakpoint the bridge puts on a tool message must survive onto the tool_result."""
+        for tool_content in ("done", [{"type": "text", "text": "done"}]):
+            body = self._transform(
+                [
+                    {"role": "user", "content": "look"},
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "content": tool_content,
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    },
+                ]
+            )
+            tool_result = body["messages"][1]["content"][0]
+            assert tool_result["cache_control"] == {"type": "ephemeral"}, tool_content
+
+    def test_pdf_data_uri_becomes_a_document_block(self):
+        """A bridged pdf data URI is a document block; forwarding it as an image is malformed."""
+        body = self._transform(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": "data:application/pdf;base64,ZmFrZQ=="}},
+                    ],
+                }
+            ]
+        )
+        assert body["messages"][0]["content"] == [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": "ZmFrZQ=="},
+            }
+        ]
+
+    def test_multipart_tool_result_preserves_text_and_converts_image(self):
+        body = self._transform(
+            [
+                {"role": "user", "content": "look"},
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {"type": "text", "text": "first"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,ZmFrZQ=="}},
+                        {"type": "text", "text": "last"},
+                    ],
+                },
+            ]
+        )
+        assert body["messages"][1]["content"][0]["content"] == [
+            {"type": "text", "text": "first"},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "ZmFrZQ=="}},
+            {"type": "text", "text": "last"},
+        ]
+
+    def test_plain_text_tool_result_remains_string(self):
+        body = self._transform(
+            [{"role": "user", "content": "look"}, {"role": "tool", "tool_call_id": "call_1", "content": "done"}]
+        )
+        assert body["messages"][1]["content"][0]["content"] == "done"
+
+    def test_anthropic_tool_schema_strips_only_top_level_schema_key(self):
+        tools = [
+            {
+                "name": "f",
+                "input_schema": {"$schema": "schema", "type": "object", "properties": {"$schema": {"type": "string"}}},
+            }
+        ]
+        body = self._transform([{"role": "user", "content": "hi"}], {"tools": tools})
+        schema = body["tools"][0]["input_schema"]
+        assert "$schema" not in schema
+        assert "$schema" in schema["properties"]
+
+    def test_tool_schema_strips_only_top_level_schema_key(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "f",
+                    "parameters": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "object",
+                        "properties": {"$schema": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+        body = self._transform([{"role": "user", "content": "hi"}], {"tools": tools})
+        schema = body["tools"][0]["input_schema"]
+        assert "$schema" not in schema
+        assert "$schema" in schema["properties"]
+
+    def test_streaming_tool_identity_is_emitted_only_on_start(self):
+        handler = SnowflakeStreamingHandler(streaming_response=[], sync_stream=True)
+        start = handler.chunk_parser(
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "tool_1", "name": "read"},
+            }
+        )
+        first_delta = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"path":'},
+            }
+        )
+        second_delta = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '"/tmp"}'},
+            }
+        )
+
+        def _tool_call(chunk):
+            return chunk.choices[0].delta.tool_calls[0]
+
+        assert _tool_call(start).id == "tool_1"
+        assert _tool_call(start).function.name == "read"
+        assert _tool_call(first_delta).id is None
+        assert _tool_call(first_delta).function.name is None
+        assert _tool_call(second_delta).id is None
+        assert _tool_call(second_delta).function.name is None
+        assert _tool_call(first_delta).function.arguments == '{"path":'
+        assert _tool_call(second_delta).function.arguments == '"/tmp"}'
+
+    def test_signed_thinking_blocks_lead_the_assistant_turn(self):
+        """Multi-turn tool use with thinking only works if the signed block is echoed back first."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "thinking_blocks": [
+                        {"type": "thinking", "thinking": "391", "signature": "Eto"},
+                        {"type": "thinking", "thinking": "unsigned"},
+                    ],
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                    ],
+                },
+            ]
+        )
+        blocks = body["messages"][1]["content"]
+        assert blocks[0] == {"type": "thinking", "thinking": "391", "signature": "Eto"}
+        assert [b["type"] for b in blocks] == ["thinking", "tool_use"]
+
+    def test_signed_thinking_blocks_lead_a_plain_text_assistant_turn(self):
+        """A thinking response without a tool call must also round-trip on the next request."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": "391",
+                    "thinking_blocks": [{"type": "thinking", "thinking": "391", "signature": "Eto"}],
+                },
+                {"role": "user", "content": "continue"},
+            ]
+        )
+        assert body["messages"][1] == {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "391", "signature": "Eto"},
+                {"type": "text", "text": "391"},
+            ],
+        }
+
+    def test_signed_thinking_blocks_preserve_list_content(self):
+        """Cached assistant text reaches this transform as a content list, not a string."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "391", "cache_control": {"type": "ephemeral"}}],
+                    "thinking_blocks": [{"type": "thinking", "thinking": "391", "signature": "Eto"}],
+                },
+                {"role": "user", "content": "continue"},
+            ]
+        )
+        assert body["messages"][1] == {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "391", "signature": "Eto"},
+                {"type": "text", "text": "391", "cache_control": {"type": "ephemeral"}},
+            ],
+        }
+
+    def test_thinking_only_assistant_turn_sends_no_empty_text_block(self):
+        """Anthropic-shaped APIs reject empty text blocks, so a content-less thinking turn is thinking only."""
+        body = self._transform(
+            [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "thinking_blocks": [{"type": "thinking", "thinking": "391", "signature": "Eto"}],
+                },
+                {"role": "user", "content": "continue"},
+            ]
+        )
+        assert body["messages"][1]["content"] == [{"type": "thinking", "thinking": "391", "signature": "Eto"}]
+
+    def test_streaming_surfaces_thinking_and_prompt_cache_usage(self):
+        """Cortex streams thinking deltas, signatures and cache counts; all must reach the caller."""
+        handler = SnowflakeStreamingHandler(streaming_response=[], sync_stream=True)
+        handler.chunk_parser(
+            {
+                "type": "message_start",
+                "message": {"usage": {"input_tokens": 18, "cache_creation_input_tokens": 1323}},
+            }
+        )
+        thinking = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "391"},
+            }
+        )
+        signature = handler.chunk_parser(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "signature_delta", "signature": "Eto"},
+            }
+        )
+        final = handler.chunk_parser(
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 8, "cache_read_input_tokens": 1323},
+            }
+        )
+
+        assert thinking.choices[0].delta.reasoning_content == "391"
+        assert signature.choices[0].delta.thinking_blocks[0]["signature"] == "Eto"
+        assert final.usage.prompt_tokens_details.cached_tokens == 1323
 
 
 class TestSnowFlakeCompletion:
@@ -380,10 +749,7 @@ class TestSnowFlakeCompletion:
         # PAT key was used
         post_kwargs = mock_post.call_args_list[-1][1]
         assert "xxxxx" in post_kwargs["headers"]["Authorization"]
-        assert (
-            post_kwargs["headers"]["X-Snowflake-Authorization-Token-Type"]
-            == "PROGRAMMATIC_ACCESS_TOKEN"
-        )
+        assert post_kwargs["headers"]["X-Snowflake-Authorization-Token-Type"] == "PROGRAMMATIC_ACCESS_TOKEN"
 
         # account id was used
         assert "AAAA-BBBB" in post_kwargs["url"]
@@ -495,9 +861,7 @@ class TestSnowflakeChatCompletion:
                 )
                 mock_post.assert_called_once()
         else:
-            with patch.object(
-                AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
-            ) as mock_post:
+            with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp) as mock_post:
                 response = asyncio.run(
                     acompletion(
                         model="snowflake/mistral-7b",
@@ -580,8 +944,4 @@ class TestSnowflakeChatCompletion:
             chunks_received = asyncio.run(_run())
 
         assert len(chunks_received) > 0
-        content = "".join(
-            c.choices[0].delta.content
-            for c in chunks_received
-            if c.choices[0].delta.content
-        )
+        content = "".join(c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content)

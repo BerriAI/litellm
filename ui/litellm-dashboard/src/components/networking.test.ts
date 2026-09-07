@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
@@ -392,7 +392,7 @@ describe("UI config and public endpoints", () => {
     await Networking.getUiConfig();
 
     expect(Networking.serverRootPath).toBe("/litellm");
-    expect(migratedHref("api-reference")).toBe("/litellm/ui/api-reference");
+    expect(uiHref("api-reference")).toBe("/litellm/ui/api-reference");
   });
 });
 
@@ -852,5 +852,50 @@ describe("userListCall search serialization", () => {
 
     expect(lastParams(mockFetch).has("search")).toBe(false);
     expect(lastParams(mockFetch).get("user_email")).toBe("ada@example.com");
+  });
+});
+
+describe("fetchMemoryList search serialization", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  const mockOkFetch = () => {
+    const emptyPage = { memories: [], total: 0 };
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue(emptyPage) } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const lastParams = (mockFetch: ReturnType<typeof vi.fn>) => {
+    const [url] = mockFetch.mock.calls.at(-1) ?? [];
+    return new URL(url as string, "http://example.com").searchParams;
+  };
+
+  it("sends the search box value as search and omits key_prefix and key", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.fetchMemoryList("token", { search: "mem-abc123", page: 1, pageSize: 50 });
+
+    const params = lastParams(mockFetch);
+    expect(params.get("search")).toBe("mem-abc123");
+    expect(params.has("key_prefix")).toBe(false);
+    expect(params.has("key")).toBe(false);
+    expect(params.get("page")).toBe("1");
+    expect(params.get("page_size")).toBe("50");
+  });
+
+  it("keeps key_prefix and key working when no search is given", async () => {
+    const mockFetch = mockOkFetch();
+
+    await Networking.fetchMemoryList("token", { keyPrefix: "user:" });
+    expect(lastParams(mockFetch).get("key_prefix")).toBe("user:");
+    expect(lastParams(mockFetch).has("search")).toBe(false);
+
+    await Networking.fetchMemoryList("token", { key: "user:profile" });
+    expect(lastParams(mockFetch).get("key")).toBe("user:profile");
+    expect(lastParams(mockFetch).has("search")).toBe(false);
   });
 });

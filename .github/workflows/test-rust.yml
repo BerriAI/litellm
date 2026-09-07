@@ -74,11 +74,18 @@ jobs:
       - name: Run Clippy with Bedrock auth
         run: cargo clippy -p litellm-core --all-targets --features bedrock-auth --locked -- -D warnings
 
+      - name: Run Clippy with all gateway features
+        run: cargo clippy -p litellm-ai-gateway --all-targets --all-features --locked -- -D warnings
+
       - name: Run Rust tests
         run: cargo test --workspace --locked
 
       - name: Run core tests with Bedrock auth
         run: cargo test -p litellm-core --features bedrock-auth --locked
+
+      # Not --all-features: python-config links libpython, which this job does not install.
+      - name: Run gateway tests with the server feature
+        run: cargo test -p litellm-ai-gateway --features server --locked
 
   release-wheel:
     name: release wheel

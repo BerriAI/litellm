@@ -542,6 +542,19 @@ describe("server-side filtering – the LIT-4080 regression guard", () => {
       expect((lastCall[2] ?? {}).userID).toBeUndefined();
     });
   });
+
+  it("sends the search box as the combined alias-or-ID search rather than the key-alias filter", async () => {
+    renderWithProviders(<VirtualKeysTable />);
+
+    fireEvent.change(screen.getByPlaceholderText(/Search by key alias or ID/), { target: { value: mockKey.token } });
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: mockKey.token }));
+    });
+    const lastOptions = mockUseKeys.mock.calls.at(-1)?.[2];
+    expect(lastOptions?.selectedKeyAlias).toBeUndefined();
+    expect(lastOptions?.keyHash).toBeUndefined();
+  });
 });
 
 describe("pagination display – total count comes from useKeys", () => {
@@ -663,7 +676,7 @@ describe("table state lives in the URL so it survives leaving and returning to t
       expect(mockUseKeys).toHaveBeenLastCalledWith(
         3,
         25,
-        expect.objectContaining({ selectedKeyAlias: "prod", sortBy: "spend", sortOrder: "asc" }),
+        expect.objectContaining({ search: "prod", sortBy: "spend", sortOrder: "asc" }),
       );
     });
     expect(screen.getByPlaceholderText(/Search by key alias/)).toHaveValue("prod");
@@ -736,7 +749,7 @@ describe("table state lives in the URL so it survives leaving and returning to t
     fireEvent.change(screen.getByPlaceholderText(/Search by key alias/), { target: { value: "prod" } });
 
     await waitFor(() => {
-      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ selectedKeyAlias: "prod" }));
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: "prod" }));
     });
     await waitFor(() => {
       expect(lastSearchParam(onUrlUpdate, "page")).toBeNull();

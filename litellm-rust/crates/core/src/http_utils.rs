@@ -102,6 +102,23 @@ mod tests {
     }
 
     #[test]
+    fn auth_header_detection_is_case_insensitive() {
+        let headers = vec![
+            ("x-trace-id".to_string(), "trace-1".to_string()),
+            ("authorization".to_string(), "Bearer sk-test".to_string()),
+        ];
+
+        assert!(has_header(&headers, "authorization"));
+
+        let headers = vec![("Authorization".to_string(), "Bearer sk-test".to_string())];
+
+        assert!(has_header(&headers, "authorization"));
+
+        let headers = vec![("x-trace-id".to_string(), "trace-1".to_string())];
+        assert!(!has_header(&headers, "authorization"));
+    }
+
+    #[test]
     fn bearer_detection_requires_a_non_empty_token() {
         assert!(has_bearer_auth(&[(
             "Authorization".to_string(),

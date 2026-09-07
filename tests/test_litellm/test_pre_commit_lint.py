@@ -53,6 +53,12 @@ case "$*" in
     "eslint --no-warn-ignored"*)
         [ "${STUB_FAIL:-}" = "eslint" ] && exit 1
         ;;
+    "eslint . -f json"*)
+        if [ -n "${STUB_HANG_DIR:-}" ]; then
+            touch "$STUB_HANG_DIR/eslint_report.started"
+            sleep 60
+        fi
+        ;;
 esac
 exit 0
 """
@@ -340,11 +346,12 @@ def test_interrupt_kills_background_jobs_and_removes_logs(tmp_path: Path) -> Non
     )
     try:
         assert _wait_until((hang_dir / "make.started").exists, 10)
+        assert _wait_until((hang_dir / "eslint_report.started").exists, 10)
         os.killpg(proc.pid, signal.SIGINT)
         assert proc.wait(timeout=10) != 0
         make_pid = int((hang_dir / "make.pid").read_text())
         assert _wait_until(lambda: _pid_gone(make_pid), 5)
-        assert list(tmp_dir.iterdir()) == []
+        assert _wait_until(lambda: not any(tmp_dir.iterdir()), 5), list(tmp_dir.iterdir())
     finally:
         with suppress(ProcessLookupError, PermissionError):
             os.killpg(proc.pid, signal.SIGTERM)

@@ -11,7 +11,6 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     RestrictedAgentAccess,
-    UnrestrictedAgentAccess,
 )
 from litellm.proxy.agent_endpoints.endpoints import (
     _attach_keys_to_agents,
@@ -550,9 +549,9 @@ class TestAgentRBACProxyAdminViewOnly:
         self.allowed_agents_spy.assert_awaited_once()
 
     def test_should_still_redact_secrets_for_view_only_admin(self):
-        """An unrestricted viewer sees the same agents as an admin but with keys
+        """A viewer granted every agent sees the same agents as an admin but with keys
         stripped; litellm_params secrets never appear in either response."""
-        self.allowed_agents_spy.return_value = UnrestrictedAgentAccess()
+        self.allowed_agents_spy.return_value = RestrictedAgentAccess(frozenset({"agent-1", "agent-2"}))
         viewer_resp = self._list_agents(self.viewer_client)
         admin_resp = self._list_agents(self.admin_client)
 
