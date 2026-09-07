@@ -8,15 +8,10 @@ use litellm_core::ocr::transformation::OcrProviderConfig;
 use reqwest::Url;
 use serde_json::{Map, Value};
 
-use litellm_core::providers::azure_ai::ocr::transformation::{
-    AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
-};
+use litellm_core::providers::azure_ai::ocr::transformation as azure_ai;
 use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 use litellm_core::providers::reducto::ocr::transformation as reducto;
 use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
-use litellm_core::providers::vertex_ai::ocr::transformation::{
-    VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
-};
 
 use crate::client::http_client;
 
@@ -41,19 +36,10 @@ pub(super) fn ocr_provider_config(
     match provider {
         "mistral" => Some(&MISTRAL_OCR_CONFIG),
         "reducto" => reducto::config_for_model(model),
-        "azure_ai" if is_azure_document_intelligence_model(model) => {
-            Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
-        }
-        "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
-        "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
-        "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),
+        "azure_ai" => azure_ai::config_for_model(model).ok(),
+        "vertex_ai" => vertex_ai::config_for_model(model).ok(),
         _ => None,
     }
-}
-
-fn is_azure_document_intelligence_model(model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    model.contains("doc-intelligence") || model.contains("documentintelligence")
 }
 
 pub(super) fn string_headers(

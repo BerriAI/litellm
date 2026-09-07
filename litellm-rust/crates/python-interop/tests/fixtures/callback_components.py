@@ -17,36 +17,68 @@ from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.types.utils import Delta, ModelResponse, ModelResponseStream, StreamingChoices, Usage
 
 
-def logger_for(callbacks=(), stream=False, input_callbacks=(), sync_callbacks=()):
+def logger_for(
+    callbacks=(),
+    stream=False,
+    input_callbacks=(),
+    sync_callbacks=(),
+    failure_callbacks=(),
+    async_failure_callbacks=(),
+    call_type="acompletion",
+):
     return Logging(
         model="test",
         messages=[{"role": "user", "content": "test"}],
         stream=stream,
-        call_type="acompletion",
+        call_type=call_type,
         start_time=datetime.now(),
         litellm_call_id="retained-test",
         function_id="retained-test",
         dynamic_async_success_callbacks=list(callbacks),
         dynamic_input_callbacks=list(input_callbacks),
         dynamic_success_callbacks=list(sync_callbacks),
+        dynamic_failure_callbacks=list(failure_callbacks),
+        dynamic_async_failure_callbacks=list(async_failure_callbacks),
     )
 
 
-async def real_pre_call_logging(owners):
-    retained = []
-    observed = []
-    snapshots = []
-    order = []
+def invoke_pre_call(owners, logger, additional):
+    owner = owners.prepare(logger.pre_call, (logger.messages, "test-key"), {"additional_args": additional})
+    try:
+        return owner.invoke()
+    finally:
+        owner.close()
+
+
+async def pre_call_identity_and_ignored_returns(owners):
+    saved = []
     ignored = {"replacement": True}
+
+    class Retain(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            saved.append((kwargs, messages))
+            return ignored
+
+    logger = logger_for(input_callbacks=[Retain(), Retain()])
+    details = logger.model_call_details
+    additional = {"headers": {"test": "header"}}
+    assert invoke_pre_call(owners, logger, additional) is None
+    assert len(saved) == 2
+    assert saved[0][0] is saved[1][0] is details
+    assert saved[0][1] is saved[1][1] is logger.messages is details["input"]
+    assert details["additional_args"] is additional
+    assert "replacement" not in details
+
+
+async def pre_call_mutations_visible_to_later_callbacks(owners):
+    saved, observed, order = [], [], []
     metadata = {"secret": "private", "keep": []}
     removed = object()
-    lock = threading.Lock()
 
     class Retain(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             order.append("retain")
-            retained.append(kwargs)
-            return ignored
+            saved.append(kwargs)
 
     class Mutate(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
@@ -54,7 +86,30 @@ async def real_pre_call_logging(owners):
             kwargs["normalized"] = "normalized"
             assert kwargs.pop("remove") is removed
             kwargs["retained_metadata"]["secret"] = "masked"
-            return ignored
+            return {"replacement": True}
+
+    class Observe(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            order.append("observe")
+            observed.append((kwargs["normalized"], "remove" in kwargs, kwargs["retained_metadata"]["secret"]))
+
+    logger = logger_for(input_callbacks=[Retain(), Mutate(), Observe()])
+    details = logger.model_call_details
+    details.update(retained_metadata=metadata, normalized=None, remove=removed)
+    assert invoke_pre_call(owners, logger, {}) is None
+    assert order == ["retain", "mutate", "observe"]
+    assert observed == [("normalized", False, "masked")]
+    assert len(saved) == 1 and saved[0] is details
+    assert details["retained_metadata"] is metadata
+    assert metadata == {"secret": "masked", "keep": []}
+    assert details["normalized"] == "normalized" and "remove" not in details
+    assert "replacement" not in details
+
+
+async def pre_call_mutation_survives_failure(owners):
+    observed, order = [], []
+    metadata = {"keep": []}
+    lock = threading.Lock()
 
     class Fail(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
@@ -66,40 +121,292 @@ async def real_pre_call_logging(owners):
     class Observe(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             order.append("observe")
-            snapshots.append(
-                (
-                    kwargs.get("normalized"),
-                    "remove" in kwargs,
-                    kwargs["retained_metadata"]["secret"],
-                    tuple(kwargs["retained_metadata"]["keep"]),
-                    "lock" in kwargs,
-                    "replacement" in kwargs,
-                )
-            )
-            observed.append((kwargs, messages))
+            observed.append((kwargs, tuple(kwargs["retained_metadata"]["keep"]), kwargs["lock"]))
 
-    logger = logger_for(input_callbacks=[Retain(), Mutate(), Fail(), Observe()])
+    logger = logger_for(input_callbacks=[Fail(), Observe()])
     details = logger.model_call_details
-    details.update(retained_metadata=metadata, normalized=None, remove=removed)
-    messages = logger.messages
-    additional = {"headers": {"test": "header"}}
-    owner = owners.prepare(logger.pre_call, (messages, "test-key"), {"additional_args": additional})
+    details["retained_metadata"] = metadata
+    assert invoke_pre_call(owners, logger, {}) is None
+    assert order == ["fail", "observe"]
+    assert len(observed) == 1 and observed[0][0] is details
+    assert observed[0][1] == ("before failure",) and observed[0][2] is lock
+    assert details["retained_metadata"] is metadata
+    assert metadata == {"keep": ["before failure"]} and details["lock"] is lock
+    with TestCase().assertRaises(TypeError):
+        json.dumps({"lock": details["lock"]})
+
+
+async def real_post_call_logging(owners):
+    saved, observed, order = [], [], []
+    shared = {"values": []}
+    response = ModelResponse(model="test")
+    ignored = {"replacement": True}
+    error = RuntimeError("expected post-call callback failure")
+
+    class Retain(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            kwargs["stash"] = shared
+            saved.append(kwargs)
+
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            order.append("retain")
+            saved.append(kwargs)
+            return ignored
+
+    class MutateThenFail(CustomLogger):
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            order.append("fail")
+            kwargs["stash"]["values"].append("post")
+            kwargs["callback_error"] = error
+            kwargs["original_response"].choices[0].message.content = "mutated"
+            raise error
+
+    class Observe(CustomLogger):
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            order.append("observe")
+            observed.append((kwargs, response_obj, start_time, end_time, tuple(kwargs["stash"]["values"])))
+            return ignored
+
+    logger = logger_for(input_callbacks=[Retain(), MutateThenFail(), Observe()])
+    details = logger.model_call_details
+    assert invoke_pre_call(owners, logger, {}) is None
+    additional = {"headers": {"test": "post"}}
+    owner = owners.prepare(logger.post_call, (response, logger.messages, "test-key"), {"additional_args": additional})
     try:
         assert owner.invoke() is None
     finally:
         owner.close()
-    assert order == ["retain", "mutate", "fail", "observe"]
-    assert snapshots == [("normalized", False, "masked", ("before failure",), True, False)]
-    assert len(retained) == len(observed) == 1
-    assert retained[0] is details and observed[0][0] is details
-    assert observed[0][1] is messages and details["input"] is messages
-    assert details["additional_args"] is additional
-    assert details["retained_metadata"] is metadata
-    assert metadata == {"secret": "masked", "keep": ["before failure"]}
-    assert details["normalized"] == "normalized" and "remove" not in details
-    assert details["lock"] is lock and "replacement" not in details
-    with TestCase().assertRaises(TypeError):
-        json.dumps({"lock": details["lock"]})
+    assert order == ["retain", "fail", "observe"]
+    assert len(saved) == 2 and saved[0] is saved[1] is details
+    assert len(observed) == 1 and observed[0][0] is details
+    assert observed[0][1] is None and observed[0][2] is logger.start_time and observed[0][3] is None
+    assert observed[0][4] == ("post",)
+    assert details["original_response"] is response and response.choices[0].message.content == "mutated"
+    assert details["input"] is logger.messages and details["additional_args"] is additional
+    assert details["log_event_type"] == "post_api_call" and details["api_key"] == "test-key"
+    assert details["stash"] is shared and details["callback_error"] is error
+    assert "replacement" not in details
+    shared["values"].append("later")
+    assert saved[0]["stash"]["values"] == ["post", "later"]
+
+
+async def real_post_call_dict_response(owners):
+    observed = []
+
+    class Observe(CustomLogger):
+        def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+            observed.append(kwargs["original_response"])
+
+    response = {"content": ["original"], "timestamp": datetime(2026, 1, 1)}
+    logger = logger_for(input_callbacks=[Observe()])
+    owner = owners.prepare(logger.post_call, (response,))
+    try:
+        assert owner.invoke() is None
+    finally:
+        owner.close()
+    assert len(observed) == 1 and observed[0] is logger.model_call_details["original_response"]
+    assert isinstance(observed[0], str)
+    assert json.loads(observed[0]) == {"content": ["original"], "timestamp": "2026-01-01 00:00:00"}
+    response["content"].append("later")
+    assert json.loads(observed[0])["content"] == ["original"]
+
+
+async def real_sync_logging(owners):
+    saved, observations, replacements = [], [], []
+    shared = {"values": []}
+    result = ModelResponse(model="test", choices=[{"message": {"role": "assistant", "content": "original"}}])
+    replacement = ModelResponse(model="test", choices=[{"message": {"role": "assistant", "content": "replacement"}}])
+    ignored = {"ignored": True}, result
+
+    class Retain(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            kwargs["stash"] = shared
+            saved.append(kwargs)
+
+        def logging_hook(self, kwargs, result, call_type):
+            observations.append(("retain", kwargs, result, call_type))
+            kwargs["stash"]["values"].append("hook")
+            result.choices[0].message.content = "mutated"
+            return kwargs, result
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            kwargs["stash"]["values"].append("event")
+            observations.append(("event", kwargs, response_obj, tuple(kwargs["stash"]["values"])))
+            return ignored
+
+    class Replace(CustomLogger):
+        def logging_hook(self, kwargs, result, call_type):
+            observations.append(("replace", kwargs, result, result.choices[0].message.content))
+            updated = {**kwargs, "adopted": True}
+            replacements.append(updated)
+            return updated, replacement
+
+    class Observe(CustomLogger):
+        def logging_hook(self, kwargs, result, call_type):
+            observations.append(("observe", kwargs, result, tuple(kwargs["stash"]["values"])))
+            return kwargs, result
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            observations.append(("success", kwargs, response_obj, tuple(kwargs["stash"]["values"])))
+
+    retain = Retain()
+    logger = logger_for(input_callbacks=[retain], sync_callbacks=[retain, Replace(), Observe()], call_type="completion")
+    assert invoke_pre_call(owners, logger, {}) is None
+    owner = owners.prepare(logger.success_handler, (result,))
+    try:
+        assert owner.invoke() is None
+    finally:
+        owner.close()
+    assert [entry[0] for entry in observations] == ["retain", "replace", "observe", "event", "success"]
+    assert len(saved) == len(replacements) == 1
+    assert observations[0][1] is observations[1][1] is saved[0]
+    assert observations[0][2] is observations[1][2] is result
+    assert observations[0][3] == "completion" and observations[1][3] == "mutated"
+    assert observations[2][3] == ("hook",) and observations[3][3] == observations[4][3] == ("hook", "event")
+    assert all(entry[1] is replacements[0] is logger.model_call_details for entry in observations[2:])
+    assert all(entry[2] is replacement for entry in observations[2:])
+    assert logger.model_call_details is not saved[0]
+    assert logger.model_call_details["adopted"] and "adopted" not in saved[0]
+    assert "ignored" not in logger.model_call_details
+    assert result.choices[0].message.content == "mutated"
+    assert replacement.choices[0].message.content == "replacement"
+    assert saved[0]["stash"] is logger.model_call_details["stash"] is shared
+    shared["values"].append("later")
+    assert observations[-1][1]["stash"]["values"] == ["hook", "event", "later"]
+
+
+async def real_sync_logging_hook_failure(owners):
+    order, saved = [], []
+    result = ModelResponse(model="test")
+    error = RuntimeError("expected sync logging hook failure")
+
+    class MutateThenFail(CustomLogger):
+        def logging_hook(self, kwargs, result, call_type):
+            order.append("fail")
+            saved.append(kwargs)
+            kwargs["callback_error"] = error
+            result.choices[0].message.content = "before failure"
+            raise error
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            order.append("unexpected success")
+
+    class Observe(CustomLogger):
+        def logging_hook(self, kwargs, result, call_type):
+            order.append("unexpected hook")
+            return kwargs, result
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            order.append("unexpected later success")
+
+    logger = logger_for(sync_callbacks=[MutateThenFail(), Observe()], call_type="completion")
+    details = logger.model_call_details
+    owner = owners.prepare(logger.success_handler, (result,))
+    try:
+        assert owner.invoke() is None
+    finally:
+        owner.close()
+    assert order == ["fail"]
+    assert len(saved) == 1 and saved[0] is logger.model_call_details is details
+    assert details["callback_error"] is error and error.__traceback__ is not None
+    assert result.choices[0].message.content == "before failure"
+
+
+async def real_sync_failure_chain(owners):
+    await real_failure_chain(owners, awaited=False)
+
+
+async def real_async_failure_chain(owners):
+    await real_failure_chain(owners, awaited=True)
+
+
+async def real_failure_chain(owners, awaited):
+    saved, observations, hooks = [], [], []
+    shared = {"values": []}
+    error = ValueError("provider failure")
+    callback_error = RuntimeError("expected failure callback error")
+    ignored = {"replacement": True}, object()
+    task = asyncio.current_task()
+    end = datetime.now()
+
+    class Stage(CustomLogger):
+        def __init__(self, name):
+            super().__init__()
+            self.name = name
+
+        def log_pre_api_call(self, model, messages, kwargs):
+            kwargs["stash"] = shared
+            saved.append(kwargs)
+
+        def logging_hook(self, kwargs, result, call_type):
+            hooks.append("sync")
+            return ignored
+
+        async def async_logging_hook(self, kwargs, result, call_type):
+            hooks.append("async")
+            return ignored
+
+        def record(self, kwargs, response_obj, start_time, end_time):
+            observations.append(
+                (
+                    self.name,
+                    kwargs,
+                    response_obj,
+                    kwargs["exception"],
+                    tuple(kwargs["stash"]["values"]),
+                    start_time,
+                    end_time,
+                    asyncio.current_task(),
+                )
+            )
+            if self.name == "fail":
+                kwargs["stash"]["values"].append("before failure")
+                kwargs["callback_error"] = callback_error
+                raise callback_error
+            return ignored
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            return self.record(kwargs, response_obj, start_time, end_time)
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            await asyncio.sleep(0)
+            return self.record(kwargs, response_obj, start_time, end_time)
+
+    retain, fail, observe = Stage("retain"), Stage("fail"), Stage("observe")
+    callbacks = [retain, fail, observe]
+    logger = logger_for(
+        input_callbacks=[retain],
+        failure_callbacks=() if awaited else callbacks,
+        async_failure_callbacks=callbacks if awaited else (),
+        call_type="acompletion" if awaited else "completion",
+    )
+    logger.model_call_details["litellm_params"]["acompletion"] = awaited
+    details = logger.model_call_details
+    assert invoke_pre_call(owners, logger, {}) is None
+    owner = owners.prepare(
+        logger.async_failure_handler if awaited else logger.failure_handler,
+        (error, "provider traceback"),
+        {"start_time": logger.start_time, "end_time": end},
+        awaited=awaited,
+    )
+    try:
+        if awaited:
+            assert await owner.invoke() is None
+        else:
+            assert owner.invoke() is None
+    finally:
+        owner.close()
+    assert [entry[0] for entry in observations] == ["retain", "fail", "observe"]
+    assert len(saved) == 1 and saved[0] is logger.model_call_details is details
+    assert all(entry[1] is details and entry[2] is None and entry[3] is error for entry in observations)
+    assert [entry[4] for entry in observations] == [(), (), ("before failure",)]
+    assert all(entry[5] is logger.start_time and entry[6] is end and entry[7] is task for entry in observations)
+    assert details["exception"] is error and details["callback_error"] is callback_error
+    assert callback_error.__traceback__ is not None
+    assert details["traceback_exception"] == "provider traceback" and details["log_event_type"] == "failed_api_call"
+    assert details["stash"] is shared and "replacement" not in details and hooks == []
+    shared["values"].append("later")
+    assert saved[0]["stash"]["values"] == observations[-1][1]["stash"]["values"] == ["before failure", "later"]
 
 
 async def real_async_logging(owners):

@@ -1,720 +1,427 @@
-"""Tests for the optional Rust-backed OCR path."""
+"""Strict whole-argument OCR dispatch and opt-in native transport contracts."""
 
 import asyncio
+import atexit
 import builtins
 import contextvars
-import copy
 import gc
 import importlib
 import inspect
+import json
 import os
-import subprocess
-import sys
 import threading
-import types
 import weakref
-from dataclasses import replace
-from datetime import datetime
-from typing import Any, Final, cast
+from concurrent.futures import ThreadPoolExecutor
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import ModuleType
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.ocr.transformation import OCRRequestData, OCRResponse
-from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import configuration
 
-# `litellm/__init__.py` does `from .ocr.main import *`, which binds the `ocr`
-# function onto `litellm.ocr` and shadows the submodule, so import the modules
-# explicitly via importlib rather than attribute traversal.
 ocr_main = importlib.import_module("litellm.ocr.main")
 rust_bridge = importlib.import_module("litellm.rust_bridge.ocr")
 rust_bridge_bindings = importlib.import_module("litellm.rust_bridge.bindings")
 rust_bridge_loader = importlib.import_module("litellm.rust_bridge.loader")
 
 MODEL = "mistral/mistral-ocr-latest"
-DOCUMENT: dict[str, object] = {
-    "type": "document_url",
-    "document_url": "https://example.com/doc.pdf",
-}
-
-FAKE_OCR_RESPONSE: dict[str, object] = {
-    "pages": [{"index": 0, "markdown": "hello world"}],
-    "model": "mistral-ocr-2505-completion",
-    "document_annotation": None,
-    "usage_info": {"pages_processed": 1},
+RESPONSE_DATA = {
+    "pages": [
+        {
+            "index": 0,
+            "markdown": "proof",
+            "images": [{"id": "image-0", "image_base64": "aW1hZ2U="}],
+            "dimensions": {"dpi": 200, "height": 2200, "width": 1700},
+        }
+    ],
+    "model": "mistral-ocr-latest",
+    "document_annotation": {"title": "Test document"},
+    "usage_info": {"pages_processed": 1, "doc_size_bytes": 1234},
     "object": "ocr",
 }
 
 
-class CapturedException(Exception):
-    pass
-
-
-class RecordingBridge:
-    """A fake ``RustOcr`` callable that records the boundary it was handed."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    def __call__(self, boundary: rust_bridge.OCRBoundary) -> OCRResponse:
-        self.calls.append(
-            {
-                "model": boundary.model,
-                "document": boundary.document,
-                "api_key": boundary.api_key,
-                "api_base": boundary.api_base,
-                "custom_llm_provider": boundary.custom_llm_provider,
-                "extra_headers": boundary.headers,
-                "optional_params": boundary.optional_params,
-                "timeout": boundary.timeout,
-            }
-        )
-        return OCRResponse.model_validate(FAKE_OCR_RESPONSE)
-
-
-class RecordingAsyncBridge:
-    """A fake async ``RustAocr`` callable that records the boundary it was handed."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    async def __call__(self, boundary: rust_bridge.OCRBoundary) -> OCRResponse:
-        self.calls.append(
-            {
-                "model": boundary.model,
-                "document": boundary.document,
-                "api_key": boundary.api_key,
-                "api_base": boundary.api_base,
-                "custom_llm_provider": boundary.custom_llm_provider,
-                "extra_headers": boundary.headers,
-                "optional_params": boundary.optional_params,
-                "timeout": boundary.timeout,
-            }
-        )
-        return OCRResponse.model_validate(FAKE_OCR_RESPONSE)
-
-
-class RaisingBridge:
-    def __call__(self, boundary: rust_bridge.OCRBoundary) -> OCRResponse:
-        raise RuntimeError("bridge failed")
-
-
-class RaisingAsyncBridge:
-    async def __call__(self, boundary: rust_bridge.OCRBoundary) -> OCRResponse:
-        raise RuntimeError("bridge failed")
-
-
-class RecordingLogging:
-    """A spy standing in for ``LiteLLMLoggingObj`` to capture ``pre_call``."""
-
-    def __init__(self) -> None:
-        self.pre_call_kwargs: dict[str, object] | None = None
-
-    def pre_call(
-        self,
-        *,
-        input: str,
-        api_key: str | None,
-        additional_args: dict[str, object],
-    ) -> None:
-        self.pre_call_kwargs = {
-            "input": input,
-            "api_key": api_key,
-            "additional_args": additional_args,
-        }
-
-
-class FakeOCRConfig:
-    """A stand-in ``BaseOCRConfig`` that echoes the request it would build."""
-
-    def __init__(self, api_key_env_var: str = "MISTRAL_API_KEY") -> None:
-        self.api_key_env_var = api_key_env_var
-        self.seen_api_keys: list[str | None] = []
-
-    def get_api_key_env_var(self) -> str:
-        return self.api_key_env_var
-
-    def validate_environment(
-        self,
-        *,
-        headers: dict[str, object],
-        model: str,
-        api_key: str | None,
-        api_base: str | None,
-        litellm_params: dict[str, object],
-    ) -> dict[str, object]:
-        self.seen_api_keys.append(api_key)
-        return {"Authorization": f"Bearer {api_key}", **headers}
-
-    def get_complete_url(
-        self,
-        *,
-        api_base: str | None,
-        model: str,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
-    ) -> str:
-        return f"{api_base or 'https://api.mistral.ai/v1'}/ocr"
-
-    def transform_ocr_request(
-        self,
-        *,
-        model: str,
-        document: dict[str, object],
-        optional_params: dict[str, object],
-        headers: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-    ) -> OCRRequestData:
-        return OCRRequestData(data={"model": model, "document": document, **optional_params}, files=None)
-
-    async def async_transform_ocr_request(
-        self,
-        *,
-        model: str,
-        document: dict[str, object],
-        optional_params: dict[str, object],
-        headers: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-    ) -> OCRRequestData:
-        return self.transform_ocr_request(
-            model=model,
-            document=document,
-            optional_params=optional_params,
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-        )
-
-
-def build_prepared_request(
-    *,
-    logging_obj: RecordingLogging | None = None,
-    provider_config: FakeOCRConfig | None = None,
-    model: str = "mistral-ocr-latest",
-    document: dict[str, object] = DOCUMENT,
-    api_key: str | None = "sk-test",
-    api_base: str | None = None,
-    custom_llm_provider: str = "mistral",
-    extra_headers: dict[str, object] | None = None,
-    optional_params: dict[str, object] | None = None,
-    litellm_params: dict[str, object] | None = None,
-    timeout: float | httpx.Timeout | None = 12.5,
-) -> Any:
-    from litellm.constants import request_timeout
-
-    return ocr_main._PreparedOCRRequest(
-        model=model,
-        document=document,
-        api_key=api_key,
-        api_base=api_base,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        provider_config=provider_config or FakeOCRConfig(),
-        optional_params=optional_params or {},
-        litellm_params=litellm_params or {},
-        effective_timeout=timeout if timeout is not None else float(request_timeout),
-        litellm_logging_obj=logging_obj or RecordingLogging(),
-    )
-
-
-class BoundaryDriver:
-    """Stands in for the native route: drives the boundary's own methods."""
-
-    def __init__(self) -> None:
-        self.roots: rust_bridge.OCRRoots | None = None
-        self.encoded: rust_bridge.OCREncoded | None = None
-
-    def __call__(self, boundary: rust_bridge.OCRBoundary) -> OCRResponse:
-        self.roots = boundary.prepare()
-        self.encoded = boundary.encode(self.roots)
-        return OCRResponse.model_validate(FAKE_OCR_RESPONSE)
-
-
 @pytest.fixture(autouse=True)
-def _reset_rust_flag():
-    """Keep the global toggle isolated between tests."""
+def reset_rust_state(monkeypatch):
+    monkeypatch.delenv("LITELLM_RUST", raising=False)
+    configuration.reset_rust_configuration()
     rust_bridge._OCR.reset()
     rust_bridge._AOCR.reset()
-    configuration.reset_rust_configuration()
-    rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
-    yield
-    rust_bridge._OCR.reset()
-    rust_bridge._AOCR.reset()
-    configuration.reset_rust_configuration()
-    rust_bridge_loader._cached_bridge = rust_bridge_loader._BRIDGE_SENTINEL
-
-
-@pytest.fixture
-def fake_bridge():
-    """Enable the Rust path with an injected recording bridge (no native wheel)."""
-    bridge = RecordingBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-    return bridge
-
-
-@pytest.fixture
-def fake_async_bridge():
-    """Enable the async Rust path with an injected recording bridge."""
-    bridge = RecordingAsyncBridge()
-    litellm.rust(True)
-    rust_bridge._AOCR.override(bridge)
-    return bridge
-
-
-def test_load_rust_ocr_returns_injected_impl():
-    bridge = RecordingBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-    assert rust_bridge.load_rust_ocr() is bridge
-
-
-def test_native_bridge_loader_returns_none_when_extension_absent(monkeypatch):
-    real_import = builtins.__import__
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "litellm.rust_bridge" and "_native" in fromlist:
-            raise ImportError
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    assert rust_bridge_loader.get_native_bridge() is None
-
-
-def test_native_bridge_loader_caches_absent_extension(monkeypatch):
-    real_import = builtins.__import__
-    attempts = 0
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        nonlocal attempts
-        if name == "litellm.rust_bridge" and "_native" in fromlist:
-            attempts += 1
-            raise ImportError
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    assert rust_bridge_loader.get_native_bridge() is None
-    assert rust_bridge_loader.get_native_bridge() is None
-    assert attempts == 1
-
-
-def test_native_bridge_loader_reset_forces_relookup(monkeypatch):
-    real_import = builtins.__import__
-    attempts = 0
-
-    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-        nonlocal attempts
-        if name == "litellm.rust_bridge" and "_native" in fromlist:
-            attempts += 1
-            raise ImportError
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-
-    assert rust_bridge_loader.get_native_bridge() is None
     rust_bridge_loader.reset_native_bridge_cache()
-    assert rust_bridge_loader.get_native_bridge() is None
-    assert attempts == 2
+    try:
+        yield
+    finally:
+        rust_bridge._OCR.reset()
+        rust_bridge._AOCR.reset()
+        configuration.reset_rust_configuration()
+        rust_bridge_loader.reset_native_bridge_cache()
 
 
-def test_native_bridge_available_reflects_loader(monkeypatch):
-    fake_module = types.ModuleType("litellm.rust_bridge._native")
-    monkeypatch.setattr(rust_bridge_loader, "get_native_bridge", lambda: fake_module)
-
-    assert rust_bridge_loader.native_bridge_available() is True
+@pytest.fixture
+def document():
+    return {"type": "document_url", "document_url": "https://example.invalid/document.pdf"}
 
 
-def test_load_rust_aocr_returns_injected_impl():
-    bridge = RecordingAsyncBridge()
-    litellm.rust(True)
-    rust_bridge._AOCR.override(bridge)
-    assert rust_bridge.load_rust_aocr() is bridge
+@pytest.fixture
+def response():
+    return OCRResponse.model_validate(RESPONSE_DATA)
 
 
-def test_toggle_without_ocr_arg_preserves_injected_impl():
-    """The public flag must not clobber an internal test binding."""
-    bridge = RecordingBridge()
-    async_bridge = RecordingAsyncBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-    rust_bridge._AOCR.override(async_bridge)
-
-    litellm.rust(False)
-    assert rust_bridge.load_rust_ocr() is bridge
-    assert rust_bridge.load_rust_aocr() is async_bridge
-    litellm.rust(True)
-    assert rust_bridge.load_rust_ocr() is bridge
-    assert rust_bridge.load_rust_aocr() is async_bridge
+@pytest.fixture
+def injected_native(response):
+    sync = Mock(return_value=response)
+    asynchronous = AsyncMock(return_value=response)
+    rust_bridge._OCR.override(sync)
+    rust_bridge._AOCR.override(asynchronous)
+    return sync, asynchronous
 
 
-def test_explicit_ocr_none_clears_injected_impl(monkeypatch):
-    monkeypatch.setattr(
-        rust_bridge_bindings,
-        "get_native_bridge",
-        lambda: None,
+@pytest.fixture
+def no_python_ocr(monkeypatch):
+    prepare = Mock(side_effect=lambda **kwargs: pytest.fail("Python OCR preparation ran"))
+    handler = Mock(side_effect=lambda **kwargs: pytest.fail("Python OCR transport ran"))
+    mapping = Mock(side_effect=lambda **kwargs: pytest.fail("Python exception mapping ran"))
+    monkeypatch.setattr(ocr_main, "_prepare_ocr_request", prepare)
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "_prepare_ocr_request", prepare)
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "_async_prepare_ocr_request", prepare)
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", handler)
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "async_ocr", handler)
+    monkeypatch.setattr(litellm, "exception_type", mapping)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("enable_with", ["global", "environment"])
+async def test_unwrapped_dispatch_preserves_every_argument(
+    monkeypatch, no_python_ocr, injected_native, response, asynchronous, enable_with
+):
+    if enable_with == "global":
+        litellm.rust(True)
+    else:
+        monkeypatch.setenv("LITELLM_RUST", "1")
+    opaque = object()
+    document = {"type": "file", "file": opaque, "mime_type": "application/pdf"}
+    metadata = {"opaque": opaque, "nested": []}
+    arguments = {
+        "model": "unresolved-provider/opaque-model",
+        "document": document,
+        "api_key": opaque,
+        "api_base": opaque,
+        "timeout": httpx.Timeout(30, read=12.5),
+        "custom_llm_provider": "unported-provider",
+        "extra_headers": {"x-opaque": opaque},
+        "metadata": metadata,
+        "litellm_metadata": {"opaque": opaque},
+        "litellm_logging_obj": opaque,
+        "litellm_call_id": "whole-arguments",
+        "pages": [0, 2],
+        "include_image_base64": True,
+        "document_annotation_format": {"schema": opaque},
+        "req_format": "native",
+        "client": opaque,
+        "arbitrary_option": opaque,
+        "optional_params": {"opaque": opaque},
+        "kwargs": {"caller_owned": opaque},
+        "aocr": opaque,
+    }
+    result = (
+        await inspect.unwrap(ocr_main.aocr)(**arguments) if asynchronous else inspect.unwrap(ocr_main.ocr)(**arguments)
     )
-    bridge = RecordingBridge()
-    async_bridge = RecordingAsyncBridge()
-    litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-    rust_bridge._AOCR.override(async_bridge)
 
+    sync, async_native = injected_native
+    selected, unused = (async_native, sync) if asynchronous else (sync, async_native)
+    selected.assert_called_once()
+    unused.assert_not_called()
+    if asynchronous:
+        async_native.assert_awaited_once()
+    assert result is response
+    assert selected.call_args.kwargs == {}
+    (forwarded,) = selected.call_args.args
+    assert isinstance(forwarded, dict)
+    assert forwarded.keys() == arguments.keys()
+    for name, value in arguments.items():
+        assert forwarded[name] is value, name
+    assert document == {"type": "file", "file": opaque, "mime_type": "application/pdf"}
+    assert metadata == {"opaque": opaque, "nested": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_unwrapped_dispatch_keeps_unresolved_defaults(
+    no_python_ocr, injected_native, document, response, asynchronous
+):
+    litellm.rust(True)
+    result = (
+        await inspect.unwrap(ocr_main.aocr)(MODEL, document)
+        if asynchronous
+        else inspect.unwrap(ocr_main.ocr)(MODEL, document)
+    )
+    selected = injected_native[int(asynchronous)]
+    selected.assert_called_once_with(
+        {
+            "model": MODEL,
+            "document": document,
+            "api_key": None,
+            "api_base": None,
+            "timeout": None,
+            "custom_llm_provider": None,
+            "extra_headers": None,
+        }
+    )
+    assert result is response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_public_decorator_routes_full_kwargs(no_python_ocr, injected_native, document, response, asynchronous):
+    litellm.rust(True)
+    metadata = {"test_tag": "whole-arguments"}
+    pages = [0, 2]
+    arguments = {
+        "model": MODEL,
+        "document": document,
+        "api_key": "sk-test",
+        "api_base": "https://example.invalid",
+        "timeout": 12.5,
+        "extra_headers": {"x-trace-id": "trace-1"},
+        "pages": pages,
+        "include_image_base64": True,
+        "metadata": metadata,
+        "arbitrary_option": {"nested": ["preserved"]},
+        "num_retries": 0,
+    }
+    result = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+
+    selected = injected_native[int(asynchronous)]
+    selected.assert_called_once()
+    injected_native[not asynchronous].assert_not_called()
+    (forwarded,) = selected.call_args.args
+    assert result is response
+    for name in ("model", "api_key", "api_base", "timeout", "extra_headers", "arbitrary_option", "num_retries"):
+        assert forwarded[name] == arguments[name]
+    assert forwarded["document"] is document
+    assert forwarded["pages"] is pages
+    assert forwarded["include_image_base64"] is True
+    assert forwarded["metadata"]["test_tag"] == "whole-arguments"
+    assert forwarded["custom_llm_provider"] is None
+    assert "litellm_logging_obj" not in forwarded
+    assert "litellm_call_id" not in forwarded
+    assert "kwargs" not in forwarded
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_bridge_passes_same_dictionary_and_response(injected_native, document, response, asynchronous):
+    arguments = {"model": MODEL, "document": document, "opaque": object()}
+    result = await rust_bridge.aocr(arguments) if asynchronous else rust_bridge.ocr(arguments)
+    selected = injected_native[int(asynchronous)]
+    selected.assert_called_once_with(arguments)
+    assert selected.call_args.args[0] is arguments
+    assert result is response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("public", [False, True], ids=["unwrapped", "decorated"])
+@pytest.mark.parametrize("failure", ["missing", "unsupported", "runtime"])
+async def test_native_failures_propagate_without_fallback(
+    monkeypatch, no_python_ocr, injected_native, document, asynchronous, public, failure
+):
+    litellm.rust(True)
+    error = (
+        NotImplementedError("native OCR provider is not implemented")
+        if failure == "unsupported"
+        else RuntimeError("native OCR failed")
+    )
+    if failure == "missing":
+        rust_bridge._OCR.reset()
+        rust_bridge._AOCR.reset()
+        monkeypatch.setattr(rust_bridge_bindings, "get_native_bridge", lambda: None)
+    else:
+        injected_native[int(asynchronous)].side_effect = error
+    function = litellm.aocr if asynchronous else litellm.ocr
+    route = function if public else inspect.unwrap(function)
+    with pytest.raises(RuntimeError if failure == "missing" else type(error)) as caught:
+        result = route(model=MODEL, document=document, api_key="sk-test", num_retries=0)
+        if asynchronous:
+            await result
+    if failure == "missing":
+        assert "OCR" in str(caught.value).upper()
+    else:
+        assert caught.value is error
+        injected_native[int(asynchronous)].assert_called_once()
+    injected_native[not asynchronous].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_bridge_missing_binding_is_strict(document, asynchronous):
     rust_bridge._OCR.override(None)
     rust_bridge._AOCR.override(None)
-    assert rust_bridge.load_rust_ocr() is None
-    assert rust_bridge.load_rust_aocr() is None
+    with pytest.raises(RuntimeError, match="(?i)ocr"):
+        if asynchronous:
+            await rust_bridge.aocr({"model": MODEL, "document": document})
+        else:
+            rust_bridge.ocr({"model": MODEL, "document": document})
 
 
-def test_load_rust_ocr_none_when_extension_absent(monkeypatch):
-    """With no injected impl and no compiled wheel, the loader returns None so the
-    caller degrades to the Python path instead of raising ImportError."""
-    monkeypatch.setattr(
-        rust_bridge_bindings,
-        "get_native_bridge",
-        lambda: None,
-    )
-    litellm.rust(True)  # no impl injected; extension isn't built in CI
-    assert rust_bridge.load_rust_ocr() is None
-    assert rust_bridge.load_rust_aocr() is None
-
-
-def test_load_rust_ocr_uses_compiled_extension(monkeypatch):
-    """With no injected impl but a packaged ``litellm.rust_bridge._native`` importable,
-    the loader returns the extension's ``ocr`` callable. The native wheel isn't
-    built in CI, so stand in a fake module via the bridge loader."""
-    fake_module = types.ModuleType("litellm.rust_bridge._native")
-    fake_module.ocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
-    fake_module.aocr = lambda **kwargs: dict(FAKE_OCR_RESPONSE)  # type: ignore[attr-defined]
-    monkeypatch.setattr(
-        rust_bridge_bindings,
-        "get_native_bridge",
-        lambda: fake_module,
-    )
-
-    litellm.rust(True)  # enabled, no impl injected -> import the extension
-    assert rust_bridge.load_rust_ocr() is fake_module.ocr
-    assert rust_bridge.load_rust_aocr() is fake_module.aocr
-
-
-def test_timeout_to_seconds_handles_float_timeout_and_none():
-    assert rust_bridge._timeout_to_seconds(12.5) == 12.5
-    assert rust_bridge._timeout_to_seconds(None) is None
-    assert rust_bridge._timeout_to_seconds(httpx.Timeout(30.0, read=42.0)) == 42.0
-
-
-def test_run_rust_ocr_forwards_boundary_fields():
-    bridge = RecordingBridge()
-    logging_obj = RecordingLogging()
-    litellm.rust(True)
-    rust_bridge._OCR.override(bridge)
-
-    response = ocr_main._run_rust_ocr(
-        build_prepared_request(
-            logging_obj=logging_obj,
-            api_base="https://proxy.internal",
-            extra_headers={"x-trace-id": "trace-1"},
-            optional_params={"include_image_base64": True},
-            timeout=12.5,
-        )
-    )
-
-    assert isinstance(response, OCRResponse)
-    assert response.pages[0].markdown == "hello world"
-    assert bridge.calls[0] == {
-        "model": "mistral-ocr-latest",
-        "document": DOCUMENT,
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("setting", ["default", "disabled", "overrides-environment"])
+async def test_rust_off_keeps_python_preparation_and_transport(
+    monkeypatch, injected_native, response, asynchronous, setting
+):
+    if setting == "overrides-environment":
+        monkeypatch.setenv("LITELLM_RUST", "1")
+    if setting != "default":
+        litellm.rust(False)
+    prepare = Mock(wraps=ocr_main._prepare_ocr_request)
+    handler = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
+    lookup = Mock(side_effect=lambda: pytest.fail("disabled Rust binding was consulted"))
+    monkeypatch.setattr(ocr_main, "_prepare_ocr_request", prepare)
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", handler)
+    monkeypatch.setattr(rust_bridge, "load_rust_ocr", lookup)
+    monkeypatch.setattr(rust_bridge, "load_rust_aocr", lookup)
+    arguments = {
+        "model": MODEL,
+        "document": {"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
         "api_key": "sk-test",
-        "api_base": "https://proxy.internal",
-        "custom_llm_provider": "mistral",
-        "extra_headers": {"x-trace-id": "trace-1"},
-        "optional_params": {"include_image_base64": True},
         "timeout": 12.5,
+        "extra_headers": {"x-trace-id": "python"},
+        "pages": [0],
+        "include_image_base64": True,
+        "num_retries": 0,
     }
-    assert logging_obj.pre_call_kwargs is None  # pre_call now runs inside the boundary
+    result = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
 
-
-def test_run_rust_ocr_passes_raw_api_key_to_provider_config():
-    """Key resolution moved into provider ``validate_environment``; the boundary
-    forwards the caller's key unchanged."""
-    provider_config = FakeOCRConfig(api_key_env_var="PROVIDER_OCR_API_KEY")
-    driver = BoundaryDriver()
-    litellm.rust(True)
-    rust_bridge._OCR.override(driver)
-
-    ocr_main._run_rust_ocr(build_prepared_request(provider_config=provider_config, api_key="sk-explicit", timeout=None))
-    ocr_main._run_rust_ocr(build_prepared_request(provider_config=provider_config, api_key=None, timeout=None))
-
-    assert provider_config.seen_api_keys == ["sk-explicit", None]
-
-
-def test_run_rust_ocr_preserves_native_response_identity():
-    """The bridge returns the boundary's own finish() object, not a re-validated copy."""
-    sentinel = OCRResponse.model_validate(FAKE_OCR_RESPONSE)
-
-    class IdentityBridge:
-        def __call__(self, boundary: rust_bridge.OCRBoundary) -> OCRResponse:
-            return sentinel
-
-    litellm.rust(True)
-    rust_bridge._OCR.override(IdentityBridge())
-
-    response = ocr_main._run_rust_ocr(build_prepared_request())
-
-    assert response is sentinel
-
-
-def test_boundary_prepare_runs_pre_call_and_encodes_the_same_roots():
-    """The logging view must alias the execution roots: mutating the headers the
-    callback received must surface in the encoded wire headers, while replacing
-    a view field must not."""
-    logging_obj = RecordingLogging()
-    driver = BoundaryDriver()
-    litellm.rust(True)
-    rust_bridge._OCR.override(driver)
-
-    seen: dict[str, object] = {}
-
-    original_pre_call = logging_obj.pre_call
-
-    def observing_pre_call(**kwargs: object) -> None:
-        original_pre_call(**kwargs)
-        view = cast(dict[str, object], kwargs["additional_args"])
-        seen["headers"] = view["headers"]
-        cast(dict[str, object], view["headers"])["X-Proof"] = "mutated"
-
-    logging_obj.pre_call = observing_pre_call  # type: ignore[method-assign]
-
-    ocr_main._run_rust_ocr(build_prepared_request(logging_obj=logging_obj, api_base="https://api.mistral.ai/v1"))
-
-    assert logging_obj.pre_call_kwargs is not None
-    additional_args = logging_obj.pre_call_kwargs["additional_args"]
-    assert additional_args["api_base"] == "https://api.mistral.ai/v1/ocr"
-    assert additional_args["headers"] == {"Authorization": "Bearer sk-test", "X-Proof": "mutated"}
-    assert driver.roots is not None
-    roots_headers, _url, _data, _files = driver.roots
-    assert roots_headers is seen["headers"]
-    assert driver.encoded is not None
-    encoded_headers = {name.lower(): value for name, value in driver.encoded[1]}
-    assert encoded_headers[b"x-proof"] == b"mutated"
-
-
-def test_ocr_routes_to_rust_when_enabled(fake_bridge):
-    response = litellm.ocr(
-        model=MODEL,
-        document=DOCUMENT,
-        api_key="sk-test",
-        extra_headers={"x-trace-id": "trace-1"},
-        include_image_base64=True,
-    )
-
-    assert isinstance(response, OCRResponse)
-    assert response.pages[0].markdown == "hello world"
-    assert len(fake_bridge.calls) == 1
-    call = fake_bridge.calls[0]
+    assert result is response
+    prepare.assert_called_once()
+    handler.assert_called_once()
+    if asynchronous:
+        handler.assert_awaited_once()
+    call = handler.call_args.kwargs
     assert call["model"] == "mistral-ocr-latest"
-    assert call["document"] == DOCUMENT
-    assert call["api_key"] == "sk-test"
     assert call["custom_llm_provider"] == "mistral"
-    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
-    assert call["optional_params"].get("include_image_base64") is True
-
-
-def test_ocr_routes_azure_ai_to_rust_when_enabled(fake_bridge):
-    response = litellm.ocr(
-        model="azure_ai/pixtral-12b-2409",
-        document=DOCUMENT,
-        api_key="sk-test",
-        api_base="https://example.services.ai.azure.com",
-    )
-
-    assert isinstance(response, OCRResponse)
-    assert len(fake_bridge.calls) == 1
-    assert fake_bridge.calls[0]["model"] == "pixtral-12b-2409"
-    assert fake_bridge.calls[0]["custom_llm_provider"] == "azure_ai"
-
-
-def test_ocr_rust_path_converts_file_document_before_bridge(fake_bridge):
-    response = litellm.ocr(
-        model=MODEL,
-        document={"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
-        api_key="sk-test",
-    )
-
-    assert isinstance(response, OCRResponse)
-    document = fake_bridge.calls[0]["document"]
-    assert document["type"] == "document_url"
-    assert document["document_url"].startswith("data:application/pdf;base64,")
-
-
-def test_ocr_exception_type_uses_resolved_provider_context(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    captured: dict[str, object] = {}
-
-    def fake_exception_type(**kwargs: object) -> CapturedException:
-        captured.update(kwargs)
-        return CapturedException("wrapped")
-
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
-    litellm.rust(True)
-    rust_bridge._OCR.override(RaisingBridge())
-
-    with pytest.raises(CapturedException):
-        litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
-
-    assert captured["model"] == "mistral-ocr-latest"
-    assert captured["custom_llm_provider"] == "mistral"
+    assert call["document"] == {
+        "type": "document_url",
+        "document_url": "data:application/pdf;base64,JVBERi0xLjQ=",
+    }
+    assert call["optional_params"] == {"pages": [0], "include_image_base64": True}
+    assert call["timeout"] == 12.5
+    assert call["headers"] == arguments["extra_headers"]
+    assert call["aocr"] is asynchronous
+    lookup.assert_not_called()
+    for native in injected_native:
+        native.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_aocr_routes_to_async_rust_when_enabled(fake_async_bridge):
-    response = await litellm.aocr(
-        model=MODEL,
-        document=DOCUMENT,
-        api_key="sk-test",
-        extra_headers={"x-trace-id": "trace-1"},
-        include_image_base64=True,
-    )
-
-    assert isinstance(response, OCRResponse)
-    assert response.pages[0].markdown == "hello world"
-    assert len(fake_async_bridge.calls) == 1
-    call = fake_async_bridge.calls[0]
-    assert call["model"] == "mistral-ocr-latest"
-    assert call["document"] == DOCUMENT
-    assert call["api_key"] == "sk-test"
-    assert call["custom_llm_provider"] == "mistral"
-    assert call["extra_headers"] == {"x-trace-id": "trace-1"}
-    assert call["optional_params"].get("include_image_base64") is True
-
-
-@pytest.mark.asyncio
-async def test_aocr_exception_type_uses_resolved_provider_context(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    captured: dict[str, object] = {}
-
-    def fake_exception_type(**kwargs: object) -> CapturedException:
-        captured.update(kwargs)
-        return CapturedException("wrapped")
-
-    monkeypatch.setattr(ocr_main.litellm, "exception_type", fake_exception_type)
-    litellm.rust(True)
-    rust_bridge._AOCR.override(RaisingAsyncBridge())
-
-    with pytest.raises(CapturedException):
-        await litellm.aocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
-
-    assert captured["model"] == "mistral-ocr-latest"
-    assert captured["custom_llm_provider"] == "mistral"
-
-
-def test_ocr_forwards_timeout_to_rust(fake_bridge):
-    """Caller-supplied timeout must flow into the Rust bridge so the fixed 600s
-    client ceiling doesn't silently override shorter deadlines."""
-    litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test", timeout=12.5)
-
-    assert fake_bridge.calls[0]["timeout"] == 12.5
-
-
-def test_ocr_passes_default_request_timeout_to_rust(fake_bridge):
-    litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
-
-    from litellm.constants import request_timeout
-
-    assert fake_bridge.calls[0]["timeout"] == float(request_timeout)
-
-
-def test_ocr_does_not_route_to_rust_when_disabled():
-    """With the flag off, the bridge must not be consulted even if an impl exists."""
-    bridge = RecordingBridge()
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_rust_off_preserves_python_exception_mapping(monkeypatch, injected_native, document, asynchronous):
     litellm.rust(False)
-    rust_bridge.set_rust_ocr(ocr=bridge)
-
-    assert rust_bridge.rust_ocr_enabled() is False
-    # The impl stays available for injection, but the disabled flag gates usage,
-    # so ocr() never reaches the Rust path (asserted via the enabled-path test).
-    assert bridge.calls == []
-
-
-def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
-    """Rust enabled but no bridge available (no injected impl, no compiled wheel):
-    ocr() must degrade to the Python HTTP handler instead of raising."""
-    monkeypatch.setattr(rust_bridge, "load_rust_ocr", lambda: None)
-    litellm.rust(True)  # enabled, but load_rust_ocr() returns None in CI
-
-    captured = {}
-
-    def fake_handler_ocr(**kwargs):
-        captured["called"] = True
-        return OCRResponse(pages=[], model="mistral-ocr-latest", object="ocr")
-
-    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", fake_handler_ocr)
-
-    response = litellm.ocr(model=MODEL, document=DOCUMENT, api_key="sk-test")
-
-    assert captured.get("called") is True  # Python path was used
-    assert isinstance(response, OCRResponse)
+    original_error = ValueError("Python transport failed")
+    mapped_error = RuntimeError("mapped Python error")
+    mapping = Mock(return_value=mapped_error)
+    handler = AsyncMock(side_effect=original_error) if asynchronous else Mock(side_effect=original_error)
+    monkeypatch.setattr(litellm, "exception_type", mapping)
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", handler)
+    arguments = dict(model=MODEL, document=document, api_key="sk-test", litellm_logging_obj=Mock())
+    with pytest.raises(RuntimeError) as caught:
+        if asynchronous:
+            await inspect.unwrap(ocr_main._legacy_aocr)(**arguments)
+        else:
+            inspect.unwrap(ocr_main._legacy_ocr)(**arguments)
+    assert caught.value is mapped_error
+    handler.assert_called_once()
+    mapping.assert_called_once()
+    assert mapping.call_args.kwargs["original_exception"] is original_error
+    assert mapping.call_args.kwargs["model"] == "mistral-ocr-latest"
+    assert mapping.call_args.kwargs["custom_llm_provider"] == "mistral"
+    for native in injected_native:
+        native.assert_not_called()
 
 
-def test_ocr_provider_configs_expose_api_key_env_vars():
-    from litellm.llms.azure_ai.ocr.document_intelligence.transformation import (
-        AzureDocumentIntelligenceOCRConfig,
-    )
-    from litellm.llms.azure_ai.ocr.transformation import AzureAIOCRConfig
-    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
-    from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
-    from litellm.llms.vertex_ai.ocr.deepseek_transformation import (
-        VertexAIDeepSeekOCRConfig,
-    )
-    from litellm.llms.vertex_ai.ocr.transformation import VertexAIOCRConfig
-
-    assert BaseOCRConfig().get_api_key_env_var() is None
-    assert MistralOCRConfig().get_api_key_env_var() == "MISTRAL_API_KEY"
-    assert AzureAIOCRConfig().get_api_key_env_var() == "AZURE_AI_API_KEY"
-    assert AzureDocumentIntelligenceOCRConfig().get_api_key_env_var() == "AZURE_DOCUMENT_INTELLIGENCE_API_KEY"
-    assert VertexAIOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
-    assert VertexAIDeepSeekOCRConfig().get_api_key_env_var() == "VERTEX_AI_API_KEY"
+def test_global_toggle_preserves_injected_bindings(injected_native):
+    for enabled in (True, False, True):
+        litellm.rust(enabled)
+        assert configuration.rust_enabled() is enabled
+        assert rust_bridge.load_rust_ocr() is injected_native[0]
+        assert rust_bridge.load_rust_aocr() is injected_native[1]
 
 
-#################################################
-# Proof: pre_call callbacks run against the same objects the wire request is
-# built from, through the real native route, compared with the Python route.
-#################################################
+@pytest.mark.parametrize("name", ["ocr", "aocr"])
+def test_binding_override_none_and_reset(monkeypatch, name):
+    native = ModuleType("litellm.rust_bridge._native")
+    implementation = Mock()
+    setattr(native, name, implementation)
+    monkeypatch.setattr(rust_bridge_bindings, "get_native_bridge", lambda: native)
+    binding = rust_bridge._OCR if name == "ocr" else rust_bridge._AOCR
+    assert binding.load() is implementation
+    override = Mock()
+    binding.override(override)
+    assert binding.load() is override
+    binding.override(None)
+    assert binding.load() is None
+    binding.reset()
+    assert binding.load() is implementation
+    setattr(native, name, object())
+    assert binding.load() is None
 
-MISTRAL_OCR_RESPONSE_JSON: Final = (
-    b'{"pages": [{"index": 0, "markdown": "proof"}], "model": "mistral-ocr-2505-completion",'
-    b' "document_annotation": null, "usage_info": {"pages_processed": 1}, "object": "ocr"}'
-)
+
+def test_loader_caches_missing_extension_until_reset(monkeypatch):
+    original_import = builtins.__import__
+    attempts = Mock()
+
+    def import_without_native(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "litellm.rust_bridge" and "_native" in fromlist:
+            attempts()
+            raise ImportError("extension not installed")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_native)
+    assert rust_bridge_loader.get_native_bridge() is None
+    assert rust_bridge_loader.native_bridge_available() is False
+    attempts.assert_called_once()
+    rust_bridge_loader.reset_native_bridge_cache()
+    assert rust_bridge_loader.get_native_bridge() is None
+    assert attempts.call_count == 2
 
 
-class _WireRecorder:
-    """Loopback OCR server recording every request it serves."""
+@pytest.fixture
+def native_ocr():
+    native = rust_bridge_loader.get_native_bridge()
+    try:
+        available = native is not None and all(
+            tuple(inspect.signature(getattr(native, name)).parameters) == ("arguments",) for name in ("ocr", "aocr")
+        )
+    except (AttributeError, TypeError, ValueError):
+        available = False
+    if not available:
+        message = "native whole-argument OCR extension unavailable or stale; rebuild the extension"
+        if os.environ.get("LITELLM_REQUIRE_NATIVE_OCR") == "1":
+            pytest.fail(message)
+        pytest.skip(message)
+    return native
 
-    def __init__(self) -> None:
-        import json
-        import threading
-        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-        self.requests: list[dict[str, object]] = []
+class WireRecorder:
+    def __init__(self):
+        self.requests = []
         self.received = threading.Event()
         self.release = threading.Event()
         self.finished = threading.Event()
         self.release.set()
         self.status = 200
+        self.response_data = RESPONSE_DATA
         recorder = self
 
         class Handler(BaseHTTPRequestHandler):
-            def do_POST(self) -> None:  # http.server API
+            def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 recorder.requests.append(
                     {
@@ -727,229 +434,451 @@ class _WireRecorder:
                 try:
                     if not recorder.release.wait(timeout=10):
                         return
+                    payload = json.dumps(recorder.response_data).encode()
                     self.send_response(recorder.status)
                     self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(MISTRAL_OCR_RESPONSE_JSON)))
+                    self.send_header("Content-Length", str(len(payload)))
                     self.end_headers()
-                    self.wfile.write(MISTRAL_OCR_RESPONSE_JSON)
+                    self.wfile.write(payload)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 finally:
                     recorder.finished.set()
 
-            def log_message(self, *args: object) -> None:
+            def log_message(self, *args):
                 pass
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-        self._thread.start()
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
 
     @property
-    def api_base(self) -> str:
-        host, port = self._server.server_address[:2]
+    def api_base(self):
+        host, port = self.server.server_address[:2]
         return f"http://{host}:{port}"
 
-    def stop(self) -> None:
+    def stop(self):
         self.release.set()
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join(timeout=5)
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
 
 
 @pytest.fixture
 def wire_recorder():
-    recorder = _WireRecorder()
+    recorder = WireRecorder()
     try:
         yield recorder
     finally:
         recorder.stop()
 
 
-def _native_boundary_route_available() -> bool:
-    bridge = rust_bridge_loader.get_native_bridge()
-    if bridge is None:
-        return False
-    ocr_fn = getattr(bridge, "ocr", None)
-    if ocr_fn is None:
-        return False
-    try:
-        return str(inspect.signature(ocr_fn)) == "(boundary)"
-    except (TypeError, ValueError):
-        return False
-
-
-@pytest.fixture
-def native_ocr():
-    if not _native_boundary_route_available():
-        if os.environ.get("LITELLM_REQUIRE_NATIVE_OCR") == "1":
-            pytest.fail("native OCR boundary route not built")
-        pytest.skip("native OCR boundary route not built")
-    return rust_bridge_loader.get_native_bridge()
-
-
-class ProofCallback(CustomLogger):
-    def __init__(self, document, context, events, fail=False) -> None:
-        self.document = document
-        self.context = context
-        self.events = events
-        self.fail = fail
-        self.headers: dict[str, object] | None = None
-        self.body: dict[str, object] | None = None
-        self.details = None
-        self.calls = 0
-
-    def log_pre_api_call(self, model, messages, kwargs):
-        self.calls += 1
-        self.events.append(("mutate", self.context.get(), threading.get_ident(), asyncio.current_task()))
-        self.context.set("callback")
-        self.details = kwargs
-        view = kwargs["additional_args"]
-        self.headers = view["headers"]
-        self.body = view["complete_input_dict"]
-        self.headers["X-Proof"] = "mutated"
-        self.body["document"]["document_url"] = "https://example.invalid/mutated-by-callback.pdf"
-        self.document["document_name"] = "closure-mutation"
-        view["headers"] = {"X-Replacement": "must-not-reach-wire"}
-        view["complete_input_dict"] = {"model": "logging-only"}
-        if self.fail:
-            raise RuntimeError("expected pre-call failure")
-        return {"additional_args": {"headers": {"X-Return": "ignored"}}}
-
-
-def _assert_retained_wire(request: dict[str, object]) -> None:
-    assert request["path"] == "/v1/ocr"
-    headers = request["headers"]
-    assert headers["authorization"] == "Bearer sk-test"
-    assert headers["x-proof"] == "mutated"
-    assert "x-replacement" not in headers
-    assert "x-return" not in headers
-    body = request["body"]
-    assert body["model"] == "mistral-ocr-latest"
-    assert body["document"]["document_url"] == "https://example.invalid/mutated-by-callback.pdf"
-    assert body["document"]["document_name"] == "closure-mutation"
-
-
-async def _pre_call_contract(native, wire_recorder, monkeypatch, asynchronous, enabled, fail=False, control="original"):
-    document = {
-        "type": "document_url",
-        "document_url": "https://example.invalid/original.pdf",
-    }
-    context = contextvars.ContextVar("ocr-pre-call", default="caller")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("callback_raises", [False, True], ids=["ignored-return", "caught-error"])
+async def test_native_mistral_wire_response_and_callback_identity(
+    native_ocr, wire_recorder, monkeypatch, no_python_ocr, document, asynchronous, callback_raises
+):
+    litellm.rust(True)
+    context = contextvars.ContextVar("ocr-callback-context", default="caller")
+    caller = (threading.get_ident(), asyncio.current_task())
     events = []
+    retained = []
     observations = []
-    native_calls = []
-    proof = ProofCallback(document, context, events, fail=fail)
+    pages = [0]
+
+    class Mutate(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            events.append(("mutate", context.get(), threading.get_ident(), asyncio.current_task()))
+            context.set("callback")
+            view = kwargs["additional_args"]
+            body, headers = view["complete_input_dict"], view["headers"]
+            retained.append((kwargs, body, headers))
+            headers["X-Proof"] = "mutated"
+            body["document"]["document_url"] = "https://example.invalid/mutated.pdf"
+            document["document_name"] = "closure-mutation"
+            pages.append(2)
+            view["headers"] = {"X-Replacement": "logging-only"}
+            view["complete_input_dict"] = {"model": "logging-only"}
+            if callback_raises:
+                raise RuntimeError("expected callback failure")
+            return {"additional_args": {"headers": {"X-Return": "ignored"}}}
 
     class Observe(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             events.append(("observe", context.get(), threading.get_ident(), asyncio.current_task()))
-            view = kwargs["additional_args"]
             observations.append(
                 (
-                    kwargs is proof.details,
-                    tuple(view["headers"].items()),
-                    view["complete_input_dict"]["model"],
-                    document["document_url"],
+                    kwargs is retained[0][0],
+                    dict(kwargs["additional_args"]["headers"]),
+                    dict(kwargs["additional_args"]["complete_input_dict"]),
                 )
             )
 
-    def selected(boundary):
-        if control == "copy-input":
-            return replace(boundary, document=copy.deepcopy(boundary.document))
-        if control in {"logging-roots", "tuple-only"}:
-
-            class EncodeControl:
-                def __getattr__(self, name):
-                    return getattr(boundary, name)
-
-                def encode(self, roots):
-                    headers, url, body, files = roots
-                    if control == "logging-roots":
-                        view = boundary.logging_obj.model_call_details["additional_args"]
-                        return boundary.encode((view["headers"], url, view["complete_input_dict"], files))
-                    return boundary.encode((headers, url, body, files))
-
-            return EncodeControl()
-        return boundary
-
-    def sync_call(boundary):
-        native_calls.append("sync")
-        if control == "duplicate-prepare":
-            boundary.prepare()
-        return native.ocr(selected(boundary))
-
-    async def async_call(boundary):
-        native_calls.append("async")
-        if control == "duplicate-prepare":
-            await boundary.aprepare()
-        if control == "new-task":
-            return await asyncio.create_task(native.aocr(selected(boundary)))
-        return await native.aocr(selected(boundary))
-
-    rust_bridge._OCR.override(sync_call)
-    rust_bridge._AOCR.override(async_call)
-    monkeypatch.setattr(litellm, "input_callback", [proof, Observe()])
-    litellm.rust(enabled)
-    caller = (threading.get_ident(), asyncio.current_task())
-    arguments = dict(model=MODEL, document=document, api_key="sk-test", api_base=wire_recorder.api_base, num_retries=0)
+    monkeypatch.setattr(litellm, "input_callback", [Mutate(), Observe()])
+    arguments = {
+        "model": MODEL,
+        "document": document,
+        "api_key": "sk-test",
+        "api_base": wire_recorder.api_base,
+        "timeout": httpx.Timeout(5, read=3),
+        "extra_headers": {"X-Trace": "caller"},
+        "pages": pages,
+        "include_image_base64": True,
+        "metadata": {"opaque": object()},
+        "arbitrary_option": object(),
+        "num_retries": 0,
+    }
     response = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
-    assert native_calls == (["async" if asynchronous else "sync"] if enabled else []), "native dispatch"
-    assert isinstance(response, OCRResponse) and response.pages[0].markdown == "proof"
-    assert proof.calls == 1, "callback count"
-    assert proof.body is not None and proof.body["document"] is document, "caller identity"
-    assert events == [("mutate", "caller", *caller), ("observe", "callback", *caller)], "callback context/order"
-    assert context.get() == "callback", "caller context write"
-    assert observations == [
-        (
-            True,
-            (("X-Replacement", "must-not-reach-wire"),),
-            "logging-only",
-            "https://example.invalid/mutated-by-callback.pdf",
-        )
-    ], "observation-time values"
-    assert len(wire_recorder.requests) == 1, "POST count"
-    assert wire_recorder.requests[0]["headers"].get("x-proof") == "mutated", "execution roots"
-    _assert_retained_wire(wire_recorder.requests[0])
-    proof.body["document"]["document_url"] = "https://example.invalid/after-encode.pdf"
-    assert document["document_url"] == "https://example.invalid/after-encode.pdf"
-    assert (
-        wire_recorder.requests[0]["body"]["document"]["document_url"]
-        == "https://example.invalid/mutated-by-callback.pdf"
-    )
+
+    assert isinstance(response, OCRResponse)
+    assert response.object == "ocr"
+    assert response.model == RESPONSE_DATA["model"]
+    assert response.pages[0].index == 0
+    assert response.pages[0].markdown == "proof"
+    assert response.pages[0].dimensions.dpi == 200
+    assert response.pages[0].images[0].image_base64 == "aW1hZ2U="
+    assert response.document_annotation == {"title": "Test document"}
+    assert response.usage_info.pages_processed == 1
+    assert response.usage_info.doc_size_bytes == 1234
+    assert response.get_provider_native_response() is None
+    assert events == [("mutate", "caller", *caller), ("observe", "callback", *caller)]
+    assert context.get() == "callback"
+    assert observations == [(True, {"X-Replacement": "logging-only"}, {"model": "logging-only"})]
+    assert len(retained) == 1
+    assert retained[0][1]["document"] is document
+    assert retained[0][1]["pages"] is pages
+    assert len(wire_recorder.requests) == 1
+    request = wire_recorder.requests[0]
+    assert request["path"] == "/v1/ocr"
+    assert request["headers"]["authorization"] == "Bearer sk-test"
+    assert request["headers"]["x-trace"] == "caller"
+    assert request["headers"]["x-proof"] == "mutated"
+    assert "x-replacement" not in request["headers"]
+    assert "x-return" not in request["headers"]
+    assert request["body"] == {
+        "model": "mistral-ocr-latest",
+        "document": {
+            "type": "document_url",
+            "document_url": "https://example.invalid/mutated.pdf",
+            "document_name": "closure-mutation",
+        },
+        "pages": [0, 2],
+        "include_image_base64": True,
+    }
+    document["document_url"] = "https://example.invalid/after-send.pdf"
+    assert request["body"]["document"]["document_url"] == "https://example.invalid/mutated.pdf"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("enabled", [False, True], ids=["python", "native"])
-@pytest.mark.parametrize("fail", [False, True], ids=["return-ignored", "caught-error"])
-async def test_pre_call_contract(native_ocr, wire_recorder, monkeypatch, asynchronous, enabled, fail):
-    await _pre_call_contract(native_ocr, wire_recorder, monkeypatch, asynchronous, enabled, fail)
+@pytest.mark.parametrize("failure", [False, True], ids=["success", "failure"])
+@pytest.mark.parametrize("callback_source", ["global", "per-call"])
+async def test_public_native_callback_lifecycle(
+    native_ocr, wire_recorder, monkeypatch, no_python_ocr, document, asynchronous, failure, callback_source
+):
+    from litellm import utils
+    from litellm.litellm_core_utils import litellm_logging, logging_worker
+
+    litellm.rust(True)
+    wire_recorder.status = 429 if failure else 200
+    monkeypatch.setattr(utils, "function_setup", Mock(side_effect=AssertionError("native OCR entered function_setup")))
+    context = contextvars.ContextVar("ocr-lifecycle-context", default="caller")
+    caller_thread, caller_task = threading.get_ident(), asyncio.current_task()
+    shared = {"phase": "pre_call"}
+    pre_calls = []
+    terminal_calls = []
+    finished = threading.Event()
+    executor = ThreadPoolExecutor(max_workers=1)
+    worker = logging_worker.LoggingWorker(timeout=5, concurrency=1)
+    monkeypatch.setattr(utils, "executor", executor)
+    monkeypatch.setattr(litellm_logging, "executor", executor)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+
+    class Lifecycle(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            pre_calls.append((kwargs, context.get(), threading.get_ident(), asyncio.current_task()))
+            kwargs["ocr_lifecycle_state"] = shared
+            context.set("pre_call")
+
+        def record(self, event, kwargs, response_obj, start_time, end_time):
+            terminal_calls.append(
+                {
+                    "event": event,
+                    "kwargs": kwargs,
+                    "response": response_obj,
+                    "exception": kwargs.get("exception"),
+                    "shared": kwargs.get("ocr_lifecycle_state"),
+                    "phase": kwargs.get("ocr_lifecycle_state", {}).get("phase"),
+                    "context": context.get(),
+                    "thread": threading.get_ident(),
+                    "task": asyncio.current_task() if threading.get_ident() == caller_thread else None,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                }
+            )
+            kwargs["ocr_lifecycle_state"]["phase"] = "terminal"
+            context.set("terminal")
+            finished.set()
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.record("sync_success", kwargs, response_obj, start_time, end_time)
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            self.record("sync_failure", kwargs, response_obj, start_time, end_time)
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            await asyncio.sleep(0)
+            self.record("async_success", kwargs, response_obj, start_time, end_time)
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            await asyncio.sleep(0)
+            self.record("async_failure", kwargs, response_obj, start_time, end_time)
+
+    callback = Lifecycle()
+    monkeypatch.setattr(litellm, "callbacks", [callback] if callback_source == "global" else [])
+    arguments = dict(
+        model=MODEL,
+        document=document,
+        api_key="sk-test",
+        api_base=wire_recorder.api_base,
+        timeout=5,
+        num_retries=0,
+        **({"callbacks": [callback]} if callback_source == "per-call" else {}),
+    )
+    try:
+        if failure:
+            with pytest.raises(litellm.RateLimitError) as caught:
+                if asynchronous:
+                    await litellm.aocr(**arguments)
+                else:
+                    litellm.ocr(**arguments)
+            assert caught.value.status_code == 429
+            assert caught.value.model == "mistral-ocr-latest"
+            assert caught.value.llm_provider == "mistral"
+        else:
+            response = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+            assert isinstance(response, OCRResponse)
+            assert response.pages[0].markdown == "proof"
+        assert await asyncio.to_thread(finished.wait, 5), "terminal callback was not delivered"
+    finally:
+        try:
+            await asyncio.wait_for(worker.flush(), timeout=5)
+            await asyncio.wait_for(asyncio.wrap_future(executor.submit(lambda: None)), timeout=5)
+        finally:
+            try:
+                await asyncio.wait_for(worker.stop(), timeout=5)
+            finally:
+                atexit.unregister(worker._flush_on_exit)
+                executor.shutdown(wait=False, cancel_futures=True)
+
+    assert len(wire_recorder.requests) == 1
+    assert len(pre_calls) == 1
+    details, pre_context, pre_thread, pre_task = pre_calls[0]
+    assert (pre_context, pre_thread, pre_task) == ("caller", caller_thread, caller_task)
+    assert details["additional_args"]["complete_input_dict"]["document"] is document
+    expected_events = (
+        {"sync_failure", "async_failure"}
+        if failure and asynchronous
+        else {f"{'async' if asynchronous else 'sync'}_{'failure' if failure else 'success'}"}
+    )
+    assert len(terminal_calls) == len(expected_events)
+    assert {terminal["event"] for terminal in terminal_calls} == expected_events
+    assert shared == {"phase": "terminal"}
+    assert details["litellm_call_id"]
+    for terminal in terminal_calls:
+        assert terminal["kwargs"] is details
+        assert terminal["shared"] is shared
+        expected_phase = "terminal" if terminal["event"] == "async_failure" else "pre_call"
+        assert terminal["phase"] == expected_phase
+        assert terminal["context"] == expected_phase
+        assert terminal["start_time"] <= terminal["end_time"]
+        if failure:
+            assert terminal["response"] is None
+            assert terminal["exception"] is caught.value
+            assert "RateLimitError" in details["traceback_exception"]
+            assert (terminal["thread"], terminal["task"]) == (caller_thread, caller_task)
+        else:
+            assert terminal["response"] is response
+            assert terminal["exception"] is None
+            assert terminal["task"] is not caller_task
+            assert (terminal["thread"] == caller_thread) is asynchronous
+            if asynchronous:
+                assert terminal["task"] is not None
+    assert context.get() == ("terminal" if failure else "pre_call")
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("public", [False, True], ids=["unwrapped", "public"])
 @pytest.mark.parametrize(
-    "asynchronous, control, message",
+    "model,provider,options,message",
     [
-        (False, "copy-input", "caller identity"),
-        (True, "copy-input", "caller identity"),
-        (False, "duplicate-prepare", "callback count"),
-        (True, "duplicate-prepare", "callback count"),
-        (True, "new-task", "callback context/order"),
-        (False, "logging-roots", "execution roots"),
-        (True, "logging-roots", "execution roots"),
+        ("azure_ai/doc-intelligence/prebuilt-read", None, {}, "Document Intelligence OCR polling"),
+        ("documentintelligence/prebuilt-layout", "azure_ai", {}, "Document Intelligence OCR polling"),
+        ("azure_ai/mistral-ocr-latest", None, {}, "HTTP document URL to data URI conversion"),
+        ("vertex_ai/mistral-ocr-latest", None, {}, "HTTP document URL to data URI conversion"),
+        ("mistral-ocr-latest", "vertex_ai", {}, "HTTP document URL to data URI conversion"),
+        ("azure_ai/mistral-ocr-latest", None, {"api_key": None}, "Azure OCR credential acquisition"),
+        ("vertex_ai/mistral-ocr-latest", None, {"api_key": None}, "Vertex OCR credential acquisition"),
+        ("vertex_ai/deepseek-ocr-maas", None, {"api_key": None}, "Vertex OCR credential acquisition"),
+        ("azure_ai/cohere/parse-v5.0", None, {}, "Cohere OCR request transformation"),
+        ("cohere/parse-v5.0", None, {}, "OCR provider"),
+        ("vertex_ai/deepseek-ocr-maas", None, {"stream": True}, "OCR streaming response handling"),
+        (MODEL, None, {"document": {"type": "file", "file": b"%PDF-1.4"}}, "file"),
+        (MODEL, None, {"req_format": "native"}, "native"),
     ],
 )
-async def test_pre_call_contract_rejects_boundary_mutants(
-    native_ocr, wire_recorder, monkeypatch, asynchronous, control, message
+async def test_native_unsupported_requests_never_prepare_or_send(
+    native_ocr,
+    wire_recorder,
+    monkeypatch,
+    no_python_ocr,
+    document,
+    asynchronous,
+    public,
+    model,
+    provider,
+    options,
+    message,
 ):
-    with pytest.raises(AssertionError, match=message):
-        await _pre_call_contract(native_ocr, wire_recorder, monkeypatch, asynchronous, True, control=control)
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    for name in ("AZURE_AI_API_KEY", "VERTEX_AI_API_KEY", "VERTEXAI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    logger = Mock()
+    arguments = {
+        "model": model,
+        "document": document,
+        "custom_llm_provider": provider,
+        "api_key": "sk-test",
+        "api_base": wire_recorder.api_base,
+        "timeout": 3,
+        **({} if public else {"litellm_logging_obj": logger}),
+        "num_retries": 0,
+        **options,
+    }
+    with pytest.raises(NotImplementedError, match=message):
+        function = litellm.aocr if asynchronous else litellm.ocr
+        result = (function if public else inspect.unwrap(function))(**arguments)
+        if asynchronous:
+            await result
+    logger.assert_not_called()
+    assert logger.mock_calls == []
+    assert wire_recorder.requests == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_pre_call_contract_allows_root_tuple_reconstruction(native_ocr, wire_recorder, monkeypatch, asynchronous):
-    await _pre_call_contract(native_ocr, wire_recorder, monkeypatch, asynchronous, True, control="tuple-only")
+@pytest.mark.parametrize("auth", ["key", "header", "environment"])
+@pytest.mark.parametrize("provider", ["azure_ai", "vertex_ai", "deepseek"])
+async def test_public_native_cloud_wire_and_shallow_boundaries(
+    native_ocr, wire_recorder, monkeypatch, no_python_ocr, asynchronous, auth, provider
+):
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    deepseek = provider == "deepseek"
+    model = "vertex_ai/deepseek-ai/deepseek-ocr-maas" if deepseek else f"{provider}/mistral-ocr-latest"
+    document = {"type": "image_url", "image_url": "data:image/png;base64,YWJj", "nested": []}
+    shared_param = ["stop"] if deepseek else [0]
+    param = "stop" if deepseek else "pages"
+    captured = []
+    opaque = object()
+
+    class Mutate(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            view = kwargs["additional_args"]
+            body = view["complete_input_dict"]
+            captured.append(body)
+            assert body[param] is shared_param
+            shared_param.append("changed" if deepseek else 2)
+            document["image_url"] = "https://example.invalid/original-only.png"
+            if deepseek:
+                assert "document" not in body
+                body["messages"][0]["content"][0]["image_url"] = "data:image/png;base64,ZGVm"
+            else:
+                assert body["document"] is not document
+                assert body["document"]["nested"] is document["nested"]
+                document["nested"].append("shared")
+                assert body["document"]["image_url"] == "data:image/png;base64,YWJj"
+                body["document"]["image_url"] = "data:image/png;base64,ZGVm"
+            view["headers"]["X-Callback"] = "native"
+            view["complete_input_dict"] = {"replacement": True}
+
+    monkeypatch.setattr(litellm, "input_callback", [Mutate()])
+    if deepseek:
+        wire_recorder.response_data = {
+            "choices": [{"message": {"content": "proof"}}],
+            "usage": {"pages_processed": 1},
+        }
+    if auth == "environment":
+        monkeypatch.setenv("AZURE_AI_API_KEY" if provider == "azure_ai" else "VERTEX_AI_API_KEY", "native-token")
+    arguments = dict(
+        model=model,
+        document=document,
+        api_key="native-token" if auth == "key" else None,
+        extra_headers={"aUtHoRiZaTiOn": "Bearer native-token"} if auth == "header" else {},
+        api_base=wire_recorder.api_base,
+        vertex_ai_project="test-project",
+        vertex_ai_location="europe-west4",
+        timeout=3,
+        num_retries=0,
+        metadata={"opaque": opaque},
+        vertex_credentials=opaque,
+        arbitrary_option=opaque,
+        **{param: shared_param},
+    )
+    response = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+    assert isinstance(response, OCRResponse)
+    assert response.pages[0].markdown == "proof"
+    assert response.usage_info.pages_processed == 1
+    assert len(captured) == len(wire_recorder.requests) == 1
+    sent = wire_recorder.requests[0]
+    auth_header = "api-key" if provider == "azure_ai" and auth != "header" else "authorization"
+    assert sent["headers"][auth_header] == ("native-token" if auth_header == "api-key" else "Bearer native-token")
+    assert sent["headers"]["x-callback"] == "native"
+    assert sent["body"][param] == shared_param
+    assert "arbitrary_option" not in sent["body"] and "metadata" not in sent["body"]
+    assert "vertex_credentials" not in sent["body"] and "vertex_ai_project" not in sent["body"]
+    if deepseek:
+        assert sent["path"] == "/v1/projects/test-project/locations/europe-west4/endpoints/openapi/chat/completions"
+        assert sent["body"] == {
+            "model": "deepseek-ai/deepseek-ocr-maas",
+            "messages": [
+                {"role": "user", "content": [{"type": "image_url", "image_url": "data:image/png;base64,ZGVm"}]}
+            ],
+            "stop": ["stop", "changed"],
+        }
+    else:
+        expected_path = (
+            "/providers/mistral/azure/ocr"
+            if provider == "azure_ai"
+            else "/v1/projects/test-project/locations/europe-west4/publishers/mistralai/models/mistral-ocr-latest:rawPredict"
+        )
+        assert sent["path"] == expected_path
+        assert sent["body"] == {
+            "model": "mistral-ocr-latest",
+            "document": {"type": "image_url", "image_url": "data:image/png;base64,ZGVm", "nested": ["shared"]},
+            "pages": [0, 2],
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_public_native_azure_supplied_entra_token(
+    native_ocr, wire_recorder, monkeypatch, no_python_ocr, asynchronous
+):
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    arguments = dict(
+        model="azure_ai/mistral-ocr-latest",
+        document={"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
+        azure_ad_token="entra-token",
+        api_base=wire_recorder.api_base,
+        timeout=3,
+        num_retries=0,
+    )
+    response = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+    assert response.pages[0].markdown == "proof"
+    assert wire_recorder.requests[0]["headers"]["authorization"] == "Bearer entra-token"
 
 
 class PreCallAbort(BaseException):
@@ -958,247 +887,117 @@ class PreCallAbort(BaseException):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("enabled", [False, True], ids=["python", "native"])
-async def test_pre_call_escape_never_sends_or_replays(native_ocr, wire_recorder, monkeypatch, asynchronous, enabled):
-    document = {"type": "document_url", "document_url": "https://example.invalid/original.pdf"}
+async def test_native_callback_escape_never_sends_or_replays(
+    native_ocr, wire_recorder, monkeypatch, no_python_ocr, document, asynchronous
+):
+    litellm.rust(True)
     error = PreCallAbort("stop before POST")
     calls = []
-    native_calls = []
 
     class Abort(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             calls.append(kwargs["additional_args"]["complete_input_dict"]["document"])
-            document["document_url"] = "https://example.invalid/aborted.pdf"
             raise error
 
-    def sync_call(boundary):
-        native_calls.append("sync")
-        return native_ocr.ocr(boundary)
-
-    async def async_call(boundary):
-        native_calls.append("async")
-        return await native_ocr.aocr(boundary)
-
-    rust_bridge._OCR.override(sync_call)
-    rust_bridge._AOCR.override(async_call)
     monkeypatch.setattr(litellm, "input_callback", [Abort()])
-    litellm.rust(enabled)
     arguments = dict(model=MODEL, document=document, api_key="sk-test", api_base=wire_recorder.api_base, num_retries=0)
-    with pytest.raises(PreCallAbort, match="stop before POST") as caught:
-        await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+    with pytest.raises(PreCallAbort) as caught:
+        if asynchronous:
+            await litellm.aocr(**arguments)
+        else:
+            litellm.ocr(**arguments)
     assert caught.value is error
     assert len(calls) == 1 and calls[0] is document
-    assert native_calls == (["async" if asynchronous else "sync"] if enabled else [])
-    assert document["document_url"] == "https://example.invalid/aborted.pdf"
     assert wire_recorder.requests == []
 
 
-class RetainedDocument(dict):
+def test_native_sync_callback_reentry_without_event_loop(
+    native_ocr, wire_recorder, monkeypatch, no_python_ocr, document
+):
+    litellm.rust(True)
+    context = contextvars.ContextVar("ocr-reentry", default="caller")
+    events = []
+    arguments = dict(model=MODEL, document=document, api_key="sk-test", api_base=wire_recorder.api_base, num_retries=0)
+
+    class Reenter(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            with pytest.raises(RuntimeError, match="no running event loop"):
+                asyncio.get_running_loop()
+            events.append((context.get(), threading.get_ident()))
+            if len(events) == 1:
+                context.set("nested")
+                result = litellm.ocr(**arguments)
+                events.append((result.pages[0].markdown, threading.get_ident()))
+
+    monkeypatch.setattr(litellm, "input_callback", [Reenter()])
+    response = litellm.ocr(**arguments)
+    assert response.pages[0].markdown == "proof"
+    assert events == [(value, threading.get_ident()) for value in ("caller", "nested", "proof")]
+    assert context.get() == "nested"
+    assert len(wire_recorder.requests) == 2
+
+
+class Opaque:
     pass
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("enabled", [False, True], ids=["python", "native"])
 @pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
-async def test_ocr_retention_during_post_and_terminal_cleanup(native_ocr, wire_recorder, enabled, outcome):
-    retained = []
-    references = []
-    calls = []
+async def test_native_retains_opaque_arguments_until_terminal_cleanup(native_ocr, wire_recorder, document, outcome):
     wire_recorder.release.clear()
     wire_recorder.status = 429 if outcome == "error" else 200
-
-    class Retain(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            body = kwargs["additional_args"]["complete_input_dict"]
-            retained.append(body)
-            references.append(weakref.ref(body["document"]))
-            calls.append("pre_call")
-
-    async def request():
-        document = RetainedDocument(type="document_url", document_url="https://example.invalid/original.pdf")
-        logging_obj = Logging(
-            model="mistral-ocr-latest",
-            messages=[],
-            stream=False,
-            call_type="aocr",
-            start_time=datetime.now(),
-            litellm_call_id="retention",
-            function_id="retention",
-            dynamic_input_callbacks=[Retain()],
-        )
-        arguments = dict(
-            model="mistral-ocr-latest",
-            document=document,
-            optional_params={},
-            logging_obj=logging_obj,
-            api_key="sk-test",
-            api_base=wire_recorder.api_base,
-            headers=None,
-            provider_config=MistralOCRConfig(),
-            litellm_params={},
-            custom_llm_provider="mistral",
-            timeout=5.0,
-        )
-        if enabled:
-            return await native_ocr.aocr(rust_bridge.OCRBoundary(handler=ocr_main.base_llm_http_handler, **arguments))
-        return await ocr_main.base_llm_http_handler.async_ocr(**arguments)
-
-    task = asyncio.create_task(request())
+    opaque = Opaque()
+    reference = weakref.ref(opaque)
+    logger = Mock()
+    logger.async_success_handler = AsyncMock()
+    logger.async_failure_handler = AsyncMock()
+    logger._should_run_sync_callbacks_for_async_calls.return_value = False
+    arguments = dict(
+        model=MODEL,
+        document=document,
+        api_key="sk-test",
+        api_base=wire_recorder.api_base,
+        timeout=5,
+        litellm_logging_obj=logger,
+        opaque=opaque,
+    )
+    task = asyncio.create_task(native_ocr.aocr(arguments))
+    del arguments, opaque
     try:
         assert await asyncio.to_thread(wire_recorder.received.wait, 5), "POST never reached server"
         assert not task.done()
-        assert calls == ["pre_call"]
-        assert len(references) == 1 and references[0]() is not None
-        retained[0]["document"]["document_url"] = "https://example.invalid/after-consumption.pdf"
-        retained[0]["document"]["cycle"] = retained[0]
-        assert wire_recorder.requests[0]["body"]["document"]["document_url"] == "https://example.invalid/original.pdf"
+        logger.update_from_kwargs.assert_called_once()
+        logger.pre_call.assert_called_once()
+        logger.reset_mock()
+        gc.collect()
+        assert reference() is not None
         if outcome == "cancel":
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
         elif outcome == "error":
             wire_recorder.release.set()
-            with pytest.raises(BaseLLMException) as caught:
+            with pytest.raises(litellm.RateLimitError) as caught:
                 await task
             assert caught.value.status_code == 429
             del caught
         else:
             wire_recorder.release.set()
-            response = await task
-            assert response.pages[0].markdown == "proof"
+            result = await task
+            assert result.pages[0].markdown == "proof"
     finally:
         wire_recorder.release.set()
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        assert await asyncio.to_thread(wire_recorder.finished.wait, 5), "server did not finish"
+        assert await asyncio.to_thread(wire_recorder.finished.wait, 5)
     del task
-    gc.collect()
-    assert references[0]() is retained[0]["document"]
-    assert retained[0]["document"]["document_url"] == "https://example.invalid/after-consumption.pdf"
-    assert len(wire_recorder.requests) == 1 and calls == ["pre_call"]
-    retained.clear()
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    if outcome == "success":
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), 5)
+    logger.reset_mock()
     await asyncio.sleep(0)
     gc.collect()
-    assert references[0]() is None, "execution retained the caller graph after cleanup"
-
-
-@pytest.mark.parametrize("filename", ["ocr_driver.py", "retained_callback.py"])
-def test_native_ocr_cold_cache_reentry(native_ocr, filename):
-    script = """
-import sys
-from litellm.rust_bridge import _native
-
-events = []
-compilations = []
-error = LookupError('preparation stopped')
-
-class Boundary:
-    async def aprepare(self):
-        raise error
-
-def invoke():
-    pending = _native.aocr(Boundary())
-    try:
-        pending.send(None)
-    except LookupError as caught:
-        assert caught is error
-        events.append('raised')
-    else:
-        raise AssertionError('preparation did not raise')
-    finally:
-        pending.close()
-        error.__traceback__ = None
-
-def audit(event, args):
-    if event == 'compile' and args[1] == sys.argv[1]:
-        compilations.append(args[1])
-        if len(compilations) == 1:
-            events.append('entered')
-            invoke()
-            events.append('returned')
-
-sys.addaudithook(audit)
-invoke()
-invoke()
-assert events == ['entered', 'raised', 'returned', 'raised', 'raised'], events
-assert len(compilations) == 2, compilations
-print('cold reentry passed')
-"""
-    isolation = ["-I"] if sys.flags.isolated else []
-    result = subprocess.run(
-        [sys.executable, *isolation, "-c", script, filename], capture_output=True, text=True, timeout=30
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.strip() == "cold reentry passed"
-
-
-@pytest.mark.parametrize("enabled", [False, True], ids=["python", "native"])
-def test_sync_pre_call_reentry_without_event_loop(native_ocr, wire_recorder, monkeypatch, enabled):
-    context = contextvars.ContextVar("sync-ocr-context", default="caller")
-    events = []
-    native_calls = []
-    document = {"type": "document_url", "document_url": "https://example.invalid/original.pdf"}
-
-    class Reenter(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                loop_running = False
-            else:
-                loop_running = True
-            events.append((context.get(), threading.get_ident(), loop_running))
-            if len(events) == 1:
-                context.set("nested")
-                response = litellm.ocr(
-                    model=MODEL,
-                    document=dict(document),
-                    api_key="sk-test",
-                    api_base=wire_recorder.api_base,
-                    num_retries=0,
-                )
-                events.append((response.pages[0].markdown, threading.get_ident(), loop_running))
-
-    def sync_call(boundary):
-        native_calls.append(boundary)
-        return native_ocr.ocr(boundary)
-
-    rust_bridge._OCR.override(sync_call)
-    monkeypatch.setattr(litellm, "input_callback", [Reenter()])
-    litellm.rust(enabled)
-    response = litellm.ocr(
-        model=MODEL,
-        document=document,
-        api_key="sk-test",
-        api_base=wire_recorder.api_base,
-        num_retries=0,
-    )
-    assert response.pages[0].markdown == "proof"
-    assert events == [(value, threading.get_ident(), False) for value in ("caller", "nested", "proof")]
-    assert context.get() == "nested"
-    assert len(native_calls) == (2 if enabled else 0)
-    assert len(wire_recorder.requests) == 2
-
-
-@pytest.mark.parametrize("explicit_close", [False, True], ids=["abandoned", "closed"])
-def test_unstarted_native_ocr_driver_releases_cyclic_input(native_ocr, explicit_close):
-    document = RetainedDocument(type="document_url", document_url="https://example.invalid/original.pdf")
-    reference = weakref.ref(document)
-    logger = RecordingLogging()
-    boundary = ocr_main._ocr_boundary(build_prepared_request(document=document, logging_obj=logger))
-    pending = native_ocr.aocr(boundary)
-    document["pending"] = pending
-    del boundary, document
-    assert reference() is not None
-    assert logger.pre_call_kwargs is None
-    if explicit_close:
-        pending.close()
-        del pending
-        gc.collect()
-    else:
-        del pending
-        with pytest.warns(RuntimeWarning, match="coroutine .* was never awaited"):
-            gc.collect()
-    assert reference() is None
-    assert logger.pre_call_kwargs is None
+    assert reference() is None, "native execution retained opaque kwargs after cleanup"
+    assert len(wire_recorder.requests) == 1

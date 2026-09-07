@@ -1,153 +1,352 @@
-//! Retained OCR route: Python owns request/response objects, Rust sequences
-//! prepare -> encode -> POST -> finish through owning `Py` handles.
+//! Native OCR retains the entire Python argument graph through completion.
+//! Missing native operations raise NotImplementedError before
+//! callbacks; no Python preparation, auth, encoding, or provider transforms run.
 
-use litellm_core::http_utils::buffered_post::{self, Request, Response};
-use litellm_python_interop::{InvocationMode, InvocationOutcome, PreparedCall};
+use litellm_core::error::Error;
+use litellm_core::ocr::types::{OcrDocumentProjection, OcrRequest, PreparedOcr};
+use litellm_core::routing_utils::provider::get_custom_llm_provider;
+use litellm_python_interop::{Pythonized, from_py, to_py};
+use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::pyclass::{PyTraverseError, PyVisit};
 use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyBytes, PyList, PyTuple};
+use pyo3::types::PyDict;
+use serde_json::Value;
 
 use crate::errors::core_error_to_pyerr;
 use crate::execution::{run_async_value, run_sync_value};
 
-#[derive(Clone, Copy)]
-struct BoundaryStep {
-    method: &'static str,
-    awaited: bool,
+#[pyclass]
+struct OcrState {
+    arguments: Option<Py<PyDict>>,
+    body: Option<Py<PyDict>>,
+    headers: Option<Py<PyDict>>,
+    logging: Option<Py<PyAny>>,
+    prepared: Option<PreparedOcr>,
 }
 
-const PREPARE_SYNC: BoundaryStep = BoundaryStep {
-    method: "prepare",
-    awaited: false,
-};
-const PREPARE_ASYNC: BoundaryStep = BoundaryStep {
-    method: "aprepare",
-    awaited: true,
-};
-const ENCODE: BoundaryStep = BoundaryStep {
-    method: "encode",
-    awaited: false,
-};
-const FINISH_SYNC: BoundaryStep = BoundaryStep {
-    method: "finish",
-    awaited: false,
-};
-const FINISH_ASYNC: BoundaryStep = BoundaryStep {
-    method: "afinish",
-    awaited: true,
-};
+#[pymethods]
+impl OcrState {
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.arguments)?;
+        visit.call(&self.body)?;
+        visit.call(&self.headers)?;
+        visit.call(&self.logging)
+    }
 
-fn invoke(
-    boundary: &Bound<'_, PyAny>,
-    step: BoundaryStep,
-    args: Bound<'_, PyTuple>,
-) -> PyResult<Py<PyAny>> {
-    let call = PreparedCall::new(
-        if step.awaited {
-            InvocationMode::Await
-        } else {
-            InvocationMode::Direct
-        },
-        boundary.getattr(step.method)?.unbind(),
-        args.unbind(),
-        None,
-    );
-    match call.invoke(boundary.py())? {
-        InvocationOutcome::Returned(value) | InvocationOutcome::Awaitable(value) => Ok(value),
+    fn __clear__(slf: &Bound<'_, Self>) {
+        let roots = {
+            let mut state = slf.borrow_mut();
+            (
+                state.arguments.take(),
+                state.body.take(),
+                state.headers.take(),
+                state.logging.take(),
+            )
+        };
+        drop(roots);
     }
 }
 
-#[pyfunction]
-fn prepare(boundary: &Bound<'_, PyAny>, asynchronous: bool) -> PyResult<Py<PyAny>> {
-    let step = if asynchronous {
-        PREPARE_ASYNC
-    } else {
-        PREPARE_SYNC
+fn ocr_error_to_pyerr(py: Python<'_>, error: Error, model: &str, provider: &str) -> PyErr {
+    let status = match error {
+        Error::Unsupported(message) => return PyNotImplementedError::new_err(message),
+        Error::Auth(_) => 401,
+        Error::Http { status, .. } => status,
+        Error::Network(_) | Error::Connect(_) => {
+            return PyRuntimeError::new_err("OCR transport failed");
+        }
+        Error::InvalidResponse(_) => {
+            return PyRuntimeError::new_err("Invalid OCR provider response");
+        }
+        other => return core_error_to_pyerr(other),
     };
-    invoke(boundary, step, PyTuple::empty(boundary.py()))
-}
-
-fn request(boundary: &Bound<'_, PyAny>, roots: &Bound<'_, PyAny>) -> PyResult<Request> {
-    type ByteHeaders<'py> = Vec<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)>;
-    let py = boundary.py();
-    let encoded = invoke(boundary, ENCODE, PyTuple::new(py, [roots])?)?;
-    let (url, headers, body, timeout_seconds): (String, ByteHeaders<'_>, Bound<'_, PyBytes>, f64) =
-        encoded.into_bound(py).extract()?;
-    Ok(Request {
-        url,
-        headers: headers
-            .into_iter()
-            .map(|(name, value)| (name.as_bytes().to_vec(), value.as_bytes().to_vec()))
-            .collect(),
-        body: body.as_bytes().to_vec(),
-        timeout_seconds,
-    })
-}
-
-struct Wire(Response);
-
-impl<'py> IntoPyObject<'py> for Wire {
-    type Target = PyTuple;
-    type Output = Bound<'py, PyTuple>;
-    type Error = PyErr;
-
-    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
-        let headers = PyList::new(
-            py,
-            self.0
-                .headers
-                .iter()
-                .map(|(name, value)| (PyBytes::new(py, name), PyBytes::new(py, value))),
+    let class = match status {
+        400 => "BadRequestError",
+        401 => "AuthenticationError",
+        403 => "PermissionDeniedError",
+        404 => "NotFoundError",
+        422 => "UnprocessableEntityError",
+        429 => "RateLimitError",
+        500 => "InternalServerError",
+        502 => "BadGatewayError",
+        503 => "ServiceUnavailableError",
+        _ => "APIError",
+    };
+    let exception = || -> PyResult<PyErr> {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item(
+            "message",
+            format!("OCR provider request failed (HTTP {status})"),
         )?;
-        (self.0.status, headers, PyBytes::new(py, &self.0.content)).into_pyobject(py)
-    }
+        kwargs.set_item("model", model)?;
+        kwargs.set_item("llm_provider", provider)?;
+        if class == "APIError" {
+            kwargs.set_item("status_code", status)?;
+        } else {
+            let httpx = py.import("httpx")?;
+            let request = httpx
+                .getattr("Request")?
+                .call1(("POST", "https://litellm.ai"))?;
+            let response_kwargs = PyDict::new(py);
+            response_kwargs.set_item("request", request)?;
+            let response = httpx
+                .getattr("Response")?
+                .call((status,), Some(&response_kwargs))?;
+            kwargs.set_item("response", response)?;
+        }
+        let instance = py
+            .import("litellm.exceptions")?
+            .getattr(class)?
+            .call((), Some(&kwargs))?;
+        Ok(PyErr::from_value(instance))
+    };
+    exception().unwrap_or_else(|error| error)
+}
+
+fn scalar(arguments: &Bound<'_, PyDict>, name: &str) -> PyResult<Option<String>> {
+    arguments
+        .get_item(name)?
+        .filter(|value| !value.is_none())
+        .map(|value| value.extract::<String>())
+        .transpose()
+        .map(|value| value.filter(|value| !value.trim().is_empty()))
+}
+
+fn header_pairs(headers: &Bound<'_, PyDict>) -> PyResult<Vec<(String, String)>> {
+    headers
+        .iter()
+        .map(|(name, value)| Ok((name.extract()?, value.extract()?)))
+        .collect()
 }
 
 #[pyfunction]
-fn send<'a>(
-    boundary: &'a Bound<'a, PyAny>,
-    roots: &Bound<'_, PyAny>,
-) -> PyResult<Bound<'a, PyAny>> {
-    let request = request(boundary, roots)?;
-    pyo3_async_runtimes::tokio::future_into_py(boundary.py(), async move {
-        let response = run_async_value(buffered_post::send(request), core_error_to_pyerr).await?;
-        Ok(Wire(response))
+#[pyo3(signature = (arguments, asynchronous=false))]
+fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResult<Py<OcrState>> {
+    let bag = arguments.bind(py);
+    let document = bag
+        .get_item("document")?
+        .ok_or_else(|| PyValueError::new_err("OCR requires document"))?
+        .cast_into::<PyDict>()?;
+    if scalar(&document, "type")?.as_deref() == Some("file") {
+        return Err(ocr_error_to_pyerr(
+            py,
+            Error::Unsupported(
+                "Native OCR does not support file documents; pass a document_url or image_url dict",
+            ),
+            "",
+            "",
+        ));
+    }
+    let timeout_seconds = match bag.get_item("timeout")?.filter(|value| !value.is_none()) {
+        None => py
+            .import("litellm.constants")?
+            .getattr("request_timeout")?
+            .extract::<f64>()?,
+        Some(timeout) => match timeout.extract::<f64>() {
+            Ok(seconds) => seconds,
+            Err(_) => timeout.getattr("read")?.extract::<f64>()?,
+        },
+    };
+    let extra_headers = match bag
+        .get_item("extra_headers")?
+        .filter(|value| !value.is_none())
+    {
+        Some(headers) => header_pairs(headers.cast::<PyDict>()?)?,
+        None => Vec::new(),
+    };
+    let model = scalar(bag, "model")?.ok_or_else(|| PyValueError::new_err("OCR requires model"))?;
+    let custom_llm_provider = scalar(bag, "custom_llm_provider")?;
+    let document_input = PyDict::new(py);
+    for name in ["type", "document_url", "image_url"] {
+        if let Some(value) = document.get_item(name)? {
+            document_input.set_item(name, value)?;
+        }
+    }
+    let prepared = litellm_core::ocr::prepare::prepare(OcrRequest {
+        model: model.clone(),
+        custom_llm_provider: custom_llm_provider.clone(),
+        api_key: scalar(bag, "api_key")?,
+        api_base: scalar(bag, "api_base")?,
+        extra_headers,
+        timeout_seconds,
+        request_format: scalar(bag, "req_format")?,
+        document: from_py(document_input.as_any())?,
+        azure_ad_token: scalar(bag, "azure_ad_token")?,
+        vertex_project: scalar(bag, "vertex_project")?.or(scalar(bag, "vertex_ai_project")?),
+        vertex_location: scalar(bag, "vertex_location")?.or(scalar(bag, "vertex_ai_location")?),
+        stream: bag
+            .get_item("stream")?
+            .filter(|value| !value.is_none())
+            .map(|value| value.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
+    })
+    .map_err(|error| {
+        let resolved = get_custom_llm_provider(&model, custom_llm_provider.as_deref());
+        ocr_error_to_pyerr(
+            py,
+            error,
+            resolved
+                .as_ref()
+                .map_or(model.as_str(), |value| value.model),
+            resolved
+                .as_ref()
+                .map_or("", |value| value.custom_llm_provider),
+        )
+    })?;
+
+    let body = to_py(py, &prepared.body)?
+        .into_bound(py)
+        .cast_into::<PyDict>()?;
+    match prepared.document_projection {
+        OcrDocumentProjection::RetainedDocument => body.set_item("document", &document)?,
+        OcrDocumentProjection::ShallowCopyDocument => {
+            body.set_item("document", document.copy()?)?
+        }
+        OcrDocumentProjection::Transformed => {}
+    }
+    let optional_params = PyDict::new(py);
+    for &name in prepared.parameter_fields {
+        if let Some(value) = bag.get_item(name)? {
+            body.set_item(name, &value)?;
+            optional_params.set_item(name, value)?;
+        }
+    }
+    let headers = PyDict::new(py);
+    for (name, value) in &prepared.headers {
+        headers.set_item(name, value)?;
+    }
+    let logging = py
+        .import("litellm.rust_bridge.ocr")?
+        .getattr("initialize_logging")?
+        .call1((bag, asynchronous))?;
+    let litellm_params = PyDict::new(py);
+    litellm_params.set_item("litellm_call_id", bag.get_item("litellm_call_id")?)?;
+    litellm_params.set_item("api_base", bag.get_item("api_base")?)?;
+    let update = PyDict::new(py);
+    update.set_item("kwargs", bag)?;
+    update.set_item("model", &prepared.model)?;
+    update.set_item("optional_params", optional_params)?;
+    update.set_item("litellm_params", litellm_params)?;
+    update.set_item("custom_llm_provider", &prepared.custom_llm_provider)?;
+    logging.call_method("update_from_kwargs", (), Some(&update))?;
+
+    let additional_args = PyDict::new(py);
+    additional_args.set_item("complete_input_dict", &body)?;
+    additional_args.set_item("api_base", &prepared.url)?;
+    additional_args.set_item("headers", &headers)?;
+    let pre_call = PyDict::new(py);
+    pre_call.set_item("input", "OCR document processing")?;
+    pre_call.set_item("api_key", bag.get_item("api_key")?)?;
+    pre_call.set_item("additional_args", additional_args)?;
+    logging.call_method("pre_call", (), Some(&pre_call))?;
+
+    let logging = logging.unbind();
+    Py::new(
+        py,
+        OcrState {
+            arguments: Some(arguments),
+            body: Some(body.unbind()),
+            headers: Some(headers.unbind()),
+            logging: Some(logging),
+            prepared: Some(prepared),
+        },
+    )
+}
+
+type OcrWireRequest = (PreparedOcr, Vec<(String, String)>, Value);
+
+fn request(py: Python<'_>, state: &Py<OcrState>) -> PyResult<OcrWireRequest> {
+    let (prepared, body, headers) = {
+        let mut state = state.borrow_mut(py);
+        let prepared = state
+            .prepared
+            .take()
+            .ok_or_else(|| PyRuntimeError::new_err("OCR request was already sent or cleared"))?;
+        let body = state
+            .body
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("OCR body was cleared"))?
+            .clone_ref(py);
+        let headers = state
+            .headers
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("OCR headers were cleared"))?
+            .clone_ref(py);
+        (prepared, body, headers)
+    };
+    Ok((
+        prepared,
+        header_pairs(headers.bind(py))?,
+        from_py(body.bind(py).as_any())?,
+    ))
+}
+
+#[pyfunction]
+fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
+    let (prepared, headers, body) = request(py, &state)?;
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let _state = state;
+        let model = prepared.model.clone();
+        let provider = prepared.custom_llm_provider.clone();
+        let response = run_async_value(
+            async move { Ok(litellm_core::ocr::ocr(prepared, headers, body).await) },
+            core_error_to_pyerr,
+        )
+        .await?
+        .map_err(|error| Python::attach(|py| ocr_error_to_pyerr(py, error, &model, &provider)))?;
+        Ok(Pythonized(response.into_json()))
     })
 }
 
 #[pyfunction]
-fn finish(
-    boundary: &Bound<'_, PyAny>,
-    wire: &Bound<'_, PyAny>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>> {
-    let step = if asynchronous {
-        FINISH_ASYNC
-    } else {
-        FINISH_SYNC
-    };
-    invoke(boundary, step, PyTuple::new(boundary.py(), [wire])?)
+fn finish(py: Python<'_>, response: Py<PyDict>) -> PyResult<Py<PyAny>> {
+    let fields = response.bind(py);
+    let native_response = fields.get_item("provider_native_response")?;
+    if native_response.is_some() {
+        fields.del_item("provider_native_response")?;
+    }
+    let response = py
+        .import("litellm.llms.base_llm.ocr.transformation")?
+        .getattr("OCRResponse")?
+        .call((), Some(fields))?;
+    if let Some(native_response) = native_response.filter(|value| !value.is_none()) {
+        response.call_method1("set_provider_native_response", (native_response,))?;
+    }
+    Ok(response.unbind())
 }
 
 #[pyfunction]
-fn ocr(boundary: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    let py = boundary.py();
-    let roots = prepare(boundary, false)?;
-    let request = request(boundary, roots.bind(py))?;
-    let response = run_sync_value(py, buffered_post::send(request), core_error_to_pyerr)?;
-    let wire = Wire(response).into_pyobject(py)?;
-    finish(boundary, &wire, false)
+fn send_sync(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
+    let (prepared, headers, body) = request(py, &state)?;
+    let model = prepared.model.clone();
+    let provider = prepared.custom_llm_provider.clone();
+    let response = run_sync_value(
+        py,
+        async move { Ok(litellm_core::ocr::ocr(prepared, headers, body).await) },
+        core_error_to_pyerr,
+    )?
+    .map_err(|error| ocr_error_to_pyerr(py, error, &model, &provider))?;
+    let fields = to_py(py, &response.into_json())?
+        .into_bound(py)
+        .cast_into::<PyDict>()?;
+    let response = finish(py, fields.unbind());
+    drop(state);
+    response
 }
 
 #[pyfunction]
-fn aocr<'a>(boundary: &'a Bound<'a, PyAny>) -> PyResult<Bound<'a, PyAny>> {
-    driver(boundary.py())?.getattr("drive")?.call1((boundary,))
+fn ocr(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
+    driver(py)?.getattr("drive_sync")?.call1((arguments,))
 }
 
-/// The async route must await `aprepare`/`afinish` inline in the caller's
-/// Python task, so a Python driver coroutine owns the roots between steps.
-/// Compiling the driver runs Python (audit hooks can re-enter `aocr`), so
-/// compile first and publish only a finished module into the once-lock.
+#[pyfunction]
+fn aocr(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
+    driver(py)?.getattr("drive")?.call1((arguments,))
+}
+
+// Compilation can re-enter through audit hooks; publish only a finished module.
 fn driver(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
     static DRIVER: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
     if let Some(module) = DRIVER.get(py) {
@@ -155,17 +354,65 @@ fn driver(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
     }
     let module = PyModule::from_code(
         py,
-        c"async def drive(boundary):
-    roots = await _prepare(boundary, True)
-    wire = await _send(boundary, roots)
-    return await _finish(boundary, wire, True)
+        c"from datetime import datetime
+from litellm.rust_bridge.ocr import invoke_terminal
+
+def drive_sync(arguments):
+    start = datetime.now()
+    state = None
+    try:
+        state = _prepare(arguments, False)
+        response = _send_sync(state)
+    except Exception as error:
+        logger = arguments.get('litellm_logging_obj')
+        if state is not None or (logger is not None and not isinstance(error, NotImplementedError)):
+            end = datetime.now()
+            for action in _sync_failure:
+                invoke_terminal(action, (arguments, state), logger, error, start, end)
+        raise
+    end = datetime.now()
+    for action in _sync_success:
+        invoke_terminal(action, (arguments, state), arguments['litellm_logging_obj'], response, start, end)
+    return response
+
+async def drive(arguments):
+    start = datetime.now()
+    state = None
+    try:
+        state = _prepare(arguments, True)
+        response = _finish(await _send(state))
+    except Exception as error:
+        logger = arguments.get('litellm_logging_obj')
+        if state is not None or (logger is not None and not isinstance(error, NotImplementedError)):
+            end = datetime.now()
+            for action in _async_failure:
+                pending = invoke_terminal(action, (arguments, state), logger, error, start, end)
+                if pending is not None:
+                    await pending
+        raise
+    end = datetime.now()
+    for action in _async_success:
+        invoke_terminal(action, (arguments, state), arguments['litellm_logging_obj'], response, start, end)
+    return response
 ",
         c"ocr_driver.py",
         c"_ocr_driver",
     )?;
     module.add("_prepare", wrap_pyfunction!(prepare, &module)?)?;
     module.add("_send", wrap_pyfunction!(send, &module)?)?;
+    module.add("_send_sync", wrap_pyfunction!(send_sync, &module)?)?;
     module.add("_finish", wrap_pyfunction!(finish, &module)?)?;
+    for (name, asynchronous, success) in [
+        ("_sync_success", false, true),
+        ("_async_success", true, true),
+        ("_sync_failure", false, false),
+        ("_async_failure", true, false),
+    ] {
+        module.add(
+            name,
+            litellm_core::ocr::terminal_callbacks(asynchronous, success).to_vec(),
+        )?;
+    }
     Ok(DRIVER.get_or_init(py, || module.unbind()).bind(py))
 }
 
@@ -178,4 +425,405 @@ pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(feature = "trace-parity")]
 pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
     register(module)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires the Python SDK and its dependencies on PYTHONPATH"]
+    fn structured_errors_use_public_sdk_exceptions() {
+        Python::initialize();
+        Python::attach(|py| {
+            let exceptions = py.import("litellm.exceptions").unwrap();
+            for (status, class) in [
+                (400, "BadRequestError"),
+                (401, "AuthenticationError"),
+                (403, "PermissionDeniedError"),
+                (404, "NotFoundError"),
+                (422, "UnprocessableEntityError"),
+                (429, "RateLimitError"),
+                (500, "InternalServerError"),
+                (502, "BadGatewayError"),
+                (503, "ServiceUnavailableError"),
+                (504, "APIError"),
+            ] {
+                let error = ocr_error_to_pyerr(
+                    py,
+                    Error::Http {
+                        status,
+                        body: "private upstream content".into(),
+                    },
+                    "mistral-ocr-latest",
+                    "mistral",
+                );
+                let value = error.value(py);
+                assert!(
+                    value
+                        .is_instance(&exceptions.getattr(class).unwrap())
+                        .unwrap(),
+                    "HTTP {status}: expected {class}, got {error}"
+                );
+                assert_eq!(
+                    value
+                        .getattr("status_code")
+                        .unwrap()
+                        .extract::<u16>()
+                        .unwrap(),
+                    status
+                );
+                assert_eq!(
+                    value.getattr("model").unwrap().extract::<String>().unwrap(),
+                    "mistral-ocr-latest"
+                );
+                assert_eq!(
+                    value
+                        .getattr("llm_provider")
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                    "mistral"
+                );
+                assert!(!error.to_string().contains("private upstream content"));
+            }
+            let error = ocr_error_to_pyerr(
+                py,
+                Error::Auth("private credential".into()),
+                "model",
+                "mistral",
+            );
+            assert!(
+                error
+                    .value(py)
+                    .is_instance(&exceptions.getattr("AuthenticationError").unwrap())
+                    .unwrap()
+            );
+            assert!(!error.to_string().contains("private credential"));
+        });
+    }
+
+    #[test]
+    fn unstructured_transport_errors_are_not_guessed_from_strings() {
+        Python::initialize();
+        Python::attach(|py| {
+            for error in [
+                Error::Network("timeout secret".into()),
+                Error::Connect("401 secret".into()),
+                Error::InvalidResponse("429 secret".into()),
+            ] {
+                let error = ocr_error_to_pyerr(py, error, "model", "mistral");
+                assert!(error.is_instance_of::<PyRuntimeError>(py));
+                assert!(!error.to_string().contains("secret"));
+            }
+        });
+    }
+
+    #[test]
+    fn native_send_owns_state_without_the_python_driver() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "ocr_test").unwrap();
+            module
+                .add_function(wrap_pyfunction!(prepare, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(send, &module).unwrap())
+                .unwrap();
+            let globals = PyDict::new(py);
+            globals.set_item("native", module).unwrap();
+            py.run(
+                cr"
+import asyncio
+import gc
+import weakref
+
+class Logger:
+    def update_from_kwargs(self, **values):
+        pass
+    def pre_call(self, **values):
+        pass
+
+async def exercise():
+    received = asyncio.Event()
+    release = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def respond(reader, writer):
+        await reader.readuntil(b'\r\n\r\n')
+        received.set()
+        await release.wait()
+        writer.close()
+        await writer.wait_closed()
+        closed.set()
+
+    server = await asyncio.start_server(respond, '127.0.0.1', 0)
+    async with server:
+        port = server.sockets[0].getsockname()[1]
+        logger = Logger()
+        alive = weakref.ref(logger)
+        state = native.prepare(dict(
+            model='mistral/mistral-ocr-latest', api_key='test-key', timeout=5.0,
+            api_base=f'http://127.0.0.1:{port}', litellm_logging_obj=logger,
+            document={'type': 'document_url', 'document_url': 'https://example.test/doc.pdf'},
+        ))
+        pending = native.send(state)
+        del state, logger
+        try:
+            await asyncio.wait_for(received.wait(), 5)
+            gc.collect()
+            assert alive() is not None
+            pending.cancel()
+            try:
+                await pending
+            except asyncio.CancelledError:
+                pass
+            for _ in range(500):
+                await asyncio.sleep(0.01)
+                gc.collect()
+                if alive() is None:
+                    break
+            assert alive() is None
+        finally:
+            release.set()
+            await asyncio.wait_for(closed.wait(), 5)
+
+asyncio.run(exercise())
+",
+                Some(&globals),
+                Some(&globals),
+            )
+            .unwrap();
+        });
+    }
+
+    #[pyfunction]
+    fn snapshot(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
+        let (_, headers, body) = request(py, &state)?;
+        to_py(py, &(headers, body))
+    }
+
+    #[test]
+    fn retains_identity_independent_wire_roots_and_collects_cycles() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "ocr_test").unwrap();
+            module
+                .add_function(wrap_pyfunction!(prepare, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
+                .unwrap();
+            let globals = PyDict::new(py);
+            globals.set_item("native", module).unwrap();
+            py.run(
+                c"
+import gc
+import weakref
+
+class Opaque:
+    pass
+
+class Timeout:
+    read = 5.0
+
+class Logger:
+    def update_from_kwargs(self, **values):
+        assert values['kwargs'] is arguments
+        assert values['kwargs']['metadata'] is metadata
+        assert values['kwargs']['opaque'] is opaque
+        assert values['optional_params']['pages'] is pages
+        self.calls = ['update']
+
+    def pre_call(self, **values):
+        self.calls.append('pre')
+        view = values['additional_args']
+        self.body = view['complete_input_dict']
+        self.headers = view['headers']
+        assert self.body['document'] is document
+        assert self.body['pages'] is pages
+        document['document_url'] = 'https://example.test/changed.pdf'
+        pages.append(2)
+        self.headers['x-hook'] = 'changed'
+        view['complete_input_dict'] = {'replacement': True}
+        view['headers'] = {'replacement': 'true'}
+
+document = {'type': 'document_url', 'document_url': 'https://example.test/test.pdf'}
+pages = [0]
+metadata = {'nested': []}
+opaque = Opaque()
+logger = Logger()
+arguments = dict(model='mistral/mistral-ocr-latest', document=document,
+                 api_key='test-key', pages=pages, metadata=metadata,
+                 opaque=opaque, litellm_logging_obj=logger, timeout=Timeout())
+state = native.prepare(arguments)
+assert logger.calls == ['update', 'pre']
+roots = gc.get_referents(state)
+assert any(root is arguments for root in roots)
+assert any(root is logger for root in roots)
+assert any(root is logger.body for root in roots)
+assert any(root is logger.headers for root in roots)
+headers, body = native.snapshot(state)
+assert body['document']['document_url'] == 'https://example.test/changed.pdf'
+assert body['pages'] == [0, 2]
+assert dict(headers)['x-hook'] == 'changed'
+assert 'replacement' not in body and 'replacement' not in dict(headers)
+
+arguments['cycle'] = state
+logger.cycle = state
+logger.body['cycle'] = state
+logger.headers['cycle'] = state
+alive = weakref.ref(opaque)
+del roots, arguments, logger, opaque
+gc.collect()
+assert alive() is not None
+del state
+gc.collect()
+assert alive() is None
+",
+                Some(&globals),
+                Some(&globals),
+            )
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn async_callbacks_are_inline_and_unsupported_requests_never_call_them() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "ocr_test").unwrap();
+            module
+                .add_function(wrap_pyfunction!(ocr, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(aocr, &module).unwrap())
+                .unwrap();
+            let globals = PyDict::new(py);
+            globals.set_item("native", module).unwrap();
+            py.run(
+                cr"
+import asyncio
+import contextvars
+import gc
+import json
+import threading
+import weakref
+
+marker = contextvars.ContextVar('ocr_marker')
+
+class Opaque:
+    pass
+
+class Logger:
+    def __init__(self):
+        self.calls = []
+
+    def failure_handler(self, error, trace, start, end):
+        assert asyncio.current_task() is caller
+        assert marker.get() == 'pre'
+        self.error = error
+
+    async def async_failure_handler(self, error, trace, start, end):
+        await asyncio.sleep(0)
+        assert asyncio.current_task() is caller
+        assert error is self.error
+
+    def update_from_kwargs(self, **values):
+        assert asyncio.current_task() is caller
+        assert threading.get_ident() == caller_thread
+        assert marker.get() == 'caller'
+        assert values['kwargs'] is arguments
+        self.calls.append('update')
+        marker.set('updated')
+
+    def pre_call(self, **values):
+        assert asyncio.current_task() is caller
+        assert threading.get_ident() == caller_thread
+        assert marker.get() == 'updated'
+        self.calls.append('pre')
+        values['additional_args']['complete_input_dict']['pages'].append(3)
+        marker.set('pre')
+
+async def exercise():
+    global arguments, caller, caller_thread
+    caller = asyncio.current_task()
+    caller_thread = threading.get_ident()
+    marker.set('caller')
+    logger = Logger()
+    document = {'type': 'document_url', 'document_url': 'https://example.test/test.pdf'}
+    arguments = dict(model='mistral/mistral-ocr-latest', document=document,
+                     api_key='test-key', pages=[0], opaque=Opaque(),
+                     litellm_logging_obj=logger)
+    alive = weakref.ref(arguments['opaque'])
+    received = asyncio.Event()
+    errors = []
+
+    async def respond(reader, writer):
+        try:
+            header = await reader.readuntil(b'\r\n\r\n')
+            length = next(int(line.split(b':', 1)[1]) for line in header.split(b'\r\n')
+                          if line.lower().startswith(b'content-length:'))
+            body = json.loads(await reader.readexactly(length))
+            assert body['pages'] == [0, 3]
+            assert 'opaque' not in body
+            gc.collect()
+            assert alive() is not None
+            assert logger.calls == ['update', 'pre']
+            globals().pop('arguments')
+            gc.collect()
+            assert alive() is not None
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            writer.write(b'HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx')
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+            received.set()
+
+    server = await asyncio.start_server(respond, '127.0.0.1', 0)
+    async with server:
+        port = server.sockets[0].getsockname()[1]
+        arguments['api_base'] = f'http://127.0.0.1:{port}'
+        arguments['timeout'] = 5.0
+        try:
+            await native.aocr(arguments)
+        except RuntimeError as error:
+            assert error is logger.error
+        else:
+            raise AssertionError('expected upstream error')
+        await asyncio.wait_for(received.wait(), 5)
+    assert not errors, errors
+    assert marker.get() == 'pre'
+    assert logger.calls == ['update', 'pre']
+
+    for model, doc in [
+        ('azure_ai/doc-intelligence/prebuilt-read', document),
+        ('vertex_ai/ocr', document),
+        ('mistral/mistral-ocr-latest', {'type': 'file', 'file': Opaque()}),
+    ]:
+        logger.calls.clear()
+        unsupported = dict(model=model, document=doc, api_key='test-key', timeout=5.0,
+                           litellm_logging_obj=logger)
+        for asynchronous in (False, True):
+            try:
+                if asynchronous:
+                    await native.aocr(unsupported)
+                else:
+                    native.ocr(unsupported)
+            except NotImplementedError:
+                pass
+            else:
+                raise AssertionError('expected strict unsupported error')
+            assert logger.calls == []
+
+asyncio.run(exercise())
+",
+                Some(&globals),
+                Some(&globals),
+            )
+            .unwrap();
+        });
+    }
 }

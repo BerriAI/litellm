@@ -1,7 +1,7 @@
 use crate::Error;
 use serde_json::{Map, Value};
 
-use super::types::{OcrRequestData, OcrResponseData};
+use super::types::{OcrDocumentProjection, OcrRequestData, OcrResponseData};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrAuthStrategy {
@@ -25,6 +25,24 @@ pub enum OcrResponseHandling {
 }
 
 pub trait OcrProviderConfig: Sync {
+    fn document_projection(&self) -> OcrDocumentProjection {
+        OcrDocumentProjection::RetainedDocument
+    }
+
+    fn credential_acquisition_operation(&self) -> Option<&'static str> {
+        None
+    }
+
+    fn validate_credentials(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        _azure_ad_token: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<(String, String)>, Error> {
+        self.validate_environment(headers, api_key, env_lookup)
+    }
+
     fn supported_ocr_params(&self) -> &'static [&'static str];
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]

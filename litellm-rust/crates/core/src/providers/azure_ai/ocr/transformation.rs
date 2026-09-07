@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::{OcrAuthStrategy, OcrProviderConfig, OcrResponseHandling};
-use crate::ocr::types::{OcrRequestData, OcrResponseData};
+use crate::ocr::types::{OcrDocumentProjection, OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
@@ -23,6 +23,19 @@ pub struct AzureDocumentIntelligenceOcrConfig;
 pub const AZURE_AI_OCR_CONFIG: AzureAiOcrConfig = AzureAiOcrConfig;
 pub const AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG: AzureDocumentIntelligenceOcrConfig =
     AzureDocumentIntelligenceOcrConfig;
+
+pub fn config_for_model(model: &str) -> Result<&'static dyn OcrProviderConfig, Error> {
+    let model = model.to_ascii_lowercase();
+    if model.contains("cohere") {
+        return Err(Error::Unsupported(
+            "Azure Cohere OCR request transformation",
+        ));
+    }
+    if model.contains("doc-intelligence") || model.contains("documentintelligence") {
+        return Ok(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG);
+    }
+    Ok(&AZURE_AI_OCR_CONFIG)
+}
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
@@ -503,6 +516,24 @@ fn transform_document_intelligence_response(
 }
 
 impl OcrProviderConfig for AzureAiOcrConfig {
+    fn document_projection(&self) -> OcrDocumentProjection {
+        OcrDocumentProjection::ShallowCopyDocument
+    }
+
+    fn credential_acquisition_operation(&self) -> Option<&'static str> {
+        Some("Azure OCR credential acquisition")
+    }
+
+    fn validate_credentials(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        azure_ad_token: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<(String, String)>, Error> {
+        validate_azure_ai_environment(headers, api_key, azure_ad_token, env_lookup)
+    }
+
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         MISTRAL_OCR_CONFIG.supported_ocr_params()
     }
@@ -550,6 +581,24 @@ impl OcrProviderConfig for AzureAiOcrConfig {
 }
 
 impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
+    fn document_projection(&self) -> OcrDocumentProjection {
+        OcrDocumentProjection::Transformed
+    }
+
+    fn credential_acquisition_operation(&self) -> Option<&'static str> {
+        Some("Azure OCR credential acquisition")
+    }
+
+    fn validate_credentials(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        azure_ad_token: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<(String, String)>, Error> {
+        validate_document_intelligence_environment(headers, api_key, azure_ad_token, env_lookup)
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         AZURE_DOCUMENT_INTELLIGENCE_SUPPORTED_OCR_PARAMS

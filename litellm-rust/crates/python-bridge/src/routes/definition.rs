@@ -222,7 +222,7 @@ mod tests {
             let module = PyModule::new(py, "routes").expect("module should be created");
             crate::routes::register(&module).expect("routes should register");
             let routes = [
-                ("ocr", "aocr", "(boundary)"),
+                ("ocr", "aocr", "(arguments)"),
                 (
                     "transcription",
                     "atranscription",

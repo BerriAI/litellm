@@ -15,8 +15,9 @@ from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socket import socket as Socket
+from types import ModuleType
 from typing import Final
-from urllib.error import HTTPError
+from unittest.mock import patch
 
 REQUEST_STARTED: Final = threading.Event()
 REQUEST_CANCELLED: Final = threading.Event()
@@ -87,6 +88,8 @@ def assert_native_request(
         assert body["model"] == "mistral-ocr-latest"
         assert body["document"]["document_url"] == "https://example.com/document.pdf"
         assert body["include_image_base64"] is True
+        assert headers.get("x-ocr-callback") == "inline"
+        assert set(body) == {"model", "document", "include_image_base64"}
         return
     if route == "transcription":
         assert path == "/model/mistral.voxtral-mini-3b-2507/converse"
@@ -110,7 +113,7 @@ def native_response(status: int, route: str | None) -> bytes:
     if status == 429:
         return b'{"error":"native-rate-limit"}'
     if route == "ocr":
-        return b'{"pages":[{"index":0,"markdown":"native-ocr"}]}'
+        return b'{"pages":[{"index":0,"markdown":"native-ocr"}],"usage_info":{"pages_processed":1}}'
     if route == "transcription":
         return b'{"output":{"message":{"content":[{"text":"native-transcription"}]}}}'
     return ANTHROPIC_RESPONSE
@@ -126,48 +129,97 @@ def load_native(native_path: Path) -> object:
 
 
 @dataclass(frozen=True)
-class OCRBoundary:
-    api_base: str
-    outcome: str
+class WheelOCRResponse:
+    pages: list[dict[str, object]]
+    model: str
+    document_annotation: object
+    usage_info: dict[str, object] | None
+    object: str
 
-    def prepare(self) -> dict[str, object]:
-        return {
-            "model": "mistral-ocr-latest",
-            "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
-            "include_image_base64": True,
-        }
 
-    async def aprepare(self) -> dict[str, object]:
-        return self.prepare()
+@dataclass(frozen=True)
+class WheelHTTPRequest:
+    method: str
+    url: str
 
-    def encode(self, roots: dict[str, object]) -> tuple[str, list[tuple[bytes, bytes]], bytes, float]:
-        return (
-            f"{self.api_base}/v1/ocr",
-            [
-                (b"authorization", b"Bearer sk-native"),
-                (b"content-type", b"application/json"),
-                (b"x-test-route", b"ocr"),
-                (b"x-test-outcome", self.outcome.encode()),
-            ],
-            json.dumps(roots).encode(),
-            3.0,
-        )
 
-    def finish(self, wire: tuple[int, list[tuple[bytes, bytes]], bytes]) -> object:
-        status, headers, content = wire
-        assert (b"content-type", b"application/json") in headers
-        if status != 200:
-            assert content == b'{"error":"native-rate-limit"}'
-            raise HTTPError(f"{self.api_base}/v1/ocr", status, "native-rate-limit", HTTPMessage(), None)
-        return json.loads(content)
+@dataclass(frozen=True)
+class WheelHTTPResponse:
+    status_code: int
+    request: WheelHTTPRequest
 
-    async def afinish(self, wire: tuple[int, list[tuple[bytes, bytes]], bytes]) -> object:
-        return self.finish(wire)
+
+class WheelRateLimitError(Exception):
+    def __init__(self, *, message: str, model: str, llm_provider: str, response: WheelHTTPResponse) -> None:
+        super().__init__(message)
+        self.status_code = response.status_code
+        self.model = model
+        self.llm_provider = llm_provider
+
+
+class OCRLogging:
+    def __init__(self, arguments: dict[str, object]) -> None:
+        self.arguments = arguments
+        self.calls: tuple[str, ...] = ()
+        self.thread_id = threading.get_ident()
+        try:
+            self.task = asyncio.current_task()
+        except RuntimeError:
+            self.task = None
+
+    def update_from_kwargs(self, **kwargs: object) -> None:
+        assert self.calls == ()
+        assert threading.get_ident() == self.thread_id
+        if self.task is not None:
+            assert asyncio.current_task() is self.task
+        assert kwargs["kwargs"] is self.arguments
+        assert kwargs["model"] == "mistral-ocr-latest"
+        assert kwargs["custom_llm_provider"] == "mistral"
+        assert kwargs["optional_params"] == {"include_image_base64": True}
+        self.calls = ("update",)
+
+    def pre_call(self, **kwargs: object) -> None:
+        assert self.calls == ("update",)
+        assert threading.get_ident() == self.thread_id
+        if self.task is not None:
+            assert asyncio.current_task() is self.task
+        assert kwargs["input"] == "OCR document processing"
+        assert kwargs["api_key"] == "sk-native"
+        additional_args: Final = kwargs["additional_args"]
+        assert isinstance(additional_args, dict)
+        assert additional_args["api_base"] == f"{self.arguments['api_base']}/v1/ocr"
+        assert additional_args["complete_input_dict"]["document"] is self.arguments["document"]
+        assert additional_args["headers"]["Authorization"] == "Bearer sk-native"
+        additional_args["headers"]["x-ocr-callback"] = "inline"
+        self.calls = ("update", "pre")
+
+
+def initialize_ocr_logging(arguments: dict[str, object], asynchronous: bool) -> object:
+    return arguments["litellm_logging_obj"]
+
+
+def invoke_ocr_terminal(
+    action: str, roots: object, logger: OCRLogging, value: object, start: object, end: object
+) -> None:
+    assert action in {"sync_success", "async_success", "sync_success_if_needed", "sync_failure", "async_failure"}
+    assert isinstance(roots, tuple) and roots[0] is logger.arguments
+    assert logger.calls == ("update", "pre")
 
 
 def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
     if route == "ocr":
-        return {"boundary": OCRBoundary(api_base, outcome)}
+        arguments: Final = {
+            "model": "mistral/mistral-ocr-latest",
+            "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
+            "include_image_base64": True,
+            "api_base": api_base,
+            "api_key": "sk-native",
+            "extra_headers": {"x-test-outcome": outcome, "x-test-route": route},
+            "timeout": 3.0,
+            "metadata": {"opaque": object()},
+        }
+        arguments["litellm_logging_obj"] = OCRLogging(arguments)
+        return {"arguments": arguments}
     common: Final = {
         "api_base": api_base,
         "extra_headers": {"x-test-outcome": outcome, "x-test-route": route},
@@ -207,19 +259,23 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
 
 
 def assert_success(route: str, response: object) -> None:
+    if route == "ocr":
+        assert isinstance(response, WheelOCRResponse), f"expected OCRResponse construction, got {response!r}"
+        assert response.pages == [{"index": 0, "markdown": "native-ocr"}]
+        assert response.model == "mistral-ocr-latest"
+        assert response.object == "ocr"
+        assert response.document_annotation is None
+        assert response.usage_info == {"pages_processed": 1}
+        return
     if not isinstance(response, dict):
         raise TypeError(f"{route} returned {type(response).__name__}, expected dict")
     actual: Final = success_value(route, response)
-    expected: Final = (
-        "native-ocr" if route == "ocr" else "native-transcription" if route == "transcription" else "native-message"
-    )
+    expected: Final = "native-transcription" if route == "transcription" else "native-message"
     if actual != expected:
         raise AssertionError(f"{route} returned {actual!r}, expected {expected!r}")
 
 
 def success_value(route: str, response: dict[object, object]) -> object:
-    if route == "ocr":
-        return response["pages"][0]["markdown"]
     if route == "transcription":
         return response["text"]
     if route == "messages":
@@ -229,8 +285,11 @@ def success_value(route: str, response: dict[object, object]) -> object:
 
 def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
     if route == "ocr":
-        if not isinstance(error, HTTPError) or error.code != 429:
+        if not isinstance(error, WheelRateLimitError) or error.status_code != 429:
             raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
+        assert error.model == "mistral-ocr-latest"
+        assert error.llm_provider == "mistral"
+        assert str(error) == "OCR provider request failed (HTTP 429)"
         return
     if route == "chat_completions":
         upstream_error: Final = native.RustUpstreamError
@@ -247,7 +306,7 @@ def exercise_sync(native: object, api_base: str) -> None:
         assert_success(route, function(**route_kwargs(route, api_base, "success")))
         try:
             function(**route_kwargs(route, api_base, "429"))
-        except (HTTPError, RuntimeError, native.RustUpstreamError) as error:
+        except (WheelRateLimitError, RuntimeError, native.RustUpstreamError) as error:
             assert_rate_limit(native, route, error)
         else:
             raise AssertionError(f"{route} accepted a 429 response")
@@ -259,10 +318,32 @@ async def exercise_async(native: object, api_base: str) -> None:
         assert_success(route, await function(**route_kwargs(route, api_base, "success")))
         try:
             await function(**route_kwargs(route, api_base, "429"))
-        except (HTTPError, RuntimeError, native.RustUpstreamError) as error:
+        except (WheelRateLimitError, RuntimeError, native.RustUpstreamError) as error:
             assert_rate_limit(native, route, error)
         else:
             raise AssertionError(f"a{route} accepted a 429 response")
+
+
+async def exercise_unsupported_ocr(native: object, api_base: str) -> None:
+    for model, operation in (
+        ("azure_ai/doc-intelligence/prebuilt-read", "Document Intelligence OCR polling"),
+        ("vertex_ai/ocr", "HTTP document URL to data URI conversion"),
+    ):
+        arguments: Final = route_kwargs("ocr", api_base, "success")["arguments"]
+        assert isinstance(arguments, dict)
+        arguments["model"] = model
+        arguments["document"] = {"type": "document_url", "document_url": "https://example.invalid/document.pdf"}
+        for asynchronous in (False, True):
+            try:
+                if asynchronous:
+                    await native.aocr(arguments)
+                else:
+                    native.ocr(arguments)
+            except NotImplementedError as error:
+                assert operation in str(error)
+            else:
+                raise AssertionError(f"native OCR accepted unsupported operation: {operation}")
+            assert arguments["litellm_logging_obj"].calls == ()
 
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:
@@ -278,8 +359,33 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
     native: Final = load_native(native_path)
     if hasattr(native, "_trace"):
         raise AssertionError("release wheel exposed trace-parity diagnostics")
-    exercise_sync(native, api_base)
-    asyncio.run(exercise_async(native, api_base))
+    transformation: Final = ModuleType("litellm.llms.base_llm.ocr.transformation")
+    transformation.OCRResponse = WheelOCRResponse
+    exceptions: Final = ModuleType("litellm.exceptions")
+    exceptions.RateLimitError = WheelRateLimitError
+    httpx: Final = ModuleType("httpx")
+    httpx.Request = WheelHTTPRequest
+    httpx.Response = WheelHTTPResponse
+    ocr_bridge: Final = ModuleType("litellm.rust_bridge.ocr")
+    ocr_bridge.initialize_logging = initialize_ocr_logging
+    ocr_bridge.invoke_terminal = invoke_ocr_terminal
+    packages: Final = {
+        name: ModuleType(name)
+        for name in (
+            "litellm",
+            "litellm.rust_bridge",
+            "litellm.llms",
+            "litellm.llms.base_llm",
+            "litellm.llms.base_llm.ocr",
+        )
+    }
+    with patch.dict(
+        sys.modules,
+        packages | {module.__name__: module for module in (transformation, exceptions, httpx, ocr_bridge)},
+    ):
+        exercise_sync(native, api_base)
+        asyncio.run(exercise_async(native, api_base))
+        asyncio.run(exercise_unsupported_ocr(native, api_base))
     asyncio.run(exercise_async_concurrency(native, api_base))
     return native
 

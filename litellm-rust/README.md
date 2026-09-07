@@ -51,6 +51,33 @@ function per top-level route, mirroring the core entrypoints.
 
 ## Checks
 
+### Native OCR Boundary
+
+`LITELLM_RUST=1` selects native OCR before Python provider preparation. With Rust
+disabled, the existing Python execution and authentication paths are unchanged
+
+The bridge retains the complete call argument dictionary as a Python object,
+including opaque callback and metadata objects. It creates callback-visible
+request dictionaries with shared parameter references, then reads the execution
+roots after pre-call dispatch. Mistral retains the original document; Azure and
+Vertex Mistral use a shallow document copy, and Vertex DeepSeek projects it into
+chat messages using the existing Rust transform. Rust performs provider preparation,
+encoding, HTTP and response normalization. Python continues to dispatch existing
+logging operations and construct the public response object
+
+This is an opt-in implementation scaffold, not full OCR parity. Azure Mistral and
+Vertex Mistral accept inline data URIs with supplied keys/tokens, native environment
+keys or auth headers. Azure also accepts a supplied `azure_ad_token`. Vertex
+DeepSeek uses its existing chat request and OCR response transforms. Cloud
+credential acquisition fails explicitly only when no native credential is available.
+HTTP document URL conversion fails only for configs requiring data URIs. Azure
+Document Intelligence selects its own config but fails at the polling capability
+check before sending a billable analyze request. Cohere transforms, file inputs,
+streaming, native response format and compression remain unsupported.
+An enabled but missing native extension also fails;
+neither case falls back to Python execution. Transport failures currently use a
+generic error rather than the SDK's timeout-specific exception
+
 Run the commands under "Checks" in [CLAUDE.md](CLAUDE.md) before pushing Rust
 changes. That list is the single source of truth and matches what GitHub Actions
 runs for changes under `litellm-rust/`.
@@ -90,14 +117,16 @@ The gate checks that native `ocr` and `aocr` are importable, then runs
 `LITELLM_REQUIRE_NATIVE_OCR=1`, so unavailable native OCR fails instead of
 skipping. CI uses `make test-rust-ocr RUST_OCR_WHEEL=/absolute/path/to/current.whl`
 to test the release wheel it just built. The stdlib-only
-`native_route_wheel_test.py` also exercises sync/async OCR through a small
-boundary, including 429 handling in `finish`/`afinish`, alongside the other
-native routes
+`native_route_wheel_test.py` also exercises sync/async OCR through the retained
+argument dictionary, including native request preparation and public 429 error
+mapping, alongside the other native routes
 
-The Python-integrated Cargo tests validate retained callback identity, mutation, invocation context,
-and ownership against Python behavior, including existing LiteLLM components.
-They do not wire retained callbacks into production routes or change provider
-preparation, authentication, HTTP transport, or response transformation
+The Python-integrated Cargo tests validate retained callback identity, mutation,
+invocation context and ownership against Python behavior, including existing
+LiteLLM components. Short synthetic pre-call contracts use Rust-owned table-driven
+cases with inline Python callbacks; larger component scenarios share Python
+fixtures. These generic proofs complement, rather than replace, native OCR
+acceptance tests
 
 The callback lifecycle scenarios use
 `#[serial(python_interpreter)]` to isolate CPython GC and interpreter-wide

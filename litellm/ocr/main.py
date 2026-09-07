@@ -53,13 +53,6 @@ class _PreparedOCRRequest:
     litellm_logging_obj: LiteLLMLoggingObj
 
 
-_RUST_OCR_PROVIDERS: Final = {
-    "mistral",
-    "azure_ai",
-    "vertex_ai",
-}
-
-
 def _prepare_ocr_request(
     model: str,
     document: Mapping[str, object],
@@ -181,50 +174,6 @@ def _prepare_ocr_request(
     )
 
 
-def _rust_ocr_supported(prepared_request: _PreparedOCRRequest) -> bool:
-    if prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native":
-        return False
-    if not prepared_request.provider_config.supports_rust_bridge():
-        return False
-    return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
-
-
-def _rust_ocr_enabled(prepared_request: _PreparedOCRRequest) -> bool:
-    raw_request_override: Final = prepared_request.litellm_params.get("rust")
-    request_override: Final = raw_request_override if isinstance(raw_request_override, bool) else None
-    return rust_enabled(request_override=request_override)
-
-
-def _ocr_boundary(prepared_request: _PreparedOCRRequest) -> rust_ocr_bridge.OCRBoundary:
-    return rust_ocr_bridge.OCRBoundary(
-        handler=base_llm_http_handler,
-        model=prepared_request.model,
-        document=prepared_request.document,
-        optional_params=prepared_request.optional_params,
-        logging_obj=prepared_request.litellm_logging_obj,
-        api_key=prepared_request.api_key,
-        api_base=prepared_request.api_base,
-        headers=prepared_request.extra_headers,
-        provider_config=prepared_request.provider_config,
-        litellm_params=prepared_request.litellm_params,
-        custom_llm_provider=prepared_request.custom_llm_provider,
-        timeout=prepared_request.effective_timeout,
-    )
-
-
-def _run_rust_ocr(prepared_request: _PreparedOCRRequest) -> OCRResponse | None:
-    if rust_ocr_bridge.load_rust_ocr() is None:
-        return None
-    return rust_ocr_bridge.ocr(_ocr_boundary(prepared_request))
-
-
-async def _run_rust_aocr(prepared_request: _PreparedOCRRequest) -> OCRResponse | None:
-    if rust_ocr_bridge.load_rust_aocr() is None:
-        return None
-    return await rust_ocr_bridge.aocr(_ocr_boundary(prepared_request))
-
-
-@client
 async def aocr(
     model: str,
     document: Mapping[str, object],
@@ -293,6 +242,32 @@ async def aocr(
         )
         ```
     """
+    if rust_enabled():
+        return await rust_ocr_bridge.aocr(
+            {
+                **kwargs,
+                "model": model,
+                "document": document,
+                "api_key": api_key,
+                "api_base": api_base,
+                "timeout": timeout,
+                "custom_llm_provider": custom_llm_provider,
+                "extra_headers": extra_headers,
+            }
+        )
+    return await _legacy_aocr(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs)
+
+
+async def _legacy_aocr(
+    model: str,
+    document: Mapping[str, object],
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, object] | None = None,
+    **kwargs: object,
+) -> OCRResponse:
     completion_kwargs: Final[dict[str, object]] = {
         "model": model,
         "document": document,
@@ -317,13 +292,6 @@ async def aocr(
         model = prepared.model
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
-
-        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
-            rust_response: Final = await _run_rust_aocr(prepared_request=prepared)
-            if rust_response is None:
-                verbose_logger.debug("Async Rust OCR bridge unavailable; falling back to Python path")
-            else:
-                return rust_response
 
         response = base_llm_http_handler.ocr(
             model=prepared.model,
@@ -485,7 +453,6 @@ def convert_file_document_to_url_document(document: dict[str, Any]) -> dict[str,
     return {"type": "document_url", "document_url": data_uri}
 
 
-@client
 def ocr(
     model: str,
     document: Mapping[str, object],
@@ -558,6 +525,33 @@ def ocr(
             print(f"Page {page.index}: {page.markdown}")
         ```
     """
+    if rust_enabled():
+        arguments: Final[dict[str, object]] = {
+            **kwargs,
+            "model": model,
+            "document": document,
+            "api_key": api_key,
+            "api_base": api_base,
+            "timeout": timeout,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+        }
+        if kwargs.get("aocr") is True:
+            return rust_ocr_bridge.aocr(arguments)
+        return rust_ocr_bridge.ocr(arguments)
+    return _legacy_ocr(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs)
+
+
+def _legacy_ocr(
+    model: str,
+    document: Mapping[str, object],
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    custom_llm_provider: str | None = None,
+    extra_headers: dict[str, object] | None = None,
+    **kwargs: object,
+) -> OCRResponse | Coroutine[object, object, OCRResponse]:
     completion_kwargs: Final[dict[str, object]] = {
         "model": model,
         "document": document,
@@ -585,13 +579,6 @@ def ocr(
         custom_llm_provider = prepared.custom_llm_provider
         completion_kwargs.update({"model": model, "custom_llm_provider": custom_llm_provider})
 
-        if _rust_ocr_supported(prepared) and _rust_ocr_enabled(prepared):
-            rust_response: Final = _run_rust_ocr(prepared_request=prepared)
-            if rust_response is None:
-                verbose_logger.debug("Rust OCR bridge unavailable; falling back to Python path")
-            else:
-                return rust_response
-
         response: Final = base_llm_http_handler.ocr(
             model=prepared.model,
             document=prepared.document,
@@ -616,3 +603,9 @@ def ocr(
             completion_kwargs=completion_kwargs,
             extra_kwargs=kwargs,
         )
+
+
+_legacy_aocr.__name__ = "aocr"
+_legacy_ocr.__name__ = "ocr"
+_legacy_aocr = client(_legacy_aocr)
+_legacy_ocr = client(_legacy_ocr)

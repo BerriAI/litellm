@@ -113,8 +113,38 @@ fn lifecycle_contract(
 }
 
 #[rstest]
+#[case::identity_and_ignored_returns("pre_call_identity_and_ignored_returns")]
+#[case::mutations_visible_to_later_callbacks("pre_call_mutations_visible_to_later_callbacks")]
+#[case::mutation_survives_failure("pre_call_mutation_survives_failure")]
+#[ignore = "requires the repository Python environment and LiteLLM on PYTHONPATH"]
+#[serial(python_interpreter)]
+fn pre_call_contract(
+    scenario_scope: Py<PyDict>,
+    #[case] scenario: &str,
+    #[values(false, true)] retained: bool,
+) -> PyResult<()> {
+    run_scenario_fixture(
+        scenario_scope,
+        scenario,
+        retained,
+        Some((
+            include_str!("fixtures/callback_components.py"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/callback_components.py"
+            ),
+        )),
+    )
+}
+
+#[rstest]
+#[case::real_post_call_logging("real_post_call_logging")]
+#[case::real_post_call_dict_response("real_post_call_dict_response")]
+#[case::real_sync_logging("real_sync_logging")]
+#[case::real_sync_logging_hook_failure("real_sync_logging_hook_failure")]
+#[case::real_sync_failure_chain("real_sync_failure_chain")]
+#[case::real_async_failure_chain("real_async_failure_chain")]
 #[case::real_async_logging("real_async_logging")]
-#[case::real_pre_call_logging("real_pre_call_logging")]
 #[case::real_copy_boundaries("real_copy_boundaries")]
 #[case::real_logging_worker("real_logging_worker")]
 #[case::real_sync_stream_copies("real_sync_stream_copies")]

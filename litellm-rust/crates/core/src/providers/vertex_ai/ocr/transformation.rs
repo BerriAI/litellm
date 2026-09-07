@@ -1,6 +1,6 @@
 use crate::error::{Error, json_type_name};
 use crate::ocr::transformation::OcrProviderConfig;
-use crate::ocr::types::{OcrRequestData, OcrResponseData};
+use crate::ocr::types::{OcrDocumentProjection, OcrRequestData, OcrResponseData};
 use serde_json::{Map, Value, json};
 
 use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
@@ -28,6 +28,18 @@ pub struct VertexAiDeepSeekOcrConfig;
 
 pub const VERTEX_AI_OCR_CONFIG: VertexAiOcrConfig = VertexAiOcrConfig;
 pub const VERTEX_AI_DEEPSEEK_OCR_CONFIG: VertexAiDeepSeekOcrConfig = VertexAiDeepSeekOcrConfig;
+
+pub fn config_for_model(model: &str) -> Result<&'static dyn OcrProviderConfig, Error> {
+    if model.to_ascii_lowercase().contains("cohere") {
+        return Err(Error::Unsupported(
+            "Vertex Cohere OCR request transformation",
+        ));
+    }
+    if is_deepseek_model(model) {
+        return Ok(&VERTEX_AI_DEEPSEEK_OCR_CONFIG);
+    }
+    Ok(&VERTEX_AI_OCR_CONFIG)
+}
 
 fn string_param<'a>(params: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
@@ -208,6 +220,14 @@ fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> V
 }
 
 impl OcrProviderConfig for VertexAiOcrConfig {
+    fn document_projection(&self) -> OcrDocumentProjection {
+        OcrDocumentProjection::ShallowCopyDocument
+    }
+
+    fn credential_acquisition_operation(&self) -> Option<&'static str> {
+        Some("Vertex OCR credential acquisition")
+    }
+
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         MISTRAL_OCR_CONFIG.supported_ocr_params()
     }
@@ -255,6 +275,14 @@ impl OcrProviderConfig for VertexAiOcrConfig {
 }
 
 impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
+    fn document_projection(&self) -> OcrDocumentProjection {
+        OcrDocumentProjection::Transformed
+    }
+
+    fn credential_acquisition_operation(&self) -> Option<&'static str> {
+        VERTEX_AI_OCR_CONFIG.credential_acquisition_operation()
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         DEEPSEEK_SUPPORTED_OCR_PARAMS
