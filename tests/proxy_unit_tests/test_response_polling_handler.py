@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-
+from fastapi import Request
 
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 
@@ -1414,7 +1414,7 @@ def _make_background_streaming_kwargs(
         polling_id=polling_id,
         data={"model": "gpt-4o", "stream": False, "background": True},
         polling_handler=polling_handler,
-        request=Mock(),
+        request=Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": []}),
         fastapi_response=Mock(),
         user_api_key_dict=Mock(),
         general_settings={},
