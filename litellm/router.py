@@ -2605,6 +2605,18 @@ class Router:
         return fallback_hidden_params, cast("dict[str, object]", fallback_headers)
 
     @staticmethod
+    def _adopt_fallback_response_headers(
+        wrapper_ref: "weakref.ref[FallbackAwareStreamWrapper]",
+        fallback_response: object,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Repoint the wrapper at `fallback_response`, returning its prepared hidden params."""
+        prepared: Final = Router._prepare_fallback_hidden_params(fallback_response)
+        adopting_wrapper: Final = wrapper_ref()
+        if adopting_wrapper is not None:
+            adopting_wrapper.adopt_fallback_response_headers(fallback_response, prepared)
+        return prepared
+
+    @staticmethod
     def _apply_fallback_hidden_params_to_item(
         fallback_item: object,
         prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
@@ -2728,13 +2740,17 @@ class Router:
 
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
-                        prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
-                        _adopting_wrapper = wrapper_ref()
-                        if _adopting_wrapper is not None:
-                            _adopting_wrapper.adopt_fallback_response_headers(
-                                fallback_response, prepared_fallback_hidden_params
-                            )
+                        prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                            wrapper_ref, fallback_response
+                        )
+                        fallback_headers_are_settled = False
                         async for fallback_item in fallback_response:
+                            if not fallback_headers_are_settled:
+                                # a fallback that failed over again only repoints itself once it yields
+                                fallback_headers_are_settled = True
+                                prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                                    wrapper_ref, fallback_response
+                                )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
                                 fallback_item
@@ -3272,13 +3288,17 @@ class Router:
                     )
 
                     if hasattr(fallback_response, "__iter__"):
-                        prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
-                        _adopting_wrapper = wrapper_ref()
-                        if _adopting_wrapper is not None:
-                            _adopting_wrapper.adopt_fallback_response_headers(
-                                fallback_response, prepared_fallback_hidden_params
-                            )
+                        prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                            wrapper_ref, fallback_response
+                        )
+                        fallback_headers_are_settled = False
                         for fallback_item in fallback_response:
+                            if not fallback_headers_are_settled:
+                                # a fallback that failed over again only repoints itself once it yields
+                                fallback_headers_are_settled = True
+                                prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                                    wrapper_ref, fallback_response
+                                )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
                                 fallback_item

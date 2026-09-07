@@ -2682,6 +2682,184 @@ async def test_acompletion_streaming_iterator_adopts_fallback_response_headers()
     assert result._hidden_params is not fallback_stream._hidden_params
 
 
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_adopts_the_deployment_that_served_a_nested_fallback():
+    """LIT-6767: a fallback that itself fails over before its first chunk.
+
+    The selected fallback still describes its own failed attempt at selection time, so
+    the wrapper has to re-read it once a chunk exists or it publishes a deployment that
+    produced no output.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error: Final = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+            }
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise failed_error
+
+    class NestedFallbackStream:
+        """A fallback that repoints itself at a third deployment as it yields."""
+
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-MIDDLE"}
+            self._hidden_params = {
+                "model_id": "middle-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-MIDDLE"},
+            }
+            self._chunks = iter([litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "OK"}}])])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                chunk = next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+            self._response_headers = {"x-request-id": "req-SERVED"}
+            self._hidden_params = {
+                "model_id": "served-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-SERVED"},
+            }
+            return chunk
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=NestedFallbackStream(),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        first_chunk: Final = await result.__anext__()
+        # the proxy commits response headers once this chunk is buffered
+        assert result._response_headers == {"x-request-id": "req-SERVED"}
+        assert result._hidden_params["model_id"] == "served-deployment"
+        assert result._hidden_params["additional_headers"] == {"llm_provider-x-request-id": "req-SERVED"}
+        # and the chunk itself carries the same deployment
+        assert first_chunk._hidden_params["model_id"] == "served-deployment"
+        async for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-SERVED"}
+    assert result._hidden_params["model_id"] == "served-deployment"
+
+
+def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_nested_fallback():
+    """LIT-6767, sync counterpart of the nested-fallback adoption test."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error: Final = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+            }
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise failed_error
+
+    class NestedFallbackStream:
+        """A fallback that repoints itself at a third deployment as it yields."""
+
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-MIDDLE"}
+            self._hidden_params = {
+                "model_id": "middle-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-MIDDLE"},
+            }
+            self._chunks = iter([litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "OK"}}])])
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            chunk = next(self._chunks)
+            self._response_headers = {"x-request-id": "req-SERVED"}
+            self._hidden_params = {
+                "model_id": "served-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-SERVED"},
+            }
+            return chunk
+
+    with patch.object(router, "function_with_fallbacks", return_value=NestedFallbackStream()):
+        result = router._completion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        first_chunk: Final = next(result)
+        assert result._response_headers == {"x-request-id": "req-SERVED"}
+        assert result._hidden_params["model_id"] == "served-deployment"
+        assert first_chunk._hidden_params["model_id"] == "served-deployment"
+        for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-SERVED"}
+    assert result._hidden_params["model_id"] == "served-deployment"
+
+
 def test_completion_streaming_iterator_adopts_fallback_response_headers():
     """LIT-6767, sync counterpart of the fallback-adoption test."""
     from unittest.mock import MagicMock, patch

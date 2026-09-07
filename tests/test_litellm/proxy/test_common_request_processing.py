@@ -2,7 +2,7 @@ import asyncio
 import copy
 import datetime
 import json
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1816,7 +1816,7 @@ class TestCommonRequestProcessingHelpers:
         headers are still uncommitted, so ``refresh_headers`` is consulted after
         the first chunk is buffered and its result wins.
         """
-        refreshed_at = []
+        refreshed_at: Final[list[str]] = []
 
         async def mock_generator():
             yield 'data: {"content": "data"}\n\n'
@@ -8245,3 +8245,18 @@ class TestStreamingResponseHeadersFollowFallback:
         assert result.headers["llm_provider-x-request-id"] == "req-SERVED"
         assert "llm_provider-stale-marker" not in result.headers
         assert result.headers["x-callback-header"] == "kept"
+
+
+class TestPassthroughHeadersAcceptImmutableMappings:
+    """LIT-6767: the streaming branch now hands the passthrough helpers an immutable mapping."""
+
+    def test_merge_passthrough_streaming_headers_accepts_a_read_only_mapping(self):
+        merged = ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
+            response_headers=httpx.Headers({"content-type": "text/event-stream", "transfer-encoding": "chunked"}),
+            custom_headers=MappingProxyType({"x-litellm-model-id": "served-deployment"}),
+        )
+
+        assert merged["x-litellm-model-id"] == "served-deployment"
+        assert merged["content-type"] == "text/event-stream"
+        # the excluded hop-by-hop header is still dropped
+        assert "transfer-encoding" not in merged

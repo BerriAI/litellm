@@ -896,7 +896,6 @@ def _sse_stream_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
 async def _resolve_stream_headers(
     headers: Mapping[str, str], refresh_headers: Callable[[], Awaitable[Mapping[str, str]]] | None
 ) -> Mapping[str, str]:
-    """The response headers to publish once the first chunk has been buffered."""
     if refresh_headers is None:
         return headers
     try:
@@ -2168,11 +2167,10 @@ class ProxyBaseLLMRequestProcessing:
             model_id = model_info.get("id", "") or ""
         return str(model_id) if model_id else ""
 
-    @staticmethod
     def _stream_response_headers(
+        self,
         *,
         hidden_params: Mapping[str, object],
-        request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         logging_obj: LiteLLMLoggingObj,
         version: str | None,
@@ -2184,14 +2182,14 @@ class ProxyBaseLLMRequestProcessing:
                 **ProxyBaseLLMRequestProcessing.get_custom_headers(
                     user_api_key_dict=user_api_key_dict,
                     call_id=logging_obj.litellm_call_id,
-                    model_id=ProxyBaseLLMRequestProcessing._get_model_id_from_response(hidden_params, request_data),
+                    model_id=self._get_model_id_from_response(hidden_params, self.data),
                     cache_key=hidden_params.get("cache_key") or "",
                     api_base=hidden_params.get("api_base") or "",
                     version=version,
                     response_cost=hidden_params.get("response_cost") or "",
                     model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
                     fastest_response_batch_completion=hidden_params.get("fastest_response_batch_completion"),
-                    request_data=request_data,
+                    request_data=self.data,
                     hidden_params=hidden_params,
                     litellm_logging_obj=logging_obj,
                     **(hidden_params.get("additional_headers") or MappingProxyType({})),
@@ -2476,7 +2474,6 @@ class ProxyBaseLLMRequestProcessing:
                 )
                 custom_headers: Final = self._stream_response_headers(
                     hidden_params=hidden_params,
-                    request_data=self.data,
                     user_api_key_dict=user_api_key_dict,
                     logging_obj=logging_obj,
                     version=version,
@@ -2484,16 +2481,11 @@ class ProxyBaseLLMRequestProcessing:
                 )
 
                 async def refresh_stream_headers() -> Mapping[str, str]:
-                    """`custom_headers` rebuilt for whichever deployment served the stream.
-
-                    `create_response` buffers the first chunk before it commits headers, so a
-                    fallback that took over by then has already repointed `response`.
-                    """
+                    """`custom_headers` rebuilt for whichever deployment served the stream."""
                     if not getattr(response, "fallback_headers_adopted", False):
                         return custom_headers
                     return self._stream_response_headers(
                         hidden_params=get_hidden_params_dict(response),
-                        request_data=self.data,
                         user_api_key_dict=user_api_key_dict,
                         logging_obj=logging_obj,
                         version=version,
