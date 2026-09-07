@@ -39,7 +39,6 @@ from typing import Final
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -451,7 +450,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         status_code: int,
         headers: dict,  # mutable-ok: BaseSearchConfig.get_error_class takes the response headers as a dict
     ) -> Exception:
-        return BaseLLMException(
+        return BedrockError(
             status_code=status_code,
             message=error_message,
             headers=headers,

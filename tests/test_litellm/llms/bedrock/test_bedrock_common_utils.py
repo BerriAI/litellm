@@ -821,3 +821,53 @@ def test_bedrock_mantle_get_error_class_keeps_provider_headers(config):
     )
 
     assert error.response.headers["x-amzn-requestid"] == "req-mantle-400"
+
+
+def _bedrock_configs_with_get_error_class():
+    import importlib
+    import inspect
+    import pathlib
+
+    import litellm
+
+    llms_root = pathlib.Path(inspect.getfile(litellm)).parent / "llms"
+    configs = []
+    for package in ("bedrock", "bedrock_mantle"):
+        for path in sorted((llms_root / package).rglob("*.py")):
+            module_name = "litellm.llms." + ".".join(path.relative_to(llms_root).with_suffix("").parts)
+            module = importlib.import_module(module_name)
+            for name, obj in vars(module).items():
+                if not inspect.isclass(obj) or obj.__module__ != module_name:
+                    continue
+                if getattr(obj, "get_error_class", None) is None:
+                    continue
+                configs.append(pytest.param(obj, id=f"{module_name}.{name}"))
+    return configs
+
+
+@pytest.mark.parametrize("config", _bedrock_configs_with_get_error_class())
+def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
+    """Every bedrock surface must classify errors through BedrockError, not a header-dropping base.
+
+    A config that inherits get_error_class from a provider-agnostic base builds a blank
+    response, so the request id is gone before the proxy ever reads it.
+    """
+    try:
+        instance = config()
+    except Exception:
+        instance = config.__new__(config)
+
+    try:
+        error = instance.get_error_class(
+            error_message="boom",
+            status_code=500,
+            headers={"x-amzn-RequestId": "req-audit-500"},
+        )
+    except Exception as raised:  # some bases raise the exception instead of returning it
+        error = raised
+
+    assert error.response.headers["x-amzn-requestid"] == "req-audit-500"
+
+
+def test_bedrock_get_error_class_audit_covers_every_surface():
+    assert len(_bedrock_configs_with_get_error_class()) >= 30

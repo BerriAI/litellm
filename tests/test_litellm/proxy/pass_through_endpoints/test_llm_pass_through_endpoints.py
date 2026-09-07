@@ -5225,7 +5225,7 @@ async def test_bedrock_count_tokens_error_forwards_provider_headers():
         headers={"x-amzn-RequestId": "req-count-tokens-500"},
     )
 
-    with patch(
+    with patch(  # test-quality-ok: the route's BedrockError branch is only reachable when the handler raises
         "litellm.llms.bedrock.count_tokens.handler.BedrockCountTokensHandler.handle_count_tokens_request",
         new=AsyncMock(side_effect=failure),
     ):
