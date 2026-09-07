@@ -16,14 +16,9 @@ _DEFAULT_SENSITIVE_PATTERNS: Final = frozenset(
         "auth",
         "authorization",
         "credential",
-        # Segment-exact matching misses regular plurals: "credential" !=
-        # "credentials", so Vertex's ``vertex_credentials`` slipped through
-        # until this was added. "secrets" and "passwords" carry the same
-        # fix. "keys" and "tokens" are deliberately NOT added here: unlike
-        # the plurals above, they collide with real non-sensitive fields
-        # ("allow_all_keys", "missing_keys", "max_tokens", "total_tokens"),
-        # so pluralizing them would mask booleans and usage counts instead
-        # of secrets.
+        # Segment-exact matching misses plurals ("secret" != "secrets"), same gap
+        # already fixed once for "credential"/"credentials". "keys"/"tokens" are
+        # NOT pluralized: they'd mask real fields like "allow_all_keys"/"max_tokens".
         "credentials",
         "secrets",
         "passwords",
