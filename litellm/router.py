@@ -616,6 +616,38 @@ RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
 RETRY_BREADCRUMB_LIMIT: Final = 4
 
 
+class FallbackAwareStreamWrapper(CustomStreamWrapper):
+    """Base for the Router's chat-completion stream wrappers, which are built around the
+    attempt the Router picked first and have to repoint themselves when a fallback takes over."""
+
+    fallback_headers_adopted: bool = False
+
+    def adopt_fallback_response_headers(
+        self,
+        fallback_response: object,
+        prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
+    ) -> None:
+        """Repoint this wrapper at the deployment that served the stream.
+
+        Replaces rather than merges, so the failed attempt's `x-request-id`, rate limit
+        counters, `model_id` and `api_base` cannot reach the proxy's response headers or
+        its callbacks.
+        """
+        self._response_headers = getattr(fallback_response, "_response_headers", None)
+        fallback_hidden_params, fallback_headers = prepared_fallback_hidden_params
+        if fallback_hidden_params:
+            self._hidden_params = {  # mutable-ok: the rest of litellm writes into _hidden_params
+                **fallback_hidden_params,
+                # dict() because add_retry_fallback_headers mutates additional_headers in place
+                "additional_headers": dict(fallback_headers),  # mutable-ok: see above
+            }
+            self._base_hidden_params = {  # mutable-ok: CustomStreamWrapper keeps this snapshot as a dict
+                **self._hidden_params,
+                "response_cost": None,
+            }
+        self.fallback_headers_adopted = True
+
+
 class Router:
     model_names: set = set()
     cache_responses: bool | None = False
@@ -2577,6 +2609,18 @@ class Router:
         return fallback_hidden_params, cast("dict[str, object]", fallback_headers)
 
     @staticmethod
+    def _adopt_fallback_response_headers(
+        wrapper_ref: "weakref.ref[FallbackAwareStreamWrapper]",
+        fallback_response: object,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Repoint the wrapper at `fallback_response`, returning its prepared hidden params."""
+        prepared: Final = Router._prepare_fallback_hidden_params(fallback_response)
+        adopting_wrapper: Final = wrapper_ref()
+        if adopting_wrapper is not None:
+            adopting_wrapper.adopt_fallback_response_headers(fallback_response, prepared)
+        return prepared
+
+    @staticmethod
     def _apply_fallback_hidden_params_to_item(
         fallback_item: object,
         prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
@@ -2615,7 +2659,7 @@ class Router:
 
         held_slot: Final = deployment_slot if deployment_slot is not None else contextlib.AsyncExitStack()
 
-        class FallbackStreamWrapper(CustomStreamWrapper):
+        class FallbackStreamWrapper(FallbackAwareStreamWrapper):
             def __init__(self, async_generator: AsyncGenerator):
                 # Copy attributes from the original model_response
                 super().__init__(
@@ -2623,6 +2667,7 @@ class Router:
                     model=model_response.model,
                     custom_llm_provider=model_response.custom_llm_provider,
                     logging_obj=model_response.logging_obj,
+                    _response_headers=getattr(model_response, "_response_headers", None),
                 )
                 self._async_generator = async_generator
                 inner_chunks: Final[object] = getattr(model_response, "chunks", None)
@@ -2699,8 +2744,17 @@ class Router:
 
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
-                        prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
+                        prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                            wrapper_ref, fallback_response
+                        )
+                        fallback_headers_are_settled = False
                         async for fallback_item in fallback_response:
+                            if not fallback_headers_are_settled:
+                                fallback_headers_are_settled = True  # rebind-ok: one-shot latch
+                                # a fallback that failed over again only repoints itself once it yields
+                                prepared_fallback_hidden_params = (  # rebind-ok: re-read once the fallback yields
+                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
+                                )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
                                 fallback_item
@@ -2742,7 +2796,11 @@ class Router:
                                 e,
                             )
 
-        return FallbackStreamWrapper(stream_with_fallbacks())
+        wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
+        # weak, so the generator closing over it does not keep the wrapper out of
+        # refcount teardown and delay the `finally` that releases the deployment slot
+        wrapper_ref: Final = weakref.ref(wrapped_response)
+        return wrapped_response
 
     @staticmethod
     def _extract_partial_responses_usage(
@@ -3171,13 +3229,14 @@ class Router:
         """
         from litellm.exceptions import MidStreamFallbackError
 
-        class SyncFallbackStreamWrapper(CustomStreamWrapper):
+        class SyncFallbackStreamWrapper(FallbackAwareStreamWrapper):
             def __init__(self, sync_generator: Generator):
                 super().__init__(
                     completion_stream=sync_generator,
                     model=model_response.model,
                     custom_llm_provider=model_response.custom_llm_provider,
                     logging_obj=model_response.logging_obj,
+                    _response_headers=getattr(model_response, "_response_headers", None),
                 )
                 self._sync_generator = sync_generator
                 if hasattr(model_response, "_hidden_params"):
@@ -3233,8 +3292,17 @@ class Router:
                     )
 
                     if hasattr(fallback_response, "__iter__"):
-                        prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
+                        prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                            wrapper_ref, fallback_response
+                        )
+                        fallback_headers_are_settled = False
                         for fallback_item in fallback_response:
+                            if not fallback_headers_are_settled:
+                                fallback_headers_are_settled = True  # rebind-ok: one-shot latch
+                                # a fallback that failed over again only repoints itself once it yields
+                                prepared_fallback_hidden_params = (  # rebind-ok: re-read once the fallback yields
+                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
+                                )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
                                 fallback_item
@@ -3272,7 +3340,10 @@ class Router:
                             close_err,
                         )
 
-        return SyncFallbackStreamWrapper(stream_with_fallbacks())
+        wrapped_response: Final = SyncFallbackStreamWrapper(stream_with_fallbacks())
+        # weak, for the same reason as the async twin
+        wrapper_ref: Final = weakref.ref(wrapped_response)
+        return wrapped_response
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """
