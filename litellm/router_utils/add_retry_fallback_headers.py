@@ -39,6 +39,12 @@ class HiddenParamsAsyncIteratorWrapper:
         if callable(aclose):
             await aclose()
 
+    def __getattr__(self, name: str) -> object:
+        # Forward attrs (e.g. completed_response) so proxy hooks that
+        # getattr on the outermost stream still see the inner iterator.
+        # See #40120 / #30210 — without this, container ownership skips.
+        return getattr(self._inner, name)
+
 
 def prepare_response_for_header_attachment(response: object) -> object | None:
     if response is None:

@@ -202,6 +202,41 @@ class TestProxyOwnershipHookReadsCompletedResponse:
         assert extracted.container["id"] == "cntr_test"
 
 
+class TestHiddenParamsWrapperForwardsCompletedResponse:
+    """Regression #40120: Router may wrap the responses stream in
+    ``HiddenParamsAsyncIteratorWrapper`` for header attachment. The
+    proxy ownership hook getattr's on that outer object — without
+    ``__getattr__`` forwarding, ``completed_response`` is invisible
+    even when the inner FallbackResponsesStreamWrapper captured it."""
+
+    def test_extract_sees_through_hidden_params_wrapper(self):
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.router_utils.add_retry_fallback_headers import (
+            HiddenParamsAsyncIteratorWrapper,
+        )
+
+        wrapper_cls, _ = _make_wrapper_class()
+
+        async def gen():
+            yield _terminal_chunk("response.completed")
+
+        inner = wrapper_cls(gen())
+        asyncio.run(_drain(inner))
+        outer = HiddenParamsAsyncIteratorWrapper(inner)
+
+        extracted = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+            outer
+        )
+        assert extracted is not None, (
+            "HiddenParamsAsyncIteratorWrapper hid completed_response from the "
+            "proxy ownership extract helper (#40120)"
+        )
+        assert extracted.id == "resp_test"
+        assert extracted.container["id"] == "cntr_test"
+
+
 class TestSilentSkipNowLogged:
     """Reporter's secondary ask: when completed_response is None, the
     ownership hook silently dropped on the floor. Make sure the new

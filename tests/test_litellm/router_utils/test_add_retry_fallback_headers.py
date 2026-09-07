@@ -162,3 +162,59 @@ def test_add_fallback_headers_to_dict_response():
 
     assert result is response
     assert response["_hidden_params"]["additional_headers"]["x-litellm-attempted-fallbacks"] == 1
+
+
+def test_hidden_params_wrapper_forwards_completed_response():
+    """Regression #40120: proxy ownership hook reads completed_response via
+    getattr on the outermost stream. HiddenParamsAsyncIteratorWrapper must
+    forward unknown attrs to the inner iterator."""
+    from types import SimpleNamespace
+
+    from litellm.router_utils.add_retry_fallback_headers import (
+        HiddenParamsAsyncIteratorWrapper,
+    )
+
+    class Inner:
+        def __init__(self):
+            self.completed_response = SimpleNamespace(
+                response=SimpleNamespace(id="resp_test", output=[])
+            )
+
+        def __anext__(self):
+            raise StopAsyncIteration
+
+    inner = Inner()
+    wrapped = HiddenParamsAsyncIteratorWrapper(inner)
+
+    assert wrapped.completed_response is inner.completed_response
+    # Own attrs must still win over forwarded ones.
+    assert wrapped._hidden_params == {}
+    assert wrapped._inner is inner
+
+
+def test_hidden_params_wrapper_extract_completed_responses_response():
+    """End-to-end with the proxy helper used by the ownership wrap hook."""
+    from types import SimpleNamespace
+
+    from litellm.proxy.common_request_processing import (
+        ProxyBaseLLMRequestProcessing,
+    )
+    from litellm.router_utils.add_retry_fallback_headers import (
+        HiddenParamsAsyncIteratorWrapper,
+    )
+
+    class Inner:
+        def __init__(self):
+            self.completed_response = SimpleNamespace(
+                response=SimpleNamespace(id="resp_test", output=[])
+            )
+
+        def __anext__(self):
+            raise StopAsyncIteration
+
+    wrapped = HiddenParamsAsyncIteratorWrapper(Inner())
+    extracted = ProxyBaseLLMRequestProcessing._extract_completed_responses_response(
+        wrapped
+    )
+    assert extracted is not None
+    assert extracted.id == "resp_test"
