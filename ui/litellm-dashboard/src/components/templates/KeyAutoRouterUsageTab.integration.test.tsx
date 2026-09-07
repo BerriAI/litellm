@@ -75,7 +75,11 @@ describe("KeyAutoRouterUsageTab", () => {
   });
 
   it("renders this key's spend, baseline, savings and per-router filter", async () => {
-    renderWithProviders(<KeyAutoRouterUsageTab accessToken="test-token" keyToken="key-hash-1" />);
+    const activity = {
+      dateValue: { from: new Date(2025, 0, 1), to: new Date(2025, 0, 31) },
+      onDateChange: vi.fn(),
+    };
+    renderWithProviders(<KeyAutoRouterUsageTab accessToken="test-token" keyToken="key-hash-1" activity={activity} />);
 
     expect(await screen.findByText("$8.75")).toBeInTheDocument();
     expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
@@ -88,5 +92,7 @@ describe("KeyAutoRouterUsageTab", () => {
 
     const benchmarkUrl = new URL(requestedUrls().find((url) => url.includes("/auto_router/benchmarks")) ?? "");
     expect(benchmarkUrl.searchParams.get("api_key")).toBe("key-hash-1");
+    expect(benchmarkUrl.searchParams.get("start_date")).toBe("2025-01-01");
+    expect(benchmarkUrl.searchParams.get("end_date")).toBe("2025-01-31");
   });
 });

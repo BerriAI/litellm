@@ -37,7 +37,9 @@ export interface DailyActivityScope {
   apiKey?: string | null;
 }
 
-export const useActivityDateRange = (): Pick<DailyActivityRange, "dateValue" | "onDateChange"> => {
+export type ActivityDateRange = Pick<DailyActivityRange, "dateValue" | "onDateChange">;
+
+export const useActivityDateRange = (): ActivityDateRange => {
   const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
   const initialTo = useMemo(() => new Date(), []);
   const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
@@ -47,9 +49,8 @@ export const useActivityDateRange = (): Pick<DailyActivityRange, "dateValue" | "
 export const useScopedDailyActivityRange = (
   accessToken: string | null,
   scope: DailyActivityScope,
+  { dateValue, onDateChange }: ActivityDateRange,
 ): DailyActivityRange => {
-  const { dateValue, onDateChange } = useActivityDateRange();
-
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
   const { userId, apiKey = null } = scope;
@@ -82,7 +83,7 @@ export const useDailyActivityRange = (
   accessToken: string | null,
   userId: string | null,
   userRole: string,
-): DailyActivityRange =>
-  useScopedDailyActivityRange(accessToken, {
-    userId: spendScopeUserId(userRole, userId),
-  });
+): DailyActivityRange => {
+  const dateRange = useActivityDateRange();
+  return useScopedDailyActivityRange(accessToken, { userId: spendScopeUserId(userRole, userId) }, dateRange);
+};

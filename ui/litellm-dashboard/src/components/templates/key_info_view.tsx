@@ -17,6 +17,7 @@ import { BadgeLink } from "@/components/shared/BadgeLink";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import KeySavingsTab from "./KeySavingsTab";
 import KeyAutoRouterUsageTab from "./KeyAutoRouterUsageTab";
+import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { useEffect, useState } from "react";
 import {
   hasProxyWideSpendView,
@@ -87,6 +88,7 @@ export default function KeyInfoView({
   backButtonText = "Back to Keys",
 }: KeyInfoViewProps) {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const activityDateRange = useActivityDateRange();
   const queryClient = useQueryClient();
   const canEditGuardrails = premiumUser || (userRole != null && rolesWithWriteAccess.includes(userRole));
   const { teams: teamsData } = useTeams();
@@ -772,12 +774,17 @@ export default function KeyInfoView({
               keyToken={currentKeyData.token}
               userId={userID}
               userRole={userRole}
+              activity={activityDateRange}
             />
           </TabsContent>
 
           {hasProxyWideSpendView(userRole) && (
             <TabsContent value="auto-router-usage">
-              <KeyAutoRouterUsageTab accessToken={accessToken} keyToken={currentKeyData.token} />
+              <KeyAutoRouterUsageTab
+                accessToken={accessToken}
+                keyToken={currentKeyData.token}
+                activity={activityDateRange}
+              />
             </TabsContent>
           )}
 
