@@ -89,12 +89,19 @@ where
     F: Future<Output = Result<T, Error>> + Send + 'static,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        let result = catch_future_panic(future).await?;
-        let result = map_core_result(result, map_error)?;
+        let result = run_async_value(future, map_error).await?;
         Ok(Pythonized(result))
     })
 }
 
+pub(crate) async fn run_async_value<T, F>(future: F, map_error: fn(Error) -> PyErr) -> PyResult<T>
+where
+    T: Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+{
+    let result = catch_future_panic(future).await?;
+    map_core_result(result, map_error)
+}
 fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -> PyResult<T> {
     match result {
         Ok(value) => Ok(value),

@@ -54,7 +54,7 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
-	@echo "  make test-rust-python   - Run ignored Python-integrated Cargo tests (optional TEST_FILTER=substring)"
+	@echo "  make test-rust-python   - Run ignored Python-integrated Cargo tests"
 	@echo "  make lint-rust-python-fixtures - Check Rust test Python fixtures with Ruff"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
@@ -293,7 +293,7 @@ test-rust-python: install-rust-python-test-deps
 	PYTHONPATH="$(CURDIR):$$site_packages$${PYTHONPATH:+:$$PYTHONPATH}" \
 	LITELLM_LOCAL_MODEL_COST_MAP=True \
 	cargo test --manifest-path litellm-rust/Cargo.toml \
-		-p litellm-python-interop -p litellm-python-bridge --tests --locked -- --ignored $(if $(TEST_FILTER),"$(TEST_FILTER)")
+		-p litellm-python-interop -p litellm-python-bridge --tests --locked -- --include-ignored
 
 lint-rust-python-fixtures:
 	$(UV) tool run --from ruff==0.15.3 ruff check --config ruff-tests.toml litellm-rust/crates/python-interop/tests litellm-rust/crates/python-bridge/tests

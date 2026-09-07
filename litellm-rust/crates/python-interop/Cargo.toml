@@ -12,4 +12,5 @@ serde.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
+serial_test.workspace = true
 serde_json.workspace = true

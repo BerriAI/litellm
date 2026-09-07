@@ -7,11 +7,11 @@ mod definition;
 mod gateway_messages;
 
 mod audio_transcription;
-mod bindings;
 mod chat_completions;
 mod messages;
 mod ocr;
 mod ocr_retained;
+mod retained_http;
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     ocr::register(module)?;

@@ -36,14 +36,24 @@ class NativeRouteHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         content_length: Final = int(self.headers.get("content-length", "0"))
-        body: Final = json.loads(self.rfile.read(content_length))
+        wire_body: Final = self.rfile.read(content_length)
+        body: Final = json.loads(wire_body)
         route: Final = self.headers.get("x-test-route")
         outcome: Final = self.headers.get("x-test-outcome")
         public_case: Final = self.headers.get("x-test-public-case")
         if public_case is not None:
-            PUBLIC_OCR_REQUESTS.put(public_case)
             assert self.headers.get("x-test-callback") == public_case
+            assert self.headers.get("x-test-view-only") is None
+            assert self.headers.get_all("x-test-callback") == [public_case]
+            assert wire_body == (
+                b'{"model":"mistral-ocr-latest","document":{"type":"document_url",'
+                b'"document_url":"https://example.com/document.pdf"},"include_image_base64":true,'
+                b'"document_alias":{"type":"document_url","document_url":"https://example.com/document.pdf"},'
+                b'"callback_mutation":"observed"}'
+            ), wire_body
         assert_native_request(route, outcome, self.path, self.headers, body)
+        if public_case is not None:
+            PUBLIC_OCR_REQUESTS.put(public_case)
         if outcome == "hang":
             REQUEST_STARTED.set()
             self.connection.settimeout(5)
@@ -266,6 +276,11 @@ def exercise_public_ocr(install_root: Path, api_base: str, case: str) -> int:
     assert Path(native.__file__).resolve().is_relative_to(install_root.resolve())
     retained: Final = getattr(native, f"{case}_retained")
     observed: Final[Counter[str]] = Counter()
+    roots: Final[dict[str, dict[str, object]]] = {}
+    phases: Final[list[str]] = []
+    document: Final = {"type": "document_url", "document_url": "https://example.com/before-callback.pdf"}
+    replacement_body: Final = {"replacement": True}
+    replacement_headers: Final = {"x-test-callback": "must-not-send", "x-test-view-only": "not-on-wire"}
 
     def observe(frame: FrameType, event: str, arg: object) -> None:
         if event == "c_call" and arg is retained:
@@ -273,26 +288,60 @@ def exercise_public_ocr(install_root: Path, api_base: str, case: str) -> int:
         if event == "call" and frame.f_code is OCRRetainedBoundary.encode.__code__:
             observed["encode"] += 1
 
-    class MutatingLogger(CustomLogger):
-        calls = 0
+    class RetainedLogger(CustomLogger):
+        def __init__(self, phase: str) -> None:
+            super().__init__()
+            self.phase = phase
+            self.calls = 0
 
-        def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+        def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> dict[str, object]:
             self.calls += 1
             additional_args: Final = kwargs["additional_args"]
             assert isinstance(additional_args, dict)
-            headers: Final = additional_args["headers"]
-            body: Final = additional_args["complete_input_dict"]
-            assert isinstance(headers, dict) and isinstance(body, dict)
-            assert body["model"] == "mistral-ocr-latest"
-            assert body["include_image_base64"] is False
-            assert headers["x-test-callback"] == "before-callback"
-            headers["x-test-callback"] = case
-            body["include_image_base64"] = True
+            if self.phase == "retain":
+                assert phases == []
+                headers: Final = additional_args["headers"]
+                body: Final = additional_args["complete_input_dict"]
+                assert isinstance(headers, dict) and isinstance(body, dict)
+                assert body["model"] == "mistral-ocr-latest"
+                assert body["include_image_base64"] is False
+                assert body["document"] is document
+                assert headers["x-test-callback"] == "before-callback"
+                roots.update(body=body, headers=headers, view=additional_args)
+                body["document_alias"] = document
+                additional_args["complete_input_dict"] = replacement_body
+                additional_args["headers"] = replacement_headers
+            else:
+                assert additional_args is roots["view"]
+                assert additional_args["complete_input_dict"] is replacement_body
+                assert additional_args["headers"] is replacement_headers
+                assert roots["body"]["document_alias"] is document
+                assert roots["body"]["document"] is document
+                if self.phase == "mutate":
+                    assert phases == ["retain"]
+                    roots["headers"]["x-test-callback"] = case
+                    roots["body"]["include_image_base64"] = True
+                    document["document_url"] = "https://example.com/document.pdf"
+                    roots["body"]["callback_mutation"] = "observed"
+                else:
+                    assert self.phase == "observe"
+                    assert phases == ["retain", "mutate"]
+                    assert roots["headers"]["x-test-callback"] == case
+                    assert roots["body"]["include_image_base64"] is True
+                    assert document["document_url"] == "https://example.com/document.pdf"
+                    assert roots["body"]["callback_mutation"] == "observed"
+                    assert replacement_body == {"replacement": True}
+                    assert replacement_headers == {
+                        "x-test-callback": "must-not-send",
+                        "x-test-view-only": "not-on-wire",
+                    }
+            phases.append(self.phase)
+            return {"headers": {"x-test-callback": "ignored-return"}, "complete_input_dict": {"invalid": object()}}
 
-    callback: Final = MutatingLogger()
+    callbacks: Final = tuple(RetainedLogger(phase) for phase in ("retain", "mutate", "observe"))
     kwargs: Final = {
         "model": "mistral/mistral-ocr-latest",
-        "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
+        "document": document,
         "api_base": api_base,
         "api_key": "sk-native",
         "extra_headers": {
@@ -302,7 +351,7 @@ def exercise_public_ocr(install_root: Path, api_base: str, case: str) -> int:
             "x-test-callback": "before-callback",
         },
         "include_image_base64": False,
-        "callbacks": [callback],
+        "callbacks": list(callbacks),
         "rust": True,
         "timeout": 3.0,
         "num_retries": 0,
@@ -316,8 +365,26 @@ def exercise_public_ocr(install_root: Path, api_base: str, case: str) -> int:
     assert isinstance(response, OCRResponse)
     assert_success("ocr", response.model_dump())
     assert response.model == "mistral-ocr-latest"
-    assert callback.calls == 1, callback.calls
+    assert tuple(callback.calls for callback in callbacks) == (1, 1, 1)
+    assert phases == ["retain", "mutate", "observe"], phases
     assert observed == {"retained": 1, "encode": 1}, observed
+    assert roots["view"]["complete_input_dict"] is replacement_body
+    assert roots["view"]["headers"] is replacement_headers
+    assert replacement_body == {"replacement": True}
+    assert replacement_headers == {"x-test-callback": "must-not-send", "x-test-view-only": "not-on-wire"}
+    assert roots["body"] == {
+        "model": "mistral-ocr-latest",
+        "document": document,
+        "include_image_base64": True,
+        "document_alias": document,
+        "callback_mutation": "observed",
+    }
+    document["document_url"] = "https://example.com/after-return.pdf"
+    roots["headers"]["x-after-return"] = "usable"
+    assert roots["body"]["document"] is roots["body"]["document_alias"] is document
+    assert roots["headers"]["x-after-return"] == "usable"
+    assert replacement_body == {"replacement": True}
+    assert replacement_headers == {"x-test-callback": "must-not-send", "x-test-view-only": "not-on-wire"}
     return 0
 
 

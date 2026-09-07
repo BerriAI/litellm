@@ -18,17 +18,17 @@ async fn rejects_invalid_timeouts_and_headers_without_echoing_wire_values() {
         })
         .await;
         assert!(
-            matches!(result, Err(Error::InvalidRequest(message)) if message == "OCR timeout must be positive and finite")
+            matches!(result, Err(Error::InvalidRequest(message)) if message == "timeout must be positive and finite")
         );
     }
     for (headers, expected) in [
         (
             vec![(b"private\nname".to_vec(), b"secret".to_vec())],
-            "invalid OCR header name",
+            "invalid header name",
         ),
         (
             vec![(b"x-proof".to_vec(), b"private\nvalue".to_vec())],
-            "invalid OCR header value",
+            "invalid header value",
         ),
     ] {
         let result = send(Request {
@@ -39,6 +39,6 @@ async fn rejects_invalid_timeouts_and_headers_without_echoing_wire_values() {
         assert!(matches!(result, Err(Error::InvalidRequest(message)) if message == expected));
     }
     assert!(
-        matches!(send(request()).await, Err(Error::Network(message)) if message == "OCR transport failed")
+        matches!(send(request()).await, Err(Error::Network(message)) if message == "transport failed")
     );
 }

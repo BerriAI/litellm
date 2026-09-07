@@ -80,7 +80,10 @@ jobs:
         run: cargo clippy -p litellm-ai-gateway --all-targets --all-features --locked -- -D warnings
 
       - name: Run Rust tests
-        run: cargo test --workspace --locked
+        # The Python bridge and interop test suites need the repository's Python
+        # environment and LiteLLM on PYTHONPATH, which the make test-rust-python
+        # lane provides.
+        run: cargo test --workspace --locked --exclude litellm-python-interop --exclude litellm-python-bridge
 
       - name: Run core tests with Bedrock auth
         run: cargo test -p litellm-core --features bedrock-auth --locked

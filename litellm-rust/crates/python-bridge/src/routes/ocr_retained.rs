@@ -1,141 +1,15 @@
-use litellm_core::ocr::transport::{self, Request, Response};
-use litellm_python_interop::{InvocationOutcome, PreparedCall};
 use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyBytes, PyList, PyTuple};
 
-use super::bindings::{BoundaryMethod, MethodBinding};
-use crate::errors::core_error_to_pyerr;
-use crate::execution::{catch_future_panic, run_sync_value};
-
-fn invoke(
-    boundary: &Bound<'_, PyAny>,
-    binding: MethodBinding,
-    args: Bound<'_, PyTuple>,
-) -> PyResult<Py<PyAny>> {
-    let call = PreparedCall::new(
-        binding.mode,
-        boundary.getattr(binding.name)?.unbind(),
-        args.unbind(),
-        None,
-    );
-    match call.invoke(boundary.py())? {
-        InvocationOutcome::Returned(value) | InvocationOutcome::Awaitable(value) => Ok(value),
-    }
-}
-
-#[pyfunction]
-fn prepare(boundary: &Bound<'_, PyAny>, asynchronous: bool) -> PyResult<Py<PyAny>> {
-    invoke(
-        boundary,
-        BoundaryMethod::Prepare.resolve(asynchronous),
-        PyTuple::empty(boundary.py()),
-    )
-}
-
-fn encode(boundary: &Bound<'_, PyAny>, roots: &Bound<'_, PyAny>) -> PyResult<Request> {
-    type ByteHeaders<'py> = Vec<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)>;
-    let encoded = invoke(
-        boundary,
-        BoundaryMethod::Encode.resolve(false),
-        PyTuple::new(boundary.py(), [roots])?,
-    )?;
-    let (url, headers, body, timeout_seconds): (String, ByteHeaders<'_>, Bound<'_, PyBytes>, f64) =
-        encoded.extract(boundary.py())?;
-    Ok(Request {
-        url,
-        headers: headers
-            .into_iter()
-            .map(|(name, value)| (name.as_bytes().to_vec(), value.as_bytes().to_vec()))
-            .collect(),
-        body: body.as_bytes().to_vec(),
-        timeout_seconds,
-    })
-}
-
-struct Wire(Response);
-
-impl<'py> IntoPyObject<'py> for Wire {
-    type Target = PyTuple;
-    type Output = Bound<'py, PyTuple>;
-    type Error = PyErr;
-
-    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
-        let headers = PyList::new(
-            py,
-            self.0
-                .headers
-                .iter()
-                .map(|(name, value)| (PyBytes::new(py, name), PyBytes::new(py, value))),
-        )?;
-        (self.0.status, headers, PyBytes::new(py, &self.0.content)).into_pyobject(py)
-    }
-}
-
-#[pyfunction]
-fn send<'py>(
-    boundary: &Bound<'py, PyAny>,
-    roots: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let request = encode(boundary, roots)?;
-    pyo3_async_runtimes::tokio::future_into_py(boundary.py(), async move {
-        let response = catch_future_panic(transport::send(request))
-            .await?
-            .map_err(core_error_to_pyerr)?;
-        Ok(Wire(response))
-    })
-}
-
-#[pyfunction]
-fn finish(
-    boundary: &Bound<'_, PyAny>,
-    wire: &Bound<'_, PyAny>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>> {
-    invoke(
-        boundary,
-        BoundaryMethod::Finish.resolve(asynchronous),
-        PyTuple::new(boundary.py(), [wire])?,
-    )
-}
+use super::retained_http;
 
 #[pyfunction]
 fn ocr_retained(boundary: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    let py = boundary.py();
-    let roots = prepare(boundary, false)?;
-    let request = encode(boundary, roots.bind(py))?;
-    let response = run_sync_value(py, transport::send(request), core_error_to_pyerr)?;
-    let wire = Wire(response).into_pyobject(py)?;
-    finish(boundary, wire.as_any(), false)
+    retained_http::run_sync(boundary)
 }
 
 #[pyfunction]
 fn aocr_retained(boundary: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    static DRIVER: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
-    let py = boundary.py();
-    let driver = DRIVER.get_or_try_init(py, || {
-        PyModule::from_code(
-            py,
-            c"async def drive(boundary, prepare, send, finish):
-    roots = await prepare(boundary, True)
-    wire = await send(boundary, roots)
-    return await finish(boundary, wire, True)
-",
-            c"ocr_retained_driver.py",
-            c"_ocr_retained_driver",
-        )?
-        .getattr("drive")
-        .map(Bound::unbind)
-    })?;
-    driver.call1(
-        py,
-        (
-            boundary,
-            wrap_pyfunction!(prepare, py)?,
-            wrap_pyfunction!(send, py)?,
-            wrap_pyfunction!(finish, py)?,
-        ),
-    )
+    retained_http::run_async(boundary)
 }
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

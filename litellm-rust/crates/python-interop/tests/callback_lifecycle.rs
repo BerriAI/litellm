@@ -1,30 +1,15 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rstest::{fixture, rstest};
+use serial_test::{parallel, serial};
 
 #[path = "support/callback_owner.rs"]
 mod callback_owner;
 
-struct InitializedPython;
+#[path = "support/mod.rs"]
+mod support;
 
-fn run_fixture(
-    py: Python<'_>,
-    globals: &Bound<'_, PyDict>,
-    source: &str,
-    filename: &str,
-) -> PyResult<()> {
-    let builtins = py.import("builtins")?;
-    let code = builtins.call_method1("compile", (source, filename, "exec"))?;
-    builtins.call_method1("exec", (code, globals))?;
-    Ok(())
-}
-
-#[fixture]
-#[once]
-fn initialized_python() -> InitializedPython {
-    Python::initialize();
-    InitializedPython
-}
+use support::python::{InitializedPython, initialized_python, run_fixture};
 
 #[fixture]
 fn scenario_scope(initialized_python: &InitializedPython) -> Py<PyDict> {
@@ -65,6 +50,10 @@ fn scenario_scope(initialized_python: &InitializedPython) -> Py<PyDict> {
 #[case::stream_lifecycle("stream_lifecycle")]
 #[case::sync_stream_lifecycle("sync_stream_lifecycle")]
 #[case::repeated_ownership("repeated_ownership")]
+#[case::retained_field_replacement("retained_field_replacement")]
+#[case::queued_graph_ownership("queued_graph_ownership")]
+#[case::detached_work_after_error("detached_work_after_error")]
+#[serial(python_interpreter)]
 fn lifecycle_contract(
     scenario_scope: Py<PyDict>,
     #[case] scenario: &str,
@@ -86,10 +75,15 @@ fn lifecycle_contract(
 
 #[rstest]
 #[case::real_async_logging("real_async_logging")]
+#[case::real_pre_call_logging("real_pre_call_logging")]
+#[case::real_copy_boundaries("real_copy_boundaries")]
+#[case::real_logging_worker("real_logging_worker")]
+#[case::real_sync_stream_copies("real_sync_stream_copies")]
 #[case::real_stream_completion("real_stream_completion")]
 #[case::real_stream_close("real_stream_close")]
 #[case::real_stream_cancellation("real_stream_cancellation")]
 #[ignore = "requires the repository Python environment and LiteLLM on PYTHONPATH"]
+#[serial(python_interpreter)]
 fn component_contract(
     scenario_scope: Py<PyDict>,
     #[case] scenario: &str,
@@ -116,6 +110,40 @@ fn component_contract(
 }
 
 #[rstest]
+#[case::real_logging_queue_chain("real_logging_queue_chain")]
+#[case::real_crowdstrike_translator_identity("real_crowdstrike_translator_identity")]
+#[case::real_rubrik_block_lifecycle("real_rubrik_block_lifecycle")]
+#[case::real_parallel_guardrail_snapshots("real_parallel_guardrail_snapshots")]
+#[case::real_purview_sync_background("real_purview_sync_background")]
+#[ignore = "requires the repository Python environment and LiteLLM on PYTHONPATH"]
+#[serial(python_interpreter)]
+fn integration_contract(
+    scenario_scope: Py<PyDict>,
+    #[case] scenario: &str,
+    #[values(false, true)] retained: bool,
+) -> PyResult<()> {
+    Python::attach(|py| {
+        let globals = scenario_scope.bind(py);
+        run_fixture(
+            py,
+            globals,
+            include_str!("fixtures/callback_integrations.py"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/callback_integrations.py"
+            ),
+        )?;
+        globals.get_item("run_scenario")?.unwrap().call1((
+            scenario,
+            retained,
+            globals.get_item("factory")?.unwrap(),
+        ))?;
+        Ok(())
+    })
+}
+
+#[rstest]
+#[parallel(python_interpreter)]
 fn detached_release(initialized_python: &InitializedPython) -> PyResult<()> {
     use litellm_python_interop::{InvocationMode, PreparedCall};
     use pyo3::types::PyTuple;
@@ -148,6 +176,7 @@ fn detached_release(initialized_python: &InitializedPython) -> PyResult<()> {
 #[rstest]
 #[case::direct(false)]
 #[case::awaited(true)]
+#[parallel(python_interpreter)]
 fn outcome_identifies_binding(scenario_scope: Py<PyDict>, #[case] awaited: bool) -> PyResult<()> {
     use litellm_python_interop::{InvocationMode, InvocationOutcome, PreparedCall};
     use pyo3::types::PyTuple;
@@ -178,6 +207,7 @@ fn outcome_identifies_binding(scenario_scope: Py<PyDict>, #[case] awaited: bool)
 }
 
 #[rstest]
+#[parallel(python_interpreter)]
 fn awaited_raise_surfaces_when_driven(scenario_scope: Py<PyDict>) -> PyResult<()> {
     use litellm_python_interop::{InvocationMode, InvocationOutcome, PreparedCall};
     use pyo3::types::PyTuple;
@@ -188,7 +218,7 @@ fn awaited_raise_surfaces_when_driven(scenario_scope: Py<PyDict>) -> PyResult<()
             Some(globals),
             None,
         )?;
-        let started = || -> PyResult<usize> { Ok(globals.get_item("events")?.unwrap().len()?) };
+        let started = || -> PyResult<usize> { globals.get_item("events")?.unwrap().len() };
         let call = PreparedCall::new(
             InvocationMode::Await,
             globals.get_item("callback")?.unwrap().unbind(),
