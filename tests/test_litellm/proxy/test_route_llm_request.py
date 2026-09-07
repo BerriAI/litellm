@@ -1048,7 +1048,7 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
         ("acreate_batch", "input_file_id", "/batches"),
         ("aspeech", "input", "/audio/speech"),
         ("amoderation", "input", "/moderations"),
-        ("aimage_generation", "prompt", "/image/generations"),
+        ("aimage_generation", "prompt", "/images/generations"),
     ],
 )
 @pytest.mark.parametrize(
