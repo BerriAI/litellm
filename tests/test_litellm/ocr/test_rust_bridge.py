@@ -1055,3 +1055,50 @@ async def test_native_retains_opaque_arguments_until_terminal_cleanup(native_ocr
     gc.collect()
     assert reference() is None, "native execution retained opaque kwargs after cleanup"
     assert len(wire_recorder.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True], ids=["python", "native"])
+async def test_public_cancellation_does_not_emit_failure_callbacks(
+    native_ocr, wire_recorder, monkeypatch, document, enabled
+):
+    calls = []
+
+    class CancellationLogger(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            calls.append("pre_call")
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            calls.append("sync_failure")
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            calls.append("async_failure")
+
+    monkeypatch.setattr(litellm, "callbacks", [CancellationLogger()])
+    litellm.rust(enabled)
+    wire_recorder.release.clear()
+    task = asyncio.create_task(
+        litellm.aocr(
+            model=MODEL,
+            document=document,
+            api_key="sk-test",
+            api_base=wire_recorder.api_base,
+            timeout=5,
+            num_retries=0,
+        )
+    )
+    try:
+        assert await asyncio.to_thread(wire_recorder.received.wait, 5), "POST never reached server"
+        assert calls == ["pre_call"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        wire_recorder.release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert await asyncio.to_thread(wire_recorder.finished.wait, 5)
+    await asyncio.sleep(0)
+    assert calls == ["pre_call"]
+    assert len(wire_recorder.requests) == 1
