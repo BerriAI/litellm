@@ -24,9 +24,10 @@ interface VectorStoreProps {
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
+  isViewOnly: boolean;
 }
 
-const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID, userRole }) => {
+const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID, userRole, isViewOnly }) => {
   const [vectorStores, setVectorStores] = useState<VectorStore[]>([]);
   const [isLoadingVectorStores, setIsLoadingVectorStores] = useState(true);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
@@ -37,7 +38,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
   const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | null>(null);
   const [editVectorStore, setEditVectorStore] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const canCreateVectorStores = isProxyAdminRole(userRole || "");
+  const canCreateVectorStores = isProxyAdminRole(userRole || "") && !isViewOnly;
   const defaultTab = canCreateVectorStores ? "create" : "manage";
   const { onTabChange, hasVisited } = useVisitedTabs(defaultTab);
 
