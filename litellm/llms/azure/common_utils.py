@@ -77,6 +77,31 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
+def resolve_azure_image_auth_headers(
+    headers: dict[str, str],
+    api_key: str | None,
+    azure_ad_token_provider: Callable[[], str] | None,
+    azure_ad_token: str | None,
+) -> dict[str, str]:
+    if api_key:
+        return headers
+
+    if azure_ad_token_provider is not None:
+        token: Final = azure_ad_token_provider()
+        if token:
+            return _with_bearer_header(headers, token)
+
+    if azure_ad_token:
+        return _with_bearer_header(headers, azure_ad_token)
+
+    return headers
+
+
+def _with_bearer_header(headers: dict[str, str], token: str) -> dict[str, str]:
+    without_api_key: Final = {k: v for k, v in headers.items() if k != "api-key"}
+    return {**without_api_key, "Authorization": f"Bearer {token}"}
+
+
 @lru_cache(maxsize=128)
 def _cached_entra_id_token_provider(
     tenant_id: str,
