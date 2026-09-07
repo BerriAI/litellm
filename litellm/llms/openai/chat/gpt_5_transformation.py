@@ -45,13 +45,14 @@ def _get_effort_level(value: Union[str, dict, None]) -> Optional[str]:
 
 
 GPT_REASONING_SERIES_MARKERS = ("gpt-5", "gpt-6")
+GPT_CHAT_FAMILY_PREFIXES = ("gpt-5-chat", "gpt-6-chat")
 
 
 def is_gpt_reasoning_series_name(model: str) -> bool:
     normalized = model.split("/")[-1]
-    return any(
-        marker in model for marker in GPT_REASONING_SERIES_MARKERS
-    ) and not normalized.startswith("gpt-5-chat")
+    if any(normalized.startswith(prefix) for prefix in GPT_CHAT_FAMILY_PREFIXES):
+        return False
+    return any(marker in model for marker in GPT_REASONING_SERIES_MARKERS)
 
 
 class OpenAIGPT5Config(OpenAIGPTConfig):
@@ -106,7 +107,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         are handled by taking the minor version before the first ``-``.
         """
         model_name = model.split("/")[-1]
-        if model_name.startswith("gpt-6"):
+        if model_name.startswith("gpt-6") and not model_name.startswith("gpt-6-chat"):
             return True
         if not model_name.startswith("gpt-5."):
             return False
