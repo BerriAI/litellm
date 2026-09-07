@@ -14336,6 +14336,7 @@
         "supports_tool_choice": true
     },
     "computer-use-preview": {
+        "deprecation_date": "2026-07-23",
         "input_cost_per_token": 3e-06,
         "litellm_provider": "azure",
         "max_input_tokens": 8192,
@@ -23829,9 +23830,9 @@
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "vertex_ai-language-models",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 65535,
-        "max_tokens": 65535,
+        "max_input_tokens": 131072,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
         "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 2e-06,
@@ -23854,12 +23855,12 @@
         "supports_audio_output": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_response_schema": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": false,
+        "supports_response_schema": false,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_url_context": true,
+        "supports_url_context": false,
         "supports_vision": true,
         "supports_web_search": true,
         "search_context_cost_per_query": {
@@ -59477,6 +59478,85 @@
         ],
         "supported_output_modalities": [
             "image"
+        ]
+    },
+    "xai/grok-imagine-video": {
+        "input_cost_per_image": 0.002,
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.05,
+        "output_cost_per_second_480p": 0.05,
+        "source": "https://docs.x.ai/docs/models/grok-imagine-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5": {
+        "input_cost_per_image": 0.01,
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_1080p": 0.25,
+        "output_cost_per_second_480p": 0.08,
+        "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5-2026-05-30": {
+        "input_cost_per_image": 0.01,
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_1080p": 0.25,
+        "output_cost_per_second_480p": 0.08,
+        "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "xai/grok-imagine-video-1.5-preview": {
+        "input_cost_per_image": 0.01,
+        "litellm_provider": "xai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.08,
+        "output_cost_per_second_1080p": 0.25,
+        "output_cost_per_second_480p": 0.08,
+        "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
         ]
     },
     "low/1024-x-1024/grok-imagine-image-2.0": {
