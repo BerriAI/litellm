@@ -329,11 +329,6 @@ def test_cognition_provider_fields():
 
 
 def test_chatgpt_provider_fields():
-    """The ChatGPT subscription provider must be selectable in the Add Model flow (LIT-7127).
-
-    Its backend signs in through the device-code auth file on the proxy host and ignores
-    api_key/api_base, so the entry carries no credential fields: any field here would be inert.
-    """
     app_instance = FastAPI()
     app_instance.include_router(router)
     test_client = TestClient(app_instance)
@@ -397,10 +392,6 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
 
 
 def test_every_backend_provider_is_listed_in_add_model_or_frozen_as_unlisted():
-    """A provider LiteLLM ships must be reachable from the Add Model dropdown, which is driven
-    entirely by /public/providers/fields (LIT-7127). Providers that predate this check are frozen
-    in ADD_MODEL_UNLISTED_PROVIDERS; a new provider gets a JSON entry rather than a line here.
-    """
     app_instance = FastAPI()
     app_instance.include_router(router)
     test_client = TestClient(app_instance)
@@ -410,7 +401,10 @@ def test_every_backend_provider_is_listed_in_add_model_or_frozen_as_unlisted():
     listed = {p["litellm_provider"] for p in response.json()}
 
     unlisted = {provider.value for provider in LlmProviders} - listed
-    assert unlisted == ADD_MODEL_UNLISTED_PROVIDERS
+    assert unlisted == ADD_MODEL_UNLISTED_PROVIDERS, (
+        "Add Model dropdown drift: give the new provider an entry in provider_create_fields.json "
+        "rather than adding it to ADD_MODEL_UNLISTED_PROVIDERS"
+    )
 
 
 def test_google_ai_studio_provider_fields_expose_api_base():
