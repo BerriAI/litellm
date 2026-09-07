@@ -6,25 +6,28 @@ locals {
   # Memorystore exposes a self-signed CA cert per instance; we ship it as
   # a base64 env var and decode it to a file at container startup so the
   # rediss:// connection can validate. Public cert, not sensitive.
-  redis_ca_pem_b64 = base64encode(google_redis_instance.this.server_ca_certs[0].cert)
+  redis_ca_pem_b64 = var.redis_transit_encryption ? base64encode(google_redis_instance.this.server_ca_certs[0].cert) : ""
 
-  shared_env_kv = [
-    { name = "DATABASE_HOST", value = google_sql_database_instance.writer.private_ip_address },
-    { name = "DATABASE_PORT", value = "5432" },
-    { name = "DATABASE_USER", value = var.db_username },
-    { name = "DATABASE_NAME", value = var.db_name },
-    { name = "DATABASE_HOST_READ_REPLICA", value = google_sql_database_instance.reader.private_ip_address },
-    { name = "DATABASE_PORT_READ_REPLICA", value = "5432" },
-    { name = "REDIS_HOST", value = google_redis_instance.this.host },
-    { name = "REDIS_PORT", value = tostring(google_redis_instance.this.port) },
-    # _redis.get_redis_url_from_environment honors REDIS_SSL to flip the
-    # scheme to rediss://; REDIS_SSL_CA_CERTS is mapped via
-    # _get_redis_env_kwarg_mapping → ssl_ca_certs on the redis-py client.
-    { name = "REDIS_SSL", value = "true" },
-    { name = "REDIS_SSL_CA_CERTS", value = "/tmp/redis-ca.pem" },
-    { name = "REDIS_CA_PEM_B64", value = local.redis_ca_pem_b64 },
-    { name = "GCS_BUCKET_NAME", value = google_storage_bucket.this.name },
-  ]
+  shared_env_kv = concat(
+    [
+      { name = "DATABASE_HOST", value = google_sql_database_instance.writer.private_ip_address },
+      { name = "DATABASE_PORT", value = "5432" },
+      { name = "DATABASE_USER", value = var.db_username },
+      { name = "DATABASE_NAME", value = var.db_name },
+      { name = "DATABASE_HOST_READ_REPLICA", value = google_sql_database_instance.reader.private_ip_address },
+      { name = "DATABASE_PORT_READ_REPLICA", value = "5432" },
+      { name = "REDIS_HOST", value = google_redis_instance.this.host },
+      { name = "REDIS_PORT", value = tostring(google_redis_instance.this.port) },
+    ],
+    var.redis_transit_encryption ? [
+      { name = "REDIS_SSL", value = "true" },
+      { name = "REDIS_SSL_CA_CERTS", value = "/tmp/redis-ca.pem" },
+      { name = "REDIS_CA_PEM_B64", value = local.redis_ca_pem_b64 },
+    ] : [],
+    [
+      { name = "GCS_BUCKET_NAME", value = google_storage_bucket.this.name },
+    ],
+  )
 
   # OTel v2 is opt-in and gated on otel_endpoint, matching the AWS stack —
   # nothing OTel-related is added to the container env until an endpoint is
@@ -126,9 +129,9 @@ locals {
   # Decode the Memorystore CA cert (passed as REDIS_CA_PEM_B64) to the
   # path REDIS_SSL_CA_CERTS points at, so the redis-py client can validate
   # the rediss:// handshake.
-  redis_ca_fragment = [
+  redis_ca_fragment = var.redis_transit_encryption ? [
     "python -c \"import os, base64, pathlib; pathlib.Path(os.environ['REDIS_SSL_CA_CERTS']).write_bytes(base64.b64decode(os.environ['REDIS_CA_PEM_B64']))\""
-  ]
+  ] : []
 
   database_url_fragment = [
     "export DATABASE_URL=\"postgresql://$${DATABASE_USER}:$${DATABASE_PASSWORD}@$${DATABASE_HOST}:$${DATABASE_PORT}/$${DATABASE_NAME}\"",
@@ -171,29 +174,7 @@ locals {
 
 # ---------- Gateway ----------
 resource "google_cloud_run_v2_service" "gateway" {
-  # Metering needs a client certificate AND its key. Each secret is created only
-  # when its own PEM is supplied, so an endpoint set with a missing key would
-  # otherwise apply cleanly and leave the proxy logging "missing config" and
-  # never exporting. ca_cert_pem stays optional: empty means fall back to the
-  # system trust store.
-  #
-  # The guard lives here, on an unconditional resource, rather than on the cert
-  # secret: that secret is count-gated on the cert itself, so it has zero
-  # instances in exactly the case this must catch. Adding count or for_each to
-  # this resource would silently stop the guard from evaluating.
-  #
-  #   endpoint  cert  key  -> result
-  #   ""        any   any  -> metering off, no secrets created
-  #   set       set   set  -> metering on
-  #   set       any-missing -> plan fails here
-  lifecycle {
-    precondition {
-      condition = var.billing_metrics_endpoint == "" || (
-        var.billing_metrics_client_cert_pem != "" && var.billing_metrics_client_key_pem != ""
-      )
-      error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
-    }
-  }
+  count = var.create_runtime ? 1 : 0
 
   name                = "${local.name}-gateway"
   location            = var.region
@@ -206,7 +187,7 @@ resource "google_cloud_run_v2_service" "gateway" {
     max_instance_request_concurrency = var.gateway_max_instance_request_concurrency
 
     vpc_access {
-      connector = google_vpc_access_connector.this.id
+      connector = google_vpc_access_connector.this[0].id
       egress    = "PRIVATE_RANGES_ONLY"
     }
 
@@ -312,17 +293,7 @@ resource "google_cloud_run_v2_service" "gateway" {
 
 # ---------- Backend ----------
 resource "google_cloud_run_v2_service" "backend" {
-  # Same guard as the gateway: the backend meters too (it serves the named-server
-  # MCP transport), and a targeted apply of just this resource must not slip a
-  # billing endpoint through without the credentials to use it.
-  lifecycle {
-    precondition {
-      condition = var.billing_metrics_endpoint == "" || (
-        var.billing_metrics_client_cert_pem != "" && var.billing_metrics_client_key_pem != ""
-      )
-      error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
-    }
-  }
+  count = var.create_runtime ? 1 : 0
 
   name                = "${local.name}-backend"
   location            = var.region
@@ -335,7 +306,7 @@ resource "google_cloud_run_v2_service" "backend" {
     max_instance_request_concurrency = var.backend_max_instance_request_concurrency
 
     vpc_access {
-      connector = google_vpc_access_connector.this.id
+      connector = google_vpc_access_connector.this[0].id
       egress    = "PRIVATE_RANGES_ONLY"
     }
 
@@ -443,6 +414,8 @@ resource "google_cloud_run_v2_service" "backend" {
 # with zero IAM bindings, so a compromised UI container can't pivot to
 # Secret Manager / Cloud SQL via the metadata service.
 resource "google_cloud_run_v2_service" "ui" {
+  count = var.create_runtime ? 1 : 0
+
   name                = "${local.name}-ui"
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
@@ -450,7 +423,7 @@ resource "google_cloud_run_v2_service" "ui" {
   deletion_protection = false
 
   template {
-    service_account                  = google_service_account.ui_runtime.email
+    service_account                  = google_service_account.ui_runtime[0].email
     max_instance_request_concurrency = var.ui_max_instance_request_concurrency
 
     scaling {
@@ -491,25 +464,31 @@ resource "google_cloud_run_v2_service" "ui" {
 # (LITELLM_MASTER_KEY); these IAM bindings just open up Cloud Run's invoker
 # gate so the LB request makes it to the container.
 resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
+  count = var.create_runtime ? 1 : 0
+
   project  = var.project_id
-  location = google_cloud_run_v2_service.gateway.location
-  name     = google_cloud_run_v2_service.gateway.name
+  location = google_cloud_run_v2_service.gateway[0].location
+  name     = google_cloud_run_v2_service.gateway[0].name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
 
 resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
+  count = var.create_runtime ? 1 : 0
+
   project  = var.project_id
-  location = google_cloud_run_v2_service.backend.location
-  name     = google_cloud_run_v2_service.backend.name
+  location = google_cloud_run_v2_service.backend[0].location
+  name     = google_cloud_run_v2_service.backend[0].name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
 
 resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
+  count = var.create_runtime ? 1 : 0
+
   project  = var.project_id
-  location = google_cloud_run_v2_service.ui.location
-  name     = google_cloud_run_v2_service.ui.name
+  location = google_cloud_run_v2_service.ui[0].location
+  name     = google_cloud_run_v2_service.ui[0].name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
@@ -519,6 +498,8 @@ resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
 # assembles DATABASE_URL from the DATABASE_* env vars and runs `prisma
 # migrate deploy`. No proxy_config, no master key, no shell wrapper.
 resource "google_cloud_run_v2_job" "migrations" {
+  count = var.create_runtime ? 1 : 0
+
   name                = "${local.name}-migrations"
   location            = var.region
   labels              = local.labels
@@ -529,7 +510,7 @@ resource "google_cloud_run_v2_job" "migrations" {
       service_account = google_service_account.runtime.email
 
       vpc_access {
-        connector = google_vpc_access_connector.this.id
+        connector = google_vpc_access_connector.this[0].id
         egress    = "PRIVATE_RANGES_ONLY"
       }
 
