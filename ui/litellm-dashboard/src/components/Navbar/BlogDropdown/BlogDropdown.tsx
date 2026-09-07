@@ -13,9 +13,9 @@ import {
 import { ChevronDown, LoaderCircle } from "lucide-react";
 import React from "react";
 
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string, language: string): string {
   const date = new Date(dateStr + "T00:00:00");
-  return date.toLocaleDateString("en-US", {
+  return date.toLocaleDateString(language === "zh-CN" ? "zh-CN" : "en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -23,7 +23,7 @@ function formatDate(dateStr: string): string {
 }
 
 export const BlogDropdown: React.FC = () => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const disableBlogPosts = useDisableBlogPosts();
 
   const { data, isLoading, isError, refetch } = useBlogPosts();
@@ -46,7 +46,7 @@ export const BlogDropdown: React.FC = () => {
         <div className="flex items-center gap-2 px-2 py-1.5 text-sm">
           <span className="text-destructive">{t("Failed to load posts")}</span>
           <Button variant="outline" size="sm" onClick={() => refetch()}>
-            Retry
+            {t("Retry")}
           </Button>
         </div>
       );
@@ -65,7 +65,7 @@ export const BlogDropdown: React.FC = () => {
                 {post.title}
               </h5>
               <span className="text-muted-foreground" style={{ fontSize: 11 }}>
-                {formatDate(post.date)}
+                {formatDate(post.date, i18n.language)}
               </span>
               <p className="line-clamp-2">{post.description}</p>
             </a>

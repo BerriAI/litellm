@@ -15,9 +15,7 @@ export default function LanguageProvider({ children }: { children: ReactNode }) 
     try {
       const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
       if (isLanguage(stored)) void instance.changeLanguage(stored);
-    } catch {
-      // Storage can be disabled by the browser; language selection still works in memory
-    }
+    } catch {}
     updateDocumentLanguage(instance.language);
     return () => {
       instance.off("languageChanged", updateDocumentLanguage);

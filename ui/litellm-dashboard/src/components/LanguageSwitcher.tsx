@@ -20,9 +20,7 @@ export default function LanguageSwitcher() {
     void i18n.changeLanguage(language);
     try {
       window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
-    } catch {
-      // Storage can be disabled by the browser; keep the current selection usable
-    }
+    } catch {}
   };
 
   return (

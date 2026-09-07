@@ -73,6 +73,7 @@
   "Prompts": "Prompts",
   "Read the docs": "Read the docs",
   "Response Cache": "Response Cache",
+  "Retry": "Retry",
   "Role": "Role",
   "Route every request to the cheapest model that can handle it, no prompt changes needed.": "Route every request to the cheapest model that can handle it, no prompt changes needed.",
   "Router Settings": "Router Settings",

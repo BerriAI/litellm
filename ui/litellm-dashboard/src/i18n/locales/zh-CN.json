@@ -73,6 +73,7 @@
   "Prompts": "提示词",
   "Read the docs": "查看文档",
   "Response Cache": "响应缓存",
+  "Retry": "重试",
   "Role": "角色",
   "Route every request to the cheapest model that can handle it, no prompt changes needed.": "自动将每个请求分配给能够处理它的最低成本模型，无需修改提示词。",
   "Router Settings": "路由设置",
