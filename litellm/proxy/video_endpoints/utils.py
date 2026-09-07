@@ -88,7 +88,7 @@ def encode_video_id_in_response(response: object, fallback_model: str | None) ->
         response["id"] = encoded  # rebind-ok: in-place id rewrite, matching encode_character_id_in_response
         return response
 
-    response.id = encoded  # rebind-ok: in-place id rewrite, matching encode_character_id_in_response
+    response.id = encoded  # pyright: ignore[reportAttributeAccessIssue]  # rebind-ok: in-place id rewrite on a non-dict response, matching encode_character_id_in_response
     return response
 
 
