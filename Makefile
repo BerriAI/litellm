@@ -113,7 +113,7 @@ install-test-deps: install-proxy-dev
 	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
 
 install-rust-python-test-deps:
-	$(UV) sync --inexact --frozen --no-default-groups --no-install-project
+	$(UV) sync --inexact --frozen --no-default-groups --no-install-project --extra proxy
 
 install-helm-unittest:
 	@helm plugin list | grep -qE '^unittest[[:space:]]+0\.8\.2([[:space:]]|$$)' || { \
