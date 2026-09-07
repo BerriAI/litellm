@@ -10,7 +10,7 @@
 	lint-test-quality lint-test-quality-budget-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
-	lint-install lint-fetch-base bootstrap
+	lint-install lint-fetch-base bootstrap install-rust-python-test-deps test-rust-python lint-rust-python-fixtures
 
 # Default target
 help:
@@ -54,6 +54,8 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
+	@echo "  make test-rust-python   - Run ignored Python-integrated Cargo tests"
+	@echo "  make lint-rust-python-fixtures - Check Rust test Python fixtures with Ruff"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -109,6 +111,9 @@ install-proxy-dev-ci:
 install-test-deps: install-proxy-dev
 	$(UV) sync --frozen --all-groups --all-extras
 	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
+
+install-rust-python-test-deps:
+	$(UV) sync --inexact --frozen --no-default-groups --no-install-project --extra proxy
 
 install-helm-unittest:
 	@helm plugin list | grep -qE '^unittest[[:space:]]+0\.8\.2([[:space:]]|$$)' || { \
@@ -281,6 +286,19 @@ pre-commit:
 	@$(MAKE) check
 
 # Testing targets
+test-rust-python: install-rust-python-test-deps
+	@python=$$($(UV_RUN) python -c 'import sys; print(sys.executable)') && \
+	site_packages=$$("$$python" -c 'import os, sysconfig; print(os.pathsep.join(dict.fromkeys(sysconfig.get_path(key) for key in ("purelib", "platlib"))))') && \
+	PYO3_PYTHON="$$python" \
+	PYTHONPATH="$(CURDIR):$$site_packages$${PYTHONPATH:+:$$PYTHONPATH}" \
+	LITELLM_LOCAL_MODEL_COST_MAP=True \
+	cargo test --manifest-path litellm-rust/Cargo.toml \
+		-p litellm-python-interop --tests --locked -- --include-ignored
+
+lint-rust-python-fixtures:
+	$(UV) tool run --from ruff==0.15.3 ruff check --config ruff-tests.toml litellm-rust/crates/python-interop/tests
+	$(UV) tool run --from ruff==0.15.3 ruff format --check --config ruff-tests.toml litellm-rust/crates/python-interop/tests
+
 test: install-test-deps
 	$(UV_RUN) pytest tests/
 

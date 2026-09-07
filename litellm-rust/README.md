@@ -54,3 +54,36 @@ function per top-level route, mirroring the core entrypoints.
 Run the commands under "Checks" in [CLAUDE.md](CLAUDE.md) before pushing Rust
 changes. That list is the single source of truth and matches what GitHub Actions
 runs for changes under `litellm-rust/`.
+
+### Python-Integrated Tests
+
+From the repository root, run the ignored Cargo tests that need the repository's
+Python dependencies and the pinned Ruff checks over the interop crate's Python
+test fixtures:
+
+```bash
+make test-rust-python
+make lint-rust-python-fixtures
+```
+
+`test-rust-python` installs the locked SDK dependencies plus the `proxy` extra
+(the integration fixtures import `litellm.proxy.*` guardrails, which need
+`fastapi`) with uv, points `PYO3_PYTHON` at the project interpreter, and runs
+`cargo test -p litellm-python-interop --tests --locked -- --include-ignored`.
+`lint-rust-python-fixtures` runs pinned Ruff lint and formatting checks without
+syncing the project environment
+
+These tests validate retained callback identity, mutation, invocation context,
+and ownership against Python behavior, including existing LiteLLM components.
+They do not wire retained callbacks into production routes or change provider
+preparation, authentication, HTTP transport, or response transformation
+
+The callback lifecycle scenarios use
+`#[serial(python_interpreter)]` to isolate CPython GC and interpreter-wide
+LiteLLM settings under `cargo test`. Compatible tests in the same binary use
+`#[parallel(python_interpreter)]`: they may overlap each other, but not an
+exclusive scenario. Unannotated tests do not participate in this isolation.
+Keep the attribute below `#[rstest]` so generated cases acquire it before
+fixture setup and Python attachment. Tasks and threads inside each scenario
+still run concurrently. Separate test processes have separate interpreters,
+so these attributes need no cross-process lock when using nextest

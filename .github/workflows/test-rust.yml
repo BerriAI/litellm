@@ -6,6 +6,7 @@ on:
       - "litellm-rust/**"
       - ".cargo/**"
       - "pyproject.toml"
+      - "uv.lock"
       - "rust-toolchain.toml"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -21,6 +22,7 @@ on:
       - "litellm-rust/**"
       - ".cargo/**"
       - "pyproject.toml"
+      - "uv.lock"
       - "rust-toolchain.toml"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
@@ -133,3 +135,9 @@ jobs:
 
       - name: Test native route wheel
         run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
+
+      - name: Check Python fixtures for Cargo tests
+        run: make lint-rust-python-fixtures
+
+      - name: Test retained callbacks with repo Python
+        run: make test-rust-python

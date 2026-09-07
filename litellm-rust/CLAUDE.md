@@ -187,3 +187,11 @@ cargo test -p litellm-ai-gateway --features server
 
 When a Rust path is exposed through Python, add Python parity tests that compare
 the existing Python output with the Rust-backed output.
+
+For Python-integrated tests that need the repository's Python environment, run
+from the repository root:
+
+```bash
+make test-rust-python
+make lint-rust-python-fixtures
+```
