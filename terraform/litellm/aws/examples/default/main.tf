@@ -48,4 +48,10 @@ module "litellm" {
   backend_extra_env     = var.backend_extra_env
   gateway_extra_secrets = var.gateway_extra_secrets
   backend_extra_secrets = var.backend_extra_secrets
+
+  sse_keepalive_ping_interval_seconds = var.sse_keepalive_ping_interval_seconds
+  anthropic_sse_ping_interval_seconds = var.anthropic_sse_ping_interval_seconds
+  enable_pre_call_checks              = var.enable_pre_call_checks
+  gateway_metrics_port                = var.gateway_metrics_port
+  gateway_metrics_scrape_cidrs        = var.gateway_metrics_scrape_cidrs
 }

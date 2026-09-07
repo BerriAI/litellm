@@ -549,6 +549,91 @@ variable "proxy_config" {
   default     = {}
 }
 
+# ---------- Reliability ----------
+#
+# Typed shortcuts for the runtime controls in
+# https://docs.litellm.ai/docs/proxy/prod. Each one is merged into the
+# generated config.yaml next to proxy_config; a null value is left out so the
+# proxy keeps its own default, and a key set explicitly in proxy_config wins.
+
+variable "sse_keepalive_ping_interval_seconds" {
+  description = <<-EOT
+    litellm_settings.sse_keepalive_ping_interval_seconds: seconds between
+    `: ping` SSE comments on OpenAI-shaped streams while the upstream is
+    silent (1-300). Off by default. Set it below the ALB idle timeout (60s
+    default) so a slow first token cannot get the stream closed. Needs
+    gateway_image v1.98.0 or newer.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.sse_keepalive_ping_interval_seconds == null || (var.sse_keepalive_ping_interval_seconds >= 1 && var.sse_keepalive_ping_interval_seconds <= 300)
+    error_message = "sse_keepalive_ping_interval_seconds must be between 1 and 300."
+  }
+}
+
+variable "anthropic_sse_ping_interval_seconds" {
+  description = <<-EOT
+    litellm_settings.anthropic_sse_ping_interval_seconds: seconds between
+    `event: ping` frames on /v1/messages streams while the upstream is silent
+    (1-300). The proxy defaults to 15 (since v1.97.0).
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.anthropic_sse_ping_interval_seconds == null || (var.anthropic_sse_ping_interval_seconds >= 1 && var.anthropic_sse_ping_interval_seconds <= 300)
+    error_message = "anthropic_sse_ping_interval_seconds must be between 1 and 300."
+  }
+}
+
+variable "enable_pre_call_checks" {
+  description = <<-EOT
+    router_settings.enable_pre_call_checks: reject a request whose prompt
+    exceeds every candidate deployment's context window before it is sent
+    to the provider. Relies on accurate max_input_tokens for each model.
+  EOT
+  type        = bool
+  default     = null
+}
+
+variable "gateway_metrics_port" {
+  description = <<-EOT
+    Serve Prometheus /metrics from a `metrics` sidecar container in the
+    gateway task on this port (1-65535, not 4000), so a scrape never runs on
+    an inference worker. The sidecar runs the gateway image with
+    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
+    workers' PROMETHEUS_MULTIPROC_DIR samples over a task volume. Null (the
+    default) leaves /metrics on the gateway port only. The sidecar port has
+    no virtual-key auth and is not routed through the ALB; open it to your
+    scrapers with gateway_metrics_scrape_cidrs. Needs gateway_image v1.101.0
+    or newer.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.gateway_metrics_port == null || (var.gateway_metrics_port >= 1 && var.gateway_metrics_port <= 65535 && var.gateway_metrics_port != 4000)
+    error_message = "gateway_metrics_port must be between 1 and 65535 and must not be 4000 (the gateway port)."
+  }
+}
+
+variable "gateway_metrics_scrape_cidrs" {
+  description = <<-EOT
+    CIDR blocks allowed to reach gateway_metrics_port on the gateway tasks
+    (your Prometheus or collector subnets). Empty by default, so only the
+    ALB can reach the tasks. Ignored when gateway_metrics_port is null.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.gateway_metrics_scrape_cidrs : can(cidrnetmask(c))])
+    error_message = "gateway_metrics_scrape_cidrs must contain valid IPv4 CIDR blocks."
+  }
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log retention for the three services."
   type        = number

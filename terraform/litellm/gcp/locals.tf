@@ -77,8 +77,26 @@ locals {
     "/ui/*",
   ]
 
-  proxy_config_enabled = var.create_runtime && length(keys(var.proxy_config)) > 0
-  proxy_config_yaml    = local.proxy_config_enabled ? yamlencode(var.proxy_config) : ""
+  reliability_litellm_settings = { for k, v in {
+    sse_keepalive_ping_interval_seconds = var.sse_keepalive_ping_interval_seconds
+    anthropic_sse_ping_interval_seconds = var.anthropic_sse_ping_interval_seconds
+  } : k => v if v != null }
+  reliability_router_settings = { for k, v in {
+    enable_pre_call_checks = var.enable_pre_call_checks
+  } : k => v if v != null }
+
+  proxy_config = merge(
+    var.proxy_config,
+    length(local.reliability_litellm_settings) > 0 ? {
+      litellm_settings = merge(local.reliability_litellm_settings, try(var.proxy_config.litellm_settings, {}))
+    } : {},
+    length(local.reliability_router_settings) > 0 ? {
+      router_settings = merge(local.reliability_router_settings, try(var.proxy_config.router_settings, {}))
+    } : {},
+  )
+
+  proxy_config_enabled = var.create_runtime && length(keys(local.proxy_config)) > 0
+  proxy_config_yaml    = local.proxy_config_enabled ? yamlencode(local.proxy_config) : ""
 
   proxy_config_mount_path = "/etc/litellm"
   proxy_config_file_name  = "config.yaml"

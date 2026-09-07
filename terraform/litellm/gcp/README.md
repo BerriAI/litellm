@@ -238,6 +238,22 @@ this with `litellm_license`. To tune the export cadence, set
 
 Behavior matches the AWS stack 1:1; the variable names are identical
 
+### Reliability controls
+
+`sse_keepalive_ping_interval_seconds`, `anthropic_sse_ping_interval_seconds`
+and `enable_pre_call_checks` are merged into the generated config.yaml next to
+`proxy_config`; a key written directly into `proxy_config` wins and a null
+value leaves the proxy default alone. There is no `gateway_metrics_port` here
+because Cloud Run routes traffic to one container port per service. See
+[Reliability controls](https://docs.litellm.ai/docs/proxy/prod#reliability-controls)
+for what each control does and for the Cloud Run scrape alternative.
+
+```hcl
+sse_keepalive_ping_interval_seconds = 20
+anthropic_sse_ping_interval_seconds = 15
+enable_pre_call_checks              = true
+```
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or

@@ -161,3 +161,36 @@ taken before the change, which by that point no longer exists.
 {{- fail (printf "postgresql.image.tag must be pinned to an explicit version when db.deployStandalone is true (got %q). An unpinned tag can start a different PostgreSQL major against the existing data directory, which makes the database unreadable and is not recoverable in place. Crossing a major version requires a dump and restore." $tag) -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Merge the typed reliability values into a (deep-copied) proxy config in place.
+Invoke with (dict "config" $config "reliability" .Values.reliability). A null
+value is skipped, and a key already present in the config is never overwritten.
+*/}}
+{{- define "litellm.applyReliabilityConfig" -}}
+{{- $config := .config -}}
+{{- $r := .reliability -}}
+{{- $litellmSettings := (get $config "litellm_settings") | default dict -}}
+{{- if not (kindIs "invalid" $r.sseKeepalivePingIntervalSeconds) -}}
+{{- if not (hasKey $litellmSettings "sse_keepalive_ping_interval_seconds") -}}
+{{- $_ := set $litellmSettings "sse_keepalive_ping_interval_seconds" $r.sseKeepalivePingIntervalSeconds -}}
+{{- end -}}
+{{- end -}}
+{{- if not (kindIs "invalid" $r.anthropicSsePingIntervalSeconds) -}}
+{{- if not (hasKey $litellmSettings "anthropic_sse_ping_interval_seconds") -}}
+{{- $_ := set $litellmSettings "anthropic_sse_ping_interval_seconds" $r.anthropicSsePingIntervalSeconds -}}
+{{- end -}}
+{{- end -}}
+{{- if $litellmSettings -}}
+{{- $_ := set $config "litellm_settings" $litellmSettings -}}
+{{- end -}}
+{{- $routerSettings := (get $config "router_settings") | default dict -}}
+{{- if not (kindIs "invalid" $r.enablePreCallChecks) -}}
+{{- if not (hasKey $routerSettings "enable_pre_call_checks") -}}
+{{- $_ := set $routerSettings "enable_pre_call_checks" $r.enablePreCallChecks -}}
+{{- end -}}
+{{- end -}}
+{{- if $routerSettings -}}
+{{- $_ := set $config "router_settings" $routerSettings -}}
+{{- end -}}
+{{- end -}}

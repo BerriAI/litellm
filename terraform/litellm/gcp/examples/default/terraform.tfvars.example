@@ -76,6 +76,13 @@ env    = "stage"
 #   }
 # }
 
+# ---------- Reliability ----------
+# Merged into the generated config.yaml; keys set directly in proxy_config win.
+# Keep the OpenAI keepalive below the load balancer backend timeout.
+# sse_keepalive_ping_interval_seconds = 20
+# anthropic_sse_ping_interval_seconds = 15
+# enable_pre_call_checks              = true
+
 # ---------- Extra env / secrets ----------
 # Plain-text env vars (non-sensitive). Land directly in the Cloud Run service spec.
 # gateway_extra_env = {

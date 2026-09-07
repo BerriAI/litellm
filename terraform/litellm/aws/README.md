@@ -242,6 +242,27 @@ this with `litellm_license`. To tune the export cadence, set
 `LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS` through `gateway_extra_env` /
 `backend_extra_env`
 
+### Reliability controls
+
+`sse_keepalive_ping_interval_seconds`, `anthropic_sse_ping_interval_seconds`
+and `enable_pre_call_checks` are merged into the generated config.yaml next to
+`proxy_config`; a key written directly into `proxy_config` wins and a null
+value leaves the proxy default alone. `gateway_metrics_port` adds a `metrics`
+sidecar (`python -m litellm.proxy.prometheus_metrics_server`) to the gateway
+task on a shared task volume, with an ECS health check on its `/health` route.
+The ALB never routes to that port and the tasks security group only opens it
+to `gateway_metrics_scrape_cidrs`. Needs `gateway_image` v1.101.0 or newer.
+What each control does and how to size the intervals is documented in
+[Reliability controls](https://docs.litellm.ai/docs/proxy/prod#reliability-controls).
+
+```hcl
+sse_keepalive_ping_interval_seconds = 20
+anthropic_sse_ping_interval_seconds = 15
+enable_pre_call_checks              = true
+gateway_metrics_port                = 4001
+gateway_metrics_scrape_cidrs        = ["10.0.0.0/16"]
+```
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or
