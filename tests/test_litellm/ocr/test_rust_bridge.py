@@ -573,7 +573,7 @@ async def test_native_mistral_wire_response_and_callback_identity(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("failure", [False, True], ids=["success", "failure"])
-@pytest.mark.parametrize("callback_source", ["global", "per-call"])
+@pytest.mark.parametrize("callback_source", ["global", "per-call", "terminal-list"])
 async def test_public_native_callback_lifecycle(
     native_ocr, wire_recorder, monkeypatch, no_python_ocr, document, asynchronous, failure, callback_source
 ):
@@ -602,6 +602,7 @@ async def test_public_native_callback_lifecycle(
             context.set("pre_call")
 
         def record(self, event, kwargs, response_obj, start_time, end_time):
+            kwargs.setdefault("ocr_lifecycle_state", shared)
             terminal_calls.append(
                 {
                     "event": event,
@@ -645,6 +646,11 @@ async def test_public_native_callback_lifecycle(
         timeout=5,
         num_retries=0,
         **({"callbacks": [callback]} if callback_source == "per-call" else {}),
+        **(
+            {"failure_callback" if failure else "success_callback": [callback]}
+            if callback_source == "terminal-list"
+            else {}
+        ),
     )
     try:
         if failure:
@@ -673,10 +679,12 @@ async def test_public_native_callback_lifecycle(
                 executor.shutdown(wait=False, cancel_futures=True)
 
     assert len(wire_recorder.requests) == 1
-    assert len(pre_calls) == 1
-    details, pre_context, pre_thread, pre_task = pre_calls[0]
-    assert (pre_context, pre_thread, pre_task) == ("caller", caller_thread, caller_task)
-    assert details["additional_args"]["complete_input_dict"]["document"] is document
+    assert len(pre_calls) == (0 if callback_source == "terminal-list" else 1)
+    details = terminal_calls[0]["kwargs"] if callback_source == "terminal-list" else pre_calls[0][0]
+    if callback_source != "terminal-list":
+        _, pre_context, pre_thread, pre_task = pre_calls[0]
+        assert (pre_context, pre_thread, pre_task) == ("caller", caller_thread, caller_task)
+        assert details["additional_args"]["complete_input_dict"]["document"] is document
     expected_events = (
         {"sync_failure", "async_failure"}
         if failure and asynchronous
@@ -691,7 +699,10 @@ async def test_public_native_callback_lifecycle(
         assert terminal["shared"] is shared
         expected_phase = "terminal" if terminal["event"] == "async_failure" else "pre_call"
         assert terminal["phase"] == expected_phase
-        assert terminal["context"] == expected_phase
+        expected_context = (
+            "caller" if callback_source == "terminal-list" and expected_phase == "pre_call" else expected_phase
+        )
+        assert terminal["context"] == expected_context
         assert terminal["start_time"] <= terminal["end_time"]
         if failure:
             assert terminal["response"] is None
@@ -705,7 +716,50 @@ async def test_public_native_callback_lifecycle(
             assert (terminal["thread"] == caller_thread) is asynchronous
             if asynchronous:
                 assert terminal["task"] is not None
-    assert context.get() == ("terminal" if failure else "pre_call")
+    expected_context = "terminal" if failure else "caller" if callback_source == "terminal-list" else "pre_call"
+    assert context.get() == expected_context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True], ids=["success", "failure"])
+async def test_public_native_callable_terminal_callback(
+    native_ocr, wire_recorder, monkeypatch, no_python_ocr, document, failure
+):
+    litellm.rust(True)
+    wire_recorder.status = 429 if failure else 200
+    calls = []
+    finished = threading.Event()
+
+    def callback(kwargs, response_obj, start_time, end_time):
+        calls.append((kwargs, response_obj, start_time, end_time))
+        finished.set()
+
+    arguments = {
+        "model": MODEL,
+        "document": document,
+        "api_key": "sk-test",
+        "api_base": wire_recorder.api_base,
+        "timeout": 5,
+        "num_retries": 0,
+        "failure_callback" if failure else "success_callback": [callback],
+    }
+    if failure:
+        with pytest.raises(litellm.RateLimitError) as caught:
+            litellm.ocr(**arguments)
+        expected_response = None
+    else:
+        expected_response = litellm.ocr(**arguments)
+
+    assert await asyncio.to_thread(finished.wait, 5), "callable callback was not delivered"
+    assert len(calls) == 1
+    details, callback_response, start_time, end_time = calls[0]
+    assert details["model"] == "mistral-ocr-latest"
+    assert details["litellm_call_id"]
+    assert details["log_event_type"] == "post_api_call"
+    assert callback_response is expected_response
+    assert start_time <= end_time
+    if failure:
+        assert details["exception"] is caught.value
 
 
 @pytest.mark.asyncio
