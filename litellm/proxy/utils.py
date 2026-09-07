@@ -3706,10 +3706,10 @@ class PrismaClient:
         SET LOCAL statement_timeout the transaction carries, since prisma's
         default 5s would close it while a statement is still waiting on a lock.
         """
-        tx_kwargs: Final[dict[str, int | timedelta]] = {} if timeout is None else {"timeout": timeout}
-        return cast(
-            "TransactionManager", self.db.tx(**tx_kwargs)
-        )  # cast-ok: wrappers delegate tx via __getattr__ (untyped)
+        effective_timeout: Final = timeout if timeout is not None else timedelta(seconds=5)
+        return cast(  # cast-ok: wrappers delegate tx via __getattr__ (untyped)
+            "TransactionManager", self.db.tx(timeout=effective_timeout)
+        )
 
     def get_request_status(self, payload: dict | SpendLogsPayload) -> Literal["success", "failure"]:
         """
