@@ -63,7 +63,7 @@ impl ResponsesWebSocketConnection {
 }
 
 #[pymodule(gil_used = false)]
-mod _native {
+pub mod _native {
     use pyo3::prelude::*;
 
     #[pymodule_init]
@@ -98,6 +98,8 @@ mod tests {
                 "RustUpstreamError",
                 "ocr",
                 "aocr",
+                "ocr_retained",
+                "aocr_retained",
                 "transcription",
                 "atranscription",
                 "messages",

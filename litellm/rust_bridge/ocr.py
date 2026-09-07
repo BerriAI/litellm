@@ -53,6 +53,10 @@ _OCR: Final = NativeBinding("ocr", validate=_as_ocr)
 _AOCR: Final = NativeBinding("aocr", validate=_as_aocr)
 
 
+def has_rust_ocr_override(*, asynchronous: bool = False) -> bool:
+    return _rust_aocr_impl is not None if asynchronous else _rust_ocr_impl is not None
+
+
 def load_rust_ocr() -> RustOcr | None:
     return _OCR.load()
 
