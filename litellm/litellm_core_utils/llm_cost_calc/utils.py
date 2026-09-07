@@ -2,7 +2,7 @@
 ## Helper utilities for cost_per_token()
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
@@ -426,6 +426,36 @@ class TokenRates:
     @property
     def billed_reasoning_rate(self) -> float:
         return self.output_rate if self.reasoning_rate is None else self.reasoning_rate
+
+
+CacheReadCostRateResolver = Callable[
+    [ModelInfo, Usage, datetime | None],  # mutable-ok: Callable parameter syntax
+    float,
+]
+_CACHE_READ_COST_RATE_RESOLVERS: dict[
+    str, CacheReadCostRateResolver
+] = {}  # mutable-ok: provider adapters register one process-wide resolver at import time
+
+
+def register_cache_read_cost_rate_resolver(
+    providers: Sequence[str],
+    resolver: CacheReadCostRateResolver,
+) -> None:
+    """Register a provider-owned cache-read rate resolver for cost breakdowns."""
+    for provider in providers:
+        _CACHE_READ_COST_RATE_RESOLVERS[provider] = resolver
+
+
+def _resolve_cache_read_cost_rate(
+    custom_llm_provider: str | None,
+    model_info: ModelInfo,
+    usage: Usage,
+    current_time: datetime | None,
+) -> float | None:
+    resolver: Final = _CACHE_READ_COST_RATE_RESOLVERS.get(custom_llm_provider or "")
+    if resolver is None:
+        return None
+    return resolver(model_info, usage, current_time)
 
 
 def _parse_off_peak_rate(value: object) -> float | None:
@@ -1356,17 +1386,14 @@ def get_token_type_cost_breakdown(
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
 
-    if custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
-        from litellm.llms.dashscope.cost_calculator import (
-            get_token_breakdown_and_rates,
-        )
-
-        _, dashscope_rates = get_token_breakdown_and_rates(
-            model_info=model_info,
-            usage=usage,
-            current_time=billing_time,
-        )
-        cache_read_cost_rate = dashscope_rates.cache_read_rate
+    provider_cache_read_cost_rate: Final = _resolve_cache_read_cost_rate(
+        custom_llm_provider=custom_llm_provider,
+        model_info=model_info,
+        usage=usage,
+        current_time=billing_time,
+    )
+    if provider_cache_read_cost_rate is not None:
+        cache_read_cost_rate = provider_cache_read_cost_rate
 
     reasoning_tokens = (
         parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
