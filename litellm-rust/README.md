@@ -66,8 +66,9 @@ make test-rust-python
 make lint-rust-python-fixtures
 ```
 
-`test-rust-python` installs the locked SDK dependencies with uv, points
-`PYO3_PYTHON` at the project interpreter, and runs
+`test-rust-python` installs the locked SDK dependencies plus the `proxy` extra
+(the integration fixtures import `litellm.proxy.*` guardrails, which need
+`fastapi`) with uv, points `PYO3_PYTHON` at the project interpreter, and runs
 `cargo test -p litellm-python-interop --tests --locked -- --include-ignored`.
 `lint-rust-python-fixtures` runs pinned Ruff lint and formatting checks without
 syncing the project environment
