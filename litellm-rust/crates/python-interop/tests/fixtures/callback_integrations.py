@@ -4,8 +4,10 @@ import gzip
 import json
 import threading
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
+from typing import Literal
 from unittest import TestCase
 
 import httpx
@@ -13,6 +15,7 @@ import httpx
 import litellm
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.gcs_bucket.gcs_bucket import GCSBucketLogger
 from litellm.integrations.literal_ai import LiteralAILogger
@@ -51,9 +54,34 @@ def integration_callback_scope(scenario):
 
 @integration_callback_scope
 async def real_logging_queue_chain(owners):
-    entered, release = asyncio.Event(), asyncio.Event()
-    uploads = []
+    return await integration_logging_queue_case(owners)
 
+
+@dataclass(frozen=True, slots=True)
+class QueueObservation:
+    gcs_model_parameters: str
+    datadog_snapshot: str
+    literal_prepared_settings: str
+
+
+@integration_callback_scope
+async def real_logging_queue_copy_control(owners):
+    baseline = await integration_logging_queue_case(owners)
+    copied = await integration_logging_queue_case(owners, literal_copy="payload")
+    envelope = await integration_logging_queue_case(owners, literal_copy="envelope")
+    assert envelope == baseline
+    assert json.loads(baseline.gcs_model_parameters) == {"stream": True, "temperature": 0.25}
+    assert copied.datadog_snapshot == baseline.datadog_snapshot
+    assert copied.literal_prepared_settings == baseline.literal_prepared_settings
+    assert json.loads(copied.literal_prepared_settings) == {"stream": True}
+    assert json.loads(copied.gcs_model_parameters) == {
+        **json.loads(baseline.gcs_model_parameters),
+        "tools": [{"type": "function", "function": {"name": "lookup"}}],
+    }
+    return copied
+
+
+def queue_loggers(entered, release, uploads):
     class VertexTransport:
         async def _ensure_access_token_async(self, **kwargs):
             entered.set()
@@ -84,6 +112,36 @@ async def real_logging_queue_chain(owners):
     CustomBatchLogger.__init__(literal, batch_size=100, flush_lock=asyncio.Lock())
     literal.literalai_api_url, literal.headers = "https://literal.invalid", {}
     literal.async_httpx_client = Transport()
+    return datadog, gcs, literal
+
+
+async def integration_logging_queue_case(owners, *, literal_copy: Literal["direct", "envelope", "payload"] = "direct"):
+    entered, release = asyncio.Event(), asyncio.Event()
+    uploads = []
+    datadog, gcs, literal = queue_loggers(entered, release, uploads)
+    copy_payload = literal_copy == "payload"
+
+    class LiteralCallback(CustomLogger):
+        def __init__(self, delegate):
+            super().__init__()
+            self.delegate = delegate
+            self.calls = self.completed = 0
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            self.calls += 1
+            self.received = kwargs
+            self.forwarded = {
+                **kwargs,
+                "standard_logging_object": (
+                    copy.deepcopy(kwargs["standard_logging_object"])
+                    if copy_payload
+                    else kwargs["standard_logging_object"]
+                ),
+            }
+            await self.delegate.async_log_failure_event(self.forwarded, response_obj, start_time, end_time)
+            self.completed += 1
+
+    literal_callback = literal if literal_copy == "direct" else LiteralCallback(literal)
 
     payload = create_dummy_standard_logging_payload()
     payload.update(status="failure", error_str="x" * 10001)
@@ -100,25 +158,37 @@ async def real_logging_queue_chain(owners):
         start_time=now,
         litellm_call_id="fixture-queue",
         function_id="fixture",
-        dynamic_async_failure_callbacks=[datadog, gcs, literal],
+        dynamic_async_failure_callbacks=[datadog, gcs, literal_callback],
     )
     error = RuntimeError("fixture failure")
     kwargs = logging.model_call_details
     kwargs.update(standard_logging_object=payload, model="fixture-model", exception=error, end_time=now)
     await integration_invoke(owners, logging.async_failure_handler, error, "fixture traceback", now, now)
+    if literal_copy != "direct":
+        assert literal_callback.calls == literal_callback.completed == 1
+        assert literal_callback.received is kwargs and literal_callback.forwarded is not kwargs
+        assert (literal_callback.forwarded["standard_logging_object"] is payload) is (not copy_payload)
+    assert len(datadog.log_queue) == gcs.log_queue.qsize() == len(literal.log_queue) == 1
     assert kwargs["standard_logging_object"] is payload
     assert payload["messages"] is messages and payload["model_parameters"] is settings
     assert payload["error_str"].endswith("truncated by litellm, this logger does not support large content")
-    assert "tools" not in settings
+    assert ("tools" in settings) is copy_payload
     dd_snapshot = json.loads(datadog.log_queue[0]["message"])
     assert dd_snapshot["model_parameters"]["tools"] == tools
     queued = gcs.log_queue.get_nowait()
     assert queued["payload"] is payload and queued["kwargs"] is kwargs and queued["response_obj"] is None
     gcs.log_queue.put_nowait(queued)
     generation = literal.log_queue[0]["generation"]
-    assert generation["settings"] is settings and generation["tools"] is tools
-    assert generation["messages"] is messages and generation["messageCompletion"] is completion
-    assert literal.log_queue[0]["metadata"] is metadata
+    prepared_settings = json.dumps(generation["settings"], sort_keys=True)
+    assert "tools" not in generation["settings"] and generation["tools"] == tools
+    if copy_payload:
+        assert generation["settings"] is not settings and generation["tools"] is not tools
+        assert generation["messages"] is not messages and generation["messageCompletion"] is not completion
+        assert literal.log_queue[0]["metadata"] is not metadata
+    else:
+        assert generation["settings"] is settings and generation["tools"] is tools
+        assert generation["messages"] is messages and generation["messageCompletion"] is completion
+        assert literal.log_queue[0]["metadata"] is metadata
 
     flush = asyncio.create_task(integration_invoke(owners, gcs.flush_queue))
     try:
@@ -148,13 +218,25 @@ async def real_logging_queue_chain(owners):
     assert json.loads(sent_dd[0]["message"]) == dd_snapshot
     literal_wire = uploads[2][1]["json"]
     sent_generation = literal_wire["variables"]["generation_0"]
-    assert sent_generation["messages"] == messages
     assert sent_generation["messages"] != gcs_snapshot["messages"]
-    assert sent_generation["settings"]["temperature"] == 0.25
-    assert sent_generation["messageCompletion"]["content"] == "late completion"
+    if copy_payload:
+        assert sent_generation["messages"] == dd_snapshot["messages"]
+        assert json.dumps(sent_generation["settings"], sort_keys=True) == prepared_settings
+        assert sent_generation["messageCompletion"] == dd_snapshot["response"]["choices"][0]["message"]
+    else:
+        assert sent_generation["messages"] == messages
+        assert sent_generation["settings"]["temperature"] == 0.25
+        assert sent_generation["messageCompletion"]["content"] == "late completion"
     messages[0]["content"] = "after serialization"
-    assert sent_generation["messages"][0]["content"] == "mutated before serialization"
+    assert sent_generation["messages"][0]["content"] == (
+        "Hello, world!" if copy_payload else "mutated before serialization"
+    )
     assert dd_snapshot["messages"][0]["content"] == "Hello, world!"
+    return QueueObservation(
+        gcs_model_parameters=json.dumps(gcs_snapshot["model_parameters"], sort_keys=True),
+        datadog_snapshot=json.dumps(dd_snapshot, sort_keys=True),
+        literal_prepared_settings=prepared_settings,
+    )
 
 
 @integration_callback_scope
