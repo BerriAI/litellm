@@ -15,28 +15,6 @@ vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
   useMCPToolsets: vi.fn(),
 }));
 
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-  const Select = ({ value, onChange, children, mode }: any) => (
-    <select
-      data-testid="mcp-select"
-      multiple={mode === "multiple"}
-      value={value}
-      onChange={(e) => onChange(Array.from(e.target.selectedOptions, (o) => (o as HTMLOptionElement).value))}
-    >
-      {children}
-    </select>
-  );
-  Select.displayName = "MockSelect";
-  Select.Option = ({ value, disabled, label }: any) => (
-    <option value={value} disabled={disabled}>
-      {label}
-    </option>
-  );
-  Select.Option.displayName = "MockSelectOption";
-  return { ...actual, Select };
-});
-
 import { useMCPAccessGroups } from "@/app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
@@ -44,6 +22,15 @@ import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolset
 const mockUseMCPServers = vi.mocked(useMCPServers);
 const mockUseMCPAccessGroups = vi.mocked(useMCPAccessGroups);
 const mockUseMCPToolsets = vi.mocked(useMCPToolsets);
+
+// The dropdown mounts its list asynchronously, so opening means waiting for the options too.
+const openSelector = async (user: ReturnType<typeof userEvent.setup>): Promise<void> => {
+  await user.click(screen.getByRole("combobox"));
+  await screen.findAllByRole("option");
+};
+
+const optionByLabel = (label: string): HTMLElement | undefined =>
+  screen.queryAllByRole("option").find((option) => option.textContent?.startsWith(label));
 
 const setupMcpMocks = () => {
   mockUseMCPServers.mockReturnValue({
@@ -60,19 +47,20 @@ describe("MCPServerSelector no-mcp-servers option", () => {
     setupMcpMocks();
   });
 
-  const optionByValue = (value: string) =>
-    Array.from(screen.getByTestId("mcp-select").querySelectorAll("option")).find(
-      (o) => (o as HTMLOptionElement).value === value,
-    ) as HTMLOptionElement | undefined;
-
-  it("hides the No MCP Servers option by default", () => {
+  it("hides the No MCP Servers option by default", async () => {
+    const user = userEvent.setup();
     renderWithProviders(
       <MCPServerSelector accessToken="tok" onChange={vi.fn()} value={{ servers: [], accessGroups: [] }} />,
     );
-    expect(optionByValue(NO_MCP_SERVERS_SENTINEL)).toBeUndefined();
+
+    await openSelector(user);
+
+    expect(optionByLabel("Server One")).toBeDefined();
+    expect(optionByLabel("No MCP Servers")).toBeUndefined();
   });
 
   it("emits an exclusive sentinel when No MCP Servers is selected", async () => {
+    const user = userEvent.setup();
     const onChange = vi.fn();
     renderWithProviders(
       <MCPServerSelector
@@ -82,14 +70,15 @@ describe("MCPServerSelector no-mcp-servers option", () => {
         value={{ servers: ["srv-1"], accessGroups: [] }}
       />,
     );
-    expect(optionByValue(NO_MCP_SERVERS_SENTINEL)).toBeDefined();
 
-    await userEvent.selectOptions(screen.getByTestId("mcp-select"), [NO_MCP_SERVERS_SENTINEL]);
+    await openSelector(user);
+    await user.click(optionByLabel("No MCP Servers")!);
 
     expect(onChange).toHaveBeenCalledWith({ servers: [NO_MCP_SERVERS_SENTINEL], accessGroups: [], toolsets: [] });
   });
 
-  it("disables real server options while the sentinel is selected", () => {
+  it("disables real server options while the sentinel is selected", async () => {
+    const user = userEvent.setup();
     renderWithProviders(
       <MCPServerSelector
         accessToken="tok"
@@ -98,8 +87,11 @@ describe("MCPServerSelector no-mcp-servers option", () => {
         value={{ servers: [NO_MCP_SERVERS_SENTINEL], accessGroups: [] }}
       />,
     );
-    expect(optionByValue("srv-1")?.disabled).toBe(true);
-    expect(optionByValue(NO_MCP_SERVERS_SENTINEL)?.disabled).toBe(false);
+
+    await openSelector(user);
+
+    expect(optionByLabel("Server One")).toHaveAttribute("aria-disabled", "true");
+    expect(optionByLabel("No MCP Servers")).not.toHaveAttribute("aria-disabled", "true");
   });
 });
 
@@ -109,19 +101,20 @@ describe("MCPServerSelector all-proxy-mcpservers option", () => {
     setupMcpMocks();
   });
 
-  const optionByValue = (value: string) =>
-    Array.from(screen.getByTestId("mcp-select").querySelectorAll("option")).find(
-      (o) => (o as HTMLOptionElement).value === value,
-    ) as HTMLOptionElement | undefined;
-
-  it("hides the All Proxy MCP Servers option by default", () => {
+  it("hides the All Proxy MCP Servers option by default", async () => {
+    const user = userEvent.setup();
     renderWithProviders(
       <MCPServerSelector accessToken="tok" onChange={vi.fn()} value={{ servers: [], accessGroups: [] }} />,
     );
-    expect(optionByValue(ALL_PROXY_MCP_SERVERS_SENTINEL)).toBeUndefined();
+
+    await openSelector(user);
+
+    expect(optionByLabel("Server One")).toBeDefined();
+    expect(optionByLabel("All Proxy MCP Servers")).toBeUndefined();
   });
 
   it("emits an exclusive sentinel when All Proxy MCP Servers is selected", async () => {
+    const user = userEvent.setup();
     const onChange = vi.fn();
     renderWithProviders(
       <MCPServerSelector
@@ -131,9 +124,9 @@ describe("MCPServerSelector all-proxy-mcpservers option", () => {
         value={{ servers: ["srv-1"], accessGroups: [] }}
       />,
     );
-    expect(optionByValue(ALL_PROXY_MCP_SERVERS_SENTINEL)).toBeDefined();
 
-    await userEvent.selectOptions(screen.getByTestId("mcp-select"), [ALL_PROXY_MCP_SERVERS_SENTINEL]);
+    await openSelector(user);
+    await user.click(optionByLabel("All Proxy MCP Servers")!);
 
     expect(onChange).toHaveBeenCalledWith({
       servers: [ALL_PROXY_MCP_SERVERS_SENTINEL],
@@ -142,7 +135,8 @@ describe("MCPServerSelector all-proxy-mcpservers option", () => {
     });
   });
 
-  it("disables real server options while the sentinel is selected", () => {
+  it("disables real server options while the sentinel is selected", async () => {
+    const user = userEvent.setup();
     renderWithProviders(
       <MCPServerSelector
         accessToken="tok"
@@ -151,11 +145,15 @@ describe("MCPServerSelector all-proxy-mcpservers option", () => {
         value={{ servers: [ALL_PROXY_MCP_SERVERS_SENTINEL], accessGroups: [] }}
       />,
     );
-    expect(optionByValue("srv-1")?.disabled).toBe(true);
-    expect(optionByValue(ALL_PROXY_MCP_SERVERS_SENTINEL)?.disabled).toBe(false);
+
+    await openSelector(user);
+
+    expect(optionByLabel("Server One")).toHaveAttribute("aria-disabled", "true");
+    expect(optionByLabel("All Proxy MCP Servers")).not.toHaveAttribute("aria-disabled", "true");
   });
 
-  it("renders the friendly option, not the raw literal, when the sentinel is already stored but the flag is off", () => {
+  it("renders the friendly label, not the raw literal, when the sentinel is already stored but the flag is off", async () => {
+    const user = userEvent.setup();
     renderWithProviders(
       <MCPServerSelector
         accessToken="tok"
@@ -163,9 +161,12 @@ describe("MCPServerSelector all-proxy-mcpservers option", () => {
         value={{ servers: [ALL_PROXY_MCP_SERVERS_SENTINEL], accessGroups: [] }}
       />,
     );
-    const option = optionByValue(ALL_PROXY_MCP_SERVERS_SENTINEL);
-    expect(option).toBeDefined();
-    expect(option?.textContent).toContain("All Proxy MCP Servers");
-    expect(optionByValue("srv-1")?.disabled).toBe(true);
+
+    expect(screen.getByLabelText("All Proxy MCP Servers")).toBeInTheDocument();
+    expect(screen.queryByText(ALL_PROXY_MCP_SERVERS_SENTINEL)).not.toBeInTheDocument();
+
+    await openSelector(user);
+
+    expect(optionByLabel("Server One")).toHaveAttribute("aria-disabled", "true");
   });
 });

@@ -3,9 +3,7 @@ Minimal Gemini File Search vector store tests.
 """
 
 import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from base_vector_store_test import BaseVectorStoreTest
 

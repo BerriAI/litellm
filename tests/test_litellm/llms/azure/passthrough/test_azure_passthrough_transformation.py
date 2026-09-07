@@ -1,11 +1,8 @@
 import json
-import os
-import sys
 from unittest.mock import MagicMock
 
 import httpx
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
 from litellm.types.utils import ModelResponse

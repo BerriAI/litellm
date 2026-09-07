@@ -1,7 +1,4 @@
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath("../../../"))
 
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 

@@ -13,6 +13,7 @@ Routes covered:
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 from .conftest import VOLATILE_KEYS, normalize
@@ -57,6 +58,141 @@ def test_config_update_happy_admin(client, auth_as, mock_prisma, monkeypatch):
         )
     assert response.status_code == 200
     assert normalize(response.json()) == {"message": "Config updated successfully"}
+
+
+def test_config_update_persists_optional_pre_call_checks(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"optional_pre_call_checks": ["prompt_caching"]}},
+        )
+
+    assert response.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted["optional_pre_call_checks"] == ["prompt_caching"]
+
+
+def test_config_update_persists_model_group_affinity_config(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    model_group_affinity_config = {"gpt-4": ["session_affinity"]}
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"model_group_affinity_config": model_group_affinity_config}},
+        )
+
+    assert response.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted["model_group_affinity_config"] == model_group_affinity_config
+
+
+def test_config_update_persists_disable_cooldowns(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    fake_proxy_config = MagicMock()
+    fake_proxy_config.add_deployment = AsyncMock()
+    monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"disable_cooldowns": True}},
+        )
+
+    assert response.status_code == 200
+    persisted = json.loads(table.upsert.call_args.kwargs["data"]["create"]["param_value"])
+    assert persisted["disable_cooldowns"] is True
+
+
+def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"assistants_config": {"enabled": True}}},
+        )
+
+    assert response.status_code == 400
+    assert "assistants_config" in response.json()["error"]["message"]
+    table.upsert.assert_not_called()
+
+
+def test_config_update_rejects_router_general_settings(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"router_general_settings": {"async_only_mode": True}}},
+        )
+
+    assert response.status_code == 400
+    assert "router_general_settings" in response.json()["error"]["message"]
+    table.upsert.assert_not_called()
+
+
+def test_config_update_rejects_unknown_router_setting(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"optional_precall_checks": ["prompt_caching"]}},
+        )
+
+    assert response.status_code == 400
+    assert "optional_precall_checks" in response.json()["error"]["message"]
+    table.upsert.assert_not_called()
+
+
+def test_config_update_unknown_router_setting_non_admin_forbidden(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.INTERNAL_USER):
+        response = client.post(
+            "/config/update",
+            json={"router_settings": {"optional_precall_checks": ["prompt_caching"]}},
+        )
+
+    assert response.status_code == 403
+    assert "admin" in response.json()["error"]["message"].lower()
 
 
 def test_config_update_non_admin_forbidden(client, auth_as, mock_prisma, monkeypatch):
@@ -471,6 +607,83 @@ def test_config_list_happy_admin(client, auth_as, mock_prisma, monkeypatch):
         "has_field_value": True,
         "has_stored_in_db": True,
     }
+
+
+def test_config_list_exposes_config_reload_interval(client, auth_as, mock_prisma, monkeypatch):
+    """proxy_config_reload_interval_seconds must surface in the admin UI general-settings
+    list as an Integer field defaulting to 30, so operators can tune multi-pod convergence
+    from the dashboard."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    row = MagicMock()
+    row.param_value = {}
+    table.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/config/list", params={"config_type": "general_settings"})
+    assert response.status_code == 200
+    by_name = {entry["field_name"]: entry for entry in response.json()}
+    assert "proxy_config_reload_interval_seconds" in by_name
+    entry = by_name["proxy_config_reload_interval_seconds"]
+    assert entry["field_type"] == "Integer"
+    assert entry["field_default_value"] == 30
+
+
+def test_config_field_update_accepts_config_reload_interval(client, auth_as, mock_prisma, monkeypatch):
+    """POST /config/field/update accepts proxy_config_reload_interval_seconds and persists
+    it to the DB general_settings row for all pods to pick up."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    table.find_first = AsyncMock(return_value=None)
+    upsert_row = {
+        "param_name": "general_settings",
+        "param_value": {"proxy_config_reload_interval_seconds": 45},
+        "id": "row-1",
+    }
+    table.upsert = AsyncMock(return_value=upsert_row)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/field/update",
+            json={
+                "field_name": "proxy_config_reload_interval_seconds",
+                "field_value": 45,
+                "config_type": "general_settings",
+            },
+        )
+    assert response.status_code == 200
+    upserted = table.upsert.call_args.kwargs["data"]["create"]["param_value"]
+    assert json.loads(upserted)["proxy_config_reload_interval_seconds"] == 45
+
+
+def test_config_field_update_rejects_non_positive_config_reload_interval(client, auth_as, mock_prisma, monkeypatch):
+    """A non-positive proxy_config_reload_interval_seconds from the UI is rejected with a 400
+    and never persisted, since APScheduler requires a positive interval."""
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    table.find_first = AsyncMock(return_value=None)
+    table.upsert = AsyncMock()
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/field/update",
+            json={
+                "field_name": "proxy_config_reload_interval_seconds",
+                "field_value": 0,
+                "config_type": "general_settings",
+            },
+        )
+    assert response.status_code == 400
+    table.upsert.assert_not_called()
 
 
 def test_config_list_non_admin_rejected(client, auth_as, mock_prisma, monkeypatch):

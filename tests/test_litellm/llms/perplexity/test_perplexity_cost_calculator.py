@@ -8,13 +8,12 @@ search queries, and reasoning tokens.
 import json
 import math
 import os
-import sys
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
 # Add the project root to Python path
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.cost_calculator import completion_cost, cost_per_token
@@ -23,6 +22,7 @@ from litellm.llms.perplexity.cost_calculator import (
 )
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
+    OffPeakPricing,
     Usage,
     PromptTokensDetailsWrapper,
 )
@@ -400,6 +400,31 @@ class TestPerplexityCostCalculator:
         assert completion_cost == 0.008
         assert prompt_cost + completion_cost == 0.008
 
+    def test_uses_perplexity_provided_cost_when_normalized_to_float(self):
+        """
+        Regression: for Responses API / Agent API models, `ResponseAPIUsage.parse_cost`
+        (litellm/types/llms/openai.py) already flattens Perplexity's
+        `usage.cost.total_cost` dict down to a plain float before
+        `_transform_response_api_usage_to_chat_usage` (litellm/responses/utils.py) copies
+        it onto the chat `Usage` object. So `usage.cost` arrives here as a float, not a
+        dict, on that path.
+
+        Pre-fix, the `isinstance(cost_info, dict)` check was always False for a float,
+        so the pre-calculated cost branch was dead code for every Responses-mode
+        Perplexity model and it silently fell back to manual token-rate calculation,
+        recording $0 for any model missing static per-token rates (e.g.
+        perplexity/openai/gpt-5.2 before rates existed).
+        """
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        usage.cost = 0.008
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model="sonar-pro", usage=usage
+        )
+
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.008
+
     def test_falls_back_to_manual_calculation_when_no_cost_provided(self):
         """
         Test that manual cost calculation is used when Perplexity doesn't
@@ -451,3 +476,143 @@ class TestPerplexityCostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-9)
         assert math.isclose(completion_cost, expected_completion, rel_tol=1e-9)
+
+    @pytest.mark.parametrize(
+        "model_id, usd_per_1m_input, usd_per_1m_output, usd_per_1m_cache_read",
+        [
+            ("deepseek-v4-flash-0731", 0.13, 0.26, 0.028),
+            ("glm-5.2", 1.4, 4.4, 0.14),
+            ("kimi-k3", 3.0, 15.0, 0.3),
+            ("kimi-k2.7-code", 0.95, 4.0, 0.19),
+        ],
+    )
+    def test_agent_api_entries_carry_perplexity_published_rates(
+        self, model_id, usd_per_1m_input, usd_per_1m_output, usd_per_1m_cache_read
+    ):
+        """The Agent API third-party models are priced from Perplexity's own catalog
+        (GET https://api.perplexity.ai/v1/models, `pricing` in usd_per_1m_tokens).
+        Perplexity's model id already starts with `perplexity/`, so the cost-map key
+        doubles the prefix. Regression: glm-5.2 shipped glm-5.3's 0.26 cache-read rate,
+        copied from the neighbouring catalog row, an 86% overcharge on cached input.
+        """
+        info = get_model_info(
+            model=f"perplexity/{model_id}", custom_llm_provider="perplexity"
+        )
+
+        assert info["key"] == f"perplexity/perplexity/{model_id}"
+        assert info["litellm_provider"] == "perplexity"
+        assert info["mode"] == "responses"
+        assert math.isclose(info["input_cost_per_token"], usd_per_1m_input / 1e6, rel_tol=1e-9)
+        assert math.isclose(info["output_cost_per_token"], usd_per_1m_output / 1e6, rel_tol=1e-9)
+        assert math.isclose(
+            info["cache_read_input_token_cost"], usd_per_1m_cache_read / 1e6, rel_tol=1e-9
+        )
+
+    def test_agent_api_fallback_rates_price_a_response_without_metered_cost(self):
+        """Perplexity meters cost on the response, but when `usage.cost` is absent the
+        calculator falls back to the mapped per-token rates. Regression: that fallback
+        raised "This model isn't mapped yet" for every Agent API third-party model,
+        because the doubled cost-map key was unreachable from the resolution ladder.
+        """
+        from litellm import ModelResponse
+
+        response = ModelResponse()
+        response.usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        response.model = "perplexity/perplexity/glm-5.2"
+
+        total_cost = completion_cost(
+            completion_response=response, custom_llm_provider="perplexity"
+        )
+
+        assert math.isclose(total_cost, 1000 * 1.4e-06 + 500 * 4.4e-06, rel_tol=1e-9)
+
+    OFF_PEAK_MODEL = "sonar-off-peak-test"
+    OFF_PEAK_WINDOW = "14:00-00:00"
+    INSIDE_WINDOW = datetime(2026, 9, 3, 17, 25, tzinfo=timezone.utc)
+    OUTSIDE_WINDOW = datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc)
+
+    def _register_off_peak_model(self, off_peak_pricing: OffPeakPricing) -> None:
+        litellm.model_cost[f"perplexity/{self.OFF_PEAK_MODEL}"] = {
+            "litellm_provider": "perplexity",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1e-06,
+            "output_cost_per_reasoning_token": 3e-06,
+            "citation_cost_per_token": 2e-06,
+            "search_context_cost_per_query": {"search_context_size_low": 0.005},
+            "off_peak_pricing": off_peak_pricing,
+        }
+
+    def test_off_peak_window_swaps_in_the_off_peak_rates(self):
+        """
+        Regression (LIT-6874): a deployment configured with off_peak_pricing kept billing the
+        standard perplexity rates inside its window, while the same block on a deepseek
+        deployment billed the off-peak rates.
+        """
+        self._register_off_peak_model(
+            {"hours_utc": self.OFF_PEAK_WINDOW, "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.INSIDE_WINDOW
+        )
+
+        assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
+
+        peak_prompt_cost, peak_completion_cost = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.OUTSIDE_WINDOW
+        )
+
+        assert math.isclose(peak_prompt_cost, 1000 * 1e-06, rel_tol=1e-10)
+        assert math.isclose(peak_completion_cost, 200 * 1e-06, rel_tol=1e-10)
+
+    def test_off_peak_rates_leave_citation_search_and_reasoning_fees_alone(self):
+        """Inside the window only the plain input and output rates change: citation tokens, the
+        per-request search fee, and a dedicated reasoning rate keep billing as published."""
+        self._register_off_peak_model(
+            {"hours_utc": self.OFF_PEAK_WINDOW, "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=200,
+            total_tokens=1200,
+            prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=50),
+        )
+        usage.citation_tokens = 100
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(
+            model=self.OFF_PEAK_MODEL, usage=usage, current_time=self.INSIDE_WINDOW
+        )
+
+        assert math.isclose(prompt_cost, (1000 * 1e-07) + (100 * 2e-06), rel_tol=1e-10)
+        assert math.isclose(completion_cost, (150 * 2e-07) + (50 * 3e-06) + 0.005, rel_tol=1e-10)
+
+    def test_off_peak_defaults_to_the_current_time(self):
+        """The proxy's cost dispatch passes no clock, so an all-day window has to apply on the
+        default current time."""
+        self._register_off_peak_model(
+            {"hours_utc": "00:00-00:00", "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=self.OFF_PEAK_MODEL, usage=usage)
+
+        assert math.isclose(prompt_cost, 1000 * 1e-07, rel_tol=1e-10)
+        assert math.isclose(completion_cost, 200 * 2e-07, rel_tol=1e-10)
+
+    def test_provider_stated_cost_still_wins_inside_an_off_peak_window(self):
+        """A response that carries Perplexity's own metered cost bills that cost whatever the
+        window says; the caller strips it when the deployment carries custom pricing."""
+        self._register_off_peak_model(
+            {"hours_utc": "00:00-00:00", "input_cost_per_token": 1e-07, "output_cost_per_token": 2e-07}
+        )
+        usage = Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200)
+        usage.cost = {"total_cost": 0.00501}
+
+        prompt_cost, completion_cost = perplexity_cost_per_token(model=self.OFF_PEAK_MODEL, usage=usage)
+
+        assert prompt_cost == 0.0
+        assert completion_cost == 0.00501

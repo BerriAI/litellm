@@ -7,12 +7,15 @@ import {
   handleTransport,
   handleAuth,
   getMcpOAuthMode,
+  gatewayMintsClientFor,
   getOAuthAuthorizationIdentity,
   isHeldOAuthTokenStale,
+  preservedAdminCredentials,
   oauth2FlowToFormValue,
   preservedDeclaredAppCredentials,
   withoutMintedTokenCredentials,
   credentialAuthClass,
+  isUnsupportedOnGatewayConnect,
 } from "./types";
 
 describe("getOAuthAuthorizationIdentity", () => {
@@ -30,6 +33,30 @@ describe("getOAuthAuthorizationIdentity", () => {
     const authorized = { auth_type: AUTH_TYPE.OAUTH2, url: "https://a.example.com/mcp" };
     const edited = { auth_type: AUTH_TYPE.OAUTH2, url: "https://b.example.com/mcp" };
     expect(getOAuthAuthorizationIdentity(edited)).not.toBe(getOAuthAuthorizationIdentity(authorized));
+  });
+
+  // Regression: upstream_resource is the RFC 8707 audience the upstream token is minted for, so
+  // editing it strands a held token on the previous audience. It must invalidate here for the same
+  // reason it belongs in the backend's mcp_oauth_token_identity, which this function mirrors.
+  it("changes when the upstream_resource credential changes", () => {
+    const authorized = {
+      auth_type: AUTH_TYPE.OAUTH2,
+      url: "https://a.example.com/mcp",
+      credentials: { client_id: "cid", upstream_resource: "api://audience-one" },
+    };
+    const retargeted = {
+      auth_type: AUTH_TYPE.OAUTH2,
+      url: "https://a.example.com/mcp",
+      credentials: { client_id: "cid", upstream_resource: "api://audience-two" },
+    };
+    const unset = {
+      auth_type: AUTH_TYPE.OAUTH2,
+      url: "https://a.example.com/mcp",
+      credentials: { client_id: "cid" },
+    };
+    expect(getOAuthAuthorizationIdentity(retargeted)).not.toBe(getOAuthAuthorizationIdentity(authorized));
+    expect(getOAuthAuthorizationIdentity(unset)).not.toBe(getOAuthAuthorizationIdentity(authorized));
+    expect(isHeldOAuthTokenStale(retargeted, getOAuthAuthorizationIdentity(authorized))).toBe(true);
   });
 
   it("is stable across non-mint fields", () => {
@@ -99,6 +126,41 @@ describe("constants", () => {
   it("should define the backend M2M flow value", () => {
     expect(MCP_OAUTH2_FLOW_M2M).toBe("client_credentials");
   });
+});
+
+describe("gatewayMintsClientFor", () => {
+  // The authoritative client-acquisition matrix: for each (auth_type, dcr_bridge) cell, does the
+  // gateway mint the OAuth client at /authorize (browser skips its own register) or not (browser
+  // registers)? This MUST equal the backend resolve_ephemeral_dcr_client mint set exactly, which
+  // test_discoverable_endpoints.py::test_resolve_ephemeral_dcr_client_mint_set_is_exact pins against
+  // the same predicate. A divergence in either direction dead-ends a mode (skip a register the
+  // gateway never performs) or double-registers, so both sides are enumerated against this table.
+  const MATRIX: Array<{ auth_type: string; dcr_bridge: boolean | null | undefined; mints: boolean }> = [
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: false, mints: true },
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: true, mints: true },
+    { auth_type: AUTH_TYPE.TRUE_PASSTHROUGH, dcr_bridge: null, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: false, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: null, mints: true },
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: undefined, mints: true },
+    // The one interactive-sign-in cell the gateway must NOT mint (browser front-door register).
+    { auth_type: AUTH_TYPE.OAUTH_DELEGATE, dcr_bridge: true, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2, dcr_bridge: true, mints: false },
+    { auth_type: AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.API_KEY, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.BEARER_TOKEN, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.BASIC, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.NONE, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.TOKEN, dcr_bridge: false, mints: false },
+    { auth_type: AUTH_TYPE.AWS_SIGV4, dcr_bridge: false, mints: false },
+  ];
+
+  it.each(MATRIX)(
+    "mints=$mints for auth_type=$auth_type dcr_bridge=$dcr_bridge",
+    ({ auth_type, dcr_bridge, mints }) => {
+      expect(gatewayMintsClientFor({ auth_type, dcr_bridge })).toBe(mints);
+    },
+  );
 });
 
 describe("getMcpOAuthMode", () => {
@@ -229,5 +291,59 @@ describe("credentialAuthClass", () => {
     expect(credentialAuthClass(AUTH_TYPE.OAUTH_DELEGATE)).toBe("client_forwarded");
     expect(credentialAuthClass(AUTH_TYPE.OAUTH2)).toBe(AUTH_TYPE.OAUTH2);
     expect(credentialAuthClass(null)).toBeNull();
+  });
+});
+
+describe("isUnsupportedOnGatewayConnect", () => {
+  it("flags the modes that need a caller-supplied upstream token or subject", () => {
+    // client-forwarded: caller presents the upstream Authorization per call
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.TRUE_PASSTHROUGH)).toBe(true);
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH_DELEGATE)).toBe(true);
+    // OBO: caller's own IdP token is the exchange subject, which the session bearer is not
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH2_TOKEN_EXCHANGE)).toBe(true);
+  });
+
+  it("does not flag modes the gateway can serve from server-side state or interactive vaulting", () => {
+    // interactive authorization_code is the one mode the connect grid vaults per user
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.OAUTH2)).toBe(false);
+    // server-configured credentials need no per-user connect
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.API_KEY)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(AUTH_TYPE.NONE)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(null)).toBe(false);
+    expect(isUnsupportedOnGatewayConnect(undefined)).toBe(false);
+  });
+});
+
+describe("preservedAdminCredentials vs preservedDeclaredAppCredentials", () => {
+  // Regression: upstream_resource is admin-typed config living in `credentials`, and the invalidation
+  // reset wipes that whole object. If it is not preserved, editing an unrelated field like the URL
+  // silently discards the admin's resource indicator and the server goes back to sending none.
+  it("preserves upstream_resource across an invalidation reset", () => {
+    const credentials = { client_id: "cid", client_secret: "csec", upstream_resource: "api://audience" };
+    expect(preservedAdminCredentials(credentials)).toEqual(credentials);
+  });
+
+  it("preserves upstream_resource even when no OAuth app is declared", () => {
+    // A dynamic-client-registration server has no client_id/client_secret but can still pin a resource.
+    expect(preservedAdminCredentials({ upstream_resource: "auto" })).toEqual({ upstream_resource: "auto" });
+  });
+
+  it("strips minted token material", () => {
+    const credentials = { client_id: "cid", upstream_resource: "auto", access_token: "tok", refresh_token: "r" };
+    expect(preservedAdminCredentials(credentials)).toEqual({ client_id: "cid", upstream_resource: "auto" });
+  });
+
+  // The two helpers answer different questions and must not be collapsed: "has the admin declared an
+  // OAuth app" gates the app-may-not-match-upstream warning, so a resource-only server must read as
+  // having no declared app.
+  it("does not report a declared app for a resource-only server", () => {
+    expect(preservedDeclaredAppCredentials({ upstream_resource: "auto" })).toBeUndefined();
+    expect(preservedAdminCredentials({ upstream_resource: "auto" })).toBeDefined();
+  });
+
+  it("still reports a declared app when client keys are present", () => {
+    expect(preservedDeclaredAppCredentials({ client_id: "cid", upstream_resource: "auto" })).toEqual({
+      client_id: "cid",
+    });
   });
 });

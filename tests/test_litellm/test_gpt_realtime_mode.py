@@ -1,8 +1,8 @@
 import json
-import typing
 from pathlib import Path
 
 import pytest
+from typing_extensions import get_args, get_type_hints
 
 import litellm
 from litellm.types.utils import ModelInfoBase
@@ -10,6 +10,7 @@ from litellm.types.utils import ModelInfoBase
 REALTIME_ONLY_GPT_MODELS = (
     "azure/gpt-realtime-2025-08-28",
     "azure/gpt-realtime-1.5-2026-02-23",
+    "azure/gpt-realtime-mini",
     "azure/gpt-realtime-mini-2025-10-06",
     "gpt-realtime",
     "gpt-realtime-1.5",
@@ -49,8 +50,8 @@ def _load_cost_map() -> dict:
 
 
 def test_realtime_is_a_valid_mode_literal():
-    hints = typing.get_type_hints(ModelInfoBase, include_extras=False)
-    assert "realtime" in typing.get_args(hints["mode"])
+    hints = get_type_hints(ModelInfoBase, include_extras=False)
+    assert "realtime" in get_args(hints["mode"])
 
 
 @pytest.mark.parametrize("model", REALTIME_ONLY_GPT_MODELS)
@@ -68,8 +69,16 @@ def test_realtime_only_gpt_4o_models_are_mode_realtime(model):
     assert _load_cost_map()[model]["mode"] == "realtime"
 
 
-def test_get_model_info_reports_realtime_mode():
-    assert litellm.get_model_info("gpt-realtime-mini")["mode"] == "realtime"
+def test_get_model_info_reports_realtime_mode(monkeypatch):
+    """get_model_info must resolve the retag against the bundled cost map, not the
+    hosted map fetched from main, which lags this repo until the next promotion."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    try:
+        assert litellm.get_model_info("gpt-realtime-mini")["mode"] == "realtime"
+    finally:
+        litellm.get_model_info.cache_clear()
 
 
 def test_backup_matches_main_for_realtime_models():

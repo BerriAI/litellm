@@ -41,6 +41,16 @@ const DEFAULT_PROPS = {
   models: ["gpt-4", "gpt-3.5-turbo", "claude-3-sonnet"],
 };
 
+const dataRows = (): HTMLElement[] =>
+  within(screen.getByRole("table"))
+    .getAllByRole("row")
+    .filter((row) => within(row).queryAllByRole("combobox").length > 0);
+
+const deleteButtonIn = (row: HTMLElement): HTMLElement => {
+  const cells = within(row).getAllByRole("cell");
+  return within(cells[cells.length - 1]).getByRole("button");
+};
+
 describe("PricingCalculator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -124,8 +134,31 @@ describe("PricingCalculator", () => {
 
   it("should render column headers for Model, Input Tokens, and Output Tokens", () => {
     renderWithProviders(<PricingCalculator {...DEFAULT_PROPS} />);
-    expect(screen.getByText("Model")).toBeInTheDocument();
-    expect(screen.getByText("Input Tokens")).toBeInTheDocument();
-    expect(screen.getByText("Output Tokens")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Model" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Input Tokens" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Output Tokens" })).toBeInTheDocument();
+  });
+
+  it("should render a numeric field for input tokens, output tokens and requests", () => {
+    renderWithProviders(<PricingCalculator {...DEFAULT_PROPS} />);
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(3);
+  });
+
+  it("should offer a model picker per row", () => {
+    renderWithProviders(<PricingCalculator {...DEFAULT_PROPS} />);
+    expect(screen.getAllByRole("combobox")).toHaveLength(1);
+  });
+
+  it("should remove a row when its delete button is clicked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<PricingCalculator {...DEFAULT_PROPS} />);
+
+    await user.click(screen.getByRole("button", { name: /add another model/i }));
+    const withTwoRows = dataRows();
+    expect(withTwoRows).toHaveLength(2);
+
+    await user.click(deleteButtonIn(withTwoRows[1]));
+
+    expect(dataRows()).toHaveLength(1);
   });
 });

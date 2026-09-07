@@ -1,15 +1,19 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { BarChart } from "@/components/shared/charts";
+import { DataTable } from "@/components/shared/DataTable";
 import { IdCell, MoneyCell } from "@/components/shared/table_cells";
 import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
-import { Segmented, Tooltip } from "antd";
+import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import React, { useState } from "react";
 import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
 import { keyInfoV1Call } from "../../../networking";
 import KeyInfoView from "../../../templates/key_info_view";
-import { DataTable } from "../../../view_logs/table";
 import { TagUsage } from "../../types";
+
+const TOP_KEYS_LIMITS = [5, 10, 25, 50] as const;
 
 interface TopKeyViewProps {
   topKeys: any[];
@@ -20,7 +24,7 @@ interface TopKeyViewProps {
 }
 
 const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = false, topKeysLimit, setTopKeysLimit }) => {
-  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+  const { accessToken } = useAuthorized();
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [keyData, setKeyData] = useState<any | undefined>(undefined);
@@ -113,33 +117,33 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         <div className="overflow-hidden">
           <div className="flex flex-wrap items-center gap-1">
             {displayTags.map((tag, index) => (
-              <Tooltip
+              <SimpleTooltip
                 key={index}
-                title={
+                content={
                   <div>
                     <div>
-                      <span className="text-gray-300">Tag Name:</span> {tag.tag}
+                      <span className="text-muted-foreground">Tag Name:</span> {tag.tag}
                     </div>
                     <div>
-                      <span className="text-gray-300">Spend:</span>{" "}
+                      <span className="text-muted-foreground">Spend:</span>{" "}
                       {tag.usage > 0 && tag.usage < 0.01 ? "<$0.01" : `$${formatNumberWithCommas(tag.usage, 2)}`}
                     </div>
                   </div>
                 }
               >
-                <span className="px-2 py-1 bg-gray-100 rounded-full text-xs">{tag.tag.slice(0, 7)}...</span>
-              </Tooltip>
+                <span className="px-2 py-1 bg-muted rounded-full text-xs">{tag.tag.slice(0, 7)}...</span>
+              </SimpleTooltip>
             ))}
             {hasMoreTags && (
               <button
                 onClick={() => toggleTagsExpansion(apiKey)}
-                className="ml-1 p-1 hover:bg-gray-200 rounded-full transition-colors"
+                className="ml-1 p-1 hover:bg-accent rounded-full transition-colors"
                 title={isExpanded ? "Show fewer tags" : "Show all tags"}
               >
                 {isExpanded ? (
-                  <ChevronUpIcon className="h-3 w-3 text-gray-500" />
+                  <ChevronUpIcon className="h-3 w-3 text-muted-foreground" />
                 ) : (
-                  <ChevronDownIcon className="h-3 w-3 text-gray-500" />
+                  <ChevronDownIcon className="h-3 w-3 text-muted-foreground" />
                 )}
               </button>
             )}
@@ -166,26 +170,32 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
   return (
     <>
       <div className="mb-4 flex justify-between items-center">
-        <Segmented
-          options={[
-            { label: "5", value: 5 },
-            { label: "10", value: 10 },
-            { label: "25", value: 25 },
-            { label: "50", value: 50 },
-          ]}
-          value={topKeysLimit}
-          onChange={(value) => setTopKeysLimit(value as number)}
-        />
+        <RadioGroup
+          aria-label="Number of top keys to show"
+          value={String(topKeysLimit)}
+          onValueChange={(limit: unknown) => setTopKeysLimit(Number(limit))}
+          className="inline-flex w-fit items-center gap-1 rounded-lg bg-muted p-[3px]"
+        >
+          {TOP_KEYS_LIMITS.map((limit) => (
+            <Label
+              key={limit}
+              className="cursor-pointer rounded-md px-3 py-1 font-medium text-foreground/60 transition-colors has-data-checked:bg-background has-data-checked:text-foreground has-data-checked:shadow-sm"
+            >
+              <RadioGroupItem value={String(limit)} className="sr-only" />
+              {limit}
+            </Label>
+          ))}
+        </RadioGroup>
         <div className="flex space-x-2">
           <button
             onClick={() => setViewMode("table")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+            className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             Table View
           </button>
           <button
             onClick={() => setViewMode("chart")}
-            className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
+            className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-info/15 text-info" : "bg-muted text-foreground"}`}
           >
             Chart View
           </button>
@@ -211,18 +221,18 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
             customTooltip={(props) => {
               const item = props.payload?.[0]?.payload;
               return (
-                <div className="relative z-50 p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
+                <div className="relative z-floating p-3 bg-black/90 shadow-lg rounded-lg text-white max-w-xs">
                   <div className="space-y-1.5">
                     <div className="text-sm">
-                      <span className="text-gray-300">Key Alias: </span>
+                      <span className="text-muted-foreground">Key Alias: </span>
                       <span className="font-mono text-gray-100 break-all">{item?.key_alias}</span>
                     </div>
                     <div className="text-sm">
-                      <span className="text-gray-300">Key ID: </span>
+                      <span className="text-muted-foreground">Key ID: </span>
                       <span className="font-mono text-gray-100 break-all">{item?.api_key}</span>
                     </div>
                     <div className="text-sm">
-                      <span className="text-gray-300">Spend: </span>
+                      <span className="text-muted-foreground">Spend: </span>
                       <span className="text-white font-medium">${formatNumberWithCommas(item?.spend, 2)}</span>
                     </div>
                   </div>
@@ -232,18 +242,19 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
           />
         </div>
       ) : (
-        <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
-          <DataTable columns={columns} data={topKeys} isLoading={false} />
-        </div>
+        <DataTable columns={columns} data={topKeys} isLoading={false} maxBodyHeight={600} size="compact" />
       )}
 
       {isModalOpen && selectedKey && keyData && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={handleOutsideClick}>
-          <div className="bg-white rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-overlay"
+          onClick={handleOutsideClick}
+        >
+          <div className="bg-card rounded-lg shadow-xl relative w-11/12 max-w-6xl max-h-[90vh] overflow-y-auto min-h-[750px]">
             {/* Close button */}
             <button
               onClick={handleClose}
-              className="absolute top-4 right-4 text-gray-500 hover:text-gray-700 focus:outline-hidden"
+              className="absolute top-4 right-4 text-muted-foreground hover:text-foreground focus:outline-hidden"
               aria-label="Close"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -5,9 +5,13 @@
 - {id: mgmt.key.update.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:2462", rationale: "Budget/model changes persist"}
 - {id: mgmt.key.update.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "key_management_endpoints.py:2462", rationale: "Non-admin cannot escalate perms"}
 - {id: mgmt.key.update.happy_path, module: mgmt, tier: P1, surface: ui, assertions: [happy_path], source: "key_management_endpoints.py:2462", rationale: "Key edit through the dashboard"}
+- {id: mgmt.key.update.preserves_unrelated_fields, module: mgmt, tier: P0, surface: api, assertions: [preserves_unrelated_fields], source: "key_management_endpoints.py:2829", rationale: "A partial /key/update changes only the field it names; alias, models, limits, budget window, team and metadata read back unchanged on every gateway replica"}
+- {id: mgmt.key.update.clear_persists, module: mgmt, tier: P0, surface: api, assertions: [clear_persists], source: "key_management_endpoints.py:2829", rationale: "An explicit null on /key/update clears max_budget and budget_duration, and the derived budget_reset_at with it, on every gateway replica"}
 - {id: mgmt.key.delete.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:3122", rationale: "Deletion revokes future calls"}
 - {id: mgmt.key.delete.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "key_management_endpoints.py:3122", rationale: "Non-owner cannot delete"}
 - {id: mgmt.key.info.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "key_management_endpoints.py:3380", rationale: "Info reflects all writes"}
+- {id: mgmt.virtual_key.valid_allows, module: mgmt, tier: P0, surface: api, assertions: [valid_allows], source: "user_api_key_auth.py", rationale: "Virtual key authenticates chat the way production OpenAI clients do"}
+- {id: mgmt.virtual_key.invalid_denied, module: mgmt, tier: P0, surface: api, assertions: [invalid_denied], source: "user_api_key_auth.py", rationale: "Bogus bearer is rejected before provider call"}
 - {id: mgmt.team.new.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "team_endpoints.py:897", rationale: "team_id/alias/budgets stored"}
 - {id: mgmt.team.new.admin_only, module: mgmt, tier: P0, surface: api, assertions: [admin_only], source: "team_endpoints.py:897", rationale: "Only org-admin/master creates teams"}
 - {id: mgmt.team.member_add.persists, module: mgmt, tier: P0, surface: api, assertions: [persists], source: "team_endpoints.py:2424", rationale: "Membership + per-member budget persist"}
@@ -29,6 +33,9 @@
 - {id: mgmt.team.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py:1750", rationale: "Deletion prevents key access"}
 - {id: mgmt.team.block.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py", rationale: "Block suspends all members"}
 - {id: mgmt.team.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "team_endpoints.py:2244", rationale: "Metadata+members+budgets"}
+- {id: mgmt.team.daily_activity.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "vendor testing strategy §9.20 / LIT-4778", rationale: "GET /team/daily/activity returns results+metadata for a valid date range"}
+- {id: mgmt.team.daily_activity.missing_start_date_rejected, module: mgmt, tier: P1, surface: api, assertions: [missing_start_date_rejected], source: "vendor testing strategy §9.20 / LIT-4778", rationale: "Missing start_date on /team/daily/activity is 400"}
+- {id: mgmt.team.daily_activity.missing_end_date_rejected, module: mgmt, tier: P1, surface: api, assertions: [missing_end_date_rejected], source: "vendor testing strategy §9.20 / LIT-4778", rationale: "Missing end_date on /team/daily/activity is 400"}
 - {id: mgmt.team.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "team_endpoints.py:3645", rationale: "Pagination/filtering"}
 - {id: mgmt.team.member_update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "team_endpoints.py:2768", rationale: "Member budget/role updates persist"}
 - {id: mgmt.user.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "internal_user_endpoints.py:555", rationale: "Metadata/perm updates persist"}
@@ -52,17 +59,20 @@
 - {id: mgmt.access_group.info.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "model_access_group_management_endpoints.py:600", rationale: "Access group membership query"}
 - {id: mgmt.mcp_server.register.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "mcp_management_endpoints.py:880", rationale: "MCP server registration"}
 - {id: mgmt.mcp_server.approve.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "mcp_management_endpoints.py:1200", rationale: "Admin approval persists"}
+- {id: mgmt.budget.update.accepts_model_max_budget, module: mgmt, tier: P1, surface: api, assertions: [accepts_model_max_budget], source: "budget_management_endpoints.py:173", fail_before_fix: proven, rationale: "Per-model caps must be settable on an existing budget; model ids routinely carry dots and hyphens and the route must accept both"}
 - {id: mgmt.budget.update.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "budget_management_endpoints.py:155", rationale: "Limit changes apply"}
 - {id: mgmt.budget.delete.persists, module: mgmt, tier: P1, surface: api, assertions: [persists], source: "budget_management_endpoints.py:280", rationale: "Clears limits"}
 - {id: mgmt.budget.list.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "budget_management_endpoints.py:215", rationale: "Budget enumeration"}
+- {id: mgmt.budget.list_v1.happy_path, module: mgmt, tier: P1, surface: api, assertions: [happy_path], source: "management_v1/budgets.py:129", rationale: "Budget enumeration the Budgets page can page, sort and filter"}
+- {id: mgmt.budget.list_v1.admin_only, module: mgmt, tier: P1, surface: api, assertions: [admin_only], source: "management_v1/budgets.py:129", rationale: "A caller without admin view is refused, not served an empty page"}
 - {id: mgmt.callback.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "callback_management_endpoints.py", rationale: "Callback config (smoke)"}
-- {id: mgmt.cache_settings.update.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "cache_settings_endpoints.py", rationale: "Cache config (smoke)"}
 - {id: mgmt.cost_tracking.estimate.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "cost_tracking_settings.py", rationale: "Cost estimate (smoke)"}
 - {id: mgmt.router_settings.update.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "router_settings_endpoints.py", rationale: "Router config (smoke)"}
 - {id: mgmt.jwt_key_mapping.new.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "jwt_key_mapping_endpoints.py", rationale: "JWT->key mapping (smoke)"}
 - {id: mgmt.compliance.gdpr.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "compliance_endpoints.py", rationale: "GDPR ops (smoke)"}
 - {id: mgmt.tool_management.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "tool_management_endpoints.py", rationale: "Tool inventory (smoke)"}
 - {id: mgmt.fallback_management.update.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "fallback_management_endpoints.py", rationale: "Fallback config (smoke)"}
-- {id: mgmt.config_override.hashicorp_vault.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "config_override_endpoints.py", rationale: "Vault integration (smoke)"}
 - {id: mgmt.workflow.list.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "workflow_management_endpoints.py", rationale: "Workflow tracking (smoke)"}
 - {id: mgmt.credential_migration.check.happy_path, module: mgmt, tier: P2, surface: api, assertions: [happy_path], source: "key_management_endpoints.py:4252", rationale: "Encryption migration (smoke)"}
+- {id: mgmt.credential.new.serves_request, module: mgmt, tier: P1, surface: api, assertions: [serves_request], source: "credential_endpoints/endpoints.py:42", rationale: "Stored credential resolves into a deployment and serves a live /messages request"}
+- {id: mgmt.model.test_connection.happy_path, module: mgmt, tier: P0, surface: api, assertions: [happy_path], source: "_health_endpoints.py:1785", rationale: "Test Connection for a responses-mode Bedrock Mantle deployment reaches the live provider and reports success; this exact shape 500ed on an acompletion partial before v1.91.0", fail_before_fix: proven}

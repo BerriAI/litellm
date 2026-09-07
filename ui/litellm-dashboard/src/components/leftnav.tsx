@@ -1,6 +1,6 @@
-import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
 import { useLogout } from "@/app/(dashboard)/hooks/useLogout";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -20,7 +20,7 @@ import {
   SidebarMenuSub,
   SidebarSeparator,
   sidebarMenuButtonVariants,
-} from "@/components/ui/sidebar";
+} from "@/components/shared/Sidebar";
 import {
   Activity,
   BarChart3,
@@ -44,6 +44,7 @@ import {
   Palette,
   PanelLeftClose,
   PanelLeftOpen,
+  PiggyBank,
   PlayCircle,
   Route,
   ScrollText,
@@ -61,8 +62,10 @@ import {
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cva.config";
+import { rolesWithCapability } from "../utils/capabilities";
 import {
   all_admin_roles,
   internalUserRoles,
@@ -72,17 +75,15 @@ import {
   rolesWithWriteAccess,
 } from "../utils/roles";
 import BetaBadge from "./BetaBadge";
-import NewBadge from "./common_components/NewBadge";
-import type { Organization } from "./networking";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
 import SidebarUsageCard from "./SidebarUsageCard";
-import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
+import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 
 const ICON = { strokeWidth: 1.75 } as const;
 
+const LOGO_CLASS_NAME = "h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7";
+
 interface SidebarProps {
-  setPage: (page: string) => void;
-  defaultSelectedKey: string;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   enabledPagesInternalUsers?: string[] | null;
@@ -96,6 +97,7 @@ interface SidebarProps {
 interface MenuItem {
   key: string;
   page: string;
+  route?: string;
   label: string | React.ReactNode;
   roles?: string[];
   children?: MenuItem[];
@@ -120,6 +122,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "llm-playground",
         page: "llm-playground",
+        route: "playground",
         label: "Playground",
         icon: <PlayCircle {...ICON} />,
         roles: rolesWithWriteAccess,
@@ -127,6 +130,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "models",
         page: "models",
+        route: "models-and-endpoints",
         label: "Models + Endpoints",
         icon: <Network {...ICON} />,
         roles: rolesAllowedToViewWriteScopedPages,
@@ -144,8 +148,20 @@ const menuGroups: MenuGroup[] = [
             icon: <Bot {...ICON} />,
             roles: rolesAllowedToViewWriteScopedPages,
           },
-          { key: "workflows", page: "workflows", label: "Workflow Runs", icon: <Workflow {...ICON} /> },
-          { key: "memory", page: "memory", label: "Memory", icon: <Database {...ICON} /> },
+          {
+            key: "workflows",
+            page: "workflows",
+            label: "Workflow Runs",
+            icon: <Workflow {...ICON} />,
+            roles: rolesWithCapability("viewWorkflowRuns"),
+          },
+          {
+            key: "memory",
+            page: "memory",
+            label: "Memory",
+            icon: <Database {...ICON} />,
+            roles: rolesWithCapability("viewMemory"),
+          },
         ],
       },
       { key: "mcp-servers", page: "mcp-servers", label: "MCP Servers", icon: <Server {...ICON} /> },
@@ -156,7 +172,7 @@ const menuGroups: MenuGroup[] = [
         page: "policies",
         label: "Policies",
         icon: <ScrollText {...ICON} />,
-        roles: all_admin_roles,
+        roles: rolesWithCapability("viewPolicies"),
       },
       {
         key: "tools",
@@ -166,7 +182,13 @@ const menuGroups: MenuGroup[] = [
         children: [
           { key: "search-tools", page: "search-tools", label: "Search Tools", icon: <Search {...ICON} /> },
           { key: "vector-stores", page: "vector-stores", label: "Vector Stores", icon: <Database {...ICON} /> },
-          { key: "tool-policies", page: "tool-policies", label: "Tool Policies", icon: <ShieldCheck {...ICON} /> },
+          {
+            key: "tool-policies",
+            page: "tool-policies",
+            label: "Tool Policies",
+            icon: <ShieldCheck {...ICON} />,
+            roles: rolesWithCapability("viewToolPolicies"),
+          },
         ],
       },
     ],
@@ -177,9 +199,21 @@ const menuGroups: MenuGroup[] = [
       {
         key: "new_usage",
         page: "new_usage",
+        route: "usage",
         icon: <BarChart3 {...ICON} />,
         roles: [...all_admin_roles, ...internalUserRoles],
         label: "Usage",
+      },
+      {
+        key: "cost-optimization",
+        page: "cost-optimization",
+        icon: <PiggyBank {...ICON} />,
+        roles: [...all_admin_roles, ...internalUserRoles],
+        label: (
+          <span className="flex items-center gap-2">
+            Cost Optimization <BetaBadge />
+          </span>
+        ),
       },
       { key: "logs", page: "logs", label: "Logs", icon: <Activity {...ICON} /> },
       {
@@ -187,7 +221,7 @@ const menuGroups: MenuGroup[] = [
         page: "guardrails-monitor",
         label: "Guardrails Monitor",
         icon: <HeartPulse {...ICON} />,
-        roles: [...all_admin_roles, ...internalUserRoles],
+        roles: rolesWithCapability("viewGuardrailUsage"),
       },
     ],
   },
@@ -227,7 +261,7 @@ const menuGroups: MenuGroup[] = [
   {
     groupLabel: "DEVELOPER TOOLS",
     items: [
-      { key: "api_ref", page: "api_ref", label: "API Reference", icon: <Code2 {...ICON} /> },
+      { key: "api_ref", page: "api_ref", route: "api-reference", label: "API Reference", icon: <Code2 {...ICON} /> },
       { key: "model-hub-table", page: "model-hub-table", label: "AI Hub", icon: <LayoutGrid {...ICON} /> },
       {
         key: "learning-resources",
@@ -236,14 +270,26 @@ const menuGroups: MenuGroup[] = [
         icon: <BookOpen {...ICON} />,
         external_url: "https://models.litellm.ai/cookbook",
       },
-      { key: "caching", page: "caching", label: "Caching", icon: <Database {...ICON} />, roles: all_admin_roles },
+      {
+        key: "caching",
+        page: "caching",
+        label: "Response Cache",
+        icon: <Database {...ICON} />,
+        roles: all_admin_roles,
+      },
       {
         key: "experimental",
         page: "experimental",
         label: "Experimental",
         icon: <FlaskConical {...ICON} />,
         children: [
-          { key: "prompts", page: "prompts", label: "Prompts", icon: <FileText {...ICON} />, roles: all_admin_roles },
+          {
+            key: "prompts",
+            page: "prompts",
+            label: "Prompts",
+            icon: <FileText {...ICON} />,
+            roles: rolesWithCapability("viewPrompts"),
+          },
           {
             key: "transform-request",
             page: "transform-request",
@@ -258,7 +304,14 @@ const menuGroups: MenuGroup[] = [
             icon: <Tags {...ICON} />,
             roles: all_admin_roles,
           },
-          { key: "4", page: "usage", label: "Old Usage", icon: <BarChart3 {...ICON} /> },
+          {
+            key: "4",
+            page: "usage",
+            route: "old-usage",
+            label: "Old Usage",
+            icon: <BarChart3 {...ICON} />,
+            roles: rolesWithCapability("viewGlobalSpend"),
+          },
         ],
       },
     ],
@@ -270,11 +323,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "settings",
         page: "settings",
-        label: (
-          <span className="flex items-center gap-2">
-            Settings <NewBadge />
-          </span>
-        ),
+        label: "Settings",
         icon: <SettingsIcon {...ICON} />,
         roles: all_admin_roles,
         children: [
@@ -295,14 +344,7 @@ const menuGroups: MenuGroup[] = [
           {
             key: "admin-panel",
             page: "admin-panel",
-            label: (
-              <span className="flex items-center gap-2">
-                Admin Settings{" "}
-                <NewBadge dot>
-                  <span />
-                </NewBadge>
-              </span>
-            ),
+            label: "Admin Settings",
             icon: <SettingsIcon {...ICON} />,
             roles: all_admin_roles,
           },
@@ -320,27 +362,31 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const findParentKey = (page: string): string | null => {
+const HOME_ROUTE = "api-keys";
+
+const routeOf = (item: MenuItem): string => item.route ?? item.page;
+
+const routeForPathname = (pathname: string): string => routeSegmentForPathname(pathname) || HOME_ROUTE;
+
+const findParentKey = (route: string): string | null => {
   for (const group of menuGroups) {
     for (const item of group.items) {
-      if (item.children?.some((c) => c.page === page || c.key === page)) return item.key;
+      if (item.children?.some((c) => routeOf(c) === route)) return item.key;
     }
   }
   return null;
 };
 
-const findMenuItemKey = (page: string): string => {
+const findMenuItemKey = (route: string): string => {
   for (const group of menuGroups) {
     for (const item of group.items) {
-      if (item.page === page) return item.key;
-      const child = item.children?.find((c) => c.page === page);
+      if (routeOf(item) === route) return item.key;
+      const child = item.children?.find((c) => routeOf(c) === route);
       if (child) return child.key;
     }
   }
-  return "api-keys";
+  return HOME_ROUTE;
 };
-
-const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : item.key);
 
 const SECTION_DISPLAY: Record<string, string> = {
   "AI GATEWAY": "AI Gateway",
@@ -356,23 +402,23 @@ const prettify = (key: string): string =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 
+const labelText = (item: MenuItem): string => (typeof item.label === "string" ? item.label : prettify(item.key));
+
 // Breadcrumb ("Section" / "Page") for the top bar, derived from the same nav config.
-export const getBreadcrumb = (page: string): { section: string | null; title: string } => {
+export const getBreadcrumb = (pathname: string): { section: string | null; title: string } => {
+  const route = routeForPathname(pathname);
   for (const group of menuGroups) {
     for (const item of group.items) {
       const section = SECTION_DISPLAY[group.groupLabel] ?? group.groupLabel;
-      if (item.page === page)
-        return { section, title: typeof item.label === "string" ? item.label : prettify(item.key) };
-      const child = item.children?.find((c) => c.page === page);
-      if (child) return { section, title: typeof child.label === "string" ? child.label : prettify(child.key) };
+      if (routeOf(item) === route) return { section, title: labelText(item) };
+      const child = item.children?.find((c) => routeOf(c) === route);
+      if (child) return { section, title: labelText(child) };
     }
   }
-  return { section: null, title: prettify(page) };
+  return { section: null, title: prettify(route) };
 };
 
 const Sidebar_: React.FC<SidebarProps> = ({
-  setPage,
-  defaultSelectedKey,
   collapsed = false,
   onToggleCollapsed,
   enabledPagesInternalUsers,
@@ -382,40 +428,35 @@ const Sidebar_: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
-  const { userId, accessToken, userRole } = useAuthorized();
-  const { data: organizations } = useOrganizations();
+  const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
+  const isOrgAdmin = useIsOrgAdmin();
   const { data: teams } = useTeams();
-  const { logoUrl } = useTheme();
+  const { logoUrl, logoUrlDark } = useTheme();
+  const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
   const { data: healthData } = useHealthReadinessDetails(accessToken);
   const logout = useLogout(accessToken);
 
   const baseUrl = getProxyBaseUrl();
   const version = healthData?.litellm_version;
-  const selectedKey = findMenuItemKey(defaultSelectedKey);
+  const currentRoute = routeForPathname(usePathname());
+  const selectedKey = findMenuItemKey(currentRoute);
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
-    const parent = findParentKey(defaultSelectedKey);
+    const parent = findParentKey(currentRoute);
     return new Set(parent ? [parent] : []);
   });
 
   // Keep the active page's parent group expanded as the user navigates, using the
   // "adjust state during render" pattern rather than an effect (avoids a
   // setState-in-effect render cascade).
-  const [prevSelectedKey, setPrevSelectedKey] = useState(defaultSelectedKey);
-  if (defaultSelectedKey !== prevSelectedKey) {
-    setPrevSelectedKey(defaultSelectedKey);
-    const parent = findParentKey(defaultSelectedKey);
+  const [prevRoute, setPrevRoute] = useState(currentRoute);
+  if (currentRoute !== prevRoute) {
+    setPrevRoute(currentRoute);
+    const parent = findParentKey(currentRoute);
     if (parent && !openGroups.has(parent)) {
       setOpenGroups((prev) => new Set(prev).add(parent));
     }
   }
-
-  const isOrgAdmin = useMemo(() => {
-    if (!userId || !organizations) return false;
-    return organizations.some((org: Organization) =>
-      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
-    );
-  }, [userId, organizations]);
 
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
@@ -424,6 +465,10 @@ const Sidebar_: React.FC<SidebarProps> = ({
     return items
       .map((item) => ({ ...item, children: item.children ? filterItemsByRole(item.children) : undefined }))
       .filter((item) => {
+        // A parent whose children were all filtered out renders as a leaf link
+        // to its own page id, which is not a real route. Drop it instead.
+        if (item.children && item.children.length === 0) return false;
+        if (item.key === "llm-playground" && isViewOnly) return false;
         if (item.key === "organizations" || item.key === "users") {
           const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
           if (!hasRoleAccess) return false;
@@ -476,13 +521,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
     });
   };
 
-  const handleLeafClick = (e: React.MouseEvent, item: MenuItem) => {
-    if (item.external_url) return;
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) return;
-    e.preventDefault();
-    setPage(item.page);
-  };
-
   const renderLeaf = (item: MenuItem, isChild: boolean) => {
     const active = selectedKey === item.key;
     const size = isChild ? "sub" : "default";
@@ -506,19 +544,17 @@ const Sidebar_: React.FC<SidebarProps> = ({
       );
     }
 
-    const href = MIGRATED_PAGES[item.page] ? migratedHref(MIGRATED_PAGES[item.page]) : legacyPageHref(item.page);
     return (
-      <a
+      <Link
         key={item.key}
-        href={href}
-        onClick={(e) => handleLeafClick(e, item)}
+        href={uiHref(routeOf(item))}
         title={collapsed ? labelText(item) : undefined}
         data-active={active || undefined}
         className={cn(sidebarMenuButtonVariants({ isActive: active, size }))}
       >
         {item.icon}
         {label}
-      </a>
+      </Link>
     );
   };
 
@@ -534,6 +570,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
       <SidebarMenuItem key={item.key}>
         <SidebarMenuButton
           isActive={active}
+          aria-expanded={open}
           onClick={() => toggleGroup(item.key)}
           title={collapsed ? labelText(item) : undefined}
         >
@@ -558,17 +595,22 @@ const Sidebar_: React.FC<SidebarProps> = ({
   };
 
   const logoSrc = logoUrl || `${baseUrl}/get_image`;
+  const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
+  const darkLogoSrc = reachableDarkLogo || logoUrl || `${baseUrl}/get_image?theme=dark`;
 
   return (
     <Sidebar collapsed={collapsed}>
       <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto">
         <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col">
           <div className="flex min-w-0 items-center gap-2">
-            <Link href={baseUrl || "/"} className="flex min-w-0 items-center" aria-label="LiteLLM home">
+            <Link href={uiHref("")} className="flex min-w-0 items-center" aria-label="LiteLLM home">
+              <img src={logoSrc} alt="LiteLLM" className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
               <img
-                src={logoSrc}
-                alt="LiteLLM"
-                className="h-7 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:w-7"
+                src={darkLogoSrc}
+                alt=""
+                aria-hidden
+                onError={() => setErroredDarkLogo(logoUrlDark)}
+                className={cn(LOGO_CLASS_NAME, "hidden dark:block")}
               />
             </Link>
             {version && (

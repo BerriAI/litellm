@@ -7,11 +7,11 @@ when an upstream's status and error code are relayed independently.
 
 from __future__ import annotations
 
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict
 
-MAX_WIRE_FIELD_CHARS = 500
+MAX_WIRE_FIELD_CHARS: Final = 500
 """Bound on every upstream-derived string that crosses to a caller or into a log line."""
 
 CredentialSource: TypeAlias = Literal["gateway_stored", "caller_supplied"]
@@ -19,17 +19,18 @@ CredentialSource: TypeAlias = Literal["gateway_stored", "caller_supplied"]
 credentials the caller supplied on the request. Decides whether a credential rejection is the
 caller's problem to fix or the gateway operator's."""
 
-GATEWAY_CREDENTIAL_CODES: frozenset[str] = frozenset({"invalid_client", "unauthorized_client"})
+GATEWAY_CREDENTIAL_CODES: Final[frozenset[str]] = frozenset({"invalid_client", "unauthorized_client"})
 """RFC 6749 error codes that indict the OAuth client's credentials or grant authorization. When the
 gateway presented its own stored credentials, these are gateway-side faults the caller cannot act on;
 when the caller supplied the credentials, they are the caller's to fix."""
 
-GATEWAY_CAPABILITY_CODES: frozenset[str] = frozenset({"invalid_target"})
-"""Codes that indict a gateway capability regardless of whose credentials were presented:
-``invalid_target`` means the upstream wants RFC 8707 resource indicators, which the gateway does not
-send yet (LIT-4339). Never the caller's fault."""
+GATEWAY_CAPABILITY_CODES: Final[frozenset[str]] = frozenset({"invalid_target"})
+"""Codes that indict gateway configuration regardless of whose credentials were presented:
+``invalid_target`` means the upstream did not accept the RFC 8707 resource indicator the server
+sent, or requires one it was not configured to send (``upstream_resource``). Never the caller's
+fault."""
 
-UPSTREAM_FAULT_CODES: frozenset[str] = frozenset({"server_error", "temporarily_unavailable"})
+UPSTREAM_FAULT_CODES: Final[frozenset[str]] = frozenset({"server_error", "temporarily_unavailable"})
 """Codes by which the upstream blames itself. Relaying them as caller faults would invert blame, so
 they classify as upstream-reported faults and render on the 5xx their meaning implies."""
 

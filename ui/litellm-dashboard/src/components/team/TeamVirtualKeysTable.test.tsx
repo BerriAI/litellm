@@ -1,7 +1,6 @@
-import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { KeyResponse } from "../key_team_helpers/key_list";
@@ -30,6 +29,8 @@ vi.mock("@tanstack/react-pacer/debouncer", () => ({
 }));
 
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
+
+const KEY_HASH = "88a145505dd6e87e2ea166fcef1e4b53948dbdb32af6431dfd05ec06b571ee52";
 
 const createMockKey = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
   ({
@@ -213,7 +214,7 @@ describe("TeamVirtualKeysTable", () => {
 
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
-    await waitFor(() => expect(screen.getByTestId("sort-header-created_at")).toBeInTheDocument());
+    expect(await screen.findByTestId("sort-header-created_at")).toBeInTheDocument();
     await user.click(screen.getByTestId("sort-header-created_at"));
 
     await waitFor(() =>
@@ -264,8 +265,8 @@ describe("TeamVirtualKeysTable", () => {
 
     await user.click(await screen.findByTestId("datatable-filters-trigger"));
     const drawerBody = await screen.findByTestId("filter-drawer-body");
-    const userInput = drawerBody.querySelector("input") as HTMLElement;
-    await user.type(userInput, "user-42");
+    const userInput = within(drawerBody).getByPlaceholderText("Filter by user ID…");
+    fireEvent.change(userInput, { target: { value: "user-42" } });
     await user.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() =>
@@ -278,7 +279,7 @@ describe("TeamVirtualKeysTable", () => {
     );
   });
 
-  it("maps the search box to a server-side key-alias query", async () => {
+  it("maps the Key ID drawer filter to a server-side useKeys query and clears it", async () => {
     const user = userEvent.setup();
     mockUseKeys.mockReturnValue({
       data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
@@ -289,11 +290,42 @@ describe("TeamVirtualKeysTable", () => {
 
     renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
 
-    await user.type(await screen.findByTestId("datatable-search"), "check-002");
+    await user.click(await screen.findByTestId("datatable-filters-trigger"));
+    const drawerBody = await screen.findByTestId("filter-drawer-body");
+    fireEvent.change(within(drawerBody).getByPlaceholderText("Enter Key ID…"), { target: { value: KEY_HASH } });
+    await user.click(screen.getByTestId("filter-drawer-apply"));
 
     await waitFor(() =>
-      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ selectedKeyAlias: "check-002" })),
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ keyHash: KEY_HASH })),
     );
+    expect(screen.getByTestId("filter-chip-key_hash")).toHaveTextContent("Key ID");
+
+    await user.click(screen.getByTestId("datatable-clear-filters"));
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ keyHash: undefined })),
+    );
+  });
+
+  it("maps the search box to the combined alias-or-ID search rather than the key-alias filter", async () => {
+    mockUseKeys.mockReturnValue({
+      data: { keys: [createMockKey()], total_count: 1, current_page: 1, total_pages: 1 },
+      isPending: false,
+      isFetching: false,
+      refetch: vi.fn(),
+    } as unknown as ReturnType<typeof useKeys>);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    const searchBox = await screen.findByTestId("datatable-search");
+    expect(searchBox).toHaveAttribute("placeholder", "Search by key alias or ID…");
+    fireEvent.change(searchBox, { target: { value: KEY_HASH } });
+
+    await waitFor(() =>
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: KEY_HASH })),
+    );
+    const lastOptions = mockUseKeys.mock.calls.at(-1)?.[2];
+    expect(lastOptions?.selectedKeyAlias).toBeUndefined();
+    expect(lastOptions?.keyHash).toBeUndefined();
   });
 
   it("should show Loading keys when isPending", async () => {

@@ -1,9 +1,7 @@
 import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
@@ -113,7 +111,7 @@ def test_response_format_is_ignored():
 
 
 def test_unsupported_param_raises_without_drop_params():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Supported parameters are \\['n', 'response_format', 'size'\\]\\."):
         FalAINanoBananaConfig().map_openai_params(
             non_default_params={"style": "vivid"},
             optional_params={},

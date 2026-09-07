@@ -1,12 +1,27 @@
 lint.ignore = ["F405", "E402", "F403"]
-lint.extend-select = ["T20", "PGH004", "RUF008", "RUF009", "RUF100"]
+# The second group is the strict gate's graduates: rules the codebase already has zero
+# violations of, so they hard-fail here instead of being ratcheted in ruff-strict-budget.json.
+# That gives editors and `ruff check --fix` the diagnostic, which the gate script cannot.
+lint.extend-select = [
+    "T20", "PGH004", "RUF008", "RUF009", "RUF100",
+    "B033", "FURB136", "FURB168", "FURB188", "I001", "PERF402", "PIE790", "PIE800", "PLC0208",
+    "PLR0402", "PLR1711", "PLR1730", "PLR2044", "PLW0133", "PYI030", "PYI041", "PYI064", "RET501",
+    "RUF010", "RUF022", "RUF023", "RUF051", "S113", "SIM114", "SIM118", "TC005", "UP006", "UP007",
+    "UP008",
+    "UP012", "UP018", "UP024", "UP032", "UP034", "UP035", "UP037", "UP045",
+]
 # RUF100 (unused-noqa) only knows the rules enabled in THIS config, so it would strip
 # `# noqa` directives that protect rules enforced elsewhere. List those codes as external
 # so RUF100 leaves their directives alone: the strict gate (ruff-strict.toml) and upstream
 # litellm's own ruff config both rely on suppressions this config can't see.
 lint.external = [
-    # Enforced by the strict-rule gate (scripts/ruff_strict_gate.py + ruff-strict.toml)
-    "C901",
+    # Enforced by the strict-rule gate (scripts/ruff_strict_gate.py + ruff-strict.toml).
+    # Family entries whose every strict rule graduated into extend-select above (FURB), and
+    # standalone graduated codes (I001, RUF010, RUF022, RUF023, RUF051), are dropped so this
+    # config's RUF100 polices their directives itself.
+    "ANN", "ASYNC230", "B", "C", "D419", "DTZ", "EXE", "LOG015", "N999", "PERF",
+    "PIE", "PL", "PYI", "RET", "RUF012", "RUF015", "RUF019",
+    "RUF046", "RUF059", "S110", "S112", "SIM", "TC", "TID251", "TRY", "UP",
     # Enforced by upstream litellm's ruff config, but not run in this repo's CI
     "PLC0415", "E402", "BLE001", "ARG002", "S102", "S324", "S606", "D401", "F403", "F405",
 ]
@@ -16,11 +31,17 @@ format.exclude = ["**/enterprise/**"]
 
 # Was the top-level `exclude`. Scoped to lint so `ruff format` still formats these paths
 # (Black did) while `ruff check` keeps skipping them.
-lint.exclude = ["litellm/types/*", "litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
+lint.exclude = ["litellm/__init__.py", "litellm/proxy/example_config_yaml/*", "tests/*"]
 
 
 [lint.per-file-ignores]
 "litellm/main.py" = ["F401"]
+"litellm/types/caching.py" = ["F401"]
+"litellm/types/integrations/slack_alerting.py" = ["F401"]
+"litellm/types/llms/custom_http.py" = ["F401"]
+"litellm/types/llms/openai.py" = ["F401"]
+"litellm/types/proxy/management_endpoints/scim_v2.py" = ["F401"]
+"litellm/types/responses/main.py" = ["F401"]
 "litellm/utils.py" = ["F401"]
 "litellm/proxy/proxy_server.py" = ["F401"]
 "litellm/caching/__init__.py" = ["F401"]

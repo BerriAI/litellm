@@ -1,5 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "@/lib/toast";
+
+vi.mock("@/lib/toast", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
 
 // ---- Hoisted shared mocks (safe to use inside vi.mock factories) ----
 const { keyUpdateCallMock, keyDeleteCallMock, mockUseAuthorized } = vi.hoisted(() => {
@@ -17,22 +22,17 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: mockUseAuthorized,
 }));
 
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: () => ({ data: [] }),
+}));
+
 // Networking: wire the hoisted fns so we can assert calls later
 vi.mock("../networking", () => {
   return {
+    serverRootPath: "",
     keyUpdateCall: (...args: any[]) => keyUpdateCallMock(...args),
     keyDeleteCall: (...args: any[]) => keyDeleteCallMock(...args),
   };
-});
-
-// Notifications
-vi.mock("../molecules/notifications_manager", () => {
-  const Notifications = {
-    success: vi.fn(),
-    error: vi.fn(),
-    fromBackend: vi.fn(),
-  };
-  return { default: Notifications };
 });
 
 // Roles: ensure 'Admin' has write access and include all role helper functions
@@ -63,107 +63,6 @@ vi.mock("../shared/errorUtils", () => ({
   parseErrorMessage: (e: any) => String(e),
 }));
 
-// Tremor components -> async factory, local React import, and named passthroughs
-vi.mock("@tremor/react", async () => {
-  const React = await import("react");
-
-  const makeNamedPassthrough = (tag: any, name: string) => {
-    function Named(props: any) {
-      const { children, ...rest } = props;
-      return React.createElement(tag, rest, children);
-    }
-    (Named as any).displayName = name;
-    return Named;
-  };
-
-  const Card = makeNamedPassthrough("div", "Card");
-  const Text = makeNamedPassthrough("span", "Text");
-  const Grid = makeNamedPassthrough("div", "Grid");
-  const Col = makeNamedPassthrough("div", "Col");
-  const TabGroup = makeNamedPassthrough("div", "TabGroup");
-  const TabList = makeNamedPassthrough("div", "TabList");
-  const TabPanels = makeNamedPassthrough("div", "TabPanels");
-  const TabPanel = makeNamedPassthrough("div", "TabPanel");
-  const Title = makeNamedPassthrough("h1", "Title");
-  const Badge = makeNamedPassthrough("span", "Badge");
-
-  function Button(props: any) {
-    const { children, onClick, ...rest } = props;
-    return React.createElement("button", { onClick, ...rest }, children);
-  }
-  (Button as any).displayName = "Button";
-
-  function Tab(props: any) {
-    const { children, ...rest } = props;
-    return React.createElement("button", { ...rest }, children);
-  }
-  (Tab as any).displayName = "Tab";
-
-  function TextInput(props: any) {
-    return React.createElement("input", { ...props });
-  }
-  (TextInput as any).displayName = "TextInput";
-
-  function TremorSelect(props: any) {
-    return React.createElement("select", { ...props });
-  }
-  (TremorSelect as any).displayName = "TremorSelect";
-
-  return {
-    Card,
-    Text,
-    Button,
-    Grid,
-    Col,
-    Tab,
-    TabList,
-    TabGroup,
-    TabPanel,
-    TabPanels,
-    Title,
-    Badge,
-    TextInput,
-    Select: TremorSelect,
-  };
-});
-
-// antd bits -> async factory & local React
-vi.mock("antd", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("antd")>();
-
-  const React = await import("react");
-
-  const Form = { useForm: () => [{}] };
-
-  function Input(props: any) {
-    return React.createElement("input", { ...props });
-  }
-  (Input as any).displayName = "AntdInput";
-
-  function InputNumber(props: any) {
-    return React.createElement("input", { ...props });
-  }
-  (InputNumber as any).displayName = "AntdInputNumber";
-
-  function Select(props: any) {
-    return React.createElement("select", { ...props });
-  }
-  (Select as any).displayName = "AntdSelect";
-
-  function Tooltip({ children }: any) {
-    return React.createElement(React.Fragment, null, children);
-  }
-  (Tooltip as any).displayName = "AntdTooltip";
-
-  function Button(props: any) {
-    const { children, onClick, ...rest } = props;
-    return React.createElement("button", { onClick, ...rest }, children);
-  }
-  (Button as any).displayName = "AntdButton";
-
-  return { ...actual, Form, Input, InputNumber, Select, Tooltip, Button };
-});
-
 // Icons -> async factory & local React
 vi.mock("@heroicons/react/outline", async () => {
   const React = await import("react");
@@ -182,46 +81,29 @@ vi.mock("@heroicons/react/outline", async () => {
   return { ArrowLeftIcon, TrashIcon, RefreshIcon };
 });
 
-vi.mock("lucide-react", async () => {
-  const React = await import("react");
-  function CopyIcon() {
-    return React.createElement("span");
-  }
-  (CopyIcon as any).displayName = "CopyIcon";
-  function CheckIcon() {
-    return React.createElement("span");
-  }
-  (CheckIcon as any).displayName = "CheckIcon";
-  return { CopyIcon, CheckIcon };
-});
-
 // Heavy children -> async factories & local React
-vi.mock("../organisms/RegenerateKeyModal", async () => {
-  const React = await import("react");
+vi.mock("../organisms/RegenerateKeyModal", () => {
   function RegenerateKeyModal() {
     return null;
   }
   (RegenerateKeyModal as any).displayName = "RegenerateKeyModal";
   return { RegenerateKeyModal };
 });
-vi.mock("../object_permissions_view", async () => {
-  const React = await import("react");
+vi.mock("../object_permissions_view", () => {
   function ObjectPermissionsView() {
     return null;
   }
   (ObjectPermissionsView as any).displayName = "ObjectPermissionsView";
   return { __esModule: true, default: ObjectPermissionsView };
 });
-vi.mock("../logging_settings_view", async () => {
-  const React = await import("react");
+vi.mock("../logging_settings_view", () => {
   function LoggingSettingsView() {
     return null;
   }
   (LoggingSettingsView as any).displayName = "LoggingSettingsView";
   return { __esModule: true, default: LoggingSettingsView };
 });
-vi.mock("../common_components/AutoRotationView", async () => {
-  const React = await import("react");
+vi.mock("../common_components/AutoRotationView", () => {
   function AutoRotationView() {
     return null;
   }
@@ -259,9 +141,25 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
   useUISettings: vi.fn().mockReturnValue({ data: { values: {} }, isLoading: false }),
 }));
 
+// Mock useMCPServers hook (requires QueryClientProvider which is not available in this test)
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPServers", () => ({
+  useMCPServers: vi.fn().mockReturnValue({ data: [] }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/mcpServers/useMCPToolsets", () => ({
+  useMCPToolsets: vi.fn().mockReturnValue({ data: [] }),
+}));
+
 // Mock useResetKeySpend hook (requires QueryClientProvider which is not available in this test)
 vi.mock("@/app/(dashboard)/hooks/keys/useResetKeySpend", () => ({
   useResetKeySpend: vi.fn().mockReturnValue({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/keys/useSetKeyBlockedState", () => ({
+  useSetKeyBlockedState: vi.fn().mockReturnValue({
     mutate: vi.fn(),
     isPending: false,
   }),
@@ -446,6 +344,128 @@ describe("KeyInfoView handleKeyUpdate guardrails guard", () => {
   });
 });
 
+describe("KeyInfoView handleKeyUpdate mcp_toolsets", () => {
+  it("should forward the toolsets the edit form supplies into object_permission", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      max_budget: 40000,
+      mcp_servers_and_groups: { servers: [], accessGroups: [], toolsets: ["ts-1"] },
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.object_permission.mcp_toolsets).toEqual(["ts-1"]);
+    expect(sentPayload.max_budget).toBe(40000);
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate budget_duration", () => {
+  it("should send a canonical budget_duration through unchanged", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: "30d",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBe("30d");
+  });
+
+  it("should heal a legacy word-form budget_duration to canonical", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: "monthly",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBe("30d");
+  });
+
+  it("should forward a cleared budget_duration as an explicit null the JSON body keeps", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: null,
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.budget_duration).toBeNull();
+    expect(JSON.stringify({ ...sentPayload })).toContain('"budget_duration":null');
+  });
+
+  it("should render the cleared budget as never resetting instead of snapping back to the old interval", async () => {
+    keyUpdateCallMock.mockResolvedValueOnce({
+      ...baseKeyData,
+      budget_duration: null,
+      budget_reset_at: null,
+    });
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "access_abc",
+      userId: "user_1",
+      userRole: "Admin",
+      premiumUser: true,
+      token: "token_123",
+      userEmail: "test@example.com",
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    render(
+      <KeyInfoView
+        keyId="tok_123"
+        onClose={() => {}}
+        keyData={{ ...baseKeyData, budget_duration: "30d", budget_reset_at: "2026-09-01T00:00:00Z" } as any}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Settings"));
+    expect(screen.getByTestId("budget-reset-value")).toHaveTextContent("Every 30d");
+
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      budget_duration: null,
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("budget-reset-value")).toHaveTextContent("Never");
+    });
+  });
+});
+
 describe("KeyInfoView handleKeyUpdate empty strings", () => {
   ["tpm_limit", "rpm_limit", "max_parallel_requests", "max_budget"].forEach((limit) => {
     it(`maps empty strings to null for ${limit}`, async () => {
@@ -466,5 +486,106 @@ describe("KeyInfoView handleKeyUpdate empty strings", () => {
       expect(sentAccessToken).toBe("access_abc");
       expect(sentPayload[limit]).toBeNull();
     });
+  });
+});
+
+describe("KeyInfoView handleKeyUpdate soft_budget", () => {
+  const premiumAdminAuth = {
+    accessToken: "access_abc",
+    userId: "user_1",
+    userRole: "Admin",
+    premiumUser: true,
+    token: "token_123",
+    userEmail: "test@example.com",
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  };
+
+  const renderWithSoftBudget = (softBudget: number | null) => {
+    mockUseAuthorized.mockReturnValue(premiumAdminAuth);
+
+    return render(
+      <KeyInfoView
+        keyId="tok_123"
+        onClose={() => {}}
+        keyData={
+          { ...baseKeyData, litellm_budget_table: softBudget === null ? null : { soft_budget: softBudget } } as any
+        }
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+  };
+
+  it("should send a changed soft_budget as a number", async () => {
+    renderWithSoftBudget(null);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      soft_budget: "25",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.soft_budget).toBe(25);
+  });
+
+  it("should omit an unchanged soft_budget so unrelated edits skip the budget gate", async () => {
+    renderWithSoftBudget(25);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      soft_budget: 25,
+      key_alias: "renamed",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect("soft_budget" in sentPayload).toBe(false);
+  });
+
+  it("should forward a cleared soft_budget as an explicit null the JSON body keeps", async () => {
+    renderWithSoftBudget(25);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      soft_budget: "",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.soft_budget).toBeNull();
+    expect(JSON.stringify({ ...sentPayload })).toContain('"soft_budget":null');
+  });
+
+  it("should reject an overflowing soft_budget instead of silently clearing it", async () => {
+    renderWithSoftBudget(25);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      soft_budget: "1e309",
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(keyUpdateCallMock).not.toHaveBeenCalled();
   });
 });
