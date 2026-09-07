@@ -4,6 +4,7 @@ import gc
 import http.client
 import http.server
 import inspect
+import sys
 import threading
 import weakref
 from copy import deepcopy
@@ -144,6 +145,59 @@ def collected(boundary):
     gc.collect()
     assert all(ref() is None for ref in boundary.refs)
     assert boundary.view == {"headers": {"replacement": True}, "body": {"replacement": True}}
+
+
+def run_cold_cache_reentry(filename):
+    """UC-COLD-REENTRY: cold compilation permits nested native calls and subsequent transport."""
+    events = []
+    error = LookupError("cold-cache preparation error")
+
+    class FailingBoundary:
+        async def aprepare(self):
+            raise error
+
+    def invoke_failure():
+        pending = native.aocr_retained(FailingBoundary())
+        observed = None
+        try:
+            pending.send(None)
+        except LookupError as caught:
+            observed = caught
+        finally:
+            pending.close()
+            error.__traceback__ = None
+        assert observed is error
+
+    def audit(event, args):
+        if event == "compile" and args[1] == filename and not events:
+            events.append("entered")
+            print(f"UC-COLD-REENTRY: entering {filename}", flush=True)  # noqa: T201  # diagnose a deadlocked child process
+            invoke_failure()
+            events.append("nested completed")
+
+    async def successful_async():
+        context.set("initial")
+        boundary = Boundary(asynchronous=True, nested=True)
+        assert await native.aocr_retained(boundary) is boundary.result
+        assert boundary.events == ["prepare", "encode", "finish"]
+        collected(boundary)
+
+    try:
+        if filename == "retained_callback.py":
+            native.aocr_retained(object()).close()
+        sys.addaudithook(audit)
+        invoke_failure()
+        events.append("outer completed")
+        assert events == ["entered", "nested completed", "outer completed"]
+        assert requests == []
+        boundary = Boundary(nested=True)
+        assert native.ocr_retained(boundary) is boundary.result
+        assert boundary.events == ["prepare", "encode", "finish"]
+        collected(boundary)
+        asyncio.run(successful_async())
+        assert len(requests) == 2
+    finally:
+        stop_server()
 
 
 def check_error(boundary, error, phase):

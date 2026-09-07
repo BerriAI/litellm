@@ -1,3 +1,6 @@
+use std::process::Command;
+use std::time::{Duration, Instant};
+
 use pyo3::prelude::*;
 use rstest::rstest;
 use serial_test::serial;
@@ -6,6 +9,61 @@ use serial_test::serial;
 mod support;
 
 use support::native::{native_globals, run_fixture};
+
+#[test]
+fn uc_cold_reentry_execution_cache() -> PyResult<()> {
+    cold_cache_reentry("retained_execution.py", "uc_cold_reentry_execution_cache")
+}
+
+#[test]
+fn uc_cold_reentry_callback_cache() -> PyResult<()> {
+    cold_cache_reentry("retained_callback.py", "uc_cold_reentry_callback_cache")
+}
+
+fn cold_cache_reentry(filename: &str, test: &str) -> PyResult<()> {
+    if std::env::var("LITELLM_COLD_REENTRY_CHILD").as_deref() != Ok(filename) {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env("LITELLM_COLD_REENTRY_CHILD", filename)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "{filename} reentry child failed: {status}"
+                );
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("{filename} reentry did not complete within 15 seconds");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    Python::initialize();
+    Python::attach(|py| {
+        let globals = native_globals(py)?;
+        run_fixture(
+            py,
+            &globals,
+            include_str!("fixtures/retained_http_contract.py"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/retained_http_contract.py"
+            ),
+        )?;
+        globals
+            .get_item("run_cold_cache_reentry")?
+            .unwrap()
+            .call1((filename,))?;
+        Ok(())
+    })
+}
 
 #[test]
 #[serial(python_interpreter)]
