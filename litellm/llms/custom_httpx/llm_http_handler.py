@@ -116,6 +116,7 @@ from litellm.types.llms.anthropic_skills import (
     Skill,
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
     CreateBatchRequest,
     CreateFileRequest,
     FileContentRequest,
@@ -485,7 +486,7 @@ class BaseLLMHTTPHandler:
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str | None,
         custom_llm_provider: str,
         model_response: ModelResponse,
@@ -504,7 +505,7 @@ class BaseLLMHTTPHandler:
         shared_session: Optional["ClientSession"] = None,
     ):
         json_mode: Final[bool] = optional_params.pop("json_mode", False)
-        extra_body: Final[dict | None] = optional_params.pop("extra_body", None)
+        extra_body: Final[Mapping[str, object] | None] = optional_params.pop("extra_body", None)
 
         provider_config = provider_config or ProviderConfigManager.get_provider_chat_config(
             model=model, provider=litellm.LlmProviders(custom_llm_provider)
@@ -519,14 +520,17 @@ class BaseLLMHTTPHandler:
         )
 
         # get config from model, custom llm provider
-        headers = provider_config.validate_environment(
-            api_key=api_key,
-            headers=headers or {},
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_base=api_base,
-            litellm_params=litellm_params,
+        request_headers: Final = cast(  # cast-ok: validate_environment is declared as a bare dict
+            "dict[str, object]",
+            provider_config.validate_environment(
+                api_key=api_key,
+                headers=headers or {},
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                api_base=api_base,
+                litellm_params=litellm_params,
+            ),
         )
 
         api_base = provider_config.get_complete_url(
@@ -538,93 +542,117 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
         )
 
-        data: dict[str, object] = provider_config.transform_request(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
-
-        if extra_body is not None:
-            data = {**data, **extra_body}
-
-        headers, signed_json_body = provider_config.sign_request(
-            headers=headers,
-            optional_params={
-                **optional_params,
-                **_aws_signing_overrides(optional_params, litellm_params),
-            },
-            request_data=data,
-            api_base=api_base,
-            api_key=api_key,
-            stream=stream,
-            fake_stream=fake_stream,
-            model=model,
-        )
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key=api_key,
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
-
-        # Check if stream was converted for WebSearch interception
-        # This is set by the async_pre_request_hook in WebSearchInterceptionLogger
-        if litellm_params.get("_websearch_interception_converted_stream", False):
-            logging_obj.model_call_details["websearch_interception_converted_stream"] = True
-
-        if acompletion is True:
-            if stream is True:
-                data = self._add_stream_param_to_request_body(
-                    data=data,
-                    provider_config=provider_config,
+        def sign_and_log(
+            transformed: dict[str, object],  # mutable-ok: async_completion takes dict
+        ) -> tuple[dict[str, object], dict[str, object], bytes | None]:  # mutable-ok: async_completion takes dict
+            data: Final = {**transformed, **extra_body} if extra_body is not None else transformed
+            signed: Final = cast(  # cast-ok: sign_request is declared as a bare dict
+                "tuple[dict[str, object], bytes | None]",
+                provider_config.sign_request(
+                    headers=request_headers,
+                    optional_params={
+                        **optional_params,
+                        **_aws_signing_overrides(optional_params, litellm_params),
+                    },
+                    request_data=data,
+                    api_base=api_base,
+                    api_key=api_key,
+                    stream=stream,
                     fake_stream=fake_stream,
-                )
+                    model=model,
+                ),
+            )
+            logging_obj.pre_call(
+                input=messages,
+                api_key=api_key,
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": api_base,
+                    "headers": signed[0],
+                },
+            )
+            if litellm_params.get("_websearch_interception_converted_stream", False):
+                logging_obj.model_call_details["websearch_interception_converted_stream"] = True
+            return data, signed[0], signed[1]
+
+        def dispatch_async(
+            data: dict[str, object],  # mutable-ok: async_completion takes dict
+            signed_headers: dict[str, object],  # mutable-ok: async_completion takes dict
+            signed_json_body: bytes | None,
+        ):
+            async_client: Final = client if isinstance(client, AsyncHTTPHandler) else None
+            if stream is True:
                 return self.acompletion_stream_function(
                     model=model,
                     messages=messages,
                     api_base=api_base,
-                    headers=headers,
+                    headers=signed_headers,
                     custom_llm_provider=custom_llm_provider,
                     provider_config=provider_config,
                     timeout=timeout,
                     logging_obj=logging_obj,
-                    data=data,
+                    data=self._add_stream_param_to_request_body(
+                        data=data,
+                        provider_config=provider_config,
+                        fake_stream=fake_stream,
+                    ),
                     fake_stream=fake_stream,
-                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
+                    client=async_client,
                     litellm_params=litellm_params,
                     json_mode=json_mode,
                     optional_params=optional_params,
                     signed_json_body=signed_json_body,
                 )
+            return self.async_completion(
+                custom_llm_provider=custom_llm_provider,
+                provider_config=provider_config,
+                api_base=api_base,
+                headers=signed_headers,
+                data=data,
+                timeout=timeout,
+                model=model,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key=api_key,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                client=async_client,
+                json_mode=json_mode,
+                signed_json_body=signed_json_body,
+                shared_session=shared_session,
+            )
 
-            else:
-                return self.async_completion(
-                    custom_llm_provider=custom_llm_provider,
-                    provider_config=provider_config,
-                    api_base=api_base,
-                    headers=headers,
-                    data=data,
-                    timeout=timeout,
-                    model=model,
-                    model_response=model_response,
-                    logging_obj=logging_obj,
-                    api_key=api_key,
-                    messages=messages,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    encoding=encoding,
-                    client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
-                    json_mode=json_mode,
-                    signed_json_body=signed_json_body,
-                    shared_session=shared_session,
+        if acompletion is True and provider_config.uses_async_transform_request:
+
+            async def transform_then_dispatch():
+                transformed: Final = cast(  # cast-ok: async_transform_request is declared as a bare dict
+                    "dict[str, object]",
+                    await provider_config.async_transform_request(
+                        model=model,
+                        messages=messages,
+                        optional_params=optional_params,
+                        litellm_params=litellm_params,
+                        headers=request_headers,
+                    ),
                 )
+                return await dispatch_async(*await asyncio.to_thread(sign_and_log, transformed))
+
+            return transform_then_dispatch()
+
+        data, signed_headers, signed_json_body = sign_and_log(
+            provider_config.transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=request_headers,
+            )
+        )
+
+        if acompletion is True:
+            return dispatch_async(data, signed_headers, signed_json_body)
 
         if stream is True:
             data = self._add_stream_param_to_request_body(
@@ -638,7 +666,7 @@ class BaseLLMHTTPHandler:
                     custom_llm_provider=custom_llm_provider,
                     logging_obj=logging_obj,
                     api_base=api_base,
-                    headers=headers,
+                    headers=signed_headers,
                     data=data,
                     signed_json_body=signed_json_body,
                     messages=messages,
@@ -648,7 +676,7 @@ class BaseLLMHTTPHandler:
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
                 api_base=api_base,
-                headers=headers,
+                headers=signed_headers,
                 data=data,
                 signed_json_body=signed_json_body,
                 original_data=data,
@@ -681,7 +709,7 @@ class BaseLLMHTTPHandler:
             sync_httpx_client=sync_httpx_client,
             provider_config=provider_config,
             api_base=api_base,
-            headers=headers,
+            headers=signed_headers,
             data=data,
             signed_json_body=signed_json_body,
             timeout=timeout,
@@ -6754,7 +6782,7 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        data, files = image_edit_provider_config.transform_image_edit_request(
+        data, files = await image_edit_provider_config.async_transform_image_edit_request(
             model=model,
             image=image,
             prompt=prompt,

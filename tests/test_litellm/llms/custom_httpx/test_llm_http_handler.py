@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import threading
 import time
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -17,7 +18,8 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
 )
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
@@ -30,7 +32,7 @@ from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import TranscriptionResponse
+from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -3184,3 +3186,288 @@ async def test_async_container_list_handler_transforms_success_response():
 
     assert [container.id for container in response.data] == ["cntr_a"]
     assert response.has_more is True
+
+
+class _TransformRecordingConfig(BaseConfig):
+    def __init__(self, transform_async: bool):
+        self.transform_async = transform_async
+        self.transform_calls = []
+        self.sign_threads = []
+
+    @property
+    def uses_async_transform_request(self) -> bool:
+        return self.transform_async
+
+    def get_supported_openai_params(self, model):
+        return []
+
+    def map_openai_params(self, non_default_params, optional_params, model, drop_params):
+        return optional_params
+
+    def validate_environment(
+        self, headers, model, messages, optional_params, litellm_params, api_key=None, api_base=None
+    ):
+        return {}
+
+    def transform_request(self, model, messages, optional_params, litellm_params, headers):
+        self.transform_calls.append("sync")
+        return {"transformed_by": "sync"}
+
+    async def async_transform_request(self, model, messages, optional_params, litellm_params, headers):
+        self.transform_calls.append("async")
+        return {"transformed_by": "async"}
+
+    def sign_request(
+        self, headers, optional_params, request_data, api_base, api_key=None, model=None, stream=None, fake_stream=None
+    ):
+        self.sign_threads.append(threading.current_thread())
+        return headers, None
+
+    def transform_response(
+        self,
+        model,
+        raw_response,
+        model_response,
+        logging_obj,
+        request_data,
+        messages,
+        optional_params,
+        litellm_params,
+        encoding,
+        api_key=None,
+        json_mode=None,
+    ):
+        model_response.choices[0].message.content = raw_response.json()["transformed_by"]
+        return model_response
+
+    def get_error_class(self, error_message, status_code, headers):
+        return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
+
+    def get_model_response_iterator(self, streaming_response, sync_stream, json_mode=False):
+        return litellm.OpenAIGPTConfig().get_model_response_iterator(
+            streaming_response=streaming_response, sync_stream=sync_stream, json_mode=json_mode
+        )
+
+
+def _start_async_completion(config, logging_obj=None):
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=captured["body"])
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    pending = BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=logging_obj if logging_obj is not None else Mock(dynamic_success_callbacks=None, model_call_details={}),
+        optional_params={},
+        timeout=10.0,
+        litellm_params={},
+        acompletion=True,
+        client=client,
+        provider_config=config,
+    )
+    return pending, captured
+
+
+async def test_completion_awaits_async_transform_request_when_config_opts_in():
+    config = _TransformRecordingConfig(transform_async=True)
+
+    pending, captured = _start_async_completion(config)
+    assert config.transform_calls == []
+
+    response = await pending
+
+    assert config.transform_calls == ["async"]
+    assert captured["body"] == {"transformed_by": "async"}
+    assert response.choices[0].message.content == "async"
+
+
+async def test_completion_signs_and_logs_off_the_event_loop_after_the_async_transform():
+    config = _TransformRecordingConfig(transform_async=True)
+    loop_thread = threading.current_thread()
+    pre_call_threads = []
+    logging_obj = Mock(dynamic_success_callbacks=None, model_call_details={})
+    logging_obj.pre_call.side_effect = lambda **kwargs: pre_call_threads.append(threading.current_thread())
+
+    pending, captured = _start_async_completion(config, logging_obj)
+    response = await pending
+
+    assert response.choices[0].message.content == "async"
+    assert captured["body"] == {"transformed_by": "async"}
+    assert config.sign_threads and all(thread is not loop_thread for thread in config.sign_threads)
+    assert pre_call_threads and all(thread is not loop_thread for thread in pre_call_threads)
+
+
+async def test_completion_keeps_sync_transform_request_before_returning_by_default():
+    config = _TransformRecordingConfig(transform_async=False)
+
+    pending, captured = _start_async_completion(config)
+    assert config.transform_calls == ["sync"]
+
+    response = await pending
+
+    assert config.transform_calls == ["sync"]
+    assert captured["body"] == {"transformed_by": "sync"}
+    assert response.choices[0].message.content == "sync"
+
+
+def _sse_echoing_transformed_by(request):
+    transformed_by = json.loads(request.content)["transformed_by"]
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "stub-model",
+        "choices": [{"index": 0, "delta": {"content": transformed_by}, "finish_reason": None}],
+    }
+    return httpx.Response(
+        200,
+        content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode(),
+        headers={"content-type": "text/event-stream"},
+        request=request,
+    )
+
+
+def _streaming_logging_obj():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="async-transform-stream",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="stub-model", user="", optional_params={}, litellm_params={}, custom_llm_provider="openai"
+    )
+    return logging_obj
+
+
+async def test_completion_streams_after_the_async_transform_request():
+    config = _TransformRecordingConfig(transform_async=True)
+    loop_thread = threading.current_thread()
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(_sse_echoing_transformed_by))
+
+    stream = await BaseLLMHTTPHandler().completion(
+        model="stub-model",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://llm.example/v1/chat",
+        custom_llm_provider="openai",
+        model_response=ModelResponse(),
+        encoding=None,
+        logging_obj=_streaming_logging_obj(),
+        optional_params={},
+        timeout=10.0,
+        litellm_params={},
+        acompletion=True,
+        stream=True,
+        client=client,
+        provider_config=config,
+    )
+    collected = [chunk async for chunk in stream]
+
+    assert config.transform_calls == ["async"]
+    assert config.sign_threads and all(thread is not loop_thread for thread in config.sign_threads)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in collected) == "async"
+
+
+class _ImageEditRecordingConfig(BaseImageEditConfig):
+    def __init__(self):
+        self.transform_calls = []
+
+    def get_supported_openai_params(self, model):
+        return []
+
+    def map_openai_params(self, image_edit_optional_params, model, drop_params):
+        return dict(image_edit_optional_params)
+
+    def validate_environment(self, headers, model, api_key=None, litellm_params=None, api_base=None):
+        return {}
+
+    def get_complete_url(self, model, api_base, litellm_params):
+        return "https://images.example/v1/edits"
+
+    def use_multipart_form_data(self):
+        return False
+
+    def transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("sync")
+        return {"transformed_by": "sync"}, []
+
+    async def async_transform_image_edit_request(
+        self, model, prompt, image, image_edit_optional_request_params, litellm_params, headers
+    ):
+        self.transform_calls.append("async")
+        return {"transformed_by": "async"}, []
+
+    def transform_image_edit_response(self, model, raw_response, logging_obj):
+        return ImageResponse(data=[ImageObject(b64_json=raw_response.json()["transformed_by"])])
+
+
+def _echo_json_transport(captured):
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=captured["body"])
+
+    return httpx.MockTransport(handle)
+
+
+async def test_async_image_edit_handler_awaits_the_async_transform():
+    config = _ImageEditRecordingConfig()
+    captured = {}
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_echo_json_transport(captured))
+
+    response = await BaseLLMHTTPHandler().async_image_edit_handler(
+        model="edit-model",
+        image=b"raw-image",
+        prompt="add a hat",
+        image_edit_provider_config=config,
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert config.transform_calls == ["async"]
+    assert captured["body"] == {"transformed_by": "async"}
+    assert response.data[0].b64_json == "async"
+
+
+def test_image_edit_handler_keeps_the_sync_transform():
+    config = _ImageEditRecordingConfig()
+    captured = {}
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=_echo_json_transport(captured))
+
+    response = BaseLLMHTTPHandler().image_edit_handler(
+        model="edit-model",
+        image=b"raw-image",
+        prompt="add a hat",
+        image_edit_provider_config=config,
+        image_edit_optional_request_params={},
+        custom_llm_provider="openai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        timeout=10.0,
+        client=client,
+    )
+
+    assert config.transform_calls == ["sync"]
+    assert captured["body"] == {"transformed_by": "sync"}
+    assert response.data[0].b64_json == "sync"
