@@ -2048,9 +2048,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             guardrail_action = guardrail_information.get("guardrail_action")
             if guardrail_action:
                 guardrail_span.set_attribute("guardrail_action", guardrail_action)
-            guardrail_transaction_id = guardrail_information.get("guardrail_transaction_id")
-            if guardrail_transaction_id:
-                guardrail_span.set_attribute("guardrail_transaction_id", guardrail_transaction_id)
+            self._set_guardrail_transaction_id(guardrail_span, guardrail_information)
 
             # The provider hook (e.g. Bedrock) extracts violation_categories
             # from the raw response BEFORE redaction and stamps them onto
@@ -2086,6 +2084,12 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             self._set_team_attributes_from_kwargs(guardrail_span, kwargs)
 
             guardrail_span.end(end_time=self._to_ns(end_time_datetime))
+
+    @staticmethod
+    def _set_guardrail_transaction_id(span: Span, information: dict) -> None:
+        transaction_id = information.get("guardrail_transaction_id")
+        if transaction_id:
+            span.set_attribute("guardrail_transaction_id", transaction_id)
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
