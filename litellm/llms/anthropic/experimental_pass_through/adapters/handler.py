@@ -34,8 +34,18 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
 
-# Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
-ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config"})
+# Anthropic-only keys to strip on extra_kwargs re-merge:
+# - "output_config": already mapped by the translator (output_config.effort ->
+#   reasoning_effort, output_config.format -> response_format).
+# - "diagnostics": a client-diagnostics-only field (sent by Claude Code) with no
+#   completion()/OpenAI equivalent. Unlike the native Anthropic Messages passthrough
+#   (AnthropicMessagesConfig.transform_anthropic_messages_request), which only forwards
+#   keys declared on AnthropicMessagesRequestOptionalParams and so drops it silently,
+#   this bridge re-merges every extra kwarg the translator didn't consume. Forwarding
+#   it verbatim reaches non-Anthropic backends (e.g. Bedrock Converse via
+#   additionalModelRequestFields) as an unrecognized field and 400s with "Extra inputs
+#   are not permitted".
+ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config", "diagnostics"})
 
 _AnthropicMessages: TypeAlias = "list[dict[str, object]]"
 _AnthropicSystem: TypeAlias = "str | list[dict[str, object]] | None"
