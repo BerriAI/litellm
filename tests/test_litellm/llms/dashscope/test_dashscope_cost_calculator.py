@@ -16,6 +16,8 @@ import pytest
 
 # Add the project root to Python path
 import litellm
+from litellm.cost_calculator import cost_per_token as litellm_cost_per_token
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_token_type_cost_breakdown
 from litellm.llms.dashscope.cost_calculator import (
     cost_per_token as dashscope_cost_per_token,
 )
@@ -52,6 +54,200 @@ class TestDashscopeCostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    @pytest.mark.parametrize(
+        ("cache_type", "expected_cache_rate"),
+        [
+            ("ephemeral", 1e-07),
+            (None, 2e-07),
+            ("unknown-future-type", 1e-07),
+        ],
+    )
+    def test_dashscope_flat_pricing_distinguishes_explicit_and_implicit_cache_reads(
+        self, cache_type: str | None, expected_cache_rate: float
+    ):
+        litellm.model_cost["dashscope/qwen-context-cache-mode-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 4e-06,
+            "implicit_cache_read_input_token_cost": 2e-07,
+            "cache_read_input_token_cost": 1e-07,
+        }
+        prompt_tokens_details: dict[str, int | str] = {"cached_tokens": 600}
+        if cache_type is not None:
+            prompt_tokens_details["cache_type"] = cache_type
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details=prompt_tokens_details,
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-context-cache-mode-test", usage=usage)
+
+        assert math.isclose(
+            prompt_cost,
+            (400 * 1e-06) + (600 * expected_cache_rate),
+            rel_tol=1e-10,
+        )
+
+    def test_dashscope_implicit_cache_read_falls_back_to_existing_cache_read_rate(self):
+        litellm.model_cost["dashscope/qwen-implicit-cache-fallback-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 4e-06,
+            "cache_read_input_token_cost": 1e-07,
+        }
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 600},
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="qwen-implicit-cache-fallback-test",
+            usage=usage,
+        )
+
+        assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * 1e-07), rel_tol=1e-10)
+
+    def test_dashscope_request_cache_control_is_explicit_mode_fallback(self):
+        litellm.model_cost["dashscope/qwen-cache-control-fallback-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 4e-06,
+            "cache_read_input_token_cost": 1e-07,
+            "implicit_cache_read_input_token_cost": 2e-07,
+        }
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 600},
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="qwen-cache-control-fallback-test",
+            usage=usage,
+            cache_control_requested=True,
+        )
+
+        assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * 1e-07), rel_tol=1e-10)
+
+    def test_dashscope_tiered_pricing_uses_mode_specific_cache_read_rate(self):
+        self._register_tiered_model(
+            "dashscope/qwen-tiered-cache-mode-test",
+            [
+                {
+                    "range": [0, 1000],
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 4e-06,
+                    "implicit_cache_read_input_token_cost": 2e-07,
+                    "cache_read_input_token_cost": 1e-07,
+                }
+            ],
+        )
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 600, "cache_type": "ephemeral"},
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(model="qwen-tiered-cache-mode-test", usage=usage)
+
+        assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * 1e-07), rel_tol=1e-10)
+
+    def test_dashscope_cost_breakdown_uses_mode_specific_cache_read_rate(self):
+        litellm.model_cost["dashscope/qwen-cache-breakdown-mode-test"] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 4e-06,
+            "cache_read_input_token_cost": 1e-07,
+            "implicit_cache_read_input_token_cost": 2e-07,
+        }
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 600, "cache_type": "ephemeral"},
+        )
+
+        breakdown = get_token_type_cost_breakdown(
+            model="qwen-cache-breakdown-mode-test",
+            custom_llm_provider="dashscope",
+            usage=usage,
+        )
+
+        assert math.isclose(breakdown.cache_read_cost, 600 * 1e-07, rel_tol=1e-10)
+
+    def test_dashscope_custom_pricing_uses_mode_specific_cache_read_rate(self):
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details={"cached_tokens": 600, "cache_type": "ephemeral"},
+        )
+
+        prompt_cost, _ = litellm_cost_per_token(
+            model="custom-qwen",
+            custom_llm_provider="dashscope",
+            usage_object=usage,
+            prompt_tokens=1000,
+            custom_cost_per_token={
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+                "implicit_cache_read_input_token_cost": 2e-07,
+                "cache_read_input_token_cost": 1e-07,
+            },
+        )
+
+        assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * 1e-07), rel_tol=1e-10)
+
+    def test_completion_cost_detects_cache_control_request_fallback(self):
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=100,
+            total_tokens=1100,
+            prompt_tokens_details={"cached_tokens": 600},
+        )
+        response = litellm.ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="custom-qwen",
+            object="chat.completion",
+            choices=[],
+            usage=usage,
+        )
+
+        cost = litellm.completion_cost(
+            completion_response=response,
+            model="custom-qwen",
+            custom_llm_provider="dashscope",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "stable prefix",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                }
+            ],
+            custom_cost_per_token={
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 4e-06,
+                "cache_read_input_token_cost": 1e-07,
+                "implicit_cache_read_input_token_cost": 2e-07,
+            },
+        )
+
+        assert math.isclose(
+            cost,
+            (400 * 1e-06) + (600 * 1e-07) + (100 * 4e-06),
+            rel_tol=1e-10,
+        )
 
     def test_dashscope_tiered_pricing_within_first_tier(self):
         """
@@ -576,6 +772,45 @@ class TestDashscopeCostCalculator:
 
         assert math.isclose(peak_prompt_cost, (600 * 2.4e-06) + (300 * 2e-07) + (100 * 3e-06), rel_tol=1e-10)
         assert math.isclose(peak_completion_cost, 200 * 4.8e-06, rel_tol=1e-10)
+
+    @pytest.mark.parametrize(
+        ("cache_type", "expected_cache_rate"),
+        [("ephemeral", 5e-08), (None, 8e-08)],
+    )
+    def test_dashscope_off_peak_uses_mode_specific_cache_read_rate(
+        self, cache_type: str | None, expected_cache_rate: float
+    ):
+        model_key = "dashscope/qwen-cache-mode-off-peak-test"
+        litellm.model_cost[model_key] = {
+            "litellm_provider": "dashscope",
+            "mode": "chat",
+            "input_cost_per_token": 2e-06,
+            "output_cost_per_token": 4e-06,
+            "cache_read_input_token_cost": 1e-07,
+            "implicit_cache_read_input_token_cost": 2e-07,
+            "off_peak_pricing": {
+                "hours_utc": self.OFF_PEAK_WINDOW,
+                "input_cost_per_token": 1e-06,
+                "cache_read_input_token_cost": 5e-08,
+                "implicit_cache_read_input_token_cost": 8e-08,
+            },
+        }
+        prompt_tokens_details: dict[str, int | str] = {"cached_tokens": 600}
+        if cache_type is not None:
+            prompt_tokens_details["cache_type"] = cache_type
+        usage = Usage(
+            prompt_tokens=1000,
+            completion_tokens=0,
+            prompt_tokens_details=prompt_tokens_details,
+        )
+
+        prompt_cost, _ = dashscope_cost_per_token(
+            model="qwen-cache-mode-off-peak-test",
+            usage=usage,
+            current_time=self.INSIDE_WINDOW,
+        )
+
+        assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * expected_cache_rate), rel_tol=1e-10)
 
     def test_dashscope_off_peak_window_overrides_the_selected_tier(self):
         """An open off-peak window bills the whole request at the flat off-peak rates, whichever tier

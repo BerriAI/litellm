@@ -2922,6 +2922,7 @@ _CACHE_PRICING_FIELDS: Final = (
     "cache_creation_input_token_cost_above_200k_tokens",
     "cache_read_input_token_cost",
     "cache_read_input_token_cost_above_200k_tokens",
+    "implicit_cache_read_input_token_cost",
 )
 
 
@@ -3097,13 +3098,14 @@ def register_model(
                 elif (
                     value.get("cache_creation_input_token_cost") is None
                     and value.get("cache_read_input_token_cost") is None
+                    and value.get("implicit_cache_read_input_token_cost") is None  # pyright: ignore[reportUnknownMemberType]  # loaded model entries are dynamic mappings
                     and value.get("tiered_pricing") is None
                     and (
                         value.get("input_cost_per_token") is not None or value.get("output_cost_per_token") is not None
                     )
                 ):
                     verbose_logger.warning(
-                        "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost and cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
+                        "register_model: model=%s has custom pricing but not in built-in cost map and no prefix/region variant matched; cache_creation_input_token_cost, cache_read_input_token_cost, and implicit_cache_read_input_token_cost will default to 0 for this model (input/output cost tracking is unaffected). To track cache cost, add them to model_info",
                         warning_display_name or key,
                     )
         # ``get_model_info`` returns ``litellm_provider: None`` when the
@@ -5796,6 +5798,7 @@ def _get_model_info_helper(
                     "cache_creation_input_token_cost_ultrafast", None
                 ),
                 cache_read_input_token_cost=_model_info.get("cache_read_input_token_cost", None),
+                implicit_cache_read_input_token_cost=_model_info.get("implicit_cache_read_input_token_cost", None),
                 prompt_cache_min_tokens=_model_info.get("prompt_cache_min_tokens", None),
                 cache_read_input_token_cost_above_200k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_200k_tokens", None

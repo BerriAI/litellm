@@ -252,6 +252,7 @@ def test_get_logging_payload_maps_nested_cache_creation_input_tokens():
 
     assert additional_usage_values["cache_creation_input_tokens"] == 2048
     assert additional_usage_values["prompt_tokens_details"]["cache_write_tokens"] == 2048
+    assert additional_usage_values["prompt_tokens_details"]["cache_type"] == "ephemeral"
 
 
 def test_get_logging_payload_preserves_anthropic_cache_creation_input_tokens():

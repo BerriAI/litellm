@@ -93,6 +93,7 @@ from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_toke
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.llms.openai import (
+    AllMessageValues,
     HttpxBinaryResponseContent,
     ImageGenerationRequestQuality,
     OpenAIModerationResponse,
@@ -128,6 +129,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     _cached_get_model_info_helper,
+    is_cached_message,
     token_counter,
 )
 
@@ -188,6 +190,28 @@ _SEARCH_CALL_TYPES: Final = frozenset(
 
 _AREALTIME_CALL_TYPE: Final = CallTypes.arealtime.value
 _MCP_CALL_TYPE: Final = CallTypes.call_mcp_tool.value
+_DASHSCOPE_PROVIDERS: Final = frozenset(("dashscope", "qwencloud", "qwen_ai_platform"))
+
+
+def _get_dashscope_cache_read_mode(
+    model: str,
+    custom_llm_provider: str | None,
+    usage: Usage,
+    cached_tokens: int,
+    cache_control_requested: bool,
+) -> Literal["explicit", "implicit"] | None:
+    if custom_llm_provider not in _DASHSCOPE_PROVIDERS and not any(
+        model.startswith(f"{provider}/") for provider in _DASHSCOPE_PROVIDERS
+    ):
+        return None
+
+    from litellm.llms.dashscope.cost_calculator import get_cache_read_mode
+
+    return get_cache_read_mode(
+        usage=usage,
+        cached_tokens=cached_tokens,
+        cache_control_requested=cache_control_requested,
+    )
 
 
 def _cost_per_token_custom_pricing_helper(
@@ -196,6 +220,7 @@ def _cost_per_token_custom_pricing_helper(
     response_time_ms: float | None = 0.0,
     cached_tokens: float = 0,
     cache_creation_tokens: float = 0,
+    cache_read_mode: Literal["explicit", "implicit"] | None = None,
     ### CUSTOM PRICING ###
     custom_cost_per_token: CostPerToken | None = None,
     custom_cost_per_second: float | None = None,
@@ -214,8 +239,8 @@ def _cost_per_token_custom_pricing_helper(
         output_cost_per_token: Final = custom_cost_per_token["output_cost_per_token"]
 
         cache_read_input_token_cost: Final = custom_cost_per_token.get(
-            "cache_read_input_token_cost",
-            input_cost_per_token,
+            "implicit_cache_read_input_token_cost" if cache_read_mode == "implicit" else "cache_read_input_token_cost",
+            custom_cost_per_token.get("cache_read_input_token_cost", input_cost_per_token),
         )
         cache_creation_input_token_cost: Final = custom_cost_per_token.get(
             "cache_creation_input_token_cost",
@@ -340,6 +365,7 @@ def cost_per_token(
     response: Any | None = None,
     ### REQUEST MODEL ###
     request_model: str | None = None,  # original request model for router detection
+    cache_control_requested: bool = False,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -418,12 +444,21 @@ def cost_per_token(
     if _is_anthropic_style:
         _normalized_prompt_tokens += _cache_read_tokens + _cache_creation_tokens
 
+    _cache_read_mode: Final = _get_dashscope_cache_read_mode(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        usage=usage_block,
+        cached_tokens=int(_cache_read_tokens),
+        cache_control_requested=cache_control_requested,
+    )
+
     response_cost: Final = _cost_per_token_custom_pricing_helper(
         prompt_tokens=_normalized_prompt_tokens,
         completion_tokens=completion_tokens,
         response_time_ms=response_time_ms,
         cached_tokens=_cache_read_tokens,
         cache_creation_tokens=_cache_creation_tokens,
+        cache_read_mode=_cache_read_mode,
         custom_cost_per_second=custom_cost_per_second,
         custom_cost_per_token=custom_cost_per_token,
     )
@@ -655,7 +690,12 @@ def cost_per_token(
             cost_per_token as dashscope_cost_per_token,
         )
 
-        return dashscope_cost_per_token(model=model, usage=usage_block, custom_llm_provider=custom_llm_provider)
+        return dashscope_cost_per_token(
+            model=model,
+            usage=usage_block,
+            custom_llm_provider=custom_llm_provider,
+            cache_control_requested=cache_control_requested,
+        )
     elif custom_llm_provider == "azure_ai":
         return azure_ai_cost_per_token(
             model=model,
@@ -1183,7 +1223,7 @@ def completion_cost(
     completion_response: object | None = None,
     model: str | None = None,
     prompt="",
-    messages: list = [],
+    messages: Sequence[AllMessageValues] = (),
     completion="",
     total_time: float | None = 0.0,  # used for replicate, sagemaker
     call_type: CallTypesLiteral | None = None,
@@ -1660,6 +1700,10 @@ def completion_cost(
                     vertex_location=vertex_location,
                     response=completion_response,
                     request_model=request_model_for_cost,
+                    cache_control_requested=(
+                        custom_llm_provider in _DASHSCOPE_PROVIDERS
+                        and any(is_cached_message(message) for message in messages)
+                    ),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)

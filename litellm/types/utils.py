@@ -124,6 +124,7 @@ class CostPerToken(TypedDict, total=False):
     input_cost_per_token: Required[float]
     output_cost_per_token: Required[float]
     cache_read_input_token_cost: float
+    implicit_cache_read_input_token_cost: ReadOnly[float]
     cache_creation_input_token_cost: float
 
 
@@ -226,6 +227,7 @@ class OffPeakPricing(TypedDict, total=False):
     output_cost_per_token: ReadOnly[float]
     output_cost_per_reasoning_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
+    implicit_cache_read_input_token_cost: ReadOnly[float]
     cache_creation_input_token_cost: ReadOnly[float]
 
 
@@ -249,6 +251,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
+    implicit_cache_read_input_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -1683,6 +1686,9 @@ class PromptTokensDetailsWrapper(
     cache_creation_token_details: CacheCreationTokenDetails | None = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
 
+    cache_type: str | None = None
+    """Provider-reported cache mode. DashScope returns ``ephemeral`` for explicit Qwen Context Cache requests."""
+
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
         if name == "cache_write_tokens":
@@ -1727,6 +1733,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
+        if self.cache_type is None:
+            del self.cache_type
 
 
 class ServerToolUse(BaseModel):
@@ -3486,6 +3494,7 @@ class MirroredPricingParams(BaseModel):
     input_cost_per_character: float | None = None
     output_cost_per_character: float | None = None
     cache_read_input_token_cost: float | None = None
+    implicit_cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     tiered_pricing: list[dict[str, Any]] | None = None
 

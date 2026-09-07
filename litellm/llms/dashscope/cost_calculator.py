@@ -9,7 +9,11 @@ See https://help.aliyun.com/zh/model-studio/billing-for-model-studio
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Final
+from typing import (
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # legacy tier selector returns an untyped dict after runtime range validation
+)
 
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
@@ -21,6 +25,8 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
 
+QwenContextCacheMode = Literal["explicit", "implicit"]
+
 
 @dataclass(frozen=True, slots=True)
 class TokenBreakdown:
@@ -29,13 +35,38 @@ class TokenBreakdown:
     cache_creation_tokens: int
     completion_tokens: int
     reasoning_tokens: int
+    cache_read_mode: QwenContextCacheMode | None
 
     @property
     def total_input_tokens(self) -> int:
         return self.text_tokens + self.cached_tokens + self.cache_creation_tokens
 
 
-def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
+def get_cache_read_mode(
+    usage: Usage,
+    cached_tokens: int,
+    cache_control_requested: bool = False,
+) -> QwenContextCacheMode | None:
+    if cached_tokens <= 0:
+        return None
+
+    prompt_tokens_details: Final = usage.prompt_tokens_details
+    cache_type: Final = (
+        getattr(prompt_tokens_details, "cache_type", None) if prompt_tokens_details is not None else None
+    )
+    if cache_type == "ephemeral":
+        return "explicit"
+    if cache_type is not None:
+        return None
+    if cache_control_requested:
+        return "explicit"
+    return "implicit"
+
+
+def _extract_token_breakdown(
+    usage: Usage,
+    cache_control_requested: bool = False,
+) -> TokenBreakdown:
     prompt_details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = prompt_details["cache_hit_tokens"]
     cache_creation_tokens: Final = prompt_details["cache_creation_tokens"]
@@ -50,6 +81,11 @@ def _extract_token_breakdown(usage: Usage) -> TokenBreakdown:
         cache_creation_tokens=cache_creation_tokens,
         completion_tokens=completion_tokens,
         reasoning_tokens=reasoning_tokens,
+        cache_read_mode=get_cache_read_mode(
+            usage=usage,
+            cached_tokens=cached_tokens,
+            cache_control_requested=cache_control_requested,
+        ),
     )
 
 
@@ -60,27 +96,56 @@ def _flat_rate(model_info: ModelInfo, cost_key: str, fallback_cost_key: str) -> 
     return float(value)
 
 
-def _flat_rates(model_info: ModelInfo) -> TokenRates:
+def _cache_read_cost_key(cache_read_mode: QwenContextCacheMode | None) -> str:
+    if cache_read_mode == "implicit":
+        return "implicit_cache_read_input_token_cost"
+    return "cache_read_input_token_cost"
+
+
+def _flat_cache_read_rate(
+    model_info: ModelInfo,
+    cache_read_mode: QwenContextCacheMode | None,
+) -> float:
+    if cache_read_mode == "implicit":
+        implicit_rate: Final = model_info.get("implicit_cache_read_input_token_cost")
+        if implicit_rate is not None:
+            return implicit_rate
+    return _flat_rate(model_info, "cache_read_input_token_cost", "input_cost_per_token")
+
+
+def _flat_rates(
+    model_info: ModelInfo,
+    cache_read_mode: QwenContextCacheMode | None = None,
+) -> TokenRates:
     reasoning_rate: Final = model_info.get("output_cost_per_reasoning_token")
     return TokenRates(
         input_rate=float(model_info.get("input_cost_per_token") or 0.0),
-        cache_read_rate=_flat_rate(model_info, "cache_read_input_token_cost", "input_cost_per_token"),
+        cache_read_rate=_flat_cache_read_rate(model_info, cache_read_mode),
         cache_creation_rate=_flat_rate(model_info, "cache_creation_input_token_cost", "input_cost_per_token"),
         output_rate=float(model_info.get("output_cost_per_token") or 0.0),
         reasoning_rate=None if reasoning_rate is None else float(reasoning_rate),
     )
 
 
-def _tier_rates(model_info: ModelInfo, tier: dict) -> TokenRates:
+def _tier_rates(
+    model_info: ModelInfo,
+    tier: dict[str, object],
+    cache_read_mode: QwenContextCacheMode | None = None,
+) -> TokenRates:
     # A tier that declares output rates keeps the request on them, all-or-nothing. A tier table
     # spelling out only input rates would serve every completion for free, so there the model's
     # own output rates stand in
-    flat_rates: Final = _flat_rates(model_info)
+    flat_rates: Final = _flat_rates(model_info, cache_read_mode)
     tier_declares_output: Final = "output_cost_per_token" in tier
     tier_declares_reasoning: Final = "output_cost_per_reasoning_token" in tier
+    cache_read_rate: Final = (
+        tier_rate(tier, "implicit_cache_read_input_token_cost")
+        if cache_read_mode == "implicit" and "implicit_cache_read_input_token_cost" in tier
+        else tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token")
+    )
     return TokenRates(
         input_rate=tier_rate(tier, "input_cost_per_token"),
-        cache_read_rate=tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
+        cache_read_rate=cache_read_rate,
         cache_creation_rate=tier_rate(tier, "cache_creation_input_token_cost", "input_cost_per_token"),
         output_rate=tier_rate(tier, "output_cost_per_token") if tier_declares_output else flat_rates.output_rate,
         reasoning_rate=(
@@ -105,11 +170,55 @@ def _bill(breakdown: TokenBreakdown, rates: TokenRates) -> tuple[float, float]:
     return prompt_cost, completion_cost
 
 
+def get_token_breakdown_and_rates(
+    model_info: ModelInfo,
+    usage: Usage,
+    current_time: datetime | None = None,
+    cache_control_requested: bool = False,
+) -> tuple[TokenBreakdown, TokenRates]:
+    breakdown: Final = _extract_token_breakdown(
+        usage,
+        cache_control_requested=cache_control_requested,
+    )
+    raw_tiers: Final = model_info.get("tiered_pricing")
+    tiered_pricing: Final = (
+        cast(  # cast-ok: ModelInfo's legacy tier type uses Any; the list check preserves the existing runtime boundary
+            list[dict[str, object]], raw_tiers
+        )
+        if isinstance(raw_tiers, list)
+        else None
+    )
+    tier: Final = (
+        cast(  # cast-ok: the shared selector returns one dict from the checked tier list but lacks generic annotations
+            dict[str, object] | None,
+            select_tier_for_input(
+                tiered_pricing=tiered_pricing,
+                input_tokens=breakdown.total_input_tokens,
+            ),
+        )
+        if tiered_pricing
+        else None
+    )
+    standard_rates: Final = (
+        _flat_rates(model_info, breakdown.cache_read_mode)
+        if tier is None
+        else _tier_rates(model_info, tier, breakdown.cache_read_mode)
+    )
+    rates: Final = apply_off_peak_pricing(
+        model_info,
+        current_time,
+        standard_rates,
+        cache_read_cost_key=_cache_read_cost_key(breakdown.cache_read_mode),
+    )
+    return breakdown, rates
+
+
 def cost_per_token(
     model: str,
     usage: Usage,
     custom_llm_provider: str = "dashscope",
     current_time: datetime | None = None,
+    cache_control_requested: bool = False,
 ) -> tuple[float, float]:
     """
     Calculate cost per token for Dashscope models.
@@ -127,15 +236,11 @@ def cost_per_token(
         Tuple[float, float] - (prompt_cost_in_usd, completion_cost_in_usd)
     """
     model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    breakdown: Final = _extract_token_breakdown(usage)
-    raw_tiers: Final = model_info.get("tiered_pricing")
-    tiered_pricing: Final = raw_tiers if isinstance(raw_tiers, list) else None
-    tier: Final = (
-        select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=breakdown.total_input_tokens)
-        if tiered_pricing
-        else None
+    breakdown, rates = get_token_breakdown_and_rates(
+        model_info=model_info,
+        usage=usage,
+        current_time=current_time,
+        cache_control_requested=cache_control_requested,
     )
-    standard_rates: Final = _flat_rates(model_info) if tier is None else _tier_rates(model_info, tier)
-    rates: Final = apply_off_peak_pricing(model_info, current_time, standard_rates)
 
     return _bill(breakdown, rates)

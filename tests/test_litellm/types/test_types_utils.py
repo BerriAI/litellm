@@ -96,6 +96,31 @@ def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
     assert not hasattr(non_int, "cache_write_tokens")
 
 
+def test_prompt_tokens_details_preserves_qwen_cache_type():
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    details = PromptTokensDetailsWrapper(
+        cached_tokens=1889,
+        cache_creation_input_tokens=0,
+        cache_type="ephemeral",
+    )
+
+    assert details.cache_type == "ephemeral"
+    assert details.model_dump()["cache_type"] == "ephemeral"
+
+
+def test_custom_pricing_accepts_qwen_implicit_cache_rate():
+    from litellm.types.utils import CustomPricingLiteLLMParams
+
+    pricing = CustomPricingLiteLLMParams(
+        cache_read_input_token_cost=1e-07,
+        implicit_cache_read_input_token_cost=2e-07,
+    )
+
+    assert pricing.cache_read_input_token_cost == 1e-07
+    assert pricing.implicit_cache_read_input_token_cost == 2e-07
+
+
 def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
     from litellm.types.utils import ServerToolUse, Usage
 

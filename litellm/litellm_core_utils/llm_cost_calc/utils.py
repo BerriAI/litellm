@@ -453,7 +453,12 @@ def _open_off_peak_block(model_info: ModelInfo, current_time: datetime | None) -
     return off_peak
 
 
-def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None, rates: TokenRates) -> TokenRates:
+def apply_off_peak_pricing(
+    model_info: ModelInfo,
+    current_time: datetime | None,
+    rates: TokenRates,
+    cache_read_cost_key: str = "cache_read_input_token_cost",
+) -> TokenRates:
     """Swap in off-peak per-token rates when the current UTC time is inside one of the model's
     off_peak_pricing rules, the every-day hours_utc windows or a day-of-week-qualified entry in
     windows. An off-peak rate replaces the rate that would otherwise apply rather than
@@ -467,10 +472,19 @@ def apply_off_peak_pricing(model_info: ModelInfo, current_time: datetime | None,
     if off_peak is None:
         return rates
     off_peak_reasoning_rate: Final = _parse_off_peak_rate(off_peak.get("output_cost_per_reasoning_token"))
+    mode_specific_cache_read_rate: Final = _parse_off_peak_rate(off_peak.get(cache_read_cost_key))
+    generic_cache_read_rate: Final = (
+        _parse_off_peak_rate(off_peak.get("cache_read_input_token_cost"))
+        if cache_read_cost_key != "cache_read_input_token_cost"
+        else None
+    )
+    cache_read_rate: Final = (
+        mode_specific_cache_read_rate if mode_specific_cache_read_rate is not None else generic_cache_read_rate
+    )
     return TokenRates(
         input_rate=_off_peak_rate(off_peak, "input_cost_per_token", rates.input_rate),
         output_rate=_off_peak_rate(off_peak, "output_cost_per_token", rates.output_rate),
-        cache_read_rate=_off_peak_rate(off_peak, "cache_read_input_token_cost", rates.cache_read_rate),
+        cache_read_rate=rates.cache_read_rate if cache_read_rate is None else cache_read_rate,
         cache_creation_rate=_off_peak_rate(off_peak, "cache_creation_input_token_cost", rates.cache_creation_rate),
         reasoning_rate=rates.reasoning_rate if off_peak_reasoning_rate is None else off_peak_reasoning_rate,
     )
@@ -1341,6 +1355,18 @@ def get_token_type_cost_breakdown(
         current_time=billing_time,
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
+
+    if custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
+        from litellm.llms.dashscope.cost_calculator import (
+            get_token_breakdown_and_rates,
+        )
+
+        _, dashscope_rates = get_token_breakdown_and_rates(
+            model_info=model_info,
+            usage=usage,
+            current_time=billing_time,
+        )
+        cache_read_cost_rate = dashscope_rates.cache_read_rate
 
     reasoning_tokens = (
         parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
