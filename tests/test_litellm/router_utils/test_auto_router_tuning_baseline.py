@@ -72,6 +72,9 @@ class TestTuningFingerprint:
             config["classifier_llm_config"] = {"model": "judge"}
         assert tuning_fingerprint(config) != DEFAULT_TUNING_FINGERPRINT
 
+    def test_explicit_empty_tier_model_configs_follow_omission(self) -> None:
+        assert tuning_fingerprint({"tier_model_configs": {}}) == DEFAULT_TUNING_FINGERPRINT
+
     def test_tier_model_overrides_change_the_fingerprint(self) -> None:
         plain = tuning_fingerprint({"tiers": {"SIMPLE": "x"}})
         with_override = tuning_fingerprint(
@@ -80,10 +83,38 @@ class TestTuningFingerprint:
         assert plain != with_override
 
     def test_non_tuning_fields_do_not_change_the_fingerprint(self) -> None:
-        assert tuning_fingerprint({"return_raw_model_name": True, "session_affinity": True}) == DEFAULT_TUNING_FINGERPRINT
+        assert (
+            tuning_fingerprint({"return_raw_model_name": True, "session_affinity": True}) == DEFAULT_TUNING_FINGERPRINT
+        )
 
     def test_invalid_config_has_no_fingerprint(self) -> None:
         assert tuning_fingerprint({"tier_boundaries": "not-a-mapping"}) is None
+
+    def test_a_release_changing_a_shipped_default_is_not_an_operator_edit(self, monkeypatch) -> None:
+        """An omitted setting follows the shipped default and stays off the quota when that default moves;
+        only what the operator wrote is fingerprinted, so an explicit value equal to the old default still counts."""
+        import litellm.router_strategy.complexity_router.config as config_module
+
+        untouched = _router("a", {})
+        tiers_only = _router("b", {"tiers": _TIERS})
+        pinned = _router("c", {"dimension_weights": dict(config_module.DEFAULT_DIMENSION_WEIGHTS)})
+        baselines = snapshot_tuning_baselines([untouched, tiers_only, pinned])
+        assert tuning_fingerprint(pinned["litellm_params"]["complexity_router_config"]) != DEFAULT_TUNING_FINGERPRINT
+
+        monkeypatch.setattr(
+            config_module,
+            "DEFAULT_DIMENSION_WEIGHTS",
+            {**config_module.DEFAULT_DIMENSION_WEIGHTS, "codePresence": 0.99},
+        )
+        monkeypatch.setattr(
+            config_module,
+            "DEFAULT_TIER_BOUNDARIES",
+            {**config_module.DEFAULT_TIER_BOUNDARIES, "simple_medium": 0.42},
+        )
+
+        assert tuning_fingerprint({}) == DEFAULT_TUNING_FINGERPRINT
+        assert mutable_tuned_identities([untouched, tiers_only, pinned], baselines) == frozenset()
+        assert mutable_tuned_identities([untouched], snapshot_tuning_baselines([])) == frozenset()
 
 
 class TestRouterIdentity:
@@ -161,12 +192,18 @@ class TestQuota:
         new_c = _router("c", {"tiers": _TIERS})
 
         assert tuning_quota_violation(candidate=edited_a, others=[legacy_b], baselines=baselines, limit=1) is None
-        assert tuning_quota_violation(candidate=edited_a, others=[edited_a, legacy_b], baselines=baselines, limit=1) is None
+        assert (
+            tuning_quota_violation(candidate=edited_a, others=[edited_a, legacy_b], baselines=baselines, limit=1)
+            is None
+        )
         assert tuning_quota_violation(candidate=legacy_a, others=[edited_b], baselines=baselines, limit=1) is None
         assert tuning_quota_violation(candidate=edited_b, others=[edited_a], baselines=baselines, limit=1) is not None
         assert tuning_quota_violation(candidate=new_c, others=[edited_a], baselines=baselines, limit=1) is not None
         assert tuning_quota_violation(candidate=new_c, others=[edited_a], baselines=baselines, limit=None) is None
-        assert tuning_quota_violation(candidate=legacy_a, others=[edited_a, edited_b], baselines=baselines, limit=1) is None
+        assert (
+            tuning_quota_violation(candidate=legacy_a, others=[edited_a, edited_b], baselines=baselines, limit=1)
+            is None
+        )
 
     def test_reverting_to_baseline_frees_the_quota(self) -> None:
         legacy_a = _router("a", {"tiers": _TIERS})
@@ -174,7 +211,10 @@ class TestQuota:
         baselines = snapshot_tuning_baselines([legacy_a, legacy_b])
         edited_b = _router("b", {"tiers": _TIERS})
         assert tuning_quota_violation(candidate=edited_b, others=[legacy_a], baselines=baselines, limit=1) is None
-        assert tuning_quota_violation(candidate=edited_b, others=[legacy_a, edited_b], baselines=baselines, limit=1) is None
+        assert (
+            tuning_quota_violation(candidate=edited_b, others=[legacy_a, edited_b], baselines=baselines, limit=1)
+            is None
+        )
 
     def test_violation_message_names_the_limit_and_remedy(self) -> None:
         message = tuning_limit_violation(held=2, limit=1)
