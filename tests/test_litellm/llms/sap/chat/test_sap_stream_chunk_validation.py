@@ -10,7 +10,7 @@ Regression tests for:
   configured resource group contains no orchestration deployment.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -128,10 +128,10 @@ def test_deployment_url_raises_404_when_no_orchestration_deployment():
 
     mock_client = MagicMock()
     mock_client.get.return_value.json.return_value = {"resources": []}
+    config._http_client = mock_client
 
-    with patch("litellm.module_level_client", mock_client):
-        with pytest.raises(GenAIHubOrchestrationError) as exc_info:
-            _ = config.deployment_url
+    with pytest.raises(GenAIHubOrchestrationError) as exc_info:
+        _ = config.deployment_url
 
     assert exc_info.value.status_code == 404
     assert "fake-group" in exc_info.value.message
