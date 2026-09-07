@@ -12,6 +12,7 @@ mod messages;
 mod ocr;
 
 #[cfg(feature = "bench")]
+#[allow(dead_code)]
 mod benchmarks;
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

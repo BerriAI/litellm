@@ -23,7 +23,6 @@ bridge_route! {
     optional = {},
     prepare = prepare_echo,
     errors = core_error_to_pyerr,
-    trace = disabled,
 }
 
 #[pyclass(frozen)]
