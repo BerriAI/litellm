@@ -1823,11 +1823,37 @@ class TestAnthropicThinkingSignatureSelfHeal:
             },
         ]
         out = sanitize_tool_use_ids_in_anthropic_messages(
-            msgs, api_base="http://127.0.0.1:8000/v1"
+            msgs, api_base="http://127.0.0.1:8000/v1", custom_llm_provider="anthropic"
         )
         assert out is msgs
         assert out[0]["content"][0]["id"] == "functions.Bash:0"
         assert out[1]["content"][0]["tool_use_id"] == "functions.Bash:0"
+
+    def test_sanitize_tool_use_ids_uses_url_hostname_not_query_string(self):
+        from litellm.llms.anthropic.common_utils import (
+            sanitize_tool_use_ids_in_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "functions.Bash:0",
+                        "name": "Bash",
+                        "input": {},
+                    }
+                ],
+            }
+        ]
+        out = sanitize_tool_use_ids_in_anthropic_messages(
+            msgs,
+            api_base="http://vllm:8000/v1?x=api.anthropic.com",
+            custom_llm_provider="anthropic",
+        )
+        assert out is msgs
+        assert out[0]["content"][0]["id"] == "functions.Bash:0"
 
     def test_sanitize_tool_use_ids_still_runs_for_anthropic_hosts(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1847,17 +1873,19 @@ class TestAnthropicThinkingSignatureSelfHeal:
                 ],
             }
         ]
-        anthropic_hosts = (
-            "",
-            "https://api.anthropic.com",
-            "https://bedrock-runtime.us-east-1.amazonaws.com",
-            "https://us-east5-aiplatform.googleapis.com",
-            "https://aiplatform.googleapis.com",
-            "https://cloud.google.com/vertex-ai",
+        still_sanitize = (
+            ("anthropic", ""),
+            ("anthropic", "https://api.anthropic.com"),
+            ("azure_ai", "https://myres.services.ai.azure.com/anthropic"),
+            ("github_copilot", "https://api.githubcopilot.com"),
+            ("bedrock", "https://bedrock-runtime.us-east-1.amazonaws.com"),
+            ("vertex_ai", "https://us-east5-aiplatform.googleapis.com"),
         )
-        for api_base in anthropic_hosts:
-            out = sanitize_tool_use_ids_in_anthropic_messages(msgs, api_base=api_base)
-            assert out[0]["content"][0]["id"] == "functions_Bash_0", api_base
+        for custom_llm_provider, api_base in still_sanitize:
+            out = sanitize_tool_use_ids_in_anthropic_messages(
+                msgs, api_base=api_base, custom_llm_provider=custom_llm_provider
+            )
+            assert out[0]["content"][0]["id"] == "functions_Bash_0", (custom_llm_provider, api_base)
             assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
 
     def test_normalize_anthropic_tool_use_id_strips_thought_signature(self):

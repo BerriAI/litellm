@@ -8,6 +8,7 @@ from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -1240,37 +1241,42 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
     return block
 
 
-_ANTHROPIC_TOOL_ID_CHARSET_HOST_MARKERS: Final = frozenset(
-    (
-        "api.anthropic.com",
-        "amazonaws.com",
-        "googleapis.com",
-        "cloud.google.com",
-    )
-)
+_ANTHROPIC_TOOL_ID_CHARSET_HOSTNAME: Final = "api.anthropic.com"
 
 
-def _upstream_enforces_anthropic_tool_id_charset(api_base: str | None) -> bool:
+def _should_sanitize_anthropic_tool_use_ids(
+    *,
+    api_base: str | None,
+    custom_llm_provider: str | None,
+) -> bool:
+    if custom_llm_provider is not None and custom_llm_provider.casefold() != "anthropic":
+        return True
     if api_base is None or not api_base.strip():
         return True
-    host: Final = api_base.casefold()
-    return any(marker in host for marker in _ANTHROPIC_TOOL_ID_CHARSET_HOST_MARKERS)
+    hostname: Final = urlparse(api_base).hostname
+    if hostname is None:
+        return True
+    return hostname.casefold() == _ANTHROPIC_TOOL_ID_CHARSET_HOSTNAME
 
 
 def sanitize_tool_use_ids_in_anthropic_messages(
     messages: list[Any],
     *,
     api_base: str | None = None,
+    custom_llm_provider: str | None = None,
 ) -> list[Any]:
     """
     Rewrite ``tool_use`` / ``server_tool_use`` ``id`` and ``tool_result``
     ``tool_use_id`` values to Anthropic's ``^[a-zA-Z0-9_-]+$`` pattern.
 
-    No-op when ``api_base`` is a host that is not Anthropic, Bedrock, or Vertex.
-    Those upstreams (vLLM, Kimi, SGLang) echo the original ids; rewriting them
-    breaks the next tool_result turn. See #32214.
+    No-op when ``custom_llm_provider`` is ``anthropic`` and ``api_base`` is a
+    non-Anthropic host. vLLM/Kimi echo the original ids; rewriting them breaks
+    the next tool_result turn. See #32214.
     """
-    if not _upstream_enforces_anthropic_tool_id_charset(api_base):
+    if not _should_sanitize_anthropic_tool_use_ids(
+        api_base=api_base,
+        custom_llm_provider=custom_llm_provider,
+    ):
         return messages
     out: Final[list[Any]] = []
     for m in messages:

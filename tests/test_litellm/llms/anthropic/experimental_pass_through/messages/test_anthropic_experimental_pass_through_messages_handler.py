@@ -220,6 +220,49 @@ async def test_anthropic_messages_sanitizes_tool_use_ids_before_dispatch():
     assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_keeps_tool_use_ids_for_non_anthropic_api_base():
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "functions.Bash:0",
+                    "name": "Bash",
+                    "input": {},
+                }
+            ],
+        }
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="anthropic/claude-sonnet-4-5-20250929",
+            custom_llm_provider="anthropic",
+            api_key="k",
+            api_base="http://127.0.0.1:8000/v1",
+        )
+
+    assert captured["messages"][0]["content"][0]["id"] == "functions.Bash:0"
+    assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+
+
 async def _async_return(value):
     return value
 
@@ -700,27 +743,6 @@ def test_handler_strips_when_no_presanitized_flag():
         )
     assert spy.call_count == 1  # sanitized exactly once here
     assert result is not None
-
-
-def test_handler_forwards_api_base_to_tool_id_sanitize():
-    from litellm.llms.anthropic.experimental_pass_through.messages import handler
-
-    with patch.object(
-        handler,
-        "sanitize_tool_use_ids_in_anthropic_messages",
-        wraps=handler.sanitize_tool_use_ids_in_anthropic_messages,
-    ) as spy:
-        result = handler.anthropic_messages_handler(
-            max_tokens=10,
-            messages=[{"role": "user", "content": "Hello"}],
-            model="anthropic/claude-3-5-sonnet-20241022",
-            custom_llm_provider="anthropic",
-            api_base="http://127.0.0.1:8000/v1",
-            mock_response="hi there",
-        )
-    assert result is not None
-    assert spy.call_count == 1
-    assert spy.call_args.kwargs["api_base"] == "http://127.0.0.1:8000/v1"
 
 
 def test_handler_skips_strip_when_presanitized():
