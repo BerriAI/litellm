@@ -2621,7 +2621,7 @@ class _VerdictGuardrail(CustomGuardrail):
 
     guardrail_provider = "acme_scanner"
 
-    def __init__(self, verdict: GuardrailProviderVerdict, **kwargs):
+    def __init__(self, verdict: GuardrailProviderVerdict, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self.verdict = verdict
 

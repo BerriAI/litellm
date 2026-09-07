@@ -159,7 +159,6 @@ class CustomGuardrail(CustomLogger):
 
     records_own_guardrail_information: ClassVar[bool] = False
 
-    # Name of the service behind this guardrail, set by subclasses that have one.
     guardrail_provider: str | None = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks

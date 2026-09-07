@@ -137,6 +137,7 @@ class GenAIMapper:
         LiteLLM.GUARDRAIL_MASKED_ENTITY_COUNT: lambda d: d.masked_entity_count,
         LiteLLM.GUARDRAIL_DURATION: lambda d: d.duration,
         LiteLLM.GUARDRAIL_ID: lambda d: d.guardrail_id,
+        LiteLLM.GUARDRAIL_TRANSACTION_ID: lambda d: d.guardrail_transaction_id,
         LiteLLM.GUARDRAIL_POLICY_TEMPLATE: lambda d: d.policy_template,
         LiteLLM.GUARDRAIL_DETECTION_METHOD: lambda d: d.detection_method,
         LiteLLM.GUARDRAIL_USAGE: lambda d: d.usage_json,

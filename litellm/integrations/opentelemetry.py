@@ -2048,6 +2048,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             guardrail_action = guardrail_information.get("guardrail_action")
             if guardrail_action:
                 guardrail_span.set_attribute("guardrail_action", guardrail_action)
+            guardrail_transaction_id = guardrail_information.get("guardrail_transaction_id")
+            if guardrail_transaction_id:
+                guardrail_span.set_attribute("guardrail_transaction_id", guardrail_transaction_id)
 
             # The provider hook (e.g. Bedrock) extracts violation_categories
             # from the raw response BEFORE redaction and stamps them onto

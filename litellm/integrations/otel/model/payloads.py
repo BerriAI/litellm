@@ -243,6 +243,7 @@ class GuardrailSpanData:
     # ``StandardLoggingGuardrailInformation``). Present for any guardrail that
     # populates them, not just one provider's shape.
     guardrail_id: str | None = None
+    guardrail_transaction_id: str | None = None
     policy_template: str | None = None
     detection_method: str | None = None
     # Provider-reported billable usage counters (JSON-serialized) and the USD cost
@@ -295,6 +296,7 @@ class GuardrailSpanData:
             start_time=as_float(get("start_time")),
             end_time=as_float(get("end_time")),
             guardrail_id=as_str(get("guardrail_id")),
+            guardrail_transaction_id=as_str(get("guardrail_transaction_id")),
             policy_template=as_str(get("policy_template")),
             detection_method=as_str(get("detection_method")),
             usage_json=_json_or_none(usage) if usage is not None else None,

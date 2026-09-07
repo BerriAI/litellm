@@ -213,15 +213,18 @@ def test_guardrail_typed_metadata_fields_mapped_to_span():
             "guardrail_name": "eu-pii",
             "guardrail_status": "success",
             "guardrail_id": "gd-eu-pii-001",
+            "guardrail_transaction_id": "tx-123",
             "policy_template": "EU AI Act Article 5",
             "detection_method": "presidio",
         }
     )
     assert d.guardrail_id == "gd-eu-pii-001"
+    assert d.guardrail_transaction_id == "tx-123"
     assert d.policy_template == "EU AI Act Article 5"
     assert d.detection_method == "presidio"
     attrs = GenAIMapper().map(d)
     assert attrs[LiteLLM.GUARDRAIL_ID] == "gd-eu-pii-001"
+    assert attrs[LiteLLM.GUARDRAIL_TRANSACTION_ID] == "tx-123"
     assert attrs[LiteLLM.GUARDRAIL_POLICY_TEMPLATE] == "EU AI Act Article 5"
     assert attrs[LiteLLM.GUARDRAIL_DETECTION_METHOD] == "presidio"
 

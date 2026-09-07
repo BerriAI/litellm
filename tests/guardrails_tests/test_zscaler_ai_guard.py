@@ -10,8 +10,10 @@ Tests covering:
 - resolve-and-execute-policy endpoint (policyId omission)
 """
 
-import pytest
+from typing import Mapping
 from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 from fastapi import HTTPException
 from litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import ZscalerAIGuard
 import asyncio
@@ -517,7 +519,7 @@ def test_update_in_memory_litellm_params_keeps_timeout_resolved():
     assert guardrail.timeout == 45.0
 
 
-def _ai_guard_response(action, transaction_id, detector_responses):
+def _ai_guard_response(action: str, transaction_id: str, detector_responses: Mapping[str, Mapping[str, object]]) -> Mock:
     response = Mock()
     response.status_code = 200
     response.json.return_value = {
@@ -529,7 +531,7 @@ def _ai_guard_response(action, transaction_id, detector_responses):
     return response
 
 
-async def _apply(guardrail, response):
+async def _apply(guardrail: ZscalerAIGuard, response: Mock) -> dict[str, object]:
     request_data = {"metadata": {}}
     with patch.object(guardrail, "_send_request", new_callable=AsyncMock) as send:
         send.return_value = response

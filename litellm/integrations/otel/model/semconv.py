@@ -309,6 +309,8 @@ class LiteLLM:
     GUARDRAIL_MASKED_ENTITY_COUNT: Final = "litellm.guardrail.masked_entity_count"
     GUARDRAIL_DURATION: Final = "litellm.guardrail.duration"
     GUARDRAIL_ID: Final = "litellm.guardrail.id"
+    # The provider's identifier for one evaluation, distinct from the stable GUARDRAIL_ID.
+    GUARDRAIL_TRANSACTION_ID: Final = "litellm.guardrail.transaction_id"
     GUARDRAIL_POLICY_TEMPLATE: Final = "litellm.guardrail.policy_template"
     GUARDRAIL_DETECTION_METHOD: Final = "litellm.guardrail.detection_method"
     # Provider-reported billable usage counters, JSON-serialized into one value.
