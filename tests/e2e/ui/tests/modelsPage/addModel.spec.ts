@@ -60,12 +60,10 @@ test.describe("Add Model", () => {
     const popup = page.locator('[data-slot="combobox-content"]');
     const list = page.locator('[data-slot="combobox-list"]');
 
-    // Base UI places the popup asynchronously and animates it open, so every geometry read polls
-    // both boxes until they settle; a popup that never lands correctly still fails on timeout.
-    // The dashboard scrolls inside <main>, not the window, so scrolling that container is what
-    // changes how much room is left below the field.
+    const scrollContainer = page.locator("main");
+
     const openAt = async (scrollTop: number) => {
-      await page.locator("main").evaluate((el, top) => el.scrollTo(0, top), scrollTop);
+      await scrollContainer.evaluate((el, top) => el.scrollTo(0, top), scrollTop);
       await providerDropdown.click();
       await expect(popup).toBeVisible();
       await expect.poll(() => popup.getAttribute("data-side")).toBe("bottom");
@@ -77,9 +75,6 @@ test.describe("Add Model", () => {
           return popupBox.y >= triggerBox.y + triggerBox.height && popupBox.y + popupBox.height <= viewport.height;
         })
         .toBe(true);
-      // Heights come from computed style, not getBoundingClientRect: the popup's open animation
-      // scales the box, so a rect read mid-animation reports ~2% short of the real layout height.
-      // Row counting stays on rects, where that scale cancels out between the list and its rows.
       return list.evaluate((listEl) => {
         const bounds = listEl.getBoundingClientRect();
         const popupEl = listEl.closest('[data-slot="combobox-content"]')!;
@@ -94,15 +89,14 @@ test.describe("Add Model", () => {
       });
     };
 
-    // ComboboxList caps itself at --spacing(72) and reserves --spacing(9) of the space below the
-    // field for the popup's own chrome, so its height is min(LIST_MAX, available - RESERVED).
-    const LIST_MAX_PX = 288 - 36;
-    const RESERVED_PX = 36;
+    const SPACING_72_PX = 288;
+    const POPUP_CHROME_PX = 36;
+    const LIST_MAX_PX = SPACING_72_PX - POPUP_CHROME_PX;
 
     const tight = await openAt(150);
     expect(tight.rows, "shows the rows that fit below the field").toBeGreaterThan(0);
     expect(tight.listHeight, "is limited by the room below the field, not by its own cap").toBeCloseTo(
-      tight.availableHeight - RESERVED_PX,
+      tight.availableHeight - POPUP_CHROME_PX,
       0,
     );
     expect(tight.listHeight, "stays under its own cap while space-limited").toBeLessThan(LIST_MAX_PX);
@@ -110,7 +104,7 @@ test.describe("Add Model", () => {
 
     const roomy = await openAt(400);
     expect(roomy.rows, "shows more rows once there is more room below the field").toBeGreaterThan(tight.rows);
-    expect(roomy.availableHeight - RESERVED_PX, "has more room below than the cap").toBeGreaterThan(LIST_MAX_PX);
+    expect(roomy.availableHeight - POPUP_CHROME_PX, "has more room below than the cap").toBeGreaterThan(LIST_MAX_PX);
     expect(roomy.listHeight, "grows to its cap once the room below exceeds it").toBeCloseTo(LIST_MAX_PX, 0);
   });
 
