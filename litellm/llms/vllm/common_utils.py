@@ -1,4 +1,4 @@
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -44,7 +44,7 @@ class VLLMError(BaseLLMException):
 
 
 class VLLMModelInfo(BaseLLMModelInfo):
-    def __init__(self, provider: str = "vllm") -> None:
+    def __init__(self, provider: Literal["vllm", "hosted_vllm"] = "vllm") -> None:
         self._provider: Final = provider
 
     def validate_environment(
@@ -81,67 +81,31 @@ class VLLMModelInfo(BaseLLMModelInfo):
             raise ValueError(f"{environment_variable} is required to query vLLM's `/models` endpoint.")
         return resolved_api_base
 
-    def _get_discovery_api_key(self, api_key: str | None) -> str | None:
-        environment_variable: Final = "HOSTED_VLLM_API_KEY" if self._provider == "hosted_vllm" else "VLLM_API_KEY"
-        return api_key or get_secret_str(environment_variable)
-
     @staticmethod
     def get_base_model(model: str) -> str | None:
         return model
 
-    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        passed_api_base: Final = api_base
+    def _query_models(self, api_base: str | None, api_key: str | None) -> httpx.Response:
         resolved_api_base: Final = self._get_discovery_api_base(api_base)
-        resolved_api_key: Final = self._get_discovery_api_key(api_key) if passed_api_base is None or api_key else None
-        endpoint: Final = "/v1/models"
-
-        url: Final = _add_path_to_api_base(resolved_api_base, endpoint)
-        headers: Final = (
-            httpx.Headers((("Authorization", f"Bearer {resolved_api_key}"),)) if resolved_api_key else httpx.Headers()
+        environment_variable: Final = "HOSTED_VLLM_API_KEY" if self._provider == "hosted_vllm" else "VLLM_API_KEY"
+        resolved_api_key: Final = (
+            api_key if api_key is not None or api_base is not None else get_secret_str(environment_variable)
         )
+        headers: Final = {"Authorization": f"Bearer {resolved_api_key}"} if resolved_api_key else {}
         response: Final = litellm.module_level_client.get(
-            url=url,
+            url=_add_path_to_api_base(resolved_api_base, "/v1/models"),
             headers=headers,
+            follow_redirects=False,
+            timeout=5.0,
         )
-
         response.raise_for_status()
+        return response
 
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
+        response: Final = self._query_models(api_base, api_key)
         models: Final = response.json()["data"]
 
         return [model["id"] for model in models]
-
-    @staticmethod
-    def _strip_provider_prefix(model: str) -> str:
-        for prefix in ("hosted_vllm/", "vllm/"):
-            if model.startswith(prefix):
-                return model[len(prefix) :]
-        return model
-
-    def _model_info_from_entry(
-        self,
-        raw_entry: object,
-        *,
-        target: str,
-        model: str,
-    ) -> ModelInfoBase | None:
-        try:
-            entry: Final = _VLLMModelEntry.model_validate(raw_entry)
-        except ValidationError:
-            return None
-        if entry.id != target or entry.max_model_len is None:
-            return None
-
-        model_info: Final[ModelInfoBase] = {
-            "key": model,
-            "litellm_provider": self._provider,
-            "mode": "chat",
-            "input_cost_per_token": 0.0,
-            "output_cost_per_token": 0.0,
-            "max_tokens": None,
-            "max_input_tokens": entry.max_model_len,
-            "max_output_tokens": None,
-        }
-        return model_info
 
     def get_model_info(
         self,
@@ -149,36 +113,26 @@ class VLLMModelInfo(BaseLLMModelInfo):
         api_base: str | None = None,
         api_key: str | None = None,
     ) -> ModelInfoBase | None:
-        passed_api_base: Final = api_base
-        resolved_api_base: Final = self._get_discovery_api_base(api_base)
-        resolved_api_key: Final = self._get_discovery_api_key(api_key) if passed_api_base is None or api_key else None
-
-        headers: Final = (
-            httpx.Headers((("Authorization", f"Bearer {resolved_api_key}"),)) if resolved_api_key else httpx.Headers()
-        )
-        response: Final = litellm.module_level_client.get(
-            url=_add_path_to_api_base(resolved_api_base, "/v1/models"),
-            headers=headers,
-        )
-        response.raise_for_status()
-
-        target: Final = self._strip_provider_prefix(model)
+        response: Final = self._query_models(api_base, api_key)
+        target: Final = model.removeprefix(f"{self._provider}/")
         discovered: Final = _VLLMModelsResponse.model_validate(response.json())
-        return next(
-            (
-                model_info
-                for raw_entry in discovered.data
-                if (
-                    model_info := self._model_info_from_entry(
-                        raw_entry,
-                        target=target,
-                        model=model,
-                    )
+        for raw_entry in discovered.data:
+            try:
+                entry = _VLLMModelEntry.model_validate(raw_entry)
+            except ValidationError:
+                continue
+            if entry.id == target and entry.max_model_len is not None:
+                return ModelInfoBase(
+                    key=model,
+                    litellm_provider=self._provider,
+                    mode="chat",
+                    input_cost_per_token=0.0,
+                    output_cost_per_token=0.0,
+                    max_tokens=None,
+                    max_input_tokens=entry.max_model_len,
+                    max_output_tokens=None,
                 )
-                is not None
-            ),
-            None,
-        )
+        return None
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VLLMError(status_code=status_code, message=error_message, headers=headers)

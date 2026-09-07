@@ -651,7 +651,7 @@ class AsyncHTTPHandler:
         self,
         url: str,
         params: dict | None = None,
-        headers: dict | httpx.Headers | None = None,
+        headers: dict | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
     ):
@@ -1289,7 +1289,7 @@ class HTTPHandler:
         self,
         url: str,
         params: dict | None = None,
-        headers: dict | httpx.Headers | None = None,
+        headers: dict | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
     ):

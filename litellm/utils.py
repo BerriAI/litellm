@@ -5636,7 +5636,7 @@ def _get_model_info_helper(
                         "falling back to the static cost map: %s",
                         model,
                         custom_llm_provider,
-                        e,
+                        type(e).__name__ if custom_llm_provider in ("vllm", "hosted_vllm") else e,
                     )
 
         if custom_llm_provider == "huggingface":
@@ -6024,7 +6024,8 @@ def get_model_info(
     - custom_llm_provider (str | null): the provider used for the model. If provided, used to check if the litellm model info is for that provider.
     - api_base (str | null): the deployment endpoint used for provider-scoped discovery.
     - api_key (str | null): the deployment credential used for provider-scoped discovery.
-    - discover_model_info (bool): query supported provider metadata endpoints before falling back to the static map.
+    - discover_model_info (bool): opt in to a synchronous, uncached vLLM metadata lookup; defaults to False.
+      Explicit api_base never inherits an ambient API key. Discovery overlays context only, not output limits.
 
     Returns:
         dict: A dictionary containing the following information:
@@ -8812,7 +8813,7 @@ class ProviderConfigManager:
                 VLLMModelInfo,  # experimental approach, to reduce bloat on __init__.py
             )
 
-            return VLLMModelInfo(provider=provider.value)
+            return VLLMModelInfo(provider="hosted_vllm" if provider == LlmProviders.HOSTED_VLLM else "vllm")
         elif LlmProviders.LEMONADE == provider:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:

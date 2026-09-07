@@ -2,6 +2,7 @@ import json
 import logging
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -9,6 +10,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.llms.vllm.common_utils import VLLMModelInfo
 
@@ -110,9 +112,7 @@ def test_hosted_vllm_chat_transformation_with_audio_url():
 
 def test_hosted_vllm_supports_reasoning_effort():
     config = HostedVLLMChatConfig()
-    supported_params = config.get_supported_openai_params(
-        model="hosted_vllm/gpt-oss-120b"
-    )
+    supported_params = config.get_supported_openai_params(model="hosted_vllm/gpt-oss-120b")
     assert "reasoning_effort" in supported_params
     optional_params = config.map_openai_params(
         non_default_params={"reasoning_effort": "high"},
@@ -133,9 +133,7 @@ def test_hosted_vllm_supports_thinking():
     Related issue: https://github.com/BerriAI/litellm/issues/19761
     """
     config = HostedVLLMChatConfig()
-    supported_params = config.get_supported_openai_params(
-        model="hosted_vllm/GLM-4.6-FP8"
-    )
+    supported_params = config.get_supported_openai_params(model="hosted_vllm/GLM-4.6-FP8")
     assert "thinking" in supported_params
 
     # Test thinking below the low threshold -> "minimal"
@@ -461,7 +459,7 @@ def test_vllm_model_info_maps_context_only_and_authenticates(monkeypatch) -> Non
     assert info["max_output_tokens"] is None
     request.assert_called_once()
     assert request.call_args.kwargs["url"] == "https://vllm.example/v1/models"
-    assert dict(request.call_args.kwargs["headers"]) == {"authorization": "Bearer secret-key"}
+    assert request.call_args.kwargs["headers"] == {"Authorization": "Bearer secret-key"}
 
 
 def test_vllm_model_info_does_not_discover_without_opt_in(monkeypatch) -> None:
@@ -477,7 +475,33 @@ def test_vllm_model_info_does_not_discover_without_opt_in(monkeypatch) -> None:
     request.assert_not_called()
 
 
-@pytest.mark.parametrize("value", [None, 0, -1, True, "262144"])
+@pytest.mark.parametrize("redirect", [False, True])
+def test_vllm_discovery_http_transport_bounds_and_credentials(monkeypatch, redirect) -> None:
+    requests: list[httpx.Request] = []
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if redirect:
+            return httpx.Response(302, headers={"Location": "https://other.example/models"})
+        return httpx.Response(200, json={"data": [{"id": "shared", "max_model_len": 262144}]})
+
+    with httpx.Client(transport=httpx.MockTransport(serve), follow_redirects=True) as client:
+        monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=client))
+        provider = VLLMModelInfo(provider="hosted_vllm")
+        if redirect:
+            with pytest.raises(httpx.HTTPStatusError):
+                provider.get_model_info("hosted_vllm/shared", api_base="https://vllm.example/v1", api_key="key")
+        else:
+            info = provider.get_model_info("hosted_vllm/shared", api_base="https://vllm.example/v1", api_key="key")
+            assert info is not None and info["max_input_tokens"] == 262144
+
+    assert len(requests) == 1
+    assert str(requests[0].url) == "https://vllm.example/v1/models"
+    assert requests[0].headers["Authorization"] == "Bearer key"
+    assert set(requests[0].extensions["timeout"].values()) == {5.0}
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, True, "262144", 262144.0, 1.5])
 def test_vllm_model_info_ignores_non_positive_or_non_integer_context(
     monkeypatch,
     value: object,
@@ -522,7 +546,7 @@ def test_hosted_vllm_model_info_uses_provider_environment(monkeypatch) -> None:
     assert info["max_input_tokens"] == 32_768
     request.assert_called_once()
     assert request.call_args.kwargs["url"] == "https://hosted.example/v1/models"
-    assert dict(request.call_args.kwargs["headers"]) == {"authorization": "Bearer hosted-secret"}
+    assert request.call_args.kwargs["headers"] == {"Authorization": "Bearer hosted-secret"}
 
 
 def test_bare_vllm_model_keeps_explicit_provider_identity(monkeypatch) -> None:
@@ -582,7 +606,7 @@ def test_vllm_endpoint_scoped_lookup_refreshes_and_removes_without_global_regist
 
 
 def test_vllm_same_model_id_is_isolated_by_endpoint(monkeypatch) -> None:
-    def get(url: str, headers: dict[str, str]) -> MagicMock:
+    def get(url: str, headers: dict[str, str], **kwargs) -> MagicMock:
         del headers
         context = 32_768 if "vllm-a" in url else 131_072
         return _model_list_response({"id": "shared", "max_model_len": context})
@@ -611,7 +635,7 @@ def test_vllm_discovery_failure_does_not_log_the_api_key(monkeypatch, caplog) ->
     monkeypatch.setattr(
         litellm.module_level_client,
         "get",
-        MagicMock(side_effect=RuntimeError("discovery failed")),
+        MagicMock(return_value=MagicMock(json=lambda: {"error": {"authorization": secret}})),
     )
 
     with caplog.at_level(logging.WARNING), pytest.raises(Exception, match="isn't mapped yet"):
@@ -633,6 +657,7 @@ def test_vllm_endpoint_discovery_survives_price_map_replacement(monkeypatch) -> 
         MagicMock(return_value=_model_list_response({"id": "model", "max_model_len": 98_304})),
     )
 
+    before = litellm.get_model_info("hosted_vllm/model", api_base="https://vllm.example/v1", discover_model_info=True)
     monkeypatch.setattr(litellm, "model_cost", {"unrelated": {"litellm_provider": "openai"}})
     info = litellm.get_model_info(
         "hosted_vllm/model",
@@ -642,6 +667,7 @@ def test_vllm_endpoint_discovery_survives_price_map_replacement(monkeypatch) -> 
     )
 
     assert info["max_input_tokens"] == 98_304
+    assert before["max_input_tokens"] == info["max_input_tokens"]
     assert "hosted_vllm/model" not in litellm.model_cost
 
 
@@ -652,6 +678,8 @@ def test_vllm_discovery_preserves_static_pricing(monkeypatch) -> None:
         "litellm_provider": "hosted_vllm",
         "mode": "chat",
         "max_input_tokens": 4_096,
+        "max_output_tokens": 1_024,
+        "supports_vision": True,
         "input_cost_per_token": 0.25,
         "output_cost_per_token": 0.5,
     }
@@ -673,4 +701,6 @@ def test_vllm_discovery_preserves_static_pricing(monkeypatch) -> None:
         assert info["max_input_tokens"] == 131_072
         assert info["input_cost_per_token"] == 0.25
         assert info["output_cost_per_token"] == 0.5
+        assert info["max_output_tokens"] == 1_024
+        assert info["supports_vision"] is True
     _invalidate_model_cost_lowercase_map()

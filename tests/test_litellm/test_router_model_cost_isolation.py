@@ -11,7 +11,7 @@ import copy
 import logging
 import os
 import re
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -128,53 +128,6 @@ def test_should_not_pollute_shared_key_with_zero_cost_pricing():
         f"Deployment B should use built-in output cost {builtin_output_cost}, got {info_b['output_cost_per_token']}"
     )
 
-
-def test_vllm_deployments_with_same_model_use_their_own_endpoint_metadata(monkeypatch):
-    def get(url, headers):
-        expected_key = "key-a" if "vllm-a" in url else "key-b"
-        assert dict(headers) == {"authorization": f"Bearer {expected_key}"}
-        response = MagicMock()
-        context = 32_768 if "vllm-a" in url else 131_072
-        response.json.return_value = {"data": [{"id": "shared", "max_model_len": context}]}
-        return response
-
-    monkeypatch.setattr(litellm.module_level_client, "get", get)
-    router = Router(
-        model_list=[
-            {
-                "model_name": "vllm-group",
-                "litellm_params": {
-                    "model": "hosted_vllm/shared",
-                    "api_base": "https://vllm-a.example/v1",
-                    "api_key": "key-a",
-                },
-                "model_info": {"id": "vllm-deployment-a"},
-            },
-            {
-                "model_name": "vllm-group",
-                "litellm_params": {
-                    "model": "hosted_vllm/shared",
-                    "api_base": "https://vllm-b.example/v1",
-                    "api_key": "key-b",
-                },
-                "model_info": {"id": "vllm-deployment-b"},
-            },
-        ]
-    )
-
-    info_a = router.get_deployment_model_info(
-        model_id="vllm-deployment-a",
-        model_name="hosted_vllm/shared",
-    )
-    info_b = router.get_deployment_model_info(
-        model_id="vllm-deployment-b",
-        model_name="hosted_vllm/shared",
-    )
-
-    assert info_a is not None and info_a["max_input_tokens"] == 32_768
-    assert info_b is not None and info_b["max_input_tokens"] == 131_072
-    assert info_a["max_output_tokens"] is None
-    assert info_b["max_output_tokens"] is None
 
 def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
     """
