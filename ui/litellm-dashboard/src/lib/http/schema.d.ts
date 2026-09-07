@@ -3301,11 +3301,14 @@ export interface paths {
          *     - model: Model name (e.g., "gpt-4", "claude-3-opus")
          *     - input_tokens: Expected input tokens per request
          *     - output_tokens: Expected output tokens per request
+         *     - cache_read_input_tokens: Cache-read tokens per request, counted within input_tokens (optional)
+         *     - cache_creation_input_tokens: Cache-write tokens per request, counted within input_tokens (optional)
+         *     - reasoning_tokens: Reasoning tokens per request, counted within output_tokens (optional)
          *     - num_requests_per_day: Number of requests per day (optional)
          *     - num_requests_per_month: Number of requests per month (optional)
          *
          *     Returns cost breakdown including:
-         *     - Per-request costs (input, output, margin)
+         *     - Per-request costs (input, output, margin, plus the cache-read, cache-write and reasoning shares)
          *     - Daily costs (if num_requests_per_day provided)
          *     - Monthly costs (if num_requests_per_month provided)
          *
@@ -3314,7 +3317,9 @@ export interface paths {
          *     {
          *         "model": "gpt-4",
          *         "input_tokens": 1000,
+         *         "cache_read_input_tokens": 800,
          *         "output_tokens": 500,
+         *         "reasoning_tokens": 200,
          *         "num_requests_per_day": 100,
          *         "num_requests_per_month": 3000
          *     }
@@ -26393,6 +26398,18 @@ export interface components {
          */
         CostEstimateRequest: {
             /**
+             * Cache Creation Input Tokens
+             * @description Input tokens written to the prompt cache; counted within input_tokens
+             * @default 0
+             */
+            cache_creation_input_tokens: number;
+            /**
+             * Cache Read Input Tokens
+             * @description Input tokens read from the prompt cache; counted within input_tokens
+             * @default 0
+             */
+            cache_read_input_tokens: number;
+            /**
              * Input Tokens
              * @description Expected input tokens per request
              */
@@ -26417,6 +26434,12 @@ export interface components {
              * @description Expected output tokens per request
              */
             output_tokens: number;
+            /**
+             * Reasoning Tokens
+             * @description Reasoning tokens the model emits; counted within output_tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
         };
         /**
          * CostEstimateResponse
@@ -26424,10 +26447,52 @@ export interface components {
          */
         CostEstimateResponse: {
             /**
+             * Cache Creation Cost Per Request
+             * @description Cache-write share of input_cost_per_request
+             * @default 0
+             */
+            cache_creation_cost_per_request: number;
+            /**
+             * Cache Creation Input Token Cost
+             * @description Rate billed per cache-write token
+             */
+            cache_creation_input_token_cost?: number | null;
+            /**
+             * Cache Creation Input Tokens
+             * @default 0
+             */
+            cache_creation_input_tokens: number;
+            /**
+             * Cache Read Cost Per Request
+             * @description Cache-read share of input_cost_per_request
+             * @default 0
+             */
+            cache_read_cost_per_request: number;
+            /**
+             * Cache Read Input Token Cost
+             * @description Rate billed per cache-read token
+             */
+            cache_read_input_token_cost?: number | null;
+            /**
+             * Cache Read Input Tokens
+             * @default 0
+             */
+            cache_read_input_tokens: number;
+            /**
              * Cost Per Request
              * @description Total cost per request (includes margin)
              */
             cost_per_request: number;
+            /**
+             * Daily Cache Creation Cost
+             * @description Cache-write share of daily_input_cost
+             */
+            daily_cache_creation_cost?: number | null;
+            /**
+             * Daily Cache Read Cost
+             * @description Cache-read share of daily_input_cost
+             */
+            daily_cache_read_cost?: number | null;
             /**
              * Daily Cost
              * @description Total daily cost (includes margin)
@@ -26449,6 +26514,11 @@ export interface components {
              */
             daily_output_cost?: number | null;
             /**
+             * Daily Reasoning Cost
+             * @description Reasoning share of daily_output_cost
+             */
+            daily_reasoning_cost?: number | null;
+            /**
              * Input Cost Per Request
              * @description Input token cost per request (before margin)
              */
@@ -26465,6 +26535,16 @@ export interface components {
             margin_cost_per_request: number;
             /** Model */
             model: string;
+            /**
+             * Monthly Cache Creation Cost
+             * @description Cache-write share of monthly_input_cost
+             */
+            monthly_cache_creation_cost?: number | null;
+            /**
+             * Monthly Cache Read Cost
+             * @description Cache-read share of monthly_input_cost
+             */
+            monthly_cache_read_cost?: number | null;
             /**
              * Monthly Cost
              * @description Total monthly cost (includes margin)
@@ -26485,10 +26565,20 @@ export interface components {
              * @description Monthly output token cost
              */
             monthly_output_cost?: number | null;
+            /**
+             * Monthly Reasoning Cost
+             * @description Reasoning share of monthly_output_cost
+             */
+            monthly_reasoning_cost?: number | null;
             /** Num Requests Per Day */
             num_requests_per_day?: number | null;
             /** Num Requests Per Month */
             num_requests_per_month?: number | null;
+            /**
+             * Output Cost Per Reasoning Token
+             * @description Rate billed per reasoning token
+             */
+            output_cost_per_reasoning_token?: number | null;
             /**
              * Output Cost Per Request
              * @description Output token cost per request (before margin)
@@ -26500,6 +26590,17 @@ export interface components {
             output_tokens: number;
             /** Provider */
             provider?: string | null;
+            /**
+             * Reasoning Cost Per Request
+             * @description Reasoning share of output_cost_per_request
+             * @default 0
+             */
+            reasoning_cost_per_request: number;
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
         };
         /** CreateCredentialItem */
         CreateCredentialItem: {

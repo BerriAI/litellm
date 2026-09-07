@@ -19,6 +19,7 @@ from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
     CompletionTokensDetailsWrapper,
+    CostPerToken,
     DataResidency,
     ImageResponse,
     ModelInfo,
@@ -1307,6 +1308,40 @@ class TokenTypeCostBreakdown:
     cache_creation_cost: float
 
 
+def _reasoning_token_count(usage: Usage) -> int:
+    parsed: Final = (
+        parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
+    )
+    return parsed or _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
+
+
+def _cache_token_counts(usage: Usage) -> tuple[int, int, CacheCreationTokenDetails | None]:
+    """(cache read tokens, cache creation tokens, cache creation details): read from prompt_tokens_details
+    first, then the private top-level counters the Usage constructor mirrors cache tokens onto for
+    providers/callers that bypass the details."""
+    parsed: Final = parse_prompt_tokens_details(usage) if usage.prompt_tokens_details is not None else None
+    parsed_read: Final = parsed["cache_hit_tokens"] if parsed is not None else 0
+    parsed_creation: Final = parsed["cache_creation_tokens"] if parsed is not None else 0
+    return (
+        parsed_read or _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0)),
+        parsed_creation or _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0)),
+        parsed["cache_creation_token_details"] if parsed is not None else None,
+    )
+
+
+def _custom_pricing_token_type_breakdown(usage: Usage, custom_cost_per_token: CostPerToken) -> TokenTypeCostBreakdown:
+    """Flat custom pricing has no tiers, uplifts or reasoning rate: cache tokens bill at the configured
+    cache rates (else the input rate) and reasoning at the output rate, as _cost_per_token_custom_pricing_helper does."""
+    input_rate: Final = custom_cost_per_token["input_cost_per_token"]
+    cache_read_tokens, cache_creation_tokens, _ = _cache_token_counts(usage)
+    return TokenTypeCostBreakdown(
+        reasoning_cost=float(_reasoning_token_count(usage)) * custom_cost_per_token["output_cost_per_token"],
+        cache_read_cost=float(cache_read_tokens) * custom_cost_per_token.get("cache_read_input_token_cost", input_rate),
+        cache_creation_cost=float(cache_creation_tokens)
+        * custom_cost_per_token.get("cache_creation_input_token_cost", input_rate),
+    )
+
+
 def get_token_type_cost_breakdown(
     model: str,
     custom_llm_provider: str | None,
@@ -1315,6 +1350,7 @@ def get_token_type_cost_breakdown(
     data_residency: str | None = None,
     vertex_location: str | None = None,
     current_time: datetime | None = None,
+    custom_cost_per_token: CostPerToken | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -1325,9 +1361,13 @@ def get_token_type_cost_breakdown(
     land on ``prompt_tokens_details`` (via the Usage constructor and provider
     transformations) and reasoning tokens on ``completion_tokens_details``. It reuses
     the same rate-resolution primitives as the total-cost path so the breakdown can
-    never drift from the totals. Returns zeros (never raises) when the model or its
-    pricing cannot be resolved.
+    never drift from the totals. A deployment billed by ``custom_cost_per_token`` is
+    priced from those flat rates instead of the cost map, for the same reason.
+    Returns zeros (never raises) when the model or its pricing cannot be resolved.
     """
+    if custom_cost_per_token is not None:
+        return _custom_pricing_token_type_breakdown(usage=usage, custom_cost_per_token=custom_cost_per_token)
+
     try:
         model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:
@@ -1348,12 +1388,6 @@ def get_token_type_cost_breakdown(
         threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
     )
 
-    reasoning_tokens = (
-        parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
-    )
-    if not reasoning_tokens:
-        reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
-
     reasoning_rate: Final = _resolve_billed_reasoning_rate(
         model_info=model_info,
         usage=usage,
@@ -1361,23 +1395,9 @@ def get_token_type_cost_breakdown(
         completion_base_cost=completion_base_cost,
         current_time=billing_time,
     )
-    reasoning_cost = float(reasoning_tokens) * reasoning_rate
+    reasoning_cost = float(_reasoning_token_count(usage)) * reasoning_rate
 
-    cache_read_tokens = 0
-    cache_creation_tokens = 0
-    cache_creation_token_details: CacheCreationTokenDetails | None = None
-    if usage.prompt_tokens_details is not None:
-        prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
-        cache_read_tokens = prompt_tokens_details["cache_hit_tokens"]
-        cache_creation_tokens = prompt_tokens_details["cache_creation_tokens"]
-        cache_creation_token_details = prompt_tokens_details["cache_creation_token_details"]
-    # Fall back to the private top-level counters the Usage constructor mirrors cache
-    # tokens onto, so providers/callers that bypass prompt_tokens_details are covered.
-    if not cache_read_tokens:
-        cache_read_tokens = _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0))
-    if not cache_creation_tokens:
-        cache_creation_tokens = _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0))
-
+    cache_read_tokens, cache_creation_tokens, cache_creation_token_details = _cache_token_counts(usage)
     cache_read_cost = float(cache_read_tokens) * cache_read_cost_rate
     cache_creation_cost = calculate_cache_writing_cost(
         cache_creation_tokens=cache_creation_tokens,
