@@ -4,16 +4,33 @@
     "description": "Routes across models with 1M-token context windows: Luna for simple queries, Terra for medium, Sol for complex, Opus 5 at high thinking for reasoning.",
     "complexity_router_config": {
       "tiers": {
-        "SIMPLE": ["gpt-5.6-luna"],
-        "MEDIUM": ["gpt-5.6-terra"],
-        "COMPLEX": ["gpt-5.6-sol"],
-        "REASONING": ["claude-opus-5"]
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-5.6-sol"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
       },
       "tier_model_configs": {
-        "REASONING": [{ "model_name": "claude-opus-5", "litellm_params": { "reasoning_effort": "high" } }]
+        "REASONING": [
+          {
+            "model_name": "claude-opus-5",
+            "litellm_params": {
+              "reasoning_effort": "high"
+            }
+          }
+        ]
       },
       "classifier_type": "heuristic_v2",
-      "escalation_keywords": ["LITELLM ESCALATE"],
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ],
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
@@ -26,16 +43,33 @@
     "description": "Routes across the Claude model family: Haiku for simple queries, Sonnet for medium, Opus for complex, Opus at high thinking for reasoning.",
     "complexity_router_config": {
       "tiers": {
-        "SIMPLE": ["claude-haiku-4-5"],
-        "MEDIUM": ["claude-sonnet-5"],
-        "COMPLEX": ["claude-opus-5"],
-        "REASONING": ["claude-opus-5"]
+        "SIMPLE": [
+          "claude-haiku-4-5"
+        ],
+        "MEDIUM": [
+          "claude-sonnet-5"
+        ],
+        "COMPLEX": [
+          "claude-opus-5"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
       },
       "tier_model_configs": {
-        "REASONING": [{ "model_name": "claude-opus-5", "litellm_params": { "reasoning_effort": "high" } }]
+        "REASONING": [
+          {
+            "model_name": "claude-opus-5",
+            "litellm_params": {
+              "reasoning_effort": "high"
+            }
+          }
+        ]
       },
       "classifier_type": "heuristic",
-      "escalation_keywords": ["LITELLM ESCALATE"],
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ],
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
@@ -48,13 +82,23 @@
     "description": "Routes across the Gemini model family: Flash Lite 2.5 for simple queries, Flash Lite 3.1 for medium, Flash 3.7 for complex, Pro 3.1 for reasoning-heavy requests.",
     "complexity_router_config": {
       "tiers": {
-        "SIMPLE": ["gemini-2.5-flash-lite"],
-        "MEDIUM": ["gemini-3.1-flash-lite"],
-        "COMPLEX": ["gemini-3.7-flash"],
-        "REASONING": ["gemini-3.1-pro-preview"]
+        "SIMPLE": [
+          "gemini-2.5-flash-lite"
+        ],
+        "MEDIUM": [
+          "gemini-3.1-flash-lite"
+        ],
+        "COMPLEX": [
+          "gemini-3.7-flash"
+        ],
+        "REASONING": [
+          "gemini-3.1-pro-preview"
+        ]
       },
       "classifier_type": "heuristic",
-      "escalation_keywords": ["LITELLM ESCALATE"],
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ],
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
@@ -67,14 +111,36 @@
     "description": "Cost-optimized routing across providers: DeepSeek V4 Flash for simple queries, Muse Spark 1.2 at xhigh for medium, Kimi K3 at max for complex, Claude Opus 5 for reasoning. An LLM classifier with the agentic rubric assigns tiers.",
     "complexity_router_config": {
       "tiers": {
-        "SIMPLE": ["deepseek-v4-flash"],
-        "MEDIUM": ["muse-spark-1.2"],
-        "COMPLEX": ["kimi-k3"],
-        "REASONING": ["claude-opus-5"]
+        "SIMPLE": [
+          "deepseek-v4-flash"
+        ],
+        "MEDIUM": [
+          "muse-spark-1.2"
+        ],
+        "COMPLEX": [
+          "kimi-k3"
+        ],
+        "REASONING": [
+          "claude-opus-5"
+        ]
       },
       "tier_model_configs": {
-        "MEDIUM": [{ "model_name": "muse-spark-1.2", "litellm_params": { "reasoning_effort": "xhigh" } }],
-        "COMPLEX": [{ "model_name": "kimi-k3", "litellm_params": { "reasoning_effort": "max" } }]
+        "MEDIUM": [
+          {
+            "model_name": "muse-spark-1.2",
+            "litellm_params": {
+              "reasoning_effort": "xhigh"
+            }
+          }
+        ],
+        "COMPLEX": [
+          {
+            "model_name": "kimi-k3",
+            "litellm_params": {
+              "reasoning_effort": "max"
+            }
+          }
+        ]
       },
       "classifier_type": "llm",
       "classifier_llm_config": {
@@ -83,7 +149,9 @@
         "classification_rubric": "agentic"
       },
       "classifier_context_window_size": 0,
-      "escalation_keywords": ["LITELLM ESCALATE"],
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ],
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
@@ -96,41 +164,38 @@
     "description": "Routes across the GPT model family: Luna for simple queries, Terra for medium, Sol for complex, Sol at xhigh thinking for reasoning.",
     "complexity_router_config": {
       "tiers": {
-        "SIMPLE": ["gpt-5.6-luna"],
-        "MEDIUM": ["gpt-5.6-terra"],
-        "COMPLEX": ["gpt-5.6-sol"],
-        "REASONING": ["gpt-5.6-sol"]
+        "SIMPLE": [
+          "gpt-5.6-luna"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-5.6-sol"
+        ],
+        "REASONING": [
+          "gpt-5.6-sol"
+        ]
       },
       "tier_model_configs": {
-        "REASONING": [{ "model_name": "gpt-5.6-sol", "litellm_params": { "reasoning_effort": "xhigh" } }]
+        "REASONING": [
+          {
+            "model_name": "gpt-5.6-sol",
+            "litellm_params": {
+              "reasoning_effort": "xhigh"
+            }
+          }
+        ]
       },
       "classifier_type": "heuristic",
-      "escalation_keywords": ["LITELLM ESCALATE"],
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ],
       "classification_mode": "every_request",
       "session_affinity": false,
       "modality_routing": false,
       "modality_pin_override": false,
       "deployment_affinity": true
     }
-  },
-  "shunt": {
-    "label": "Shunt",
-    "description": "Bounds large file/shell reads and delegates bulk-read and boilerplate-codegen tool calls to a cheap model, based on the shunt technique for AI coding agents (https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90). Ported server-side: works with any client, no plugin install. classifier_type is heuristic so this never counts against the licensed heuristic_v2 limit.",
-    "complexity_router_config": {
-      "tiers": {
-        "SIMPLE": ["claude-haiku-4-5", "gpt-5.6-luna", "gemini-2.5-flash-lite", "deepseek-v4-flash"],
-        "MEDIUM": ["claude-sonnet-5", "gpt-5.6-terra", "gemini-3.1-flash-lite"],
-        "COMPLEX": ["claude-opus-5", "gpt-5.6-sol", "gemini-3.7-flash"],
-        "REASONING": ["claude-opus-5", "gpt-5.6-sol", "gemini-3.1-pro-preview"]
-      },
-      "classifier_type": "heuristic",
-      "escalation_keywords": ["LITELLM ESCALATE"],
-      "classification_mode": "every_request",
-      "session_affinity": false,
-      "modality_routing": false,
-      "modality_pin_override": false,
-      "deployment_affinity": true
-    },
-    "auto_router_shunt_min_lines": 350
   }
 }

@@ -51,10 +51,3 @@ export const hydrateAutoRouterShunt = (litellmParams: {
     codeWriteModel: litellmParams.auto_router_shunt_code_write_model ?? undefined,
   };
 };
-
-/** From a partial-fit preset's own top-level auto_router_shunt_min_lines (see
- * autorouter_presets.ts's AutoRouterPreset.auto_router_shunt_min_lines), or untouched. */
-export const shuntStateFromPreset = (presetMinLines: number | undefined): AutoRouterShuntState =>
-  presetMinLines === undefined
-    ? DEFAULT_AUTO_ROUTER_SHUNT
-    : { minLines: presetMinLines, bulkReadModel: undefined, codeWriteModel: undefined };

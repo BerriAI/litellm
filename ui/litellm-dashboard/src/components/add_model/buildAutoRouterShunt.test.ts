@@ -1,9 +1,4 @@
-import {
-  buildAutoRouterShuntParams,
-  DEFAULT_AUTO_ROUTER_SHUNT,
-  hydrateAutoRouterShunt,
-  shuntStateFromPreset,
-} from "./buildAutoRouterShunt";
+import { buildAutoRouterShuntParams, DEFAULT_AUTO_ROUTER_SHUNT, hydrateAutoRouterShunt } from "./buildAutoRouterShunt";
 
 describe("buildAutoRouterShuntParams", () => {
   it("omits all three keys when the threshold was never configured", () => {
@@ -70,15 +65,5 @@ describe("hydrateAutoRouterShunt", () => {
     };
     const rebuilt = buildAutoRouterShuntParams(hydrateAutoRouterShunt(original));
     expect(rebuilt).toEqual(original);
-  });
-});
-
-describe("shuntStateFromPreset", () => {
-  it("stays untouched when the preset carries no threshold", () => {
-    expect(shuntStateFromPreset(undefined)).toEqual(DEFAULT_AUTO_ROUTER_SHUNT);
-  });
-
-  it("arms with the preset's threshold and no worker-model overrides", () => {
-    expect(shuntStateFromPreset(350)).toEqual({ minLines: 350, bulkReadModel: undefined, codeWriteModel: undefined });
   });
 });

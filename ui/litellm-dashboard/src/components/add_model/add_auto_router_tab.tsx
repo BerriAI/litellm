@@ -41,7 +41,6 @@ import {
   type AutoRouterShuntState,
   buildAutoRouterShuntParams,
   DEFAULT_AUTO_ROUTER_SHUNT,
-  shuntStateFromPreset,
 } from "./buildAutoRouterShunt";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
@@ -69,8 +68,6 @@ import {
   buildPresetPrefill,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
-  hasNoUsableModelsAtAll,
-  isPartialFitPreset,
   ModelAvailability,
   PresetPrefill,
   AutoRouterPreset,
@@ -299,23 +296,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // have been applied: while loading we withhold selection rather than let a caller pick a preset
   // whose models we cannot yet verify, and a failed fetch leaves every preset unverifiable. This
   // makes the load-race (pick during loading, then discover a missing model) unrepresentable.
-  //
-  // A partial-fit preset (isPartialFitPreset) is gated differently: its interception settings
-  // apply regardless of tier models, so it greys out only when the caller has no usable chat
-  // model at all, never merely because none of its own named models match the caller's fleet.
-  // Selecting it then leaves whichever tiers didn't resolve empty for the caller to fill in
-  // (see handlePresetChange), rather than blocking selection the way every other preset does.
   const presetAvailability = React.useCallback(
     (preset: AutoRouterPreset): PresetAvailability => {
       if (modelsLoading) return { kind: "loading" };
       if (modelsUnverifiable) return { kind: "unverifiable" };
-      if (isPartialFitPreset(preset)) {
-        if (hasNoUsableModelsAtAll(availability)) return { kind: "missing_models", models: ["any chat model"] };
-        // Expand Detailed Configuration when at least one tier didn't resolve to any of the
-        // preset's own models, the same "needs your input" signal viaDeployments already means
-        // for a fully-resolving preset - here it can mean the caller has to fill a tier by hand.
-        return { kind: "available", viaDeployments: getMissingModelsInPreset(preset, availability).length > 0 };
-      }
       const missing = getMissingModelsInPreset(preset, availability);
       if (missing.length > 0) return { kind: "missing_models", models: missing };
       return {
@@ -380,12 +364,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (presetState.kind !== "available") return;
 
     setSelectedPreset(presetKey);
-    applyPrefill(
-      buildPresetPrefill(preset.complexity_router_config, availability, {
-        dropUnresolvedTierEntries: isPartialFitPreset(preset),
-      }),
-      shuntStateFromPreset(preset.auto_router_shunt_min_lines),
-    );
+    applyPrefill(buildPresetPrefill(preset.complexity_router_config, availability));
     setDetailsExpanded(presetState.viaDeployments);
   };
 

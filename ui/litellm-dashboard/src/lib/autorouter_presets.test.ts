@@ -13,8 +13,6 @@ import {
   buildModelAvailability,
   deploymentRefsFromModelInfo,
   normalizeModelName,
-  isPartialFitPreset,
-  hasNoUsableModelsAtAll,
 } from "./autorouter_presets";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
@@ -35,7 +33,6 @@ describe("autorouter_presets", () => {
       "Gemini Family",
       "Lite",
       "OpenAI Family",
-      "Shunt",
     ]);
     // Every preset carries all four fields the UI relies on; a JSON typo dropping one fails here.
     for (const p of presets) {
@@ -823,74 +820,6 @@ describe("autorouter_presets", () => {
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano"]));
       expect(prefill.complexityRouterConfig.tier_model_params).toBeUndefined();
-    });
-  });
-
-  describe("isPartialFitPreset", () => {
-    it("marks the shunt preset as partial-fit", () => {
-      expect(isPartialFitPreset(getPresetByKey("shunt")!)).toBe(true);
-    });
-
-    it("does not mark an ordinary family preset as partial-fit", () => {
-      expect(isPartialFitPreset(getPresetByKey("anthropic_family")!)).toBe(false);
-    });
-  });
-
-  describe("hasNoUsableModelsAtAll", () => {
-    it("is true when the caller has registered no chat models", () => {
-      expect(hasNoUsableModelsAtAll(groupsOnly([]))).toBe(true);
-    });
-
-    it("is false as soon as any model group is registered, whether or not the preset names it", () => {
-      expect(hasNoUsableModelsAtAll(groupsOnly(["some-unrelated-model"]))).toBe(false);
-    });
-  });
-
-  describe("buildPresetPrefill with dropUnresolvedTierEntries", () => {
-    const config = {
-      tiers: {
-        SIMPLE: ["model-a", "model-b"],
-        MEDIUM: ["model-c"],
-        COMPLEX: ["model-d"],
-        REASONING: ["model-e"],
-      },
-      classifier_type: "heuristic" as const,
-      classification_mode: "every_request" as const,
-      session_affinity: false,
-      deployment_affinity: true,
-    };
-
-    it("drops a tier entry that fails to resolve instead of keeping the preset's literal string", () => {
-      const prefill = buildPresetPrefill(config, groupsOnly(["model-a"]), { dropUnresolvedTierEntries: true });
-      expect(prefill.complexityRouterConfig.tiers).toEqual({
-        SIMPLE: ["model-a"],
-        MEDIUM: [],
-        COMPLEX: [],
-        REASONING: [],
-      });
-    });
-
-    it("keeps every resolved entry in a tier that partially resolves", () => {
-      const prefill = buildPresetPrefill(config, groupsOnly(["model-a", "model-b"]), {
-        dropUnresolvedTierEntries: true,
-      });
-      expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["model-a", "model-b"]);
-    });
-
-    it("defaults to the literal-fallback behavior when the option is omitted", () => {
-      const prefill = buildPresetPrefill(config, groupsOnly([]));
-      expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["model-a", "model-b"]);
-    });
-
-    it("still rewrites a resolved entry to the caller's registered spelling", () => {
-      const versioned = {
-        ...config,
-        tiers: { ...config.tiers, SIMPLE: ["claude-sonnet-4.5"] },
-      };
-      const prefill = buildPresetPrefill(versioned, groupsOnly(["claude-sonnet-4-5"]), {
-        dropUnresolvedTierEntries: true,
-      });
-      expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-sonnet-4-5"]);
     });
   });
 });

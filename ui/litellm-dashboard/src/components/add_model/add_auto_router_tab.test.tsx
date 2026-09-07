@@ -771,7 +771,6 @@ describe("AddAutoRouterTab", () => {
       "Gemini Family",
       "Lite",
       "OpenAI Family",
-      "Shunt",
       "Custom Configuration",
     ]);
   });
@@ -1028,68 +1027,11 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
-  // Shunt is a partial-fit preset (see isPartialFitPreset in @/lib/autorouter_presets): unlike
-  // the family presets above, it stays selectable even when none of its own named tier models
-  // are available, as long as the caller has some chat model at all.
-  describe("shunt preset", () => {
-    it("stays selectable with only unrelated chat models, unlike an ordinary family preset", async () => {
-      mockFetchAvailableModels.mockResolvedValue([{ model_group: "unknown-model-a", mode: "chat" }]);
-
-      renderWithProviders(<Harness />);
-      openTemplateDropdown();
-
-      await waitFor(() => expect(optionByLabel("Anthropic Family")).toHaveTextContent("Missing:"));
-      await waitFor(() => expect(isOptionDisabled(optionByLabel("Shunt")!)).toBe(false));
-    });
-
-    it("greys out only when the caller has no chat model at all", async () => {
-      mockFetchAvailableModels.mockResolvedValue([]);
-
-      renderWithProviders(<Harness />);
-      openTemplateDropdown();
-
-      await waitFor(() => expect(isOptionDisabled(optionByLabel("Shunt")!)).toBe(true));
-    });
-
-    it("expands detailed configuration with empty tiers when none of its own models resolve", async () => {
-      const user = userEvent.setup();
-      const actual = await vi.importActual<typeof import("./build_complexity_router_config")>(
-        "./build_complexity_router_config",
-      );
-      vi.mocked(getMissingTiersError).mockImplementation(actual.getMissingTiersError);
-      mockFetchAvailableModels.mockResolvedValue([{ model_group: "unknown-model-a", mode: "chat" }]);
-
-      renderWithProviders(<Harness />);
-      await waitForPresetEnabled("Shunt");
-      await selectTemplate("Shunt");
-
-      // Detailed Configuration auto-expands (none of Shunt's own tier models resolved, the same
-      // "needs your input" signal a deployment-matched family preset also expands for), and the
-      // submit stays blocked until a caller fills in a model for every tier - the same gate
-      // Custom Configuration is held to, since an unfilled tier is unfilled either way.
-      expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
-      await user.type(screen.getByPlaceholderText(/smart_router/i), "shunt-empty-tiers");
-      expect(screen.getByRole("button", { name: /add auto router/i })).toBeDisabled();
-    });
-
-    it("carries the bounded-read threshold through to the create payload", async () => {
-      const user = userEvent.setup();
-      vi.mocked(getMissingTiersError).mockReturnValue(null);
-      mockFetchAvailableModels.mockResolvedValue([{ model_group: "some-chat-model", mode: "chat" }]);
-
-      renderWithProviders(<Harness />);
-      await waitForPresetEnabled("Shunt");
-      await selectTemplate("Shunt");
-
-      await user.type(screen.getByPlaceholderText(/smart_router/i), "shunt-router");
-      await user.click(screen.getByRole("button", { name: /add auto router/i }));
-
-      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
-      const submitted = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0];
-      expect(submitted?.auto_router_shunt_min_lines).toBe(350);
-    });
-
-    it("omits shunt fields entirely for a router built from Custom Configuration", async () => {
+  // Shunt is not a preset: it's an Advanced toggle available on any router, off by default, so
+  // these exercise the toggle directly against an ordinary family preset rather than a preset
+  // of its own.
+  describe("shunt (Advanced)", () => {
+    it("omits shunt fields entirely until a caller opens the section and sets a threshold", async () => {
       const user = userEvent.setup();
       vi.mocked(getMissingTiersError).mockReturnValue(null);
       mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
@@ -1106,17 +1048,45 @@ describe("AddAutoRouterTab", () => {
       expect(submitted?.auto_router_shunt_min_lines).toBeUndefined();
     });
 
+    it("carries the bounded-read threshold through to the create payload once set", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+      mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+
+      renderWithProviders(<Harness />);
+      await waitForPresetEnabled("Anthropic Family");
+      await selectTemplate("Anthropic Family");
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "shunt-router");
+      expandDetailedConfiguration();
+      await user.click(screen.getByText("Advanced: Shunt"));
+      const threshold = screen.getByRole("spinbutton", { name: "Bounded-read threshold" });
+      fireEvent.change(threshold, { target: { value: "350" } });
+
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      const submitted = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0];
+      expect(submitted?.auto_router_shunt_min_lines).toBe(350);
+    });
+
     it("carries a chosen worker model through to the create payload", async () => {
       const user = userEvent.setup();
       vi.mocked(getMissingTiersError).mockReturnValue(null);
-      mockFetchAvailableModels.mockResolvedValue([{ model_group: "some-chat-model", mode: "chat" }]);
+      mockFetchAvailableModels.mockResolvedValue([
+        ...ALL_FAMILY_MODELS,
+        { model_group: "some-chat-model", mode: "chat" },
+      ]);
 
       renderWithProviders(<Harness />);
-      await waitForPresetEnabled("Shunt");
-      await selectTemplate("Shunt");
+      await waitForPresetEnabled("Anthropic Family");
+      await selectTemplate("Anthropic Family");
 
       await user.type(screen.getByPlaceholderText(/smart_router/i), "shunt-with-worker-model");
+      expandDetailedConfiguration();
       await user.click(screen.getByText("Advanced: Shunt"));
+      const threshold = screen.getByRole("spinbutton", { name: "Bounded-read threshold" });
+      fireEvent.change(threshold, { target: { value: "350" } });
       await chooseSelectOption(user, screen.getByRole("combobox", { name: "Bulk-read model" }), "some-chat-model");
 
       await user.click(screen.getByRole("button", { name: /add auto router/i }));
@@ -1296,12 +1266,8 @@ describe("AddAutoRouterTab", () => {
         expect(isOptionDisabled(optionByLabel("Anthropic Family")!)).toBe(false);
       });
       const labels = visibleOptions().map((option) => option.querySelector(".font-medium")?.textContent);
-      // Shunt is a partial-fit preset (see isPartialFitPreset): it stays available as long as SOME
-      // chat model is registered, regardless of whether it's one of Shunt's own named models, so it
-      // sorts alongside Anthropic Family here rather than with the family presets that stay disabled.
       expect(labels).toEqual([
         "Anthropic Family",
-        "Shunt",
         "1M Context",
         "Gemini Family",
         "Lite",
