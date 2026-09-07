@@ -138,6 +138,9 @@ output and error files returned by terminal batches. Bedrock deletion uses a sig
 restricted to the configured storage buckets and managed file prefixes. The low-RPM
 test submits with its restricted key and cleans up with the test administrator key
 
+Managed deletion forwards the deployment's trusted bucket configuration and returns
+the requested managed file ID even when stored output metadata carries a provider ID
+
 Azure input uploads request `expires_after` anchored to `created_at` with
 `seconds=1209600`, and the lifecycle tests check the returned expiry. This is a
 fallback for interrupted runs: immediate deletion remains the normal cleanup.

@@ -1779,7 +1779,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             # Remove conflicting keys from data to avoid duplicate keyword arguments
             filtered_data = {k: v for k, v in data.items() if k not in ("model", "file_id")}
             for model_id, model_file_id in specific_model_file_id_mapping.items():
-                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **filtered_data)  # type: ignore
+                credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+                delete_data = {
+                    **{k: v for k, v in filtered_data.items() if k != "_litellm_internal_model_credentials"},
+                    **(
+                        {"_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
+                        if credentials is not None
+                        else {}
+                    ),
+                }
+                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **delete_data)
 
         stored_file_object = await self.delete_unified_file_id(file_id, litellm_parent_otel_span)
 
@@ -1790,7 +1799,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 prom_logger.record_managed_file_deleted(result="success")
 
         if stored_file_object:
-            return stored_file_object
+            return OpenAIFileObject.model_validate(stored_file_object).model_copy(update={"id": file_id})
         elif delete_response:
             delete_response.id = file_id
             return delete_response
