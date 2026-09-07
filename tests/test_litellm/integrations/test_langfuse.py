@@ -908,26 +908,23 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         kwargs = self._build_langfuse_kwargs(payload)
         kwargs["litellm_trace_id"] = "sess-abc"
         self.last_trace_kwargs = {}
+        # Below the prompt-management SDK floor so the call needs no prompt patching
+        self.logger.langfuse_sdk_version = "2.6.3"
 
-        with patch(
-            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
-            side_effect=lambda generation_params, **kwargs: generation_params,
-            create=True,
-        ):
-            self.logger._log_langfuse_v2(
-                user_id="user-1",
-                metadata={"session_id": "sess-abc", "trace_id": metadata_trace_id},
-                litellm_params={"metadata": {"session_id": "sess-abc", "trace_id": metadata_trace_id}},
-                output=None,
-                start_time=datetime.datetime.utcnow(),
-                end_time=datetime.datetime.utcnow(),
-                kwargs=kwargs,
-                optional_params={},
-                input=None,
-                response_obj=None,
-                level="INFO",
-                litellm_call_id=litellm_call_id,
-            )
+        self.logger._log_langfuse_v2(
+            user_id="user-1",
+            metadata={"session_id": "sess-abc", "trace_id": metadata_trace_id},
+            litellm_params={"metadata": {"session_id": "sess-abc", "trace_id": metadata_trace_id}},
+            output=None,
+            start_time=datetime.datetime.utcnow(),
+            end_time=datetime.datetime.utcnow(),
+            kwargs=kwargs,
+            optional_params={},
+            input=None,
+            response_obj=None,
+            level="INFO",
+            litellm_call_id=litellm_call_id,
+        )
         return self.last_trace_kwargs
 
     def test_log_langfuse_v2_session_header_trace_id_falls_back_to_call_id(self):
