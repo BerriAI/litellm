@@ -381,6 +381,36 @@ class TestVertexAILivePassthroughLoggingHandler:
         grounded_cost = self._session_cost(handler, mock_logging_obj, grounded, self.NATIVE_AUDIO_MODEL)
         assert grounded_cost == pytest.approx(plain_cost, rel=1e-9), "reporting tool use must not move the bill"
 
+    def test_a_malformed_details_entry_does_not_cost_the_whole_session(self, handler, mock_logging_obj):
+        """A ``*TokensDetails`` value that is not a list of objects must not take the session down.
+
+        The handler's only error path returns no result at all, so one odd frame used to throw
+        while reading it and the whole session billed nothing. The good turns still bill.
+        """
+        turns = self.AUDIO_SESSION[:3]
+        messages = self._live_messages(turns)
+        mangled = [dict(message) for message in messages]
+        mangled[1]["usageMetadata"] = {**mangled[1]["usageMetadata"], "promptTokensDetails": "TEXT"}
+
+        usage = self._session_usage(handler, mock_logging_obj, mangled, self.NATIVE_AUDIO_MODEL)
+
+        surviving = turns[1:]
+        assert usage.prompt_tokens_details.audio_tokens == sum(turn["prompt"][1] for turn in surviving)
+        assert usage.prompt_tokens_details.text_tokens == sum(turn["prompt"][0] for turn in surviving)
+        assert usage.prompt_tokens == sum(sum(turn["prompt"]) for turn in turns), "the totals still cover every turn"
+
+        direct = handler._create_usage_object_from_metadata(
+            usage_metadata={
+                "promptTokenCount": 40,
+                "candidatesTokenCount": 12,
+                "promptTokensDetails": [{"modality": "AUDIO", "tokenCount": 40}, "AUDIO"],
+                "candidatesTokensDetails": {"modality": "TEXT", "tokenCount": 12},
+            },
+            model=self.NATIVE_AUDIO_MODEL,
+        )
+        assert direct.prompt_tokens_details.audio_tokens == 40, "the well-formed entry beside a bad one still counts"
+        assert direct.completion_tokens == 12
+
     @pytest.mark.parametrize(
         "label,prompt_details,candidate_details",
         [
