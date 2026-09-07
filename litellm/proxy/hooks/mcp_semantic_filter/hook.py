@@ -197,9 +197,9 @@ class SemanticToolFilterHook(CustomLogger):
         )
 
         via_gateway: Final = await (
-            LiteLLM_Proxy_MCP_Handler._routes_through_gateway(tools, served_names)
+            LiteLLM_Proxy_MCP_Handler.routes_through_gateway(tools, served_names)
             if served_names is not None
-            else LiteLLM_Proxy_MCP_Handler._routes_through_gateway(tools)
+            else LiteLLM_Proxy_MCP_Handler.routes_through_gateway(tools)
         )
         return [
             {**tool, "allowed_tools": selected_tool_names} if isinstance(tool, dict) and routed else tool

@@ -99,6 +99,7 @@ def create_tool_name_mapping(
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    anthropic_image_source_to_openai_url,
     parse_tool_call_arguments,
     reasoning_content_from_thinking_blocks,
     with_prompt_cache_breakpoint,
@@ -115,6 +116,10 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
+)
+from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    openai_chat_refusal_text,
+    refusal_stop_details,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
@@ -174,6 +179,7 @@ from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
 from .streaming_iterator import AnthropicStreamWrapper
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
@@ -264,6 +270,7 @@ class AnthropicAdapter:
         tool_name_mapping: dict[str, str] | None = None,
         polyfill_result: PolyfillResult | None = None,
         is_async: bool = True,
+        litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
     ) -> AsyncIterator[bytes] | Iterator[bytes] | None:
         """
         Translate OpenAI streaming response to Anthropic format.
@@ -290,6 +297,7 @@ class AnthropicAdapter:
             applied_edits=applied_edits,
             compaction_block=compaction_block,
             iterations_usage=iterations_usage,
+            litellm_logging_obj=litellm_logging_obj,
         )
         # Return the SSE-wrapped version for proper event formatting.
         if is_async:
@@ -521,18 +529,20 @@ class LiteLLMAnthropicMessagesAdapter:
                                 self._add_cache_control_if_applicable(content, tool_call, model)
                                 tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
+                                # Anthropic's schema has no cache_control on thinking or
+                                # redacted_thinking blocks, and anthropic_messages_pt replays
+                                # these verbatim at content[0], so carrying one here (or
+                                # inventing an empty one) is a guaranteed 400 on the way back.
                                 thinking_block = ChatCompletionThinkingBlock(
                                     type="thinking",
                                     thinking=content.get("thinking") or "",
                                     signature=content.get("signature") or "",
-                                    cache_control=content.get("cache_control", {}),
                                 )
                                 thinking_blocks.append(thinking_block)
                             elif content.get("type") == "redacted_thinking":
                                 redacted_thinking_block = ChatCompletionRedactedThinkingBlock(
                                     type="redacted_thinking",
                                     data=content.get("data") or "",
-                                    cache_control=content.get("cache_control", {}),
                                 )
                                 thinking_blocks.append(redacted_thinking_block)
 
@@ -1220,20 +1230,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         if not isinstance(image_source, dict):
             return None
-
-        source_type: Final = image_source.get("type")
-
-        if source_type == "base64":
-            # Base64 image format
-            media_type: Final = image_source.get("media_type", "image/jpeg")
-            image_data: Final = image_source.get("data", "")
-            if image_data:
-                return f"data:{media_type};base64,{image_data}"
-        elif source_type == "url":
-            # URL-referenced image format
-            return image_source.get("url", "")
-
-        return None
+        return anthropic_image_source_to_openai_url(image_source)
 
     def _tool_result_content(self, raw_content: object) -> ToolResultContent:
         if isinstance(raw_content, str):
@@ -1321,6 +1318,8 @@ class LiteLLMAnthropicMessagesAdapter:
                 new_content.append(
                     AnthropicResponseContentBlockText(type="text", text=choice.message.content).model_dump()
                 )
+            if (refusal_text := openai_chat_refusal_text(choice.message)) is not None:
+                new_content.append(AnthropicResponseContentBlockText(type="text", text=refusal_text).model_dump())
             # Handle tool calls (in parallel to text content)
             if choice.message.tool_calls is not None and len(choice.message.tool_calls) > 0:
                 for tool_call in choice.message.tool_calls:
@@ -1353,7 +1352,7 @@ class LiteLLMAnthropicMessagesAdapter:
                     # Add provider_specific_fields if signature is present
                     if provider_specific_fields:
                         tool_use_block.provider_specific_fields = provider_specific_fields
-                    new_content.append(tool_use_block.model_dump())
+                    new_content.append(tool_use_block.model_dump(exclude_none=True))
 
         return new_content
 
@@ -1479,13 +1478,22 @@ class LiteLLMAnthropicMessagesAdapter:
             choices=response.choices,
             tool_name_mapping=tool_name_mapping,
         )
+        refusal_text: Final = next(
+            (text for choice in response.choices if (text := openai_chat_refusal_text(choice.message)) is not None),
+            None,
+        )
 
         if polyfill_result is not None and polyfill_result.compaction_block is not None:
             anthropic_content.insert(0, polyfill_result.compaction_block)
 
         ## extract finish reason
-        anthropic_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
+        translated_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
             openai_finish_reason=response.choices[0].finish_reason
+        )
+        anthropic_finish_reason: Final = (
+            "refusal"
+            if refusal_text is not None and translated_finish_reason != "max_tokens"
+            else translated_finish_reason
         )
         # extract usage
         usage: Final[Usage] = getattr(response, "usage")
@@ -1508,6 +1516,7 @@ class LiteLLMAnthropicMessagesAdapter:
             usage=anthropic_usage,
             content=anthropic_content,
             stop_reason=anthropic_finish_reason,
+            stop_details=(refusal_stop_details(refusal_text) if anthropic_finish_reason == "refusal" else None),
         )
 
         applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None
@@ -1548,7 +1557,9 @@ class LiteLLMAnthropicMessagesAdapter:
                         "signature": thought_sig,
                     }
                 return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
-            elif choice.delta.content is not None and len(choice.delta.content) > 0:
+            elif (choice.delta.content is not None and len(choice.delta.content) > 0) or openai_chat_refusal_text(
+                choice.delta
+            ) is not None:
                 return "text", TextBlock(type="text", text="")
             elif isinstance(choice, StreamingChoices) and hasattr(choice.delta, "thinking_blocks"):
                 thinking_blocks = choice.delta.thinking_blocks or []
@@ -1620,7 +1631,10 @@ class LiteLLMAnthropicMessagesAdapter:
         elif reasoning_content:
             return "thinking_delta", ContentThinkingBlockDelta(type="thinking_delta", thinking=reasoning_content)
         else:
-            return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
+            refusal_text: Final = "".join(
+                refusal for choice in choices if (refusal := openai_chat_refusal_text(choice.delta)) is not None
+            )
+            return "text_delta", ContentTextBlockDelta(type="text_delta", text=text + refusal_text)
 
     def translate_streaming_openai_response_to_anthropic(
         self,

@@ -25,6 +25,7 @@ from litellm.proxy._experimental.mcp_server.tool_search import (
     AGENT_SEARCH_TOOL_NAME,
     MCP_TOOL_CALL_TOOL_NAME,
     MCP_TOOL_SEARCH_TOOL_NAME,
+    SKILL_SEARCH_TOOL_NAME,
     SemanticToolRanker,
     ToolSearchResult,
     coerce_top_k,
@@ -273,8 +274,8 @@ class TestSearchTools:
 
 
 class TestGetVirtualToolDefinitions:
-    def test_returns_three_tools(self) -> None:
-        assert len(get_virtual_tool_definitions()) == 3
+    def test_returns_four_tools(self) -> None:
+        assert len(get_virtual_tool_definitions()) == 4
 
     def test_agent_search_schema_requires_query(self) -> None:
         tools = get_virtual_tool_definitions()
@@ -331,6 +332,7 @@ class TestGetVirtualToolDefinitions:
             MCP_TOOL_SEARCH_TOOL_NAME,
             MCP_TOOL_CALL_TOOL_NAME,
             AGENT_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
         }
 
 
@@ -365,7 +367,12 @@ class TestListToolRestApiWithToolSearch:
 
         assert result["error"] is None
         tool_names = [t["name"] for t in result["tools"]]
-        assert set(tool_names) == {MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME, AGENT_SEARCH_TOOL_NAME}
+        assert set(tool_names) == {
+            MCP_TOOL_SEARCH_TOOL_NAME,
+            MCP_TOOL_CALL_TOOL_NAME,
+            AGENT_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
+        }
 
     @pytest.mark.asyncio
     async def test_returns_full_catalog_when_flag_disabled(self) -> None:
@@ -739,6 +746,31 @@ class TestCallToolRestApiVirtualTools:
         assert mock_search.await_args.kwargs["agents"] == (translator,)
 
     @pytest.mark.asyncio
+    async def test_skill_search_call_tolerates_malformed_top_k(self) -> None:
+        """Regression: a caller-supplied non-numeric top_k must be coerced to the default,
+        the same as agent_search, instead of raising a pydantic ValidationError that the
+        endpoint's catch-all turns into an HTTP 500."""
+        from mcp.types import CallToolResult, TextContent
+
+        from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        request = self._make_request(
+            {"name": SKILL_SEARCH_TOOL_NAME, "arguments": {"query": "translate a document", "top_k": "not-a-number"}}
+        )
+        fake_result = CallToolResult(content=[TextContent(type="text", text="[]")], isError=False)
+        with patch(  # test-quality-ok: the embedding router only resolves via proxy_server globals, no injection seam
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_skill_search",
+            new_callable=AsyncMock,
+            return_value=fake_result,
+        ) as mock_search:
+            result = await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
+
+        assert result.isError is False
+        assert mock_search.await_args.kwargs["top_k"] == DEFAULT_SKILL_SEARCH_TOP_K
+        assert mock_search.await_args.kwargs["query"] == "translate a document"
+
+    @pytest.mark.asyncio
     async def test_agent_search_call_reports_missing_embedding_model_as_tool_error(self) -> None:
         from litellm.proxy.agent_endpoints.agent_search import AgentSearchNotConfigured
 
@@ -783,9 +815,14 @@ class TestCallToolRestApiVirtualTools:
 
         router = MagicMock()
         router.aembedding = AsyncMock(side_effect=fake_aembedding)
+        key_limits = MagicMock()
+        key_limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
         with (
             patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
                 "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the proxy's key-limit hooks are a module global; the embedding call runs them like /embeddings does
+                "litellm.proxy.proxy_server.proxy_logging_obj", key_limits
             ),
             patch(  # test-quality-ok: the authorized catalog is the seam every virtual tool shares; the ranking under test stays real
                 "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
@@ -796,6 +833,8 @@ class TestCallToolRestApiVirtualTools:
             result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
 
         assert mock_list.await_args.kwargs["user_api_key_auth"] is user_api_key_dict
+        assert key_limits.pre_call_hook.await_args.kwargs["call_type"] == "aembedding"
+        assert key_limits.pre_call_hook.await_args.kwargs["data"]["model"] == "emb"
         assert result.isError is False
         assert [t["name"] for t in json.loads(result.content[0].text)] == [FX_TOOL.name]
 
@@ -811,7 +850,9 @@ class TestCallToolRestApiVirtualTools:
         assert "mcp_tool_search.embedding_model" in result.content[0].text
 
     @pytest.mark.asyncio
-    async def test_mcp_tool_search_reports_invalid_settings_as_tool_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_mcp_tool_search_reports_invalid_settings_as_tool_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(litellm, "mcp_tool_search", {"top_k": 0})
         user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
@@ -1197,6 +1238,7 @@ class TestHandleListToolsVirtual:
             MCP_TOOL_SEARCH_TOOL_NAME,
             MCP_TOOL_CALL_TOOL_NAME,
             AGENT_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
         }
 
 

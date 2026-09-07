@@ -1,4 +1,4 @@
-
+from typing import Final
 
 import pytest
 
@@ -119,6 +119,147 @@ def _caching_usage(read: int, written: int, text: int = 10, out: int = 100) -> d
         "cache_creation_input_tokens": written,
         "cache_read_input_tokens": read,
     }
+
+
+@pytest.mark.parametrize(
+    "model,provider,prompt,reads,writes_5m,writes_1h,tier,region,location",
+    [
+        pytest.param("claude-sonnet-4-5", "anthropic", 50000, 20000, 20000, 0, None, None, None, id="5m"),
+        pytest.param("claude-sonnet-4-5", "anthropic", 50000, 20000, 0, 20000, None, None, None, id="1h"),
+        pytest.param("claude-sonnet-4-5", "anthropic", 50000, 20000, 12000, 8000, None, None, None, id="mixed-ttl"),
+        pytest.param("claude-sonnet-4-5", "anthropic", 199999, 80000, 20000, 0, None, None, None, id="below-200k"),
+        pytest.param("claude-sonnet-4-5", "anthropic", 200000, 80000, 20000, 0, None, None, None, id="exactly-200k"),
+        pytest.param("claude-sonnet-4-5", "anthropic", 200001, 80000, 20000, 0, None, None, None, id="above-200k"),
+        pytest.param("claude-sonnet-4-5", "anthropic", 250000, 80000, 12000, 8000, None, None, None, id="ttl-and-200k"),
+        pytest.param(
+            "claude-sonnet-4-5", "anthropic", 250000, 80000, 0, 20000, "priority", None, None, id="absent-tier"
+        ),
+        pytest.param("gpt-5.5", "openai", 100000, 80000, 0, 0, "priority", None, None, id="priority"),
+        pytest.param("gpt-5.5", "openai", 100000, 80000, 0, 0, "flex", None, None, id="flex"),
+        pytest.param("gpt-5.5", "openai", 100000, 80000, 0, 0, "batch", None, None, id="batch-resolver-fallback"),
+        pytest.param("gpt-5.5", "openai", 300000, 80000, 0, 0, "flex", None, None, id="flex-and-272k"),
+        pytest.param("gpt-5.5", "openai", 100000, 80000, 0, 0, "priority", "eu", None, id="priority-and-eu"),
+        pytest.param("gemini-2.5-pro", "vertex_ai", 250000, 80000, 20000, 0, None, None, None, id="variant-only-write"),
+        pytest.param("gemini-3.5-flash", "vertex_ai", 100000, 80000, 0, 0, None, None, "us-east5", id="vertex-region"),
+        pytest.param("gpt-5.5", "openai", 300000, 0, 0, 0, "priority", "eu", None, id="no-cache"),
+    ],
+)
+def test_caching_savings_agree_with_biller_on_the_request_pricing_basis(
+    model: str,
+    provider: str,
+    prompt: int,
+    reads: int,
+    writes_5m: int,
+    writes_1h: int,
+    tier: str | None,
+    region: str | None,
+    location: str | None,
+) -> None:
+    pricing: Final = litellm.get_model_info(model=model, custom_llm_provider=provider)
+    usage: Final = Usage(
+        prompt_tokens=prompt,
+        completion_tokens=100,
+        total_tokens=prompt + 100,
+        prompt_tokens_details={
+            "cached_tokens": reads,
+            "cache_creation_tokens": writes_5m + writes_1h,
+            "text_tokens": prompt - reads - writes_5m - writes_1h,
+            "cache_creation_token_details": {
+                "ephemeral_5m_input_tokens": writes_5m,
+                "ephemeral_1h_input_tokens": writes_1h,
+            },
+        },
+    )
+    uncached: Final = Usage(
+        prompt_tokens=prompt,
+        completion_tokens=100,
+        total_tokens=prompt + 100,
+        prompt_tokens_details={"text_tokens": prompt, "cached_tokens": 0, "cache_creation_tokens": 0},
+    )
+    costs: Final = tuple(
+        sum(
+            generic_cost_per_token(
+                model=model,
+                usage=arm,
+                custom_llm_provider=provider,
+                model_info=pricing,
+                service_tier=tier,
+                data_residency=region,
+                vertex_location=location,
+            )
+        )
+        for arm in (uncached, usage)
+    )
+    expected: Final = costs[0] - costs[1]
+    for attributed in (False, True):
+        result: Final = compute_savings_spend(
+            model=model,
+            custom_llm_provider=provider,
+            compression_saved_tokens=4389,
+            gateway_injected_cache=attributed,
+            usage_object=usage.model_dump(),
+            cost_breakdown={"service_tier": tier, "data_residency": region, "vertex_location": location},
+            billed_at="2026-09-07T12:00:00+00:00",
+        )
+        assert result.prompt_caching == pytest.approx(expected)
+        assert result.gateway_injected_caching == pytest.approx(expected if attributed else 0.0)
+        assert result.compression == pytest.approx(4389 * (pricing["input_cost_per_token"] or 0.0))
+        assert result.autorouter == 0.0
+    if reads + writes_5m + writes_1h == 0:
+        assert expected == 0.0
+
+
+def test_negative_ttl_counts_do_not_become_cache_write_credits() -> None:
+    results: Final = tuple(
+        compute_savings_spend(
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            compression_saved_tokens=0,
+            gateway_injected_cache=True,
+            usage_object={
+                "prompt_tokens": 6000,
+                "completion_tokens": 100,
+                "prompt_tokens_details": {
+                    "text_tokens": 1000,
+                    "cache_creation_tokens": 5000,
+                    "cache_creation_token_details": {
+                        "ephemeral_5m_input_tokens": short_count,
+                        "ephemeral_1h_input_tokens": 5000,
+                    },
+                },
+            },
+        )
+        for short_count in (-5000, 0)
+    )
+    assert results[0] == results[1]
+    assert results[0].prompt_caching < 0
+
+
+def test_unpublished_one_hour_price_uses_the_ordinary_write_price() -> None:
+    model: Final = "claude-4-opus-20250514"
+    pricing: Final = litellm.get_model_info(model=model, custom_llm_provider="anthropic")
+    assert pricing.get("cache_creation_input_token_cost_above_1hr") is None
+    assert pricing["cache_creation_input_token_cost"] > pricing["input_cost_per_token"]
+    results: Final = tuple(
+        compute_savings_spend(
+            model=model,
+            custom_llm_provider="anthropic",
+            compression_saved_tokens=0,
+            gateway_injected_cache=True,
+            usage_object={
+                "prompt_tokens": 6000,
+                "completion_tokens": 100,
+                "prompt_tokens_details": {
+                    "text_tokens": 1000,
+                    "cache_creation_tokens": 5000,
+                    "cache_creation_token_details": ttl,
+                },
+            },
+        )
+        for ttl in (None, {"ephemeral_1h_input_tokens": 5000})
+    )
+    assert results[0] == results[1]
+    assert results[0].prompt_caching < 0
 
 
 def test_prompt_caching_savings_nets_out_the_cache_write_premium():
@@ -852,7 +993,7 @@ def test_the_served_arm_is_read_from_the_record_not_repriced():
 @pytest.mark.parametrize(
     "basis, expected_multiplier",
     [
-        pytest.param({"service_tier": "priority"}, 2.0, id="priority tier doubles the baseline"),
+        pytest.param({"service_tier": "priority"}, 2.5, id="priority tier uplifts the baseline"),
         pytest.param({"data_residency": "eu"}, 1.1, id="eu residency uplifts the baseline"),
         pytest.param({}, 1.0, id="no basis recorded prices at standard"),
         pytest.param(None, 1.0, id="row predating the field prices at standard"),
@@ -872,7 +1013,8 @@ def test_the_baseline_is_priced_on_the_basis_the_request_was_billed_at(basis, ex
     """
     gpt = litellm.get_model_info("gpt-5.5", "openai")
     haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    assert gpt.get("input_cost_per_token_priority") == 2 * gpt["input_cost_per_token"]
+    assert gpt.get("input_cost_per_token_priority") == pytest.approx(2.5 * gpt["input_cost_per_token"])
+    assert gpt.get("output_cost_per_token_priority") == pytest.approx(2.5 * gpt["output_cost_per_token"])
     assert gpt.get("regional_processing_uplift_multiplier_eu") == 1.1
     assert haiku.get("input_cost_per_token_priority") is None, "served model must not move with the basis"
     assert haiku.get("regional_processing_uplift_multiplier_eu") is None

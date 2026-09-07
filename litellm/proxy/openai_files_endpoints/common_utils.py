@@ -15,6 +15,7 @@ from typing import (
     runtime_checkable,
 )
 
+from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.proxy._types import ProxyException
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
@@ -36,6 +37,8 @@ if TYPE_CHECKING:
 MAX_FILE_LIST_LIMIT: Final = 10000
 
 FILE_LIST_CONTINUATION_CHUNK_SIZE: Final = 500
+
+BATCH_CREATE_HIDDEN_PARAM: Final = "batch_create"
 
 
 def validate_file_list_limit(limit: int | None) -> None:
@@ -1355,12 +1358,7 @@ def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
     enumerated the batch and none succeeded. A zero or unknown total means counts
     are unreported, so stay eligible and let the next poller pass revisit it. (#37713)
     """
-    if response.output_file_id is not None:
-        return True
-    request_counts = response.request_counts
-    if request_counts is None:
-        return False
-    return request_counts.total > 0 and request_counts.completed == 0
+    return batch_cost_is_final(response)
 
 
 async def update_batch_in_database(
