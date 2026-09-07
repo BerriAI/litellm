@@ -1599,6 +1599,29 @@ def test_cached_messages_end_on_supported_turn():
     assert cached_messages_end_on_supported_turn([]) is False
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+def test_cached_content_system_instruction_uses_canonical_rest_key(custom_llm_provider):
+    """cachedContents.create takes systemInstruction; this was the last snake_case sender in the provider."""
+    from litellm.llms.vertex_ai.context_caching.transformation import (
+        transform_openai_messages_to_gemini_context_caching,
+    )
+
+    result = transform_openai_messages_to_gemini_context_caching(
+        model="gemini-2.5-pro",
+        messages=[
+            {"role": "system", "content": "You are a concise assistant."},
+            {"role": "user", "content": "Reply with exactly: ok"},
+        ],
+        custom_llm_provider=custom_llm_provider,
+        cache_key="test-cache-key",
+        vertex_project="test_project",
+        vertex_location="test_location",
+    )
+
+    assert "system_instruction" not in result
+    assert result["systemInstruction"]["parts"][0]["text"] == "You are a concise assistant."
+
+
 class TestCheckCachePagination:
     """Test pagination logic in check_cache and async_check_cache methods."""
 
