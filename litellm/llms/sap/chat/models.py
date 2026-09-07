@@ -50,6 +50,16 @@ class ImageURLContent(BaseModel):
 class ImageContent(BaseModel):
     type_: Literal["image_url"] = Field(default="image_url", alias="type")
     image_url: ImageURLContent
+    cache_control: CacheControl | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(
+        self, handler: SerializerFunctionWrapHandler, info: SerializationInfo
+    ) -> dict:  # mutable-ok: pydantic serializer contract requires bare dict return
+        result = handler(self)
+        if result.get("cache_control") is None:
+            result.pop("cache_control", None)
+        return result
 
 
 class FunctionObj(BaseModel):

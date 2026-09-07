@@ -919,3 +919,25 @@ class TestCacheControl:
         content = self._template(body)[0]["content"]
         assert "cache_control" not in content[0]
         assert content[1].get("cache_control") == {"type": "ephemeral"}
+
+    def test_message_level_cache_control_folded_onto_trailing_image_block(self):
+        """A top-level cache_control with a trailing image part lands on that image.
+
+        The Anthropic spec allows cache_control on any content block including
+        image_url. Previously ImageContent had no cache_control field, so the
+        marker was silently dropped by Pydantic validation.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc="}},
+                ],
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        body = self._transform("anthropic--claude-3-5-sonnet", messages)
+        content = self._template(body)[0]["content"]
+        assert "cache_control" not in content[0]
+        assert content[1].get("cache_control") == {"type": "ephemeral"}
