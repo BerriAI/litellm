@@ -2476,7 +2476,16 @@ def _candidate_realtime_token_costs(
 
 
 def _cost_map_entry_declares_pricing(model_name: str, custom_llm_provider: str) -> bool:
+    """Whether the entry behind ``model_name`` sets any rate of its own, even a zero one.
+
+    The name is resolved the way ``get_model_info`` resolves it before the raw entry is read,
+    because a deployment-scoped name arrives here already carrying its provider prefix. Two raw
+    lookups cannot strip that prefix, so a zero-rated override read as declaring nothing, and a
+    session that should bill nothing fell through to the public rates instead.
+    """
+    resolved: Final = _get_model_info_or_none(model_name, custom_llm_provider)
     entries: Final = (
+        litellm.model_cost.get(resolved.get("key")) if resolved is not None else None,
         litellm.model_cost.get(model_name),
         litellm.model_cost.get(f"{custom_llm_provider}/{model_name}"),
     )

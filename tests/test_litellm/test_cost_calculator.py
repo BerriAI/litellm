@@ -4939,3 +4939,109 @@ def test_realtime_honours_deployment_custom_pricing(monkeypatch):
         custom_pricing_model=deployment_key,
     )
     assert zero_rated_cost == 0.0
+
+
+def test_realtime_honours_a_provider_prefixed_zero_rated_deployment(monkeypatch):
+    """Regression: the override arrived provider-prefixed and was read as pricing nothing.
+
+    `_select_model_name_for_cost_calc` hands back `<provider>/<model_id>`, so the name reaching
+    the pricing guard carries a prefix the raw cost-map lookups cannot strip. The rates resolved
+    correctly through `get_model_info`, then the guard rejected them as undeclared and the session
+    billed the public rates. A zero-rated deployment must stay at zero however its name arrives.
+    """
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    model = "gemini-live-2.5-flash-native-audio"
+    deployment_key = "deployment-id-for-a-prefixed-zero-rated-realtime-group"
+    paid = litellm.model_cost[model]
+    monkeypatch.setitem(
+        litellm.model_cost,
+        deployment_key,
+        {
+            **paid,
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+            "input_cost_per_audio_token": 0.0,
+            "output_cost_per_audio_token": 0.0,
+        },
+    )
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": model}},
+        {
+            "type": "response.done",
+            "response": {"usage": {"input_tokens": 219, "output_tokens": 81, "total_tokens": 300}},
+        },
+    ]
+    usage = Usage(
+        prompt_tokens=219,
+        completion_tokens=81,
+        total_tokens=300,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=16, audio_tokens=203),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=23, audio_tokens=58),
+    )
+
+    paid_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=usage,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name=model,
+    )
+    assert paid_cost > 0
+
+    zero_rated_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=usage,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name=model,
+        custom_pricing_model=f"vertex_ai/{deployment_key}",
+    )
+    assert zero_rated_cost == 0.0
+
+
+def test_unpriced_deployment_entry_still_falls_through_to_the_session_model(monkeypatch):
+    """The guard's own purpose must survive: an entry that prices nothing is not an override.
+
+    Deployments are auto-registered under their model_id with no rates at all, and those must
+    keep billing at the session model's public rates rather than silently costing nothing.
+    """
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+
+    model = "gemini-live-2.5-flash-native-audio"
+    deployment_key = "deployment-id-with-no-declared-rates"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        deployment_key,
+        {key: value for key, value in litellm.model_cost[model].items() if "cost_per" not in key},
+    )
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": model}},
+        {
+            "type": "response.done",
+            "response": {"usage": {"input_tokens": 219, "output_tokens": 81, "total_tokens": 300}},
+        },
+    ]
+    usage = Usage(
+        prompt_tokens=219,
+        completion_tokens=81,
+        total_tokens=300,
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=16, audio_tokens=203),
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=23, audio_tokens=58),
+    )
+
+    with_unpriced_override = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=usage,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name=model,
+        custom_pricing_model=f"vertex_ai/{deployment_key}",
+    )
+    without_override = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=usage,
+        custom_llm_provider="vertex_ai",
+        litellm_model_name=model,
+    )
+    assert with_unpriced_override == pytest.approx(without_override, rel=1e-9)
+    assert with_unpriced_override > 0
