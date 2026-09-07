@@ -9,7 +9,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
@@ -35,6 +35,11 @@ _AGGREGATED_FIELDS: Final = frozenset(
         "candidatesTokensDetails",
     }
 )
+
+
+def _detail_entries(raw: object) -> tuple[Mapping[str, object], ...]:
+    """Narrow one turn's ``*TokensDetails`` value to the entries that are actually shaped like one."""
+    return tuple(entry for entry in raw if isinstance(entry, Mapping)) if isinstance(raw, Sequence) else ()
 
 
 class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
@@ -68,7 +73,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     @staticmethod
     def _resolve_detail_counts(
-        details: Sequence[Mapping[str, Any]],
+        details: Sequence[Mapping[str, object]],
         declared_total: object,
     ) -> tuple[tuple[str, int], ...]:
         """
@@ -100,7 +105,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
 
     @staticmethod
     def _merged_modality_totals(
-        snapshots: Sequence[Mapping[str, Any]],
+        snapshots: Sequence[Mapping[str, object]],
         count_key: str,
         details_key: str,
     ) -> Mapping[str, int]:
@@ -109,7 +114,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             tuple(
                 chain.from_iterable(
                     VertexAILivePassthroughLoggingHandler._resolve_detail_counts(
-                        snapshot.get(details_key) or [], snapshot.get(count_key)
+                        _detail_entries(snapshot.get(details_key)), snapshot.get(count_key)
                     )
                     for snapshot in snapshots
                 )
@@ -179,12 +184,13 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         """
         prompt_by_modality: Final = VertexAILivePassthroughLoggingHandler._sum_by_modality(
             VertexAILivePassthroughLoggingHandler._resolve_detail_counts(
-                usage_metadata.get("promptTokensDetails") or [], usage_metadata.get("promptTokenCount")
+                _detail_entries(usage_metadata.get("promptTokensDetails")), usage_metadata.get("promptTokenCount")
             )
         )
         candidates_by_modality: Final = VertexAILivePassthroughLoggingHandler._sum_by_modality(
             VertexAILivePassthroughLoggingHandler._resolve_detail_counts(
-                usage_metadata.get("candidatesTokensDetails") or [], usage_metadata.get("candidatesTokenCount")
+                _detail_entries(usage_metadata.get("candidatesTokensDetails")),
+                usage_metadata.get("candidatesTokenCount"),
             )
         )
 
