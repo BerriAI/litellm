@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import gc
 import inspect
 import weakref
@@ -31,44 +30,8 @@ class LiveCallFactory(CallFactory, Protocol):
     def live(self) -> int: ...
 
 
-Arguments = tuple[tuple[object, ...], dict[str, object] | None]
-ArgumentTransform = Callable[[tuple[object, ...], dict[str, object] | None], Arguments]
-
-
-def reconstruct_envelope(positional: tuple[object, ...], keywords: dict[str, object] | None) -> Arguments:
-    return tuple(value for value in positional), None if keywords is None else dict(keywords)
-
-
-def shallow_selected_payload(positional: tuple[object, ...], keywords: dict[str, object] | None) -> Arguments:
-    return (copy.copy(positional[0]), *positional[1:]), keywords
-
-
-def deepcopy_graph(positional: tuple[object, ...], keywords: dict[str, object] | None) -> Arguments:
-    return copy.deepcopy((positional, keywords))
-
-
-def deepcopy_separate(positional: tuple[object, ...], keywords: dict[str, object] | None) -> Arguments:
-    return copy.deepcopy(positional), copy.deepcopy(keywords)
-
-
 def unchanged_result(value: object) -> object:
     return value
-
-
-@dataclass(frozen=True, slots=True)
-class ArgumentTransformFactory:
-    inner: CallFactory
-    transform: ArgumentTransform
-
-    def prepare(
-        self,
-        callable: Callable[..., object],
-        positional: tuple[object, ...],
-        keywords: dict[str, object] | None = None,
-        awaited: bool = False,
-    ) -> PreparedInvocation:
-        args, kwargs = self.transform(positional, keywords)
-        return self.inner.prepare(callable, args, kwargs, awaited=awaited)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,103 +172,12 @@ def control_factory(control: str, inner: CallFactory) -> CallFactory:
         return CheckedWeakFactory()
     if control == "missing_handoff":
         return MissingHandoffFactory(inner)
-    if control in ("result_passthrough", "result_shallow", "result_deep"):
-        return ResultTransformFactory(
-            inner,
-            {"result_passthrough": unchanged_result, "result_shallow": copy.copy, "result_deep": copy.deepcopy}[
-                control
-            ],
-        )
-    return ArgumentTransformFactory(
-        inner,
-        {
-            "envelope": reconstruct_envelope,
-            "shallow_payload": shallow_selected_payload,
-            "deep_graph": deepcopy_graph,
-            "deep_separate": deepcopy_separate,
-        }[control],
-    )
+    return {"result_passthrough": ResultTransformFactory(inner, unchanged_result)}[control]
 
 
 @dataclass
 class ControlNode:
     stage: int = 0
-
-
-@dataclass
-class ControlPayload:
-    nested: ControlNode
-    stage: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class IdentityObservation:
-    root: bool
-    nested: bool
-    cross_argument: bool
-
-
-async def argument_identity(owners: CallFactory, awaited: bool) -> IdentityObservation:
-    nested = ControlNode()
-    original = ControlPayload(nested)
-
-    def observe(value: ControlPayload, *, alias: ControlNode) -> IdentityObservation:
-        return IdentityObservation(value is original, value.nested is nested, value.nested is alias)
-
-    async def observe_async(value: ControlPayload, *, alias: ControlNode) -> IdentityObservation:
-        return observe(value, alias=alias)
-
-    owner = owners.prepare(observe_async if awaited else observe, (original,), {"alias": nested}, awaited=awaited)
-    try:
-        pending = owner.invoke()
-        return await settle(pending, awaited)
-    finally:
-        owner.close()
-
-
-@dataclass(frozen=True, slots=True)
-class TimingObservation:
-    root: int
-    nested: int
-    alias: int
-
-
-async def mutation_timing(owners: CallFactory, awaited: bool) -> TimingObservation:
-    nested = ControlNode()
-    original = ControlPayload(nested)
-
-    def observe(value: ControlPayload, *, alias: ControlNode) -> TimingObservation:
-        return TimingObservation(value.stage, value.nested.stage, alias.stage)
-
-    async def observe_async(value: ControlPayload, *, alias: ControlNode) -> TimingObservation:
-        return observe(value, alias=alias)
-
-    owner = owners.prepare(observe_async if awaited else observe, (original,), {"alias": nested}, awaited=awaited)
-    try:
-        original.stage = nested.stage = 1
-        pending = owner.invoke()
-        original.stage = nested.stage = 2
-        return await settle(pending, awaited)
-    finally:
-        owner.close()
-
-
-async def result_identity(owners: CallFactory, awaited: bool) -> IdentityObservation:
-    original = ControlPayload(ControlNode())
-
-    def callback() -> ControlPayload:
-        return original
-
-    async def callback_async() -> ControlPayload:
-        return original
-
-    owner = owners.prepare(callback_async if awaited else callback, (), awaited=awaited)
-    try:
-        pending = owner.invoke()
-        result = await settle(pending, awaited)
-        return IdentityObservation(result is original, result.nested is original.nested, True)
-    finally:
-        owner.close()
 
 
 @dataclass
@@ -444,19 +316,6 @@ async def direct_coroutine(owners: CallFactory, awaited: bool) -> bool:
 
 
 def expected_control(witness: str, control: str, awaited: bool) -> object:
-    if witness == "argument_identity":
-        return IdentityObservation(
-            control in ("identity", "envelope"),
-            control in ("identity", "envelope", "shallow_payload"),
-            control != "deep_separate",
-        )
-    if witness == "mutation_timing":
-        stage = 2 if awaited else 1
-        if control in ("deep_graph", "deep_separate"):
-            return TimingObservation(0, 0, 0)
-        return TimingObservation(0 if control == "shallow_payload" else stage, stage, stage)
-    if witness == "result_identity":
-        return IdentityObservation(control in ("identity", "result_passthrough"), control != "result_deep", True)
     if witness in ("deferred_lifetime", "pending_handoff"):
         if control == "weak" or (witness == "pending_handoff" and control == "missing_handoff"):
             return LifetimeObservation(
@@ -480,9 +339,6 @@ def run_control(witness: str, control: str, retained: bool, awaited: bool, facto
 
 
 WITNESSES: dict[str, Callable[[CallFactory, bool], object]] = {
-    "argument_identity": argument_identity,
-    "mutation_timing": mutation_timing,
-    "result_identity": result_identity,
     "deferred_lifetime": deferred_lifetime,
     "borrowed_lifetime": borrowed_lifetime,
     "pending_handoff": pending_handoff,

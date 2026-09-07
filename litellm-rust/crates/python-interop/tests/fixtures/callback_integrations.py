@@ -10,6 +10,7 @@ from typing import Literal
 from unittest import TestCase
 
 import httpx
+from fastapi import HTTPException
 
 import litellm
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -33,6 +34,12 @@ async def integration_invoke(owners, callback, *args, **kwargs):
     pending = owner.invoke()
     owner.close()
     return await pending
+
+
+async def integration_checkpoint():
+    ready = asyncio.Event()
+    asyncio.get_running_loop().call_soon(ready.set)
+    await ready.wait()
 
 
 def integration_response(url, body, status=200, headers=None):
@@ -404,11 +411,18 @@ async def real_parallel_guardrail_snapshots(owners):
         for safe_memory_mode in (False, True):
             litellm.safe_memory_mode = safe_memory_mode
             await integration_parallel_snapshot_case(owners)
+            for ordinary_first in (False, True):
+                for reverse_completion in (False, True):
+                    await integration_parallel_snapshot_case(
+                        owners, ordinary_first=ordinary_first, reverse_completion=reverse_completion
+                    )
+            with TestCase().assertRaisesRegex(AssertionError, "copied live graph lost caller-visible mutation"):
+                await integration_parallel_snapshot_case(owners, copy_live=True)
     finally:
         litellm.safe_memory_mode = original_mode
 
 
-async def integration_parallel_snapshot_case(owners):
+async def integration_parallel_snapshot_case(owners, *, ordinary_first=None, reverse_completion=False, copy_live=False):
     from litellm.caching.dual_cache import DualCache
     from litellm.litellm_core_utils.core_helpers import independent_snapshot
     from litellm.proxy.utils import ProxyLogging
@@ -430,6 +444,21 @@ async def integration_parallel_snapshot_case(owners):
     assert raw is not live and raw["messages"][0] is not live["messages"][0]
     assert raw["uncopyable"] is sentinel and sentinel.attempts == 1
     live["messages"][0]["content"] = "masked"
+    dispatched = independent_snapshot(live) if copy_live else live
+    ordinary = RuntimeError("ordinary guardrail failure")
+    blocking = HTTPException(status_code=400, detail={"error": "blocked by policy"})
+    passthrough = ModifyResponseException("synthetic response", "fixture-model", dispatched)
+    errors = (
+        {}
+        if ordinary_first is None
+        else {
+            "fixture-live-writer": passthrough,
+            "fixture-raw-a": ordinary if ordinary_first else blocking,
+            "fixture-raw-b": blocking if ordinary_first else ordinary,
+        }
+    )
+    finished = []
+    permits, completed = {}, {}
 
     class Inspect(CustomGuardrail):
         async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
@@ -447,7 +476,12 @@ async def integration_parallel_snapshot_case(owners):
                 assert data["uncopyable"] is sentinel
                 data["uncopyable"].observed.append(self.guardrail_name)
             else:
-                assert data is live and data["messages"][0]["content"] == "shared mutation"
+                assert data is dispatched and data["messages"][0]["content"] == "shared mutation"
+            await permits[self.guardrail_name].wait()
+            finished.append(self.guardrail_name)
+            completed[self.guardrail_name].set()
+            if self.guardrail_name in errors:
+                raise errors[self.guardrail_name]
             return {"discarded": self.guardrail_name}
 
     guardrails = tuple(
@@ -462,30 +496,63 @@ async def integration_parallel_snapshot_case(owners):
     )
     proxy = ProxyLogging.__new__(ProxyLogging)
     proxy.call_details = {"user_api_key_cache": DualCache()}
+    permits.update((guardrail.guardrail_name, asyncio.Event()) for guardrail in guardrails)
+    completed.update((guardrail.guardrail_name, asyncio.Event()) for guardrail in guardrails)
     task = asyncio.create_task(
         integration_invoke(
-            owners, proxy._run_parallel_pre_call_guardrails, guardrails, live, raw, UserAPIKeyAuth(), "acompletion"
+            owners,
+            proxy._run_parallel_pre_call_guardrails,
+            guardrails,
+            dispatched,
+            raw,
+            UserAPIKeyAuth(),
+            "acompletion",
         )
     )
     try:
         await arrived.wait()
         assert not task.done()
-        assert observations["fixture-live-writer"] is observations["fixture-live-reader"] is live
+        assert observations["fixture-live-writer"] is observations["fixture-live-reader"] is dispatched
         first, second = observations["fixture-raw-a"], observations["fixture-raw-b"]
         assert first is not second and first is not raw and second is not raw
         assert first["messages"][0] is not second["messages"][0]
         assert first["messages"][0] is not raw["messages"][0]
         assert first["uncopyable"] is second["uncopyable"] is raw["uncopyable"] is sentinel
-        assert sentinel.attempts == 3 and not sentinel.observed
+        assert sentinel.attempts == 3 + copy_live and not sentinel.observed
         release.set()
-        assert await task is None
+        order = tuple(completed)[:: -1 if reverse_completion else 1]
+        for index, name in enumerate(order):
+            assert not task.done()
+            permits[name].set()
+            await completed[name].wait()
+            await integration_checkpoint()
+            assert finished == list(order[: index + 1])
+        if errors:
+            expected = ordinary if ordinary_first else blocking
+            with TestCase().assertRaises(type(expected)) as caught:
+                await task
+            assert caught.exception is expected
+            assert passthrough.request_data is dispatched
+            assert blocking.status_code == 400
+            assert blocking.detail == {
+                "error": "blocked by policy",
+                "guardrail_name": "fixture-raw-b" if ordinary_first else "fixture-raw-a",
+                "guardrail_mode": GuardrailEventHooks.pre_call,
+            }
+        else:
+            assert await task is None
         assert raw["messages"] == [{"role": "user", "content": "original"}]
-        assert live["messages"][0]["content"] == "shared mutation"
+        assert dispatched["messages"][0]["content"] == "shared mutation"
         assert set(sentinel.observed) == {"fixture-raw-a", "fixture-raw-b"} and len(sentinel.observed) == 2
-        assert "discarded" not in live
+        assert "discarded" not in dispatched
         assert first["messages"][0]["content"] == "fixture-raw-a"
         assert second["messages"][0]["content"] == "fixture-raw-b"
-        assert all(guardrail._pre_call_hook_already_ran(live) for guardrail in guardrails if guardrail.scan_raw_request)
+        assert all(
+            guardrail._pre_call_hook_already_ran(dispatched) is (guardrail.guardrail_name not in errors)
+            for guardrail in guardrails
+            if guardrail.scan_raw_request
+        )
+        assert live["messages"][0]["content"] == "shared mutation", "copied live graph lost caller-visible mutation"
     finally:
         release.set()
         mutated.set()
@@ -495,7 +562,13 @@ async def integration_parallel_snapshot_case(owners):
 
 
 async def real_purview_sync_background(owners):
+    for active_loop in (False, True):
+        await integration_purview_logging_case(owners, active_loop=active_loop)
+
+
+async def integration_purview_logging_case(owners, *, active_loop):
     entered, release = threading.Event(), threading.Event()
+    async_entered, async_release = asyncio.Event(), asyncio.Event()
     calls, workers = [], []
     main_thread = threading.get_ident()
 
@@ -505,7 +578,11 @@ async def real_purview_sync_background(owners):
             calls.append((url, kwargs))
             if url.endswith("/token"):
                 entered.set()
-                assert release.wait(5), "background audit was not released"
+                if active_loop:
+                    async_entered.set()
+                    await async_release.wait()
+                else:
+                    assert release.wait(5), "background audit was not released"
                 return integration_response(url, {"access_token": "fixture-token", "expires_in": 3600})
             assert kwargs["headers"]["Authorization"] == "Bearer fixture-token"
             if url.endswith("/compute"):
@@ -535,19 +612,39 @@ async def real_purview_sync_background(owners):
     }
     result = ModelResponse(model="fixture-model", choices=[{"message": {"role": "assistant", "content": "before"}}])
     owner = owners.prepare(purview.logging_hook, (kwargs, result, "completion"), awaited=False)
+    task = None
     try:
-        returned = await asyncio.to_thread(owner.invoke)
+        tasks_before = asyncio.all_tasks()
+        threads_before = set(threading.enumerate())
+        returned = owner.invoke() if active_loop else await asyncio.to_thread(owner.invoke)
         owner.close()
         assert returned[0] is kwargs and returned[1] is result
-        assert await asyncio.to_thread(entered.wait, 5)
-        assert len(calls) == 1 and workers[0].ident != main_thread and workers[0].daemon
+        if active_loop:
+            await integration_checkpoint()
+            assert not calls and not workers and not entered.is_set()
+            assert asyncio.all_tasks() == tasks_before and set(threading.enumerate()) == threads_before
+            task = asyncio.create_task(
+                integration_invoke(owners, purview.async_logging_hook, kwargs, result, "completion")
+            )
+            await async_entered.wait()
+            assert not task.done() and workers[0].ident == main_thread
+        else:
+            assert await asyncio.to_thread(entered.wait, 5)
+            assert workers[0].ident != main_thread and workers[0].daemon
+        assert len(calls) == 1
         assert workers[0].is_alive()
         kwargs["messages"][0]["content"] = "too late for prompt extraction"
         kwargs["litellm_call_id"] = "after-http"
         result.choices[0].message.content = "response mutated while audit waits"
         release.set()
-        await asyncio.to_thread(workers[0].join, 5)
-        assert not workers[0].is_alive() and all(worker is workers[0] for worker in workers)
+        async_release.set()
+        if active_loop:
+            audited = await task
+            assert audited[0] is kwargs and audited[1] is result
+        else:
+            await asyncio.to_thread(workers[0].join, 5)
+            assert not workers[0].is_alive()
+        assert all(worker is workers[0] for worker in workers)
         assert len(calls) == 4
         entries = [call[1]["json"]["contentToProcess"] for call in calls[2:]]
         assert [entry["activityMetadata"]["activity"] for entry in entries] == ["uploadText", "downloadText"]
@@ -561,5 +658,10 @@ async def real_purview_sync_background(owners):
     finally:
         owner.close()
         release.set()
-        if workers:
+        async_release.set()
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        if workers and not active_loop:
             await asyncio.to_thread(workers[0].join, 5)

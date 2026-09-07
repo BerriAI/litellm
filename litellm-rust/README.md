@@ -51,10 +51,14 @@ function per top-level route, mirroring the core entrypoints.
 
 ## Checks
 
-### Native OCR Boundary
+### Private Native OCR Proof
 
-`LITELLM_RUST=1` selects native OCR before Python provider preparation. With Rust
-disabled, the existing Python execution and authentication paths are unchanged
+Public `litellm.ocr` and `litellm.aocr` always use the existing Python lifecycle,
+including when `litellm.rust(True)` or `LITELLM_RUST=1` enables other Rust paths.
+Native OCR remains a private proof until full lifecycle parity is established.
+Only tests requesting the private `native_ocr` fixture replace those public
+functions with test-only route selection: Rust enabled calls the native bridge,
+and Rust disabled calls the captured production Python functions
 
 The bridge retains the complete call argument dictionary as a Python object,
 including opaque callback and metadata objects. It creates callback-visible
@@ -65,7 +69,7 @@ chat messages using the existing Rust transform. Rust performs provider preparat
 encoding, HTTP and response normalization. Python continues to dispatch existing
 logging operations and construct the public response object
 
-This is an opt-in implementation scaffold, not full OCR parity. Azure Mistral and
+This is a private implementation scaffold, not full OCR parity. Azure Mistral and
 Vertex Mistral accept inline data URIs with supplied keys/tokens, native environment
 keys or auth headers. Azure also accepts a supplied `azure_ad_token`. Vertex
 DeepSeek uses its existing chat request and OCR response transforms. Cloud
@@ -74,9 +78,9 @@ HTTP document URL conversion fails only for configs requiring data URIs. Azure
 Document Intelligence selects its own config but fails at the polling capability
 check before sending a billable analyze request. Cohere transforms, file inputs,
 streaming, native response format and compression remain unsupported.
-An enabled but missing native extension also fails;
-neither case falls back to Python execution. Transport failures currently use a
-generic error rather than the SDK's timeout-specific exception
+Direct private bridge calls with a missing native extension also fail;
+neither case falls back to Python execution within the private route. Transport
+failures currently use a generic error rather than the SDK's timeout-specific exception
 
 Run the commands under "Checks" in [CLAUDE.md](CLAUDE.md) before pushing Rust
 changes. That list is the single source of truth and matches what GitHub Actions
@@ -100,7 +104,7 @@ make lint-rust-python-fixtures
 `lint-rust-python-fixtures` runs pinned Ruff lint and formatting checks without
 syncing the project environment
 
-Run the native OCR acceptance gate from the repository root:
+Run the private native OCR proof gate from the repository root:
 
 ```bash
 make test-rust-ocr
@@ -126,7 +130,30 @@ invocation context and ownership against Python behavior, including existing
 LiteLLM components. Short synthetic pre-call contracts use Rust-owned table-driven
 cases with inline Python callbacks; larger component scenarios share Python
 fixtures. These generic proofs complement, rather than replace, native OCR
-acceptance tests
+private proof tests
+
+The standard-library-only tests in
+`crates/python-interop/tests/callback_patterns.rs` define small inline Python
+callbacks, with Rust controlling invocation, ownership and assertions. They
+compare Python-reference and Rust-retained calls using both direct and awaited
+invocation. They model the behavior
+groups in the callback use-case inventory: live versus serialized queues,
+mutation before an error, ignored returns, identity-based redaction, block-state
+stash, background writes after return, parallel live data versus snapshots, and
+shallow/deep copies with uncopyable-value fallback. Copy controls deliberately
+produce different observations; event gates establish ordering without sleeps.
+Existing synthetic lifecycle cases also cover streams, context and cancellation
+
+Run this matrix without LiteLLM, vendor SDKs, credentials or services:
+
+```bash
+cargo test --manifest-path litellm-rust/Cargo.toml -p litellm-python-interop --test callback_patterns
+```
+
+These are behavioral models, not tests of vendor authentication, delivery or
+production dispatcher policy. The optional component and integration fixtures
+exercise existing LiteLLM implementations with fake transports and credentials
+as supplementary coverage; run them with `make test-rust-python`
 
 The callback lifecycle scenarios use
 `#[serial(python_interpreter)]` to isolate CPython GC and interpreter-wide

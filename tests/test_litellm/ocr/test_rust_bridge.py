@@ -1,4 +1,4 @@
-"""Strict whole-argument OCR dispatch and opt-in native transport contracts."""
+"""Public Python OCR routing and private native OCR proof contracts."""
 
 import asyncio
 import atexit
@@ -96,14 +96,7 @@ def no_python_ocr(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("enable_with", ["global", "environment"])
-async def test_unwrapped_dispatch_preserves_every_argument(
-    monkeypatch, no_python_ocr, injected_native, response, asynchronous, enable_with
-):
-    if enable_with == "global":
-        litellm.rust(True)
-    else:
-        monkeypatch.setenv("LITELLM_RUST", "1")
+async def test_bridge_preserves_every_argument(no_python_ocr, injected_native, response, asynchronous):
     opaque = object()
     document = {"type": "file", "file": opaque, "mime_type": "application/pdf"}
     metadata = {"opaque": opaque, "nested": []}
@@ -129,9 +122,7 @@ async def test_unwrapped_dispatch_preserves_every_argument(
         "kwargs": {"caller_owned": opaque},
         "aocr": opaque,
     }
-    result = (
-        await inspect.unwrap(ocr_main.aocr)(**arguments) if asynchronous else inspect.unwrap(ocr_main.ocr)(**arguments)
-    )
+    result = await rust_bridge.aocr(arguments) if asynchronous else rust_bridge.ocr(arguments)
 
     sync, async_native = injected_native
     selected, unused = (async_native, sync) if asynchronous else (sync, async_native)
@@ -152,34 +143,27 @@ async def test_unwrapped_dispatch_preserves_every_argument(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_unwrapped_dispatch_keeps_unresolved_defaults(
-    no_python_ocr, injected_native, document, response, asynchronous
-):
+async def test_public_wrapper_passes_defaults_to_legacy(monkeypatch, injected_native, document, response, asynchronous):
     litellm.rust(True)
-    result = (
-        await inspect.unwrap(ocr_main.aocr)(MODEL, document)
-        if asynchronous
-        else inspect.unwrap(ocr_main.ocr)(MODEL, document)
-    )
-    selected = injected_native[int(asynchronous)]
-    selected.assert_called_once_with(
-        {
-            "model": MODEL,
-            "document": document,
-            "api_key": None,
-            "api_base": None,
-            "timeout": None,
-            "custom_llm_provider": None,
-            "extra_headers": None,
-        }
-    )
+    legacy = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
+    monkeypatch.setattr(ocr_main, "_legacy_aocr" if asynchronous else "_legacy_ocr", legacy)
+    result = await litellm.aocr(MODEL, document) if asynchronous else litellm.ocr(MODEL, document)
+    legacy.assert_called_once_with(MODEL, document, None, None, None, None, None)
+    if asynchronous:
+        legacy.assert_awaited_once()
     assert result is response
+    for native in injected_native:
+        native.assert_not_called()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_public_decorator_routes_full_kwargs(no_python_ocr, injected_native, document, response, asynchronous):
+async def test_public_wrapper_passes_full_kwargs_to_legacy(
+    monkeypatch, injected_native, document, response, asynchronous
+):
     litellm.rust(True)
+    legacy = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
+    monkeypatch.setattr(ocr_main, "_legacy_aocr" if asynchronous else "_legacy_ocr", legacy)
     metadata = {"test_tag": "whole-arguments"}
     pages = [0, 2]
     arguments = {
@@ -197,21 +181,28 @@ async def test_public_decorator_routes_full_kwargs(no_python_ocr, injected_nativ
     }
     result = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
 
-    selected = injected_native[int(asynchronous)]
-    selected.assert_called_once()
-    injected_native[not asynchronous].assert_not_called()
-    (forwarded,) = selected.call_args.args
+    legacy.assert_called_once_with(
+        MODEL,
+        document,
+        "sk-test",
+        "https://example.invalid",
+        12.5,
+        None,
+        arguments["extra_headers"],
+        pages=pages,
+        include_image_base64=True,
+        metadata=metadata,
+        arbitrary_option=arguments["arbitrary_option"],
+        num_retries=0,
+    )
+    if asynchronous:
+        legacy.assert_awaited_once()
     assert result is response
-    for name in ("model", "api_key", "api_base", "timeout", "extra_headers", "arbitrary_option", "num_retries"):
-        assert forwarded[name] == arguments[name]
-    assert forwarded["document"] is document
-    assert forwarded["pages"] is pages
-    assert forwarded["include_image_base64"] is True
-    assert forwarded["metadata"]["test_tag"] == "whole-arguments"
-    assert forwarded["custom_llm_provider"] is None
-    assert "litellm_logging_obj" not in forwarded
-    assert "litellm_call_id" not in forwarded
-    assert "kwargs" not in forwarded
+    assert legacy.call_args.args[1] is document
+    assert legacy.call_args.kwargs["pages"] is pages
+    assert legacy.call_args.kwargs["metadata"] is metadata
+    for native in injected_native:
+        native.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -227,10 +218,9 @@ async def test_bridge_passes_same_dictionary_and_response(injected_native, docum
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("public", [False, True], ids=["unwrapped", "decorated"])
 @pytest.mark.parametrize("failure", ["missing", "unsupported", "runtime"])
-async def test_native_failures_propagate_without_fallback(
-    monkeypatch, no_python_ocr, injected_native, document, asynchronous, public, failure
+async def test_bridge_failures_propagate_without_fallback(
+    monkeypatch, no_python_ocr, injected_native, document, asynchronous, failure
 ):
     litellm.rust(True)
     error = (
@@ -244,12 +234,9 @@ async def test_native_failures_propagate_without_fallback(
         monkeypatch.setattr(rust_bridge_bindings, "get_native_bridge", lambda: None)
     else:
         injected_native[int(asynchronous)].side_effect = error
-    function = litellm.aocr if asynchronous else litellm.ocr
-    route = function if public else inspect.unwrap(function)
+    arguments = dict(model=MODEL, document=document, api_key="sk-test", num_retries=0)
     with pytest.raises(RuntimeError if failure == "missing" else type(error)) as caught:
-        result = route(model=MODEL, document=document, api_key="sk-test", num_retries=0)
-        if asynchronous:
-            await result
+        await rust_bridge.aocr(arguments) if asynchronous else rust_bridge.ocr(arguments)
     if failure == "missing":
         assert "OCR" in str(caught.value).upper()
     else:
@@ -263,26 +250,27 @@ async def test_native_failures_propagate_without_fallback(
 async def test_bridge_missing_binding_is_strict(document, asynchronous):
     rust_bridge._OCR.override(None)
     rust_bridge._AOCR.override(None)
-    with pytest.raises(RuntimeError, match="(?i)ocr"):
-        if asynchronous:
-            await rust_bridge.aocr({"model": MODEL, "document": document})
-        else:
-            rust_bridge.ocr({"model": MODEL, "document": document})
+    arguments = {"model": MODEL, "document": document}
+    with pytest.raises(RuntimeError, match=r"(?i)ocr"):
+        await rust_bridge.aocr(arguments) if asynchronous else rust_bridge.ocr(arguments)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-@pytest.mark.parametrize("setting", ["default", "disabled", "overrides-environment"])
-async def test_rust_off_keeps_python_preparation_and_transport(
-    monkeypatch, injected_native, response, asynchronous, setting
+@pytest.mark.parametrize("route", ["ocr", "aocr", "ocr-async"])
+@pytest.mark.parametrize("setting", ["default", "disabled", "overrides-environment", "global", "environment"])
+async def test_public_ocr_always_keeps_python_preparation_and_transport(
+    monkeypatch, injected_native, response, route, setting
 ):
-    if setting == "overrides-environment":
+    asynchronous = route != "ocr"
+    if setting in ("overrides-environment", "environment"):
         monkeypatch.setenv("LITELLM_RUST", "1")
-    if setting != "default":
+    if setting in ("disabled", "overrides-environment"):
         litellm.rust(False)
+    if setting == "global":
+        litellm.rust(True)
     prepare = Mock(wraps=ocr_main._prepare_ocr_request)
     handler = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
-    lookup = Mock(side_effect=lambda: pytest.fail("disabled Rust binding was consulted"))
+    lookup = Mock(side_effect=lambda: pytest.fail("public OCR consulted a native binding"))
     monkeypatch.setattr(ocr_main, "_prepare_ocr_request", prepare)
     monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", handler)
     monkeypatch.setattr(rust_bridge, "load_rust_ocr", lookup)
@@ -296,8 +284,10 @@ async def test_rust_off_keeps_python_preparation_and_transport(
         "pages": [0],
         "include_image_base64": True,
         "num_retries": 0,
+        **({"aocr": True} if route == "ocr-async" else {}),
     }
-    result = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
+    function = litellm.aocr if route == "aocr" else litellm.ocr
+    result = await function(**arguments) if asynchronous else function(**arguments)
 
     assert result is response
     prepare.assert_called_once()
@@ -322,8 +312,9 @@ async def test_rust_off_keeps_python_preparation_and_transport(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_rust_off_preserves_python_exception_mapping(monkeypatch, injected_native, document, asynchronous):
-    litellm.rust(False)
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_legacy_preserves_python_exception_mapping(monkeypatch, injected_native, document, asynchronous, enabled):
+    litellm.rust(enabled)
     original_error = ValueError("Python transport failed")
     mapped_error = RuntimeError("mapped Python error")
     mapping = Mock(return_value=mapped_error)
@@ -332,10 +323,9 @@ async def test_rust_off_preserves_python_exception_mapping(monkeypatch, injected
     monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", handler)
     arguments = dict(model=MODEL, document=document, api_key="sk-test", litellm_logging_obj=Mock())
     with pytest.raises(RuntimeError) as caught:
-        if asynchronous:
-            await inspect.unwrap(ocr_main._legacy_aocr)(**arguments)
-        else:
-            inspect.unwrap(ocr_main._legacy_ocr)(**arguments)
+        await inspect.unwrap(ocr_main._legacy_aocr)(**arguments) if asynchronous else inspect.unwrap(
+            ocr_main._legacy_ocr
+        )(**arguments)
     assert caught.value is mapped_error
     handler.assert_called_once()
     mapping.assert_called_once()
@@ -393,7 +383,8 @@ def test_loader_caches_missing_extension_until_reset(monkeypatch):
 
 
 @pytest.fixture
-def native_ocr():
+def native_ocr(monkeypatch, reset_rust_state):
+    """PRIVATE, test-only route selection; public OCR stays Python until full lifecycle parity."""
     native = rust_bridge_loader.get_native_bridge()
     try:
         available = native is not None and all(
@@ -406,7 +397,67 @@ def native_ocr():
         if os.environ.get("LITELLM_REQUIRE_NATIVE_OCR") == "1":
             pytest.fail(message)
         pytest.skip(message)
+    python_ocr, python_aocr = litellm.ocr, litellm.aocr
+    signature = inspect.signature(python_ocr)
+
+    def native_arguments(args, kwargs):
+        bound = signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+        return {**bound.arguments.pop("kwargs"), **bound.arguments}
+
+    def private_ocr(*args, **kwargs):
+        if not configuration.rust_enabled():
+            return python_ocr(*args, **kwargs)
+        arguments = native_arguments(args, kwargs)
+        return rust_bridge.aocr(arguments) if arguments.get("aocr") is True else rust_bridge.ocr(arguments)
+
+    async def private_aocr(*args, **kwargs):
+        if not configuration.rust_enabled():
+            return await python_aocr(*args, **kwargs)
+        return await rust_bridge.aocr(native_arguments(args, kwargs))
+
+    monkeypatch.setattr(litellm, "ocr", private_ocr)
+    monkeypatch.setattr(litellm, "aocr", private_aocr)
     return native
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["ocr", "aocr", "ocr-async"])
+async def test_private_fixture_selects_native_only_when_enabled(
+    request, monkeypatch, injected_native, document, response, route
+):
+    native = ModuleType("litellm.rust_bridge._native")
+    native.ocr = rust_bridge.ocr
+    native.aocr = rust_bridge.aocr
+    monkeypatch.setattr(rust_bridge_loader, "get_native_bridge", lambda: native)
+    python_ocr, python_aocr = litellm.ocr, litellm.aocr
+    asynchronous = route != "ocr"
+    legacy = AsyncMock(return_value=response) if asynchronous else Mock(return_value=response)
+    monkeypatch.setattr(ocr_main, "_legacy_aocr" if route == "aocr" else "_legacy_ocr", legacy)
+    assert request.getfixturevalue("native_ocr") is native
+    assert ocr_main.ocr is python_ocr and ocr_main.aocr is python_aocr
+    arguments = {"metadata": {"opaque": object()}, **({"aocr": True} if route == "ocr-async" else {})}
+    for enabled in (True, False, True):
+        litellm.rust(enabled)
+        function = litellm.aocr if route == "aocr" else litellm.ocr
+        result = function(MODEL, document, **arguments)
+        assert (await result if asynchronous else result) is response
+    legacy.assert_called_once_with(MODEL, document, None, None, None, None, None, **arguments)
+    selected, unused = injected_native[int(asynchronous)], injected_native[not asynchronous]
+    assert selected.call_count == 2
+    unused.assert_not_called()
+    assert selected.call_args.args[0] == {
+        "model": MODEL,
+        "document": document,
+        "api_key": None,
+        "api_base": None,
+        "timeout": None,
+        "custom_llm_provider": None,
+        "extra_headers": None,
+        **arguments,
+    }
+    assert selected.call_args.args[0]["document"] is document
+    assert selected.call_args.args[0]["metadata"] is arguments["metadata"]
 
 
 class WireRecorder:
@@ -574,7 +625,7 @@ async def test_native_mistral_wire_response_and_callback_identity(
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("failure", [False, True], ids=["success", "failure"])
 @pytest.mark.parametrize("callback_source", ["global", "per-call", "terminal-list"])
-async def test_public_native_callback_lifecycle(
+async def test_private_native_callback_lifecycle(
     native_ocr, wire_recorder, monkeypatch, no_python_ocr, document, asynchronous, failure, callback_source
 ):
     from litellm import utils
@@ -722,17 +773,59 @@ async def test_public_native_callback_lifecycle(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", [False, True], ids=["success", "failure"])
-async def test_public_native_callable_terminal_callback(
-    native_ocr, wire_recorder, monkeypatch, no_python_ocr, document, failure
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync-request", "async-request"])
+@pytest.mark.parametrize("callback_kind", ["sync", "async", "async-object"])
+@pytest.mark.parametrize("callback_source", ["terminal-list", "global-list", "callbacks", "per-call", "overlap"])
+async def test_private_native_callable_terminal_callback(
+    native_ocr,
+    wire_recorder,
+    monkeypatch,
+    no_python_ocr,
+    document,
+    failure,
+    asynchronous,
+    callback_kind,
+    callback_source,
 ):
+    from litellm import utils
+    from litellm.litellm_core_utils import litellm_logging, logging_worker
+
     litellm.rust(True)
     wire_recorder.status = 429 if failure else 200
     calls = []
     finished = threading.Event()
+    executor = ThreadPoolExecutor(max_workers=1)
+    worker = logging_worker.LoggingWorker(timeout=5, concurrency=1)
+    monkeypatch.setattr(utils, "executor", executor)
+    monkeypatch.setattr(litellm_logging, "executor", executor)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+    monkeypatch.setattr(litellm_logging, "customLogger", None)
+    monkeypatch.setattr(utils, "callback_list", [])
+    monkeypatch.setattr(utils, "function_setup", Mock(side_effect=AssertionError("native OCR entered function_setup")))
 
-    def callback(kwargs, response_obj, start_time, end_time):
-        calls.append((kwargs, response_obj, start_time, end_time))
-        finished.set()
+    def record(kwargs, *terminal):
+        if terminal:
+            assert kwargs["log_event_type"] == "post_api_call"
+            calls.append((kwargs, *terminal))
+            finished.set()
+
+    async def async_callback(kwargs, *terminal):
+        await asyncio.sleep(0)
+        record(kwargs, *terminal)
+
+    class AsyncCallable:
+        async def __call__(self, kwargs, *terminal):
+            await async_callback(kwargs, *terminal)
+
+    callback = record if callback_kind == "sync" else async_callback if callback_kind == "async" else AsyncCallable()
+    callback_list = [callback, callback]
+    terminal_name = "failure_callback" if failure else "success_callback"
+    if callback_source in ("global-list", "overlap"):
+        monkeypatch.setattr(litellm, terminal_name, [callback])
+    if callback_source == "overlap":
+        monkeypatch.setattr(litellm, f"_async_{terminal_name}", [callback])
+    if callback_source == "callbacks":
+        monkeypatch.setattr(litellm, "callbacks", [callback])
 
     arguments = {
         "model": MODEL,
@@ -741,25 +834,89 @@ async def test_public_native_callable_terminal_callback(
         "api_base": wire_recorder.api_base,
         "timeout": 5,
         "num_retries": 0,
-        "failure_callback" if failure else "success_callback": [callback],
+        **({terminal_name: callback_list} if callback_source in ("terminal-list", "overlap") else {}),
+        **({"callbacks": callback_list} if callback_source in ("per-call", "overlap") else {}),
     }
-    if failure:
-        with pytest.raises(litellm.RateLimitError) as caught:
-            litellm.ocr(**arguments)
-        expected_response = None
-    else:
-        expected_response = litellm.ocr(**arguments)
+    try:
+        if failure:
+            with pytest.raises(litellm.RateLimitError) as caught:
+                if asynchronous:
+                    await litellm.aocr(**arguments)
+                else:
+                    litellm.ocr(**arguments)
+            expected_response = None
+        else:
+            expected_response = await litellm.aocr(**arguments) if asynchronous else litellm.ocr(**arguments)
 
-    assert await asyncio.to_thread(finished.wait, 5), "callable callback was not delivered"
+        if asynchronous or callback_kind == "sync":
+            assert await asyncio.to_thread(finished.wait, 5), "callable callback was not delivered"
+    finally:
+        try:
+            await asyncio.wait_for(worker.flush(), 5)
+            await asyncio.wait_for(asyncio.wrap_future(executor.submit(lambda: None)), 5)
+        finally:
+            await asyncio.wait_for(worker.stop(), 5)
+            atexit.unregister(worker._flush_on_exit)
+            executor.shutdown(wait=True, cancel_futures=True)
+
+    assert callback_list == [callback, callback]
+    assert callback not in utils.callback_list
+    if callback_source in ("terminal-list", "overlap"):
+        assert arguments[terminal_name] is callback_list
+    if callback_source in ("per-call", "overlap"):
+        assert arguments["callbacks"] is callback_list
+        assert callback not in litellm.callbacks
+        assert callback not in litellm.input_callback
+    if not asynchronous and callback_kind != "sync":
+        assert calls == []
+        return
     assert len(calls) == 1
     details, callback_response, start_time, end_time = calls[0]
     assert details["model"] == "mistral-ocr-latest"
     assert details["litellm_call_id"]
-    assert details["log_event_type"] == "post_api_call"
     assert callback_response is expected_response
     assert start_time <= end_time
     if failure:
         assert details["exception"] is caught.value
+
+
+@pytest.mark.asyncio
+async def test_native_named_callback_initialization_preserves_aliases(monkeypatch, document):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils import litellm_logging
+
+    events = []
+
+    class NamedLogger(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            events.append("input")
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            events.append("success")
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            events.append("failure")
+
+    callback = NamedLogger()
+    monkeypatch.setattr(litellm_logging, "_init_custom_logger_compatible_class", Mock(return_value=callback))
+    monkeypatch.setattr(litellm, "input_callback", [callback])
+    monkeypatch.setattr(litellm, "_async_success_callback", [callback])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [callback])
+    callbacks = ["lago", callback, "lago"]
+    metadata = {"opaque": object()}
+    arguments = {"model": MODEL, "document": document, "callbacks": callbacks, "metadata": metadata}
+    logger = rust_bridge.initialize_logging(arguments, True)
+    assert arguments["document"] is document
+    assert arguments["metadata"] is metadata
+    assert arguments["callbacks"] is callbacks
+    assert callbacks == ["lago", callback, "lago"]
+    assert rust_bridge.initialize_logging(arguments, True) is logger
+    logger.pre_call(input="document", api_key="sk-test")
+    result = OCRResponse.model_validate(RESPONSE_DATA)
+    await logger.async_success_handler(result, datetime.now(), datetime.now())
+    await logger.async_failure_handler(ValueError("test"), "test", datetime.now(), datetime.now())
+    assert events == ["input", "success", "failure"]
 
 
 @pytest.mark.asyncio
@@ -773,9 +930,24 @@ async def test_public_native_callable_terminal_callback(
         ("azure_ai/mistral-ocr-latest", None, {}, "HTTP document URL to data URI conversion"),
         ("vertex_ai/mistral-ocr-latest", None, {}, "HTTP document URL to data URI conversion"),
         ("mistral-ocr-latest", "vertex_ai", {}, "HTTP document URL to data URI conversion"),
-        ("azure_ai/mistral-ocr-latest", None, {"api_key": None}, "Azure OCR credential acquisition"),
-        ("vertex_ai/mistral-ocr-latest", None, {"api_key": None}, "Vertex OCR credential acquisition"),
-        ("vertex_ai/deepseek-ocr-maas", None, {"api_key": None}, "Vertex OCR credential acquisition"),
+        (
+            "azure_ai/mistral-ocr-latest",
+            None,
+            {"api_key": None, "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}},
+            "OCR credential acquisition",
+        ),
+        (
+            "vertex_ai/mistral-ocr-latest",
+            None,
+            {"api_key": None, "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}},
+            "OCR credential acquisition",
+        ),
+        (
+            "vertex_ai/deepseek-ocr-maas",
+            None,
+            {"api_key": None, "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}},
+            "OCR credential acquisition",
+        ),
         ("azure_ai/cohere/parse-v5.0", None, {}, "Cohere OCR request transformation"),
         ("cohere/parse-v5.0", None, {}, "OCR provider"),
         ("vertex_ai/deepseek-ocr-maas", None, {"stream": True}, "OCR streaming response handling"),
@@ -825,7 +997,7 @@ async def test_native_unsupported_requests_never_prepare_or_send(
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize("auth", ["key", "header", "environment"])
 @pytest.mark.parametrize("provider", ["azure_ai", "vertex_ai", "deepseek"])
-async def test_public_native_cloud_wire_and_shallow_boundaries(
+async def test_private_native_cloud_wire_and_shallow_boundaries(
     native_ocr, wire_recorder, monkeypatch, no_python_ocr, asynchronous, auth, provider
 ):
     monkeypatch.setenv("LITELLM_RUST", "1")
@@ -917,7 +1089,7 @@ async def test_public_native_cloud_wire_and_shallow_boundaries(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
-async def test_public_native_azure_supplied_entra_token(
+async def test_private_native_azure_supplied_entra_token(
     native_ocr, wire_recorder, monkeypatch, no_python_ocr, asynchronous
 ):
     monkeypatch.setenv("LITELLM_RUST", "1")
@@ -991,13 +1163,393 @@ def test_native_sync_callback_reentry_without_event_loop(
     assert len(wire_recorder.requests) == 2
 
 
+@pytest.fixture
+async def isolated_ocr_logging_worker(monkeypatch):
+    from litellm.litellm_core_utils import logging_worker
+
+    worker = logging_worker.LoggingWorker(timeout=5, concurrency=1)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+    try:
+        yield worker
+    finally:
+        try:
+            await asyncio.wait_for(worker.flush(), 5)
+        finally:
+            try:
+                await asyncio.wait_for(worker.stop(), 5)
+            finally:
+                atexit.unregister(worker._flush_on_exit)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True], ids=["python", "native"])
+@pytest.mark.parametrize("outcome", ["mutation", "replacement", "failure"])
+async def test_public_deployment_callback_parity(
+    native_ocr, wire_recorder, monkeypatch, document, enabled, outcome, isolated_ocr_logging_worker
+):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    events, captured, responses, snapshots, terminals = [], [], [], [], []
+    metadata = {"deployment_state": {"phase": "caller"}}
+    state = metadata["deployment_state"]
+    replacement = OCRResponse.model_validate({**RESPONSE_DATA, "document_annotation": {"reviewed": True}})
+    decoy_logger = object()
+
+    class DeploymentLogger(CustomLogger):
+        def __init__(self, index):
+            super().__init__()
+            self.index = index
+
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            assert kwargs["metadata"] is metadata
+            if self.index == 0:
+                assert kwargs["litellm_logging_obj"] is logger
+                captured.append(kwargs["litellm_logging_obj"])
+                state["phase"] = "first"
+                return {**kwargs, "pages": [2], "litellm_logging_obj": decoy_logger}
+            assert kwargs["litellm_logging_obj"] is decoy_logger
+            assert state["phase"] == "first" and kwargs["pages"] == [2]
+            kwargs["pages"].append(3)
+            state["phase"] = "second"
+            events.append(("deployment_pre", call_type.value))
+
+        def log_pre_api_call(self, model, messages, kwargs):
+            assert kwargs is captured[0].model_call_details
+            assert kwargs["litellm_params"]["metadata"]["deployment_state"] is state
+            assert state["phase"] == "second"
+            events.append(("pre_api", kwargs["additional_args"]["complete_input_dict"].get("pages")))
+
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            assert request_data["metadata"] is metadata
+            assert request_data["litellm_logging_obj"] is captured[0]
+            responses.append(response)
+            if self.index == 0:
+                response.document_annotation = {"mutated": True}
+                state["phase"] = "success"
+                return replacement if outcome == "replacement" else None
+            assert state["phase"] == "success"
+            assert response is (replacement if outcome == "replacement" else responses[0])
+            response.document_annotation["second"] = True
+            events.append(("deployment_success", call_type.value))
+
+        async def async_post_call_failure_deployment_hook(self, request_data, exception, call_type, **kwargs):
+            assert request_data["metadata"] is metadata
+            assert request_data["litellm_logging_obj"] is captured[0]
+            snapshots.append(exception)
+            if self.index == 0:
+                assert exception.status_code == 429
+                state["phase"] = "error"
+                captured[0].model_call_details["deployment_error_state"] = state
+                exception.status_code = 418
+                raise RuntimeError("observer failure must not replace the provider error")
+            assert exception is snapshots[0] and exception.status_code == 418
+            assert captured[0].model_call_details["deployment_error_state"] is state
+            assert state["phase"] == "error"
+            events.append(("deployment_failure", call_type.value))
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            terminals.append((kwargs, response_obj))
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            terminals.append((kwargs, kwargs["exception"]))
+
+    callbacks = [DeploymentLogger(0), DeploymentLogger(1)]
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+    logger = Logging(
+        model=MODEL,
+        messages=[],
+        stream=False,
+        call_type="aocr",
+        start_time=datetime.now(),
+        litellm_call_id=f"deployment-{enabled}-{outcome}",
+        function_id="",
+        dynamic_input_callbacks=callbacks,
+        dynamic_async_success_callbacks=callbacks,
+        dynamic_async_failure_callbacks=callbacks,
+    )
+    wire_recorder.status = 429 if outcome == "failure" else 200
+    litellm.rust(enabled)
+    arguments = dict(
+        model=MODEL,
+        document=document,
+        api_key="sk-test",
+        api_base=wire_recorder.api_base,
+        timeout=5,
+        num_retries=0,
+        metadata=metadata,
+        litellm_logging_obj=logger,
+    )
+    if outcome == "failure":
+        with pytest.raises(litellm.RateLimitError) as caught:
+            await litellm.aocr(**arguments)
+        result = caught.value
+        assert result.status_code == 429
+        assert len(snapshots) == 2 and all(snapshot is not result for snapshot in snapshots)
+    else:
+        result = await litellm.aocr(**arguments)
+        assert len(responses) == 2 and result is responses[1]
+        assert (result is responses[0]) is (outcome == "mutation")
+        assert result.document_annotation == {
+            "reviewed" if outcome == "replacement" else "mutated": True,
+            "second": True,
+        }
+    await asyncio.sleep(0)
+    await asyncio.wait_for(isolated_ocr_logging_worker.flush(), 5)
+    assert len(captured) == 1 and captured[0] is logger
+    assert len(terminals) == 2
+    for details, terminal in terminals:
+        assert details is captured[0].model_call_details and terminal is result
+        assert details["litellm_params"]["metadata"]["deployment_state"] is state
+        if outcome == "failure":
+            assert details["deployment_error_state"] is state
+    terminal_event = "deployment_failure" if outcome == "failure" else "deployment_success"
+    assert events == [("deployment_pre", "aocr"), ("pre_api", [2, 3]), ("pre_api", [2, 3]), (terminal_event, "aocr")]
+    assert len(wire_recorder.requests) == 1 and wire_recorder.requests[0]["body"]["pages"] == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_public_deferred_success_callback_parity(
+    native_ocr, wire_recorder, monkeypatch, document, isolated_ocr_logging_worker
+):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    worker = isolated_ocr_logging_worker
+    observations = []
+
+    class DeferredLogger(CustomLogger):
+        def __init__(self):
+            self.calls = []
+            self.delivered = asyncio.Event()
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.calls.append(response_obj.document_annotation)
+            self.delivered.set()
+
+    try:
+        for enabled in (False, True):
+            callback = DeferredLogger()
+            logger = Logging(
+                model=MODEL,
+                messages=[],
+                stream=False,
+                call_type="aocr",
+                start_time=datetime.now(),
+                litellm_call_id=f"deferred-{enabled}",
+                function_id="",
+                dynamic_async_success_callbacks=[callback],
+            )
+            logger._defer_async_logging = True
+            litellm.rust(enabled)
+            result = await litellm.aocr(
+                model=MODEL,
+                document=document,
+                api_key="sk-test",
+                api_base=wire_recorder.api_base,
+                timeout=5,
+                num_retries=0,
+                litellm_logging_obj=logger,
+            )
+            enqueue = getattr(logger, "_enqueue_deferred_logging", None)
+            assert callable(enqueue)
+            assert not callback.calls
+            result.document_annotation = {"reviewed": True}
+            enqueue()
+            logger._enqueue_deferred_logging = None
+            await asyncio.wait_for(callback.delivered.wait(), 5)
+            await asyncio.wait_for(worker.flush(), 5)
+            observations.append((callable(enqueue), tuple(callback.calls)))
+    finally:
+        await asyncio.wait_for(worker.flush(), 5)
+    assert len(wire_recorder.requests) == 2
+    assert observations[0] == (True, ({"reviewed": True},))
+    assert len(observations[1][1]) == 1
+    assert observations[1] == observations[0]
+
+
+def test_public_cold_callable_input_callback_parity(native_ocr, wire_recorder, monkeypatch, document):
+    from litellm import utils
+    from litellm.litellm_core_utils import litellm_logging
+
+    observations = []
+    for enabled in (False, True):
+        calls = []
+
+        def callback(kwargs, calls=calls):
+            calls.append(kwargs["log_event_type"])
+
+        monkeypatch.setattr(litellm, "input_callback", [callback])
+        monkeypatch.setattr(litellm_logging, "customLogger", None)
+        monkeypatch.setattr(utils, "callback_list", [])
+        litellm.rust(enabled)
+        result = litellm.ocr(
+            model=MODEL,
+            document=document,
+            api_key="sk-test",
+            api_base=wire_recorder.api_base,
+            timeout=5,
+            num_retries=0,
+        )
+        assert result.pages[0].markdown == "proof"
+        observations.append(tuple(calls))
+    assert len(wire_recorder.requests) == 2
+    assert observations[0] == ("pre_api_call",)
+    assert observations[1] == observations[0]
+
+
 class Opaque:
     pass
 
 
 @pytest.mark.asyncio
+async def test_native_deferred_callback_retains_shared_arguments(
+    native_ocr, wire_recorder, document, isolated_ocr_logging_worker
+):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    class Arguments(dict):
+        pass
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    observed = []
+
+    class DeferredLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            entered.set()
+            await release.wait()
+            shared = arguments_ref()
+            observed.append(
+                (
+                    shared is not None and shared["opaque"] is opaque_ref(),
+                    shared is not None and shared["unknown_option"]["nested"] is opaque_ref(),
+                    shared is not None and shared["document"] is document,
+                    response_obj is result,
+                )
+            )
+
+    logger = Logging(
+        model=MODEL,
+        messages=[],
+        stream=False,
+        call_type="aocr",
+        start_time=datetime.now(),
+        litellm_call_id="retained-deferred",
+        function_id="",
+        dynamic_async_success_callbacks=[DeferredLogger()],
+    )
+    logger._defer_async_logging = True
+    opaque = Opaque()
+    arguments = Arguments(
+        model=MODEL,
+        document=document,
+        api_key="sk-test",
+        api_base=wire_recorder.api_base,
+        timeout=5,
+        num_retries=0,
+        litellm_logging_obj=logger,
+        opaque=opaque,
+        unknown_option={"nested": opaque},
+    )
+    arguments_ref, opaque_ref = weakref.ref(arguments), weakref.ref(opaque)
+    try:
+        result = await native_ocr.aocr(arguments)
+        assert result.pages[0].markdown == "proof" and not entered.is_set()
+        logger._enqueue_deferred_logging()
+        logger._enqueue_deferred_logging = None
+        del arguments, opaque
+        await asyncio.wait_for(entered.wait(), 5)
+        gc.collect()
+        assert arguments_ref() is not None and opaque_ref() is not None
+        assert arguments_ref()["unknown_option"]["nested"] is opaque_ref()
+        assert not observed
+        shared = arguments_ref()
+    finally:
+        release.set()
+        await asyncio.wait_for(isolated_ocr_logging_worker.flush(), 5)
+    assert observed == [(True, True, True, True)]
+    assert shared["opaque"] is shared["unknown_option"]["nested"] is opaque_ref()
+    assert shared["document"] is document and shared["litellm_logging_obj"] is logger
+    del shared
+    await asyncio.sleep(0)
+    gc.collect()
+    assert arguments_ref() is None and opaque_ref() is None
+    assert len(wire_recorder.requests) == 1
+    assert "opaque" not in wire_recorder.requests[0]["body"]
+    assert "unknown_option" not in wire_recorder.requests[0]["body"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True], ids=["python", "native"])
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
+async def test_correlation_context_restored_in_calling_task(
+    native_ocr, wire_recorder, monkeypatch, document, enabled, outcome, isolated_ocr_logging_worker
+):
+    from litellm._logging import session_id_var, trace_id_var
+
+    during, restored = [], []
+
+    class CorrelationLogger(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            during.append((trace_id_var.get(), session_id_var.get(), asyncio.current_task()))
+
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
+    monkeypatch.setattr(litellm, "callbacks", [CorrelationLogger()])
+    litellm.rust(enabled)
+    wire_recorder.status = 429 if outcome == "failure" else 200
+    wire_recorder.release.clear()
+
+    async def call():
+        trace_token = trace_id_var.set("outer-trace")
+        session_token = session_id_var.set("outer-session")
+        try:
+            return await litellm.aocr(
+                model=MODEL,
+                document=document,
+                api_key="sk-test",
+                api_base=wire_recorder.api_base,
+                timeout=5,
+                num_retries=0,
+                litellm_trace_id="request-trace",
+                litellm_session_id="request-session",
+            )
+        finally:
+            restored.append((trace_id_var.get(), session_id_var.get(), asyncio.current_task()))
+            trace_id_var.reset(trace_token)
+            session_id_var.reset(session_token)
+
+    task = asyncio.create_task(call())
+    try:
+        assert await asyncio.to_thread(wire_recorder.received.wait, 5), "POST never reached server"
+        assert during == [("request-trace", "request-session", task)]
+        if outcome == "cancel":
+            task.cancel()
+        else:
+            wire_recorder.release.set()
+        if outcome == "success":
+            assert (await asyncio.wait_for(task, 5)).pages[0].markdown == "proof"
+        else:
+            with pytest.raises(asyncio.CancelledError if outcome == "cancel" else litellm.RateLimitError):
+                await asyncio.wait_for(task, 5)
+        assert restored == [("outer-trace", "outer-session", task)]
+    finally:
+        wire_recorder.release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert await asyncio.to_thread(wire_recorder.finished.wait, 5)
+        await asyncio.wait_for(isolated_ocr_logging_worker.flush(), 5)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "error", "cancel"])
-async def test_native_retains_opaque_arguments_until_terminal_cleanup(native_ocr, wire_recorder, document, outcome):
+async def test_native_retains_opaque_arguments_until_terminal_cleanup(
+    native_ocr, wire_recorder, document, outcome, isolated_ocr_logging_worker
+):
     wire_recorder.release.clear()
     wire_recorder.status = 429 if outcome == "error" else 200
     opaque = Opaque()
@@ -1046,10 +1598,8 @@ async def test_native_retains_opaque_arguments_until_terminal_cleanup(native_ocr
         await asyncio.gather(task, return_exceptions=True)
         assert await asyncio.to_thread(wire_recorder.finished.wait, 5)
     del task
-    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
     if outcome == "success":
-        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), 5)
+        await asyncio.wait_for(isolated_ocr_logging_worker.flush(), 5)
     logger.reset_mock()
     await asyncio.sleep(0)
     gc.collect()
@@ -1102,3 +1652,158 @@ async def test_public_cancellation_does_not_emit_failure_callbacks(
     await asyncio.sleep(0)
     assert calls == ["pre_call"]
     assert len(wire_recorder.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True], ids=["python", "native"])
+async def test_public_concurrent_callback_isolation_and_cleanup(request, monkeypatch, enabled):
+    from contextlib import ExitStack
+
+    from litellm import utils
+    from litellm.litellm_core_utils import litellm_logging, logging_worker
+
+    if enabled:
+        request.getfixturevalue("native_ocr")
+        request.getfixturevalue("no_python_ocr")
+    litellm.rust(enabled)
+    context = contextvars.ContextVar("ocr-stress-context", default="parent")
+    pre_calls, terminals = [], []
+    entered, release = {}, {}
+    worker = logging_worker.LoggingWorker(timeout=5, concurrency=2)
+    executor = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(logging_worker, "GLOBAL_LOGGING_WORKER", worker)
+    monkeypatch.setattr(utils, "executor", executor)
+    monkeypatch.setattr(litellm_logging, "executor", executor)
+
+    class ConcurrentLogger(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            tag = kwargs["litellm_call_id"]
+            state = {"owner": tag, "phase": "pre"}
+            pre_calls.append((tag, kwargs, state, context.get()))
+            kwargs["ocr_stress_state"] = state
+            kwargs["additional_args"]["headers"]["X-Callback"] = tag
+            context.set(f"{tag}:pre")
+
+        def record(self, event, kwargs, response_obj):
+            tag = kwargs["litellm_call_id"]
+            state = kwargs.get("ocr_stress_state", {})
+            terminals.append(
+                (tag, event, kwargs, state, dict(state), context.get(), response_obj, kwargs.get("exception"))
+            )
+            state["phase"] = event
+            context.set(f"{tag}:{event}")
+
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            self.record("sync_success", kwargs, response_obj)
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            self.record("sync_failure", kwargs, response_obj)
+
+        async def terminal(self, event, kwargs, response_obj):
+            tag = kwargs["litellm_call_id"]
+            entered[tag].set()
+            await asyncio.wait_for(release[tag].wait(), 5)
+            self.record(event, kwargs, response_obj)
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            await self.terminal("async_success", kwargs, response_obj)
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            await self.terminal("async_failure", kwargs, response_obj)
+
+    monkeypatch.setattr(litellm, "callbacks", [ConcurrentLogger()])
+
+    async def call(tag, recorder):
+        context.set(tag)
+        return await litellm.aocr(
+            model=MODEL,
+            document={"type": "document_url", "document_url": f"https://example.invalid/{tag}.pdf"},
+            api_key="sk-test",
+            api_base=recorder.api_base,
+            litellm_call_id=tag,
+            timeout=5,
+            num_retries=0,
+        )
+
+    async def batch(prefix, outcomes):
+        with ExitStack() as stack:
+            recorders = {f"{prefix}-{outcome}": WireRecorder() for outcome in outcomes}
+            for tag, recorder in recorders.items():
+                stack.callback(recorder.stop)
+                recorder.release.clear()
+                recorder.status = 429 if tag.endswith("error") else 200
+                entered[tag], release[tag] = asyncio.Event(), asyncio.Event()
+            tasks = {tag: asyncio.create_task(call(tag, recorder)) for tag, recorder in recorders.items()}
+            try:
+                assert all(await asyncio.gather(*(asyncio.to_thread(r.received.wait, 5) for r in recorders.values())))
+                assert all(not task.done() for task in tasks.values())
+                for tag, task in tasks.items():
+                    if tag.endswith("cancel"):
+                        task.cancel()
+                        with pytest.raises(asyncio.CancelledError):
+                            await asyncio.wait_for(task, 5)
+                    else:
+                        recorders[tag].release.set()
+                active = tuple(tag for tag in tasks if not tag.endswith("cancel"))
+                await asyncio.wait_for(asyncio.gather(*(entered[tag].wait() for tag in active)), 5)
+                for tag in reversed(active):
+                    release[tag].set()
+                results = await asyncio.wait_for(asyncio.gather(*tasks.values(), return_exceptions=True), 5)
+                await asyncio.wait_for(worker.flush(), 5)
+                await asyncio.wait_for(asyncio.wrap_future(executor.submit(lambda: None)), 5)
+                for (tag, recorder), result in zip(recorders.items(), results):
+                    matching_pre = [entry for entry in pre_calls if entry[0] == tag]
+                    assert len(matching_pre) == len(recorder.requests) == 1
+                    _, details, state, pre_context = matching_pre[0]
+                    assert pre_context == tag
+                    sent = recorder.requests[0]
+                    assert sent["path"] == "/v1/ocr"
+                    assert sent["headers"]["x-callback"] == tag
+                    assert sent["body"]["document"]["document_url"] == f"https://example.invalid/{tag}.pdf"
+                    expected = (
+                        []
+                        if tag.endswith("cancel")
+                        else ["sync_failure", "async_failure"]
+                        if tag.endswith("error")
+                        else ["async_success"]
+                    )
+                    matching_terminal = [entry for entry in terminals if entry[0] == tag]
+                    assert [entry[1] for entry in matching_terminal] == expected
+                    if tag.endswith("cancel"):
+                        assert isinstance(result, asyncio.CancelledError)
+                    elif tag.endswith("error"):
+                        assert isinstance(result, litellm.RateLimitError) and result.status_code == 429
+                    else:
+                        assert isinstance(result, OCRResponse) and result.pages[0].markdown == "proof"
+                    for _, event, kwargs, shared, snapshot, terminal_context, response, error in matching_terminal:
+                        phase = "sync_failure" if event == "async_failure" else "pre"
+                        assert kwargs is details and shared is state
+                        assert snapshot == {"owner": tag, "phase": phase}
+                        assert terminal_context == f"{tag}:{phase}"
+                        assert response is (None if tag.endswith("error") else result)
+                        assert error is (result if tag.endswith("error") else None)
+                assert context.get() == "parent"
+            finally:
+                for tag, recorder in recorders.items():
+                    recorder.release.set()
+                    release[tag].set()
+                    if not tasks[tag].done():
+                        tasks[tag].cancel()
+                await asyncio.wait_for(asyncio.gather(*tasks.values(), return_exceptions=True), 5)
+                assert all(await asyncio.gather(*(asyncio.to_thread(r.finished.wait, 5) for r in recorders.values())))
+
+    try:
+        for index in range(2):
+            await batch(str(index), ("success", "error", "cancel"))
+        await batch("recovery", ("success",))
+        assert len(pre_calls) == 7 and len(terminals) == 7
+        assert len({id(entry[1]) for entry in pre_calls}) == len({id(entry[2]) for entry in pre_calls}) == 7
+    finally:
+        try:
+            await asyncio.wait_for(worker.flush(), 5)
+        finally:
+            try:
+                await asyncio.wait_for(worker.stop(), 5)
+            finally:
+                atexit.unregister(worker._flush_on_exit)
+                await asyncio.wait_for(asyncio.to_thread(executor.shutdown, wait=True, cancel_futures=True), 5)

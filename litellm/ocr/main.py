@@ -28,8 +28,6 @@ from litellm.llms.base_llm.ocr.transformation import (
     parse_ocr_request_format,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.rust_bridge import ocr as rust_ocr_bridge
-from litellm.rust_bridge.configuration import rust_enabled
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -242,19 +240,6 @@ async def aocr(
         )
         ```
     """
-    if rust_enabled():
-        return await rust_ocr_bridge.aocr(
-            {
-                **kwargs,
-                "model": model,
-                "document": document,
-                "api_key": api_key,
-                "api_base": api_base,
-                "timeout": timeout,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-            }
-        )
     return await _legacy_aocr(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs)
 
 
@@ -525,20 +510,6 @@ def ocr(
             print(f"Page {page.index}: {page.markdown}")
         ```
     """
-    if rust_enabled():
-        arguments: Final[dict[str, object]] = {
-            **kwargs,
-            "model": model,
-            "document": document,
-            "api_key": api_key,
-            "api_base": api_base,
-            "timeout": timeout,
-            "custom_llm_provider": custom_llm_provider,
-            "extra_headers": extra_headers,
-        }
-        if kwargs.get("aocr") is True:
-            return rust_ocr_bridge.aocr(arguments)
-        return rust_ocr_bridge.ocr(arguments)
     return _legacy_ocr(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs)
 
 

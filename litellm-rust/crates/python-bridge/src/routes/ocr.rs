@@ -3,14 +3,19 @@
 //! callbacks; no Python preparation, auth, encoding, or provider transforms run.
 
 use litellm_core::error::Error;
+use litellm_core::ocr::lifecycle::{
+    ErrorDisposition, Lifecycle, NativeOutcome, Observations, Operation, Options, Outcome,
+};
 use litellm_core::ocr::types::{OcrDocumentProjection, OcrRequest, PreparedOcr};
 use litellm_core::routing_utils::provider::get_custom_llm_provider;
-use litellm_python_interop::{Pythonized, from_py, to_py};
+use litellm_python_interop::{
+    InvocationMode, InvocationOutcome, PreparedCall, Pythonized, from_py, to_py,
+};
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::{PyTraverseError, PyVisit};
 use pyo3::sync::PyOnceLock;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyTuple};
 use serde_json::Value;
 
 use crate::errors::core_error_to_pyerr;
@@ -50,7 +55,7 @@ impl OcrState {
 
 fn ocr_error_to_pyerr(py: Python<'_>, error: Error, model: &str, provider: &str) -> PyErr {
     let status = match error {
-        Error::Unsupported(message) => return PyNotImplementedError::new_err(message),
+        Error::Unsupported(message) => return PyRuntimeError::new_err(message),
         Error::Auth(_) => 401,
         Error::Http { status, .. } => status,
         Error::Network(_) | Error::Connect(_) => {
@@ -120,24 +125,11 @@ fn header_pairs(headers: &Bound<'_, PyDict>) -> PyResult<Vec<(String, String)>> 
         .collect()
 }
 
-#[pyfunction]
-#[pyo3(signature = (arguments, asynchronous=false))]
-fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResult<Py<OcrState>> {
-    let bag = arguments.bind(py);
+fn decode_request(py: Python<'_>, bag: &Bound<'_, PyDict>) -> PyResult<OcrRequest> {
     let document = bag
         .get_item("document")?
         .ok_or_else(|| PyValueError::new_err("OCR requires document"))?
         .cast_into::<PyDict>()?;
-    if scalar(&document, "type")?.as_deref() == Some("file") {
-        return Err(ocr_error_to_pyerr(
-            py,
-            Error::Unsupported(
-                "Native OCR does not support file documents; pass a document_url or image_url dict",
-            ),
-            "",
-            "",
-        ));
-    }
     let timeout_seconds = match bag.get_item("timeout")?.filter(|value| !value.is_none()) {
         None => py
             .import("litellm.constants")?
@@ -163,9 +155,9 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
             document_input.set_item(name, value)?;
         }
     }
-    let prepared = litellm_core::ocr::prepare::prepare(OcrRequest {
-        model: model.clone(),
-        custom_llm_provider: custom_llm_provider.clone(),
+    Ok(OcrRequest {
+        model,
+        custom_llm_provider,
         api_key: scalar(bag, "api_key")?,
         api_base: scalar(bag, "api_base")?,
         extra_headers,
@@ -182,20 +174,179 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
             .transpose()?
             .unwrap_or(false),
     })
-    .map_err(|error| {
-        let resolved = get_custom_llm_provider(&model, custom_llm_provider.as_deref());
-        ocr_error_to_pyerr(
-            py,
-            error,
-            resolved
-                .as_ref()
-                .map_or(model.as_str(), |value| value.model),
-            resolved
-                .as_ref()
-                .map_or("", |value| value.custom_llm_provider),
-        )
-    })?;
+}
 
+fn request_error_to_pyerr(
+    py: Python<'_>,
+    error: Error,
+    model: &str,
+    custom_llm_provider: Option<&str>,
+) -> PyErr {
+    let resolved = get_custom_llm_provider(model, custom_llm_provider);
+    ocr_error_to_pyerr(
+        py,
+        error,
+        resolved.as_ref().map_or(model, |value| value.model),
+        resolved
+            .as_ref()
+            .map_or("", |value| value.custom_llm_provider),
+    )
+}
+
+#[pyclass]
+struct OcrLifecycle {
+    machine: Lifecycle,
+    asynchronous: bool,
+}
+
+#[pymethods]
+impl OcrLifecycle {
+    #[new]
+    fn new(
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+        asynchronous: bool,
+        internal_call: bool,
+    ) -> PyResult<Self> {
+        let request = decode_request(py, arguments)?;
+        let logger = arguments
+            .get_item("litellm_logging_obj")?
+            .filter(|value| !value.is_none());
+        let identity = |name: &str| -> PyResult<Option<String>> {
+            if let Some(logger) = &logger {
+                match logger.getattr(name) {
+                    Ok(value) => {
+                        if let Ok(value) = value.extract::<String>() {
+                            return Ok(Some(value));
+                        }
+                    }
+                    Err(error)
+                        if !error.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) =>
+                    {
+                        return Err(error);
+                    }
+                    _ => {}
+                }
+            }
+            scalar(arguments, name)
+        };
+        let machine = Lifecycle::new(
+            &request,
+            Options {
+                asynchronous,
+                internal_call,
+                call_id: identity("litellm_call_id")?,
+                trace_id: identity("litellm_trace_id")?,
+                ..Options::default()
+            },
+        )
+        .map_err(|error| {
+            request_error_to_pyerr(
+                py,
+                error,
+                &request.model,
+                request.custom_llm_provider.as_deref(),
+            )
+        })?;
+        match machine {
+            NativeOutcome::Completed(machine) => Ok(Self {
+                machine,
+                asynchronous,
+            }),
+            NativeOutcome::Declined(decline) => {
+                Err(PyNotImplementedError::new_err(decline.reason()))
+            }
+        }
+    }
+
+    fn identity(&self) -> (String, Option<String>) {
+        let identity = self.machine.identity();
+        (identity.call_id.clone(), identity.trace_id.clone())
+    }
+
+    fn advance(
+        &mut self,
+        outcome: u8,
+        logger_available: bool,
+        has_fallbacks: bool,
+    ) -> PyResult<bool> {
+        let outcome = match outcome {
+            0 => Outcome::Success,
+            1 => Outcome::Failure,
+            _ => Outcome::Abort,
+        };
+        self.machine
+            .advance(
+                outcome,
+                Observations {
+                    logger_available,
+                    has_fallbacks,
+                },
+            )
+            .map(|transition| transition.error == ErrorDisposition::Replace)
+            .map_err(core_error_to_pyerr)
+    }
+
+    fn complete(&self) -> Option<bool> {
+        match self.machine.operation() {
+            Operation::Complete(outcome) => Some(outcome == Outcome::Success),
+            _ => None,
+        }
+    }
+}
+
+#[pyfunction]
+fn invoke(
+    py: Python<'_>,
+    machine: Py<OcrLifecycle>,
+    host: Py<PyAny>,
+) -> PyResult<(bool, Py<PyAny>)> {
+    let (operation, asynchronous) = {
+        let machine = machine.borrow(py);
+        (machine.machine.operation(), machine.asynchronous)
+    };
+    let (method, mode) = match operation {
+        Operation::Setup => ("setup", InvocationMode::Direct),
+        Operation::DeploymentPre => ("deployment_pre", InvocationMode::Await),
+        Operation::Prepare => ("prepare", InvocationMode::Direct),
+        Operation::Send if asynchronous => ("send", InvocationMode::Await),
+        Operation::Send => ("send_sync", InvocationMode::Direct),
+        Operation::DeploymentSuccess => ("deployment_success", InvocationMode::Await),
+        Operation::DeploymentFailure => ("deployment_failure", InvocationMode::Await),
+        Operation::SyncSuccess => ("sync_success", InvocationMode::Direct),
+        Operation::AsyncSuccess => ("async_success", InvocationMode::Direct),
+        Operation::SyncSuccessIfNeeded => ("sync_success_if_needed", InvocationMode::Direct),
+        Operation::SyncFailure => ("sync_failure", InvocationMode::Direct),
+        Operation::AsyncFailure => ("async_failure", InvocationMode::Await),
+        Operation::Restore => ("restore", InvocationMode::Direct),
+        Operation::Complete(_) => return Err(PyRuntimeError::new_err("OCR lifecycle is complete")),
+    };
+    let call = PreparedCall::new(
+        mode,
+        host.getattr(py, method)?,
+        PyTuple::empty(py).unbind(),
+        None,
+    );
+    match call.invoke(py)? {
+        InvocationOutcome::Returned(value) => Ok((false, value)),
+        InvocationOutcome::Awaitable(value) => Ok((true, value)),
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (arguments, asynchronous=false))]
+fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResult<Py<OcrState>> {
+    let bag = arguments.bind(py);
+    let request = decode_request(py, bag)?;
+    let model = request.model.clone();
+    let custom_llm_provider = request.custom_llm_provider.clone();
+    let prepared = litellm_core::ocr::prepare::prepare(request).map_err(|error| {
+        request_error_to_pyerr(py, error, &model, custom_llm_provider.as_deref())
+    })?;
+    let document = bag
+        .get_item("document")?
+        .ok_or_else(|| PyValueError::new_err("OCR requires document"))?
+        .cast_into::<PyDict>()?;
     let body = to_py(py, &prepared.body)?
         .into_bound(py)
         .cast_into::<PyDict>()?;
@@ -355,64 +506,128 @@ fn driver(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
     let module = PyModule::from_code(
         py,
         c"from datetime import datetime
-from litellm.rust_bridge.ocr import invoke_terminal
+from litellm import utils
+from litellm.types.utils import CallTypes
+from litellm.rust_bridge.ocr import initialize_logging, invoke_terminal
+
+class Host:
+    def __init__(self, arguments, asynchronous):
+        self.machine = _Lifecycle(arguments, asynchronous, utils.is_internal_call.get())
+        self.arguments = arguments
+        self.current = arguments
+        self.asynchronous = asynchronous
+        self.logger = arguments.get('litellm_logging_obj')
+        self.state = None
+        self.response = None
+        self.error = None
+        self.start = datetime.now()
+        self.end = None
+
+    def setup(self):
+        call_id, trace_id = self.machine.identity()
+        self.arguments['litellm_call_id'] = call_id
+        self.arguments['litellm_trace_id'] = trace_id
+        self.logger = initialize_logging(self.arguments, self.asynchronous)
+        self.arguments['litellm_logging_obj'] = self.logger
+
+    async def deployment_pre(self):
+        modified = await utils.async_pre_call_deployment_hook(self.current, 'aocr')
+        if modified is not None:
+            self.current = modified
+        self.current['litellm_logging_obj'] = self.logger
+        call_id, trace_id = self.machine.identity()
+        self.current['litellm_call_id'] = call_id
+        self.current['litellm_trace_id'] = trace_id
+
+    def prepare(self):
+        self.state = _prepare(self.current, self.asynchronous)
+
+    def send_sync(self):
+        self.response = _send_sync(self.state)
+        self.end = datetime.now()
+
+    async def send(self):
+        self.response = _finish(await _send(self.state))
+        self.end = datetime.now()
+
+    async def deployment_success(self):
+        self.response = await utils.async_post_call_success_deployment_hook(self.current, self.response, CallTypes.aocr)
+
+    async def deployment_failure(self):
+        await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'aocr')
+
+    def terminal(self, action, value):
+        return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, value, self.start, self.end)
+
+    def sync_success(self):
+        return self.terminal('sync_success', self.response)
+
+    def async_success(self):
+        return self.terminal('async_success', self.response)
+
+    def sync_success_if_needed(self):
+        return self.terminal('sync_success_if_needed', self.response)
+
+    def sync_failure(self):
+        return self.terminal('sync_failure', self.error)
+
+    def async_failure(self):
+        return self.terminal('async_failure', self.error)
+
+    def restore(self):
+        utils._restore_correlation_context_if_supported(self.logger)
+
+    def advance(self, outcome, error=None):
+        if error is not None and self.end is None:
+            self.end = datetime.now()
+        if self.logger is None:
+            self.logger = self.arguments.get('litellm_logging_obj')
+        replace = self.machine.advance(outcome, self.logger is not None, self.current.get('fallbacks') is not None)
+        if replace:
+            self.error = error
+
+    def result(self):
+        if self.machine.complete():
+            return self.response
+        raise self.error
 
 def drive_sync(arguments):
-    start = datetime.now()
-    state = None
-    try:
-        state = _prepare(arguments, False)
-        response = _send_sync(state)
-    except Exception as error:
-        logger = arguments.get('litellm_logging_obj')
-        if state is not None or (logger is not None and not isinstance(error, NotImplementedError)):
-            end = datetime.now()
-            for action in _sync_failure:
-                invoke_terminal(action, (arguments, state), logger, error, start, end)
-        raise
-    end = datetime.now()
-    for action in _sync_success:
-        invoke_terminal(action, (arguments, state), arguments['litellm_logging_obj'], response, start, end)
-    return response
+    host = Host(arguments, False)
+    while host.machine.complete() is None:
+        try:
+            _invoke(host.machine, host)
+        except Exception as error:
+            host.advance(1, error)
+        except BaseException as error:
+            host.advance(2, error)
+        else:
+            host.advance(0)
+    return host.result()
 
 async def drive(arguments):
-    start = datetime.now()
-    state = None
-    try:
-        state = _prepare(arguments, True)
-        response = _finish(await _send(state))
-    except Exception as error:
-        logger = arguments.get('litellm_logging_obj')
-        if state is not None or (logger is not None and not isinstance(error, NotImplementedError)):
-            end = datetime.now()
-            for action in _async_failure:
-                pending = invoke_terminal(action, (arguments, state), logger, error, start, end)
-                if pending is not None:
-                    await pending
-        raise
-    end = datetime.now()
-    for action in _async_success:
-        invoke_terminal(action, (arguments, state), arguments['litellm_logging_obj'], response, start, end)
-    return response
+    host = Host(arguments, True)
+    while host.machine.complete() is None:
+        try:
+            awaiting, value = _invoke(host.machine, host)
+            if awaiting:
+                await value
+        except Exception as error:
+            host.advance(1, error)
+        except BaseException as error:
+            host.advance(2, error)
+        else:
+            host.advance(0)
+    return host.result()
 ",
         c"ocr_driver.py",
         c"_ocr_driver",
     )?;
+    module.add("_Lifecycle", py.get_type::<OcrLifecycle>())?;
+    module.add("_invoke", wrap_pyfunction!(invoke, &module)?)?;
     module.add("_prepare", wrap_pyfunction!(prepare, &module)?)?;
     module.add("_send", wrap_pyfunction!(send, &module)?)?;
     module.add("_send_sync", wrap_pyfunction!(send_sync, &module)?)?;
     module.add("_finish", wrap_pyfunction!(finish, &module)?)?;
-    for (name, asynchronous, success) in [
-        ("_sync_success", false, true),
-        ("_async_success", true, true),
-        ("_sync_failure", false, false),
-        ("_async_failure", true, false),
-    ] {
-        module.add(
-            name,
-            litellm_core::ocr::terminal_callbacks(asynchronous, success).to_vec(),
-        )?;
-    }
     Ok(DRIVER.get_or_init(py, || module.unbind()).bind(py))
 }
 
@@ -516,6 +731,88 @@ mod tests {
                 assert!(error.is_instance_of::<PyRuntimeError>(py));
                 assert!(!error.to_string().contains("secret"));
             }
+        });
+    }
+
+    #[test]
+    fn callback_decline_is_terminal_and_identity_is_reused() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "ocr_test").unwrap();
+            module
+                .add_function(wrap_pyfunction!(ocr, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(aocr, &module).unwrap())
+                .unwrap();
+            let globals = PyDict::new(py);
+            globals.set_item("native", module).unwrap();
+            py.run(
+                c"
+import asyncio
+import contextvars
+import threading
+from datetime import datetime
+
+marker = contextvars.ContextVar('terminal_marker')
+
+class Logger:
+    litellm_call_id = 'supplied-call'
+    litellm_trace_id = 'supplied-trace'
+
+    def update_from_kwargs(self, **values):
+        assert values['kwargs']['litellm_call_id'] == self.litellm_call_id
+        assert values['kwargs']['litellm_trace_id'] == self.litellm_trace_id
+        assert threading.get_ident() == self.thread
+        marker.set('update')
+        raise self.original
+
+    def failure_handler(self, error, trace, start, end):
+        assert error is self.original
+        assert marker.get() == 'update'
+        assert start <= end <= datetime.now()
+        self.end = end
+        self.calls.append('failure')
+
+    async def async_failure_handler(self, error, trace, start, end):
+        await asyncio.sleep(0)
+        assert asyncio.current_task() is self.task
+        assert marker.get() == 'update'
+        assert error is self.original
+        assert end is self.end
+        self.calls.append('async_failure')
+
+    def _restore_correlation_context(self):
+        self.calls.append('restore')
+
+async def exercise():
+    for asynchronous in (False, True):
+        logger = Logger()
+        logger.thread = threading.get_ident()
+        logger.task = asyncio.current_task()
+        logger.calls = []
+        logger.original = NotImplementedError('callback declined, not admission')
+        arguments = dict(model='mistral/mistral-ocr-latest', api_key='test-key', timeout=1.0,
+                         document={'type': 'document_url', 'document_url': 'https://example.test/doc.pdf'},
+                         litellm_logging_obj=logger)
+        try:
+            if asynchronous:
+                await native.aocr(arguments)
+            else:
+                native.ocr(arguments)
+        except NotImplementedError as error:
+            assert error is logger.original
+        else:
+            raise AssertionError('callback exception was lost')
+        assert logger.calls == (['failure', 'async_failure', 'restore'] if asynchronous else ['failure', 'restore'])
+        assert arguments['litellm_call_id'] == 'supplied-call'
+        assert arguments['litellm_trace_id'] == 'supplied-trace'
+
+asyncio.run(exercise())
+",
+                Some(&globals),
+                Some(&globals),
+            ).unwrap();
         });
     }
 
@@ -733,7 +1030,8 @@ class Logger:
         assert asyncio.current_task() is caller
         assert threading.get_ident() == caller_thread
         assert marker.get() == 'caller'
-        assert values['kwargs'] is arguments
+        assert values['kwargs'] is not arguments
+        assert values['kwargs']['opaque'] is arguments['opaque']
         self.calls.append('update')
         marker.set('updated')
 

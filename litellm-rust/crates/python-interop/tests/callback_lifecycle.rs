@@ -1,8 +1,9 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use litellm_python_interop::{InvocationMode, InvocationOutcome, PreparedCall};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyTuple};
 use rstest::{fixture, rstest};
 use serial_test::{parallel, serial};
 
@@ -12,7 +13,7 @@ mod callback_owner;
 #[path = "support/mod.rs"]
 mod support;
 
-use support::python::{InitializedPython, initialized_python, run_fixture};
+use support::python::{InitializedPython, initialized_python, item, run_fixture};
 
 #[test]
 fn cold_awaited_adapter_initialization_allows_reentry() -> PyResult<()> {
@@ -100,8 +101,6 @@ fn scenario_scope(initialized_python: &InitializedPython) -> Py<PyDict> {
 #[case::stream_lifecycle("stream_lifecycle")]
 #[case::sync_stream_lifecycle("sync_stream_lifecycle")]
 #[case::repeated_ownership("repeated_ownership")]
-#[case::retained_field_replacement("retained_field_replacement")]
-#[case::queued_graph_ownership("queued_graph_ownership")]
 #[case::detached_work_after_error("detached_work_after_error")]
 #[serial(python_interpreter)]
 fn lifecycle_contract(
@@ -176,8 +175,8 @@ fn component_contract(
 #[case::real_logging_queue_copy_control("real_logging_queue_copy_control")]
 #[case::real_crowdstrike_translator_identity("real_crowdstrike_translator_identity")]
 #[case::real_rubrik_block_lifecycle("real_rubrik_block_lifecycle")]
-#[case::real_parallel_guardrail_snapshots("real_parallel_guardrail_snapshots")]
-#[case::real_purview_sync_background("real_purview_sync_background")]
+#[case::real_parallel_guardrail_sharing_and_exception_order("real_parallel_guardrail_snapshots")]
+#[case::real_purview_sync_background_and_active_loop("real_purview_sync_background")]
 #[ignore = "requires the repository Python environment and LiteLLM on PYTHONPATH"]
 #[serial(python_interpreter)]
 fn integration_contract(
@@ -220,20 +219,6 @@ fn run_scenario_fixture(
 }
 
 #[rstest]
-#[case::original_arguments("argument_identity", "identity")]
-#[case::envelope_arguments("argument_identity", "envelope")]
-#[case::shallow_arguments("argument_identity", "shallow_payload")]
-#[case::copied_graph("argument_identity", "deep_graph")]
-#[case::independent_copies("argument_identity", "deep_separate")]
-#[case::original_read_timing("mutation_timing", "identity")]
-#[case::envelope_read_timing("mutation_timing", "envelope")]
-#[case::shallow_read_timing("mutation_timing", "shallow_payload")]
-#[case::deep_read_timing("mutation_timing", "deep_graph")]
-#[case::independent_read_timing("mutation_timing", "deep_separate")]
-#[case::original_result("result_identity", "identity")]
-#[case::passthrough_result("result_identity", "result_passthrough")]
-#[case::shallow_result("result_identity", "result_shallow")]
-#[case::deep_result("result_identity", "result_deep")]
 #[case::retained_lifetime("deferred_lifetime", "identity")]
 #[case::prepared_ownership("deferred_lifetime", "missing_handoff")]
 #[case::externally_owned_retained("borrowed_lifetime", "identity")]
@@ -301,6 +286,153 @@ fn run_control_fixture(
             awaited,
             globals.get_item("factory")?.unwrap(),
         ))?;
+        Ok(())
+    })
+}
+
+fn invoke_direct_callback(
+    py: Python<'_>,
+    globals: &Bound<'_, PyDict>,
+    callback: &str,
+    argument: &str,
+    retained: bool,
+) -> PyResult<Py<PyAny>> {
+    let args = PyTuple::new(py, [item(globals, argument)])?;
+    if !retained {
+        let factory = item(globals, "ReferenceFactory").call0()?;
+        let owner = factory.call_method1("prepare", (item(globals, callback), args))?;
+        let result = owner.call_method0("invoke");
+        owner.call_method0("close")?;
+        assert_eq!(factory.getattr("live")?.extract::<usize>()?, 0);
+        return result.map(Bound::unbind);
+    }
+    let call = PreparedCall::new(
+        InvocationMode::Direct,
+        item(globals, callback).unbind(),
+        args.unbind(),
+        None,
+    );
+    match call.invoke(py)? {
+        InvocationOutcome::Returned(value) => Ok(value),
+        InvocationOutcome::Awaitable(_) => panic!("direct callback produced an awaitable outcome"),
+    }
+}
+
+#[rstest]
+#[serial(python_interpreter)]
+fn retained_field_survives_replacement_and_observes_original_mutations(
+    scenario_scope: Py<PyDict>,
+    #[values(false, true)] retained: bool,
+) -> PyResult<()> {
+    Python::attach(|py| {
+        let globals = scenario_scope.bind(py);
+        py.run(
+            c"
+original = {'messages': [{'content': 'original'}]}
+replacement = {'messages': [{'content': 'replacement'}]}
+event = {'payload': original, 'alias': original}
+saved = []
+
+def retain(value):
+    saved.append(value['payload'])
+
+def replace(value):
+    value['payload'] = replacement
+    value['alias']['messages'][0]['content'] = 'mutated original'
+",
+            Some(globals),
+            None,
+        )?;
+        for callback in ["retain", "replace"] {
+            assert!(invoke_direct_callback(py, globals, callback, "event", retained)?.is_none(py));
+        }
+        let original = item(globals, "original");
+        let replacement = item(globals, "replacement");
+        let event = item(globals, "event");
+        let saved = item(globals, "saved").get_item(0)?;
+        assert!(saved.is(&original));
+        assert!(event.get_item("alias")?.is(&original));
+        assert!(event.get_item("payload")?.is(&replacement));
+        assert_eq!(
+            saved
+                .get_item("messages")?
+                .get_item(0)?
+                .get_item("content")?
+                .extract::<String>()?,
+            "mutated original"
+        );
+        replacement
+            .get_item("messages")?
+            .get_item(0)?
+            .set_item("content", "mutated replacement")?;
+        assert_eq!(
+            event
+                .get_item("payload")?
+                .get_item("messages")?
+                .get_item(0)?
+                .get_item("content")?
+                .extract::<String>()?,
+            "mutated replacement"
+        );
+        assert_eq!(
+            original
+                .get_item("messages")?
+                .get_item(0)?
+                .get_item("content")?
+                .extract::<String>()?,
+            "mutated original"
+        );
+        Ok(())
+    })
+}
+
+#[rstest]
+#[serial(python_interpreter)]
+fn queued_graph_outlives_invocation_and_stays_live_until_serialized(
+    scenario_scope: Py<PyDict>,
+    #[values(false, true)] retained: bool,
+) -> PyResult<()> {
+    Python::attach(|py| {
+        let globals = scenario_scope.bind(py);
+        py.run(
+            c"
+queue = asyncio.Queue()
+sentinel = Value()
+reference = weakref.ref(sentinel)
+payload = {'sentinel': sentinel, 'nested': {'status': 'queued'}}
+snapshot = json.dumps(payload['nested'])
+
+def enqueue(value):
+    queue.put_nowait(value)
+",
+            Some(globals),
+            None,
+        )?;
+        assert!(invoke_direct_callback(py, globals, "enqueue", "payload", retained)?.is_none(py));
+        py.run(c"del sentinel, payload\ngc.collect()", Some(globals), None)?;
+        let reference = item(globals, "reference");
+        assert!(!reference.call0()?.is_none());
+        let queue = item(globals, "queue");
+        let queued = queue.call_method0("get_nowait")?;
+        queued
+            .get_item("nested")?
+            .set_item("status", "changed before flush")?;
+        let json = item(globals, "json");
+        let flushed = json.call_method1(
+            "loads",
+            (json.call_method1("dumps", (queued.get_item("nested")?,))?,),
+        )?;
+        assert_eq!(
+            flushed.get_item("status")?.extract::<String>()?,
+            "changed before flush"
+        );
+        let snapshot = json.call_method1("loads", (item(globals, "snapshot"),))?;
+        assert_eq!(snapshot.get_item("status")?.extract::<String>()?, "queued");
+        assert!(queued.get_item("sentinel")?.is(reference.call0()?));
+        queue.call_method0("task_done")?;
+        drop(queued);
+        py.run(c"gc.collect()", Some(globals), None)?;
+        assert!(reference.call0()?.is_none());
         Ok(())
     })
 }

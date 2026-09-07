@@ -10,6 +10,8 @@ import sys
 import tempfile
 import threading
 import zipfile
+from collections.abc import Awaitable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -200,10 +202,35 @@ def initialize_ocr_logging(arguments: dict[str, object], asynchronous: bool) -> 
 
 def invoke_ocr_terminal(
     action: str, roots: object, logger: OCRLogging, value: object, start: object, end: object
-) -> None:
+) -> Awaitable[None] | None:
     assert action in {"sync_success", "async_success", "sync_success_if_needed", "sync_failure", "async_failure"}
     assert isinstance(roots, tuple) and roots[0] is logger.arguments
     assert logger.calls == ("update", "pre")
+    if action == "async_failure":
+        return observe_ocr_failure({}, value, "aocr")
+    return None
+
+
+async def pre_ocr_deployment(arguments: dict[str, object], call_type: str) -> dict[str, object]:
+    assert call_type == "aocr"
+    return arguments
+
+
+async def post_ocr_deployment(arguments: dict[str, object], response: object, call_type: str) -> object:
+    assert call_type == "aocr"
+    return response
+
+
+async def observe_ocr_failure(arguments: dict[str, object], error: object, call_type: str) -> None:
+    assert call_type == "aocr"
+
+
+def restore_ocr_context(logger: object) -> None:
+    pass
+
+
+class WheelCallTypes:
+    aocr = "aocr"
 
 
 def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
@@ -369,11 +396,20 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
     ocr_bridge: Final = ModuleType("litellm.rust_bridge.ocr")
     ocr_bridge.initialize_logging = initialize_ocr_logging
     ocr_bridge.invoke_terminal = invoke_ocr_terminal
+    utils: Final = ModuleType("litellm.utils")
+    utils.is_internal_call = ContextVar("wheel_internal_call", default=False)
+    utils.async_pre_call_deployment_hook = pre_ocr_deployment
+    utils.async_post_call_success_deployment_hook = post_ocr_deployment
+    utils.async_post_call_failure_deployment_hook = observe_ocr_failure
+    utils._restore_correlation_context_if_supported = restore_ocr_context
+    types_utils: Final = ModuleType("litellm.types.utils")
+    types_utils.CallTypes = WheelCallTypes
     packages: Final = {
         name: ModuleType(name)
         for name in (
             "litellm",
             "litellm.rust_bridge",
+            "litellm.types",
             "litellm.llms",
             "litellm.llms.base_llm",
             "litellm.llms.base_llm.ocr",
@@ -381,7 +417,8 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
     }
     with patch.dict(
         sys.modules,
-        packages | {module.__name__: module for module in (transformation, exceptions, httpx, ocr_bridge)},
+        packages
+        | {module.__name__: module for module in (transformation, exceptions, httpx, ocr_bridge, utils, types_utils)},
     ):
         exercise_sync(native, api_base)
         asyncio.run(exercise_async(native, api_base))

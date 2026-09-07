@@ -563,58 +563,6 @@ async def repeated_ownership(owners):
         assert all(ref() is None for ref in refs)
 
 
-async def retained_field_replacement(owners):
-    original = {"messages": [{"content": "original"}]}
-    replacement = {"messages": [{"content": "replacement"}]}
-    event = {"payload": original, "alias": original}
-    saved = []
-
-    def retain(value):
-        saved.append(value["payload"])
-
-    def replace(value):
-        value["payload"] = replacement
-        value["alias"]["messages"][0]["content"] = "mutated original"
-
-    for callback in (retain, replace):
-        owner = owners.prepare(callback, (event,))
-        try:
-            assert owner.invoke() is None
-        finally:
-            owner.close()
-    assert saved[0] is original is event["alias"]
-    assert event["payload"] is replacement
-    assert saved[0]["messages"][0]["content"] == "mutated original"
-    replacement["messages"][0]["content"] = "mutated replacement"
-    assert event["payload"]["messages"][0]["content"] == "mutated replacement"
-    assert original["messages"][0]["content"] == "mutated original"
-
-
-async def queued_graph_ownership(owners):
-    queue = asyncio.Queue()
-    sentinel = Value()
-    reference = weakref.ref(sentinel)
-    payload = {"sentinel": sentinel, "nested": {"status": "queued"}}
-    snapshot = json.dumps(payload["nested"])
-    enqueue = owners.prepare(queue.put_nowait, (payload,))
-    try:
-        enqueue.invoke()
-    finally:
-        enqueue.close()
-    del sentinel, payload
-    gc.collect()
-    assert owners.live == 0 and reference() is not None
-    queued = queue.get_nowait()
-    queued["nested"]["status"] = "changed before flush"
-    assert json.loads(json.dumps(queued["nested"])) == {"status": "changed before flush"}
-    assert json.loads(snapshot) == {"status": "queued"}
-    assert queued["sentinel"] is reference()
-    queue.task_done()
-    del queued
-    gc.collect()
-    assert reference() is None
-
-
 async def detached_work_after_error(owners):
     for raises in (False, True):
         entered, release = asyncio.Event(), asyncio.Event()
@@ -665,16 +613,18 @@ def run_checked(owners, scenario):
 
     async def run():
         asyncio.get_running_loop().set_exception_handler(lambda loop, context: background_failures.append(context))
-        await asyncio.wait_for(scenario, timeout=15)
+        result = await asyncio.wait_for(scenario, timeout=15)
         gc.collect()
         assert owners.live == baseline
         pending = asyncio.all_tasks() - {asyncio.current_task()}
         assert not pending, f"undrained tasks: {pending}"
+        return result
 
-    asyncio.run(run())
+    result = asyncio.run(run())
     gc.collect()
     assert not background_failures, f"unhandled background failures: {background_failures}"
     assert owners.live == baseline
+    return result
 
 
 def run_scenario(name, retained, factory):
