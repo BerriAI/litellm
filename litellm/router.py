@@ -2746,10 +2746,10 @@ class Router:
                         fallback_headers_are_settled = False
                         async for fallback_item in fallback_response:
                             if not fallback_headers_are_settled:
+                                fallback_headers_are_settled = True  # rebind-ok: one-shot latch
                                 # a fallback that failed over again only repoints itself once it yields
-                                fallback_headers_are_settled = True
-                                prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
-                                    wrapper_ref, fallback_response
+                                prepared_fallback_hidden_params = (  # rebind-ok: re-read once the fallback yields
+                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
                                 )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
@@ -3294,10 +3294,10 @@ class Router:
                         fallback_headers_are_settled = False
                         for fallback_item in fallback_response:
                             if not fallback_headers_are_settled:
+                                fallback_headers_are_settled = True  # rebind-ok: one-shot latch
                                 # a fallback that failed over again only repoints itself once it yields
-                                fallback_headers_are_settled = True
-                                prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
-                                    wrapper_ref, fallback_response
+                                prepared_fallback_hidden_params = (  # rebind-ok: re-read once the fallback yields
+                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
                                 )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
