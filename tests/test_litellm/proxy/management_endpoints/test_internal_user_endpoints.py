@@ -4285,6 +4285,10 @@ async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mo
     written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
     assert written_data.get("password") is not None
     assert written_data["password"] != strong_password
+    # An admin-set password is known to the admin, so the user must be forced
+    # to change it at next login and the breach screen re-armed.
+    assert written_data["password_reset_required"] is True
+    assert written_data["last_breach_check_at"] is None
 
 
 @pytest.mark.asyncio

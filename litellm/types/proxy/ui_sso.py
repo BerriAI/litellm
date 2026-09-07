@@ -1,6 +1,6 @@
 from typing import Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class ReturnedUITokenObject(TypedDict):
@@ -17,6 +17,7 @@ class ReturnedUITokenObject(TypedDict):
     auth_header_name: str
     disabled_non_admin_personal_key_creation: bool
     server_root_path: str  # e.g. `/litellm`
+    password_reset_required: ReadOnly[bool]
 
 
 class ParsedOpenIDResult(TypedDict, total=False):

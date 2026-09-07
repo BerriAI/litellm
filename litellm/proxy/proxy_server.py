@@ -16193,6 +16193,7 @@ async def onboarding(invite_link: str, request: Request):
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        password_reset_required=False,
     )
     jwt_token: Final = jwt.encode(
         cast(dict, returned_ui_token_object),
@@ -16302,6 +16303,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        password_reset_required=False,
     )
     assert master_key is not None
     return jwt.encode(
@@ -16392,7 +16394,12 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
 
         ### UPDATE USER OBJECT ###
         user_obj: Final[_UserTableRow | None] = await tx.litellm_usertable.update(
-            where={"user_id": invite_obj.user_id}, data={"password": hashed_pw}
+            where={"user_id": invite_obj.user_id},
+            data={
+                "password": hashed_pw,
+                "password_reset_required": False,
+                "last_breach_check_at": None,
+            },
         )
 
         if user_obj is None:
