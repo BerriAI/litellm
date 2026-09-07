@@ -70,11 +70,8 @@ const tierChips = (tier: string): HTMLElement => {
 };
 
 const expectTierModel = (tier: string, model: string): void => {
-  expect(within(tierChips(tier)).getByLabelText(model)).toBeInTheDocument();
-};
-
-const expectTierMissingModel = (tier: string, model: string): void => {
-  expect(within(tierChips(tier)).queryByLabelText(model)).not.toBeInTheDocument();
+  const chips = within(tierChips(tier)).getAllByLabelText(/.+/, { selector: '[data-slot="combobox-chip"]' });
+  expect(chips.map((chip) => chip.getAttribute("aria-label"))).toEqual([model]);
 };
 
 const selectTemplate = async (label: string): Promise<void> => {
@@ -209,7 +206,6 @@ describe("AddAutoRouterTab", () => {
     expectTierModel("Medium", "claude-sonnet-5");
     expectTierModel("Complex", "claude-opus-5");
     expectTierModel("Reasoning", "claude-opus-5");
-    expectTierMissingModel("Complex", "gpt-5.6-luna");
     expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining("Configured with"));
   });
 
@@ -230,7 +226,6 @@ describe("AddAutoRouterTab", () => {
     expectTierModel("Medium", "claude-sonnet-5");
     expectTierModel("Complex", "gpt-5.6-sol");
     expectTierModel("Reasoning", "gpt-5.6-sol");
-    expectTierMissingModel("Complex", "gpt-5.6-luna");
   });
 
   it("opens Detailed Configuration on the tiers automatic setup just filled in", async () => {
