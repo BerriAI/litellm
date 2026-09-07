@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { MODEL_MAX_BUDGET_PREMIUM_HINT } from "../key_team_helpers/ModelMaxBudgetEditor";
 import {
@@ -300,7 +300,7 @@ describe("KeyEditView", () => {
   });
 
   it("should render", async () => {
-    const { getByText } = renderWithProviders(
+    renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={() => {}}
@@ -313,12 +313,12 @@ describe("KeyEditView", () => {
     );
 
     await waitFor(() => {
-      expect(getByText("Save Changes")).toBeInTheDocument();
+      expect(screen.getByText("Save Changes")).toBeInTheDocument();
     });
   });
 
   it("should render tags", async () => {
-    const { getByText } = renderWithProviders(
+    renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={() => {}}
@@ -331,12 +331,12 @@ describe("KeyEditView", () => {
     );
 
     await waitFor(() => {
-      expect(getByText("test-tag")).toBeInTheDocument();
+      expect(screen.getByText("test-tag")).toBeInTheDocument();
     });
   });
 
   it("should not render tags in metadata textarea", async () => {
-    const { getByLabelText } = renderWithProviders(
+    renderWithProviders(
       <KeyEditView
         keyData={MOCK_KEY_DATA}
         onCancel={() => {}}
@@ -348,7 +348,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    const metadataTextarea = getByLabelText("Metadata") as HTMLTextAreaElement;
+    const metadataTextarea = screen.getByLabelText("Metadata") as HTMLTextAreaElement;
     await waitFor(() => {
       expect(metadataTextarea).toHaveValue("{}");
     });
@@ -423,6 +423,22 @@ describe("KeyEditView", () => {
       });
       expect(screen.getByText("Prompts", { selector: "label" })).toBeInTheDocument();
       expect(screen.getByText("Policies")).toBeInTheDocument();
+    });
+
+    it("lists a prompt existing in several environments once in the dropdown", async () => {
+      vi.mocked(getPromptsList).mockResolvedValueOnce({
+        prompts: [
+          { prompt_id: "envgreet", litellm_params: {}, prompt_info: { prompt_type: "db" }, environment: "development" },
+          { prompt_id: "envgreet", litellm_params: {}, prompt_info: { prompt_type: "db" }, environment: "production" },
+        ],
+      });
+
+      renderAs("Admin");
+
+      const prompts = await screen.findByLabelText(/Prompts/);
+      await userEvent.type(prompts, "envgreet");
+
+      expect(await screen.findAllByRole("option", { name: "envgreet" })).toHaveLength(1);
     });
 
     it("should omit both fields and fire neither admin-only request for an internal user", async () => {
@@ -963,10 +979,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    await userEvent.click(await screen.findByLabelText("Reset Budget"));
-
-    const weeklyOption = await screen.findByText("weekly");
-    await userEvent.click(weeklyOption);
+    await chooseSelectOption(userEvent, await screen.findByLabelText("Reset Budget"), "weekly");
 
     const submitButton = screen.getByRole("button", { name: /save changes/i });
     await userEvent.click(submitButton);
@@ -1042,8 +1055,7 @@ describe("KeyEditView", () => {
     );
 
     const resetBudget = await screen.findByLabelText("Reset Budget");
-    await userEvent.click(resetBudget);
-    await userEvent.click(await screen.findByText("Never resets"));
+    await chooseSelectOption(userEvent, resetBudget, "Never resets");
 
     await waitFor(() => {
       expect(resetBudget).toHaveTextContent("Never resets");
@@ -1074,8 +1086,7 @@ describe("KeyEditView", () => {
       />,
     );
 
-    await userEvent.click(await screen.findByLabelText("Reset Budget"));
-    await userEvent.click(await screen.findByText("Never resets"));
+    await chooseSelectOption(userEvent, await screen.findByLabelText("Reset Budget"), "Never resets");
 
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1461,6 +1472,32 @@ describe("KeyEditView", () => {
       await waitFor(() => {
         expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
       });
+    });
+
+    it("submits organization_id as null after the organization is cleared", async () => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={{ ...MOCK_KEY_DATA, organization_id: "org-1" }}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken=""
+          userID=""
+          userRole="Admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Organization")).toHaveValue("Engineering");
+      });
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: null }));
+      });
+      expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toHaveProperty("organization_id", null);
     });
   });
 
@@ -1946,8 +1983,7 @@ describe("KeyEditView", () => {
       await userEvent.clear(duration);
       await userEvent.type(duration, "45d");
 
-      await userEvent.click(screen.getByLabelText(/TPM Rate Limit Type/));
-      await userEvent.click(await screen.findByTitle("Guaranteed throughput"));
+      await chooseSelectOption(userEvent, screen.getByLabelText(/TPM Rate Limit Type/), /^Guaranteed throughput/);
 
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -2103,8 +2139,7 @@ describe("KeyEditView", () => {
       renderForPayload(onSubmitMock);
       await screen.findByRole("button", { name: /save changes/i });
 
-      await userEvent.click(screen.getByLabelText(/RPM Rate Limit Type/));
-      await userEvent.click(await screen.findByTitle("Guaranteed throughput"));
+      await chooseSelectOption(userEvent, screen.getByLabelText(/RPM Rate Limit Type/), /^Guaranteed throughput/);
 
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 

@@ -24,6 +24,30 @@ vi.mock("./agent_form_fields", () => ({
   default: () => <div data-testid="agent-form-fields" />,
 }));
 
+vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
+  default: ({
+    onChange,
+  }: {
+    onChange: (selection: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="select-mcp-toolset"
+      onClick={() => onChange({ servers: [], accessGroups: [], toolsets: ["ts-1"] })}
+    >
+      Select MCP toolset
+    </button>
+  ),
+}));
+
+vi.mock("@/components/mcp_server_management/MCPToolPermissions", () => ({
+  default: () => null,
+}));
+
+vi.mock("@/components/common_components/team_dropdown", () => ({
+  default: () => null,
+}));
+
 const a2aInfo: AgentCreateInfo = {
   agent_type: "a2a",
   agent_type_display_name: "A2A Agent",
@@ -96,5 +120,26 @@ describe("AddAgentForm logos", () => {
     expect(within(trigger).queryByAltText("A2A Agent logo")).not.toBeInTheDocument();
     expect(warnSpy).toHaveBeenCalledTimes(2);
     warnSpy.mockRestore();
+  });
+
+  it("includes selected MCP toolsets in the create payload", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+    vi.mocked(networking.createAgentCall).mockResolvedValue({
+      agent_id: "agent-1",
+      agent_name: "Test Agent",
+    } as never);
+    vi.mocked(networking.keyListCall).mockResolvedValue({ keys: [] });
+
+    renderForm();
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByTestId("select-mcp-toolset"));
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByRole("button", { name: "Next →" }));
+    await user.click(screen.getByText(/Skip for now/));
+    await user.click(screen.getByRole("button", { name: "Create Agent →" }));
+
+    await vi.waitFor(() => expect(networking.createAgentCall).toHaveBeenCalled());
+    const [, payload] = vi.mocked(networking.createAgentCall).mock.calls[0];
+    expect(payload.object_permission).toEqual({ mcp_toolsets: ["ts-1"] });
   });
 });

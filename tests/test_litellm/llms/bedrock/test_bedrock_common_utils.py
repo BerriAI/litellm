@@ -522,6 +522,47 @@ def test_merge_bedrock_aws_request_params_keeps_caller_credentials_without_stati
     assert merged["aws_region_name"] == "us-west-2"
 
 
+def test_strip_unsupported_output_config_keeps_format_drops_effort(local_model_cost_map):
+    """On a model with neither effort flag, only the ``format`` key survives."""
+    from litellm.llms.bedrock.common_utils import (
+        strip_unsupported_bedrock_invoke_output_config_keys,
+    )
+
+    schema_format = {"type": "json_schema", "schema": {"type": "object"}}
+    body = {"output_config": {"effort": "high", "format": schema_format}}
+
+    strip_unsupported_bedrock_invoke_output_config_keys(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        request_body=body,
+    )
+
+    assert body["output_config"] == {"format": schema_format}
+
+
+def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_map):
+    """The legacy ``output_format`` wins over ``output_config.format`` when a
+    request carries both, matching the pre-existing precedence."""
+    from litellm.llms.bedrock.common_utils import (
+        apply_bedrock_invoke_structured_output,
+    )
+
+    legacy = {"type": "json_schema", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
+    newer = {"type": "json_schema", "schema": {"type": "object", "properties": {"b": {"type": "string"}}}}
+    body = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_format": legacy,
+        "output_config": {"format": newer},
+    }
+
+    apply_bedrock_invoke_structured_output(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        request_body=body,
+    )
+
+    assert body["output_config"] == {"format": legacy}
+    assert "output_format" not in body
+
+
 def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
     """A trust policy requiring sts:ExternalId must be satisfied when signing batch API requests."""
     import datetime

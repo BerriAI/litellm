@@ -8,7 +8,7 @@ import json
 import os
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
-from types import UnionType
+from types import MappingProxyType, UnionType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, Union, cast, get_args, get_origin
 from urllib.parse import urlparse
 
@@ -50,6 +50,9 @@ from litellm.types.guardrails import (
     PresidioPresidioConfigModelUserInterface,
     SupportedGuardrailIntegrations,
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.hide_secrets import (
+    HideSecretsGuardrailConfigModel,
 )
 
 if TYPE_CHECKING:
@@ -514,12 +517,26 @@ async def update_guardrail(
         guardrail_name: Final = result.get("guardrail_name", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.update_in_memory_guardrail(
-                guardrail_id=guardrail_id, guardrail=cast(Guardrail, result)
-            )
+            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=cast(Guardrail, result))
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
+        except (ValueError, TypeError) as update_error:
+            # The new config is invalid (a raising guardrail __init__):
+            # reinitialize_guardrail already restored the previous live instance, but
+            # update_guardrail_in_db above already persisted the rejected config to
+            # the DB. Roll that back too, so the DB and the live guardrail never
+            # disagree about what's actually enforcing, and surface the rejection to
+            # the caller instead of a misleading 200.
+            await GUARDRAIL_REGISTRY.update_guardrail_in_db(
+                guardrail_id=guardrail_id,
+                guardrail=existing_guardrail,
+                prisma_client=prisma_client,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid guardrail configuration, update rejected: {update_error}",
+            ) from update_error
         except Exception as update_error:
             verbose_proxy_logger.warning(
                 "Immediate sync: Failed to update '%s' (ID: %s) in memory: %s",
@@ -1387,7 +1404,11 @@ async def get_guardrail_ui_settings():
         provider: [hook.value for hook in hooks]
         for provider, guardrail_class in guardrail_class_registry.items()
         if (hooks := guardrail_class.get_supported_event_hooks()) is not None
-    }
+    } | MappingProxyType(
+        # hide-secrets lives in the enterprise package, not in the registry
+        # above; it only runs on pre_call.
+        {SupportedGuardrailIntegrations.HIDE_SECRETS.value: [GuardrailEventHooks.pre_call.value]}
+    )
 
     return GuardrailUIAddGuardrailSettings(
         supported_entities=[entity.value for entity in PiiEntityType],
@@ -1939,12 +1960,18 @@ async def get_provider_specific_params():
 
     tool_permission_fields["ui_friendly_name"] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
 
+    # hide-secrets lives in the enterprise package, not in the registry loop below.
+    hide_secrets_fields: Final = _get_fields_from_model(HideSecretsGuardrailConfigModel)
+
+    hide_secrets_fields["ui_friendly_name"] = HideSecretsGuardrailConfigModel.ui_friendly_name()
+
     # Return the provider-specific parameters
     provider_params: Final = {
         SupportedGuardrailIntegrations.BEDROCK.value: bedrock_fields,
         SupportedGuardrailIntegrations.PRESIDIO.value: presidio_fields,
         SupportedGuardrailIntegrations.LAKERA_V2.value: lakera_v2_fields,
         SupportedGuardrailIntegrations.TOOL_PERMISSION.value: tool_permission_fields,
+        SupportedGuardrailIntegrations.HIDE_SECRETS.value: hide_secrets_fields,
     }
 
     ### get the config model for the guardrail - go through the registry and get the config model for the guardrail

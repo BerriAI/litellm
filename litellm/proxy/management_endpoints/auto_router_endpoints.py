@@ -789,6 +789,26 @@ def _for_teams(team_ids: Sequence[str | None]) -> str:
     return f" for team {', '.join(named)}" if named else ""
 
 
+def _validate_model_scope(llm_router: "Router | None", models: Sequence[str]) -> None:
+    """Reject a scope naming a model no request on this proxy could carry, at start rather
+    than as a job that silently samples nothing. The question is "could any caller ask for
+    this name", not "does it resolve for the job's teams": a user target's traffic can arrive
+    on any team's key, so a team-public name is a legitimate scope for it, and an auto-router
+    is one too (a forward job on router A scoped to router B samples what B serves today).
+    Nothing here is ever dispatched to."""
+    unreachable: Final = tuple(
+        model
+        for model in models
+        if judge_target(llm_router, model).via == "nothing"
+        and (llm_router is None or model not in llm_router.team_public_model_names)
+    )
+    if unreachable:
+        raise HTTPException(
+            status_code=400,
+            detail="models not served by this proxy: " + ", ".join(f"'{model}'" for model in unreachable),
+        )
+
+
 _JUDGED_ROLES: Final[frozenset[StrategyRouterDependencyRole]] = frozenset({"tier", "default"})
 
 
@@ -1080,6 +1100,7 @@ class _LegRow(BaseModel):
     target_id: str
     router_name: str
     router_names: tuple[str, ...] = ()
+    models: tuple[str, ...] = ()
     direction: ShadowEvalDirection
     baseline_model: str | None = None
     judge_model: str
@@ -1150,6 +1171,7 @@ def _group_response(
             for leg in sorted(legs, key=lambda leg: (leg.target_type, leg.target_id))
         ),
         router_names=first.arm_router_names,
+        models=first.models,
         direction=first.direction,
         baseline_model=first.baseline_model,
         judge_model=first.judge_model,
@@ -1322,7 +1344,10 @@ async def start_shadow_eval(
     A target is a virtual key, a team, or a user. Team and user targets match on the
     identity every request resolves to at auth time, so they cover JWT-authenticated
     traffic, which presents no virtual key; a user target samples that user's traffic
-    across all their teams, whether it arrives on a JWT or a key they own.
+    across all their teams, whether it arrives on a JWT or a key they own. models narrows
+    every target to requests for those model groups, so a user plus one model samples that
+    user's traffic on that model across every key they own; it is forward-only, since a
+    reverse job already samples exactly the traffic its own router served.
 
     A forward job answers whether the targets should adopt router_name: it samples the
     requests the router did not serve and duplicates them through it. A reverse job
@@ -1411,6 +1436,7 @@ async def start_shadow_eval(
     if data.baseline_model is not None:
         _validate_plain_model(llm_router, data.baseline_model, "baseline_model", team_ids)
     _validate_judge_is_not_a_candidate(llm_router, data, team_ids)
+    _validate_model_scope(llm_router, data.models)
 
     requested_targets: Final[tuple[tuple[ShadowEvalTargetType, str], ...]] = (
         *(("key", key) for key in data.api_key_ids),
@@ -1456,6 +1482,7 @@ async def start_shadow_eval(
         # a pre-router_names pod samples router_name alone, so it must be a real arm
         "router_name": data.router_names[0],
         "router_names": list(data.router_names),  # mutable-ok: Prisma payload
+        "models": list(data.models),  # mutable-ok: Prisma payload
         "direction": data.direction,
         "baseline_model": data.baseline_model,
         "judge_model": data.judge_model,
@@ -1517,6 +1544,7 @@ async def start_shadow_eval(
             for target_type, target_id in sorted(requested_targets)
         ),
         router_names=data.router_names,
+        models=data.models,
         direction=data.direction,
         baseline_model=data.baseline_model,
         judge_model=data.judge_model,

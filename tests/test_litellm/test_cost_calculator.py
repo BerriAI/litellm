@@ -1,6 +1,7 @@
 
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -146,6 +147,51 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("vertex_ai/lyria-002", 0.06),
+        ("vertex_ai/lyria-3-clip-preview", 0.04),
+        ("vertex_ai/lyria-3-pro-preview", 0.08),
+    ],
+)
+@pytest.mark.parametrize("runtime_state", ("complete", "missing", "routing_only", "custom_zero", "custom_price"))
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+def test_vertex_lyria_speech_cost(
+    model: str,
+    expected_cost: float,
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_state: str,
+    call_type: str,
+) -> None:
+    model_info: Final = litellm.model_cost[model]
+    if runtime_state == "missing":
+        monkeypatch.delitem(litellm.model_cost, model)
+    elif runtime_state == "routing_only":
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {key: value for key, value in model_info.items() if key != "output_cost_per_image"},
+        )
+    elif runtime_state in ("custom_zero", "custom_price"):
+        multiplier: Final = 0 if runtime_state == "custom_zero" else 2
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {**model_info, "output_cost_per_image": model_info["output_cost_per_image"] * multiplier},
+        )
+
+    cost: Final = completion_cost(
+        model=model,
+        prompt="A bright synth track",
+        call_type=call_type,
+    )
+
+    expected: Final = 0 if runtime_state == "custom_zero" else expected_cost * (2 if runtime_state == "custom_price" else 1)
+    assert cost == pytest.approx(expected)
+
+
 def test_baseten_model_api_pricing_entries(_local_model_cost_map):
 
     expected_pricing = {
@@ -175,6 +221,11 @@ def test_wandb_model_api_pricing_entries(_local_model_cost_map):
     expected_pricing = {
         "wandb/moonshotai/Kimi-K2.5": (6e-07, 3e-06),
         "wandb/MiniMaxAI/MiniMax-M2.5": (3e-07, 1.2e-06),
+        "wandb/Qwen/Qwen3-235B-A22B-Instruct-2507": (1e-07, 1e-07),
+        "wandb/Qwen/Qwen3-235B-A22B-Thinking-2507": (1e-07, 1e-07),
+        "wandb/deepseek-ai/DeepSeek-R1-0528": (1.35e-06, 5.4e-06),
+        "wandb/deepseek-ai/DeepSeek-V3-0324": (1.14e-06, 2.75e-06),
+        "wandb/meta-llama/Llama-4-Scout-17B-16E-Instruct": (1.7e-07, 6.6e-07),
     }
 
     for model_name, (input_cost, output_cost) in expected_pricing.items():
@@ -4473,3 +4524,17 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     )
 
     assert selected == expected
+
+
+def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_model_cost_map):
+    """gpt-6-astra batch pricing is 50% off the standard $10 input and $50 output rates per 1M tokens."""
+    from litellm.cost_calculator import batch_cost_calculator
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    prompt_cost, completion_cost = batch_cost_calculator(
+        usage=usage, model="gpt-6-astra", custom_llm_provider="openai"
+    )
+
+    assert prompt_cost == pytest.approx(1000 * 5e-6)
+    assert completion_cost == pytest.approx(500 * 2.5e-5)

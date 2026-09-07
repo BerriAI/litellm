@@ -12,12 +12,14 @@ monkeypatches anything.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 
-from e2e_http import RETRY_ATTEMPTS, TRANSIENT_STATUSES, request_with_retry
+from e2e_http import RETRY_ATTEMPTS, TRANSIENT_STATUSES, request_with_retry, streaming_outcome
 
 
 @dataclass
@@ -80,3 +82,55 @@ class TestTransientRetryPolicy:
         assert result is responses[RETRY_ATTEMPTS - 1]
         assert sleep.delays == [0.5, 1.0]
         assert [r.close_calls for r in responses] == [1, 1, 0, 0]
+
+
+@dataclass(frozen=True, slots=True)
+class FakeSseResponse:
+    lines: Sequence[bytes]
+    status_code: int = 200
+    headers: Mapping[str, str] = MappingProxyType({"content-type": "text/event-stream"})
+    text: str = ""
+
+    def iter_lines(self) -> Iterator[bytes]:
+        return iter(self.lines)
+
+
+def _ticking_clock(start: float, step: float) -> Callable[[], float]:
+    ticks: Final = iter(range(10_000))
+    return lambda: start + step * next(ticks)
+
+
+class TestStreamEventArrivals:
+    def test_each_event_is_stamped_at_the_moment_its_line_arrives(self) -> None:
+        resp: Final = FakeSseResponse(
+            lines=(
+                b"event: message_start",
+                b'data: {"type":"message_start"}',
+                b"",
+                b"event: ping",
+                b'data: {"type":"ping"}',
+                b"event: content_block_delta",
+                b'data: {"type":"content_block_delta"}',
+                b"data: [DONE]",
+            )
+        )
+
+        result: Final = streaming_outcome(resp, True, sent_at=100.0, clock=_ticking_clock(start=100.0, step=0.5))
+
+        assert result.stream_events == [
+            '{"type":"message_start"}',
+            '{"type":"ping"}',
+            '{"type":"content_block_delta"}',
+        ]
+        assert result.stream_event_arrivals == [0.5, 1.5, 2.5]
+        assert result.stream_done
+        assert result.chunks == 7
+
+    def test_a_non_streaming_outcome_carries_no_arrivals(self) -> None:
+        resp: Final = FakeSseResponse(lines=(), status_code=400, text="bad request")
+
+        result: Final = streaming_outcome(resp, True, sent_at=0.0, clock=_ticking_clock(start=0.0, step=1.0))
+
+        assert result.stream_events == []
+        assert result.stream_event_arrivals == []
+        assert result.body == "bad request"

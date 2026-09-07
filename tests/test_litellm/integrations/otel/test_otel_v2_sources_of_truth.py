@@ -541,6 +541,74 @@ def test_llm_call_adapter_extracts_cache_tokens_from_usage_object():
     assert data.usage.cache_read_input_tokens == 3
 
 
+def test_llm_call_adapter_normalizes_nested_cache_tokens():
+    cases: Final = (
+        ({"prompt_tokens_details": {"cached_tokens": 3}}, 3, None),
+        ({"prompt_cache_hit_tokens": 11}, 11, None),
+        ({"prompt_tokens_details": {"cache_write_tokens": 7}}, None, 7),
+        ({"prompt_tokens_details": {"cache_creation_tokens": 13}}, None, 13),
+        ({"prompt_tokens_details": {"cache_creation_input_tokens": 17}}, None, 17),
+    )
+    for usage_object, expected_read, expected_creation in cases:
+        case_payload = _sample_payload(metadata={"usage_object": usage_object})
+        data = LLMCallSpanData.from_standard_logging_payload(case_payload)
+        assert data.usage.cache_read_input_tokens == expected_read
+        assert data.usage.cache_creation_input_tokens == expected_creation
+
+
+def test_llm_call_adapter_prefers_nested_count_over_zero_top_level():
+    payload = _sample_payload(
+        metadata={
+            "usage_object": {
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "prompt_tokens_details": {"cached_tokens": 5, "cache_write_tokens": 7},
+            }
+        }
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_read_input_tokens == 5
+    assert data.usage.cache_creation_input_tokens == 7
+
+
+def test_llm_call_adapter_ignores_invalid_cache_values_before_valid_fallbacks():
+    payload = _sample_payload(
+        metadata={
+            "usage_object": {
+                "cache_read_input_tokens": -1,
+                "cache_creation_input_tokens": "5.0",
+                "prompt_tokens_details": {"cached_tokens": 5, "cache_write_tokens": 7},
+            }
+        }
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_read_input_tokens == 5
+    assert data.usage.cache_creation_input_tokens == 7
+
+
+def test_llm_call_adapter_ignores_non_finite_cache_values():
+    payload = _sample_payload(
+        metadata={
+            "usage_object": {
+                "prompt_tokens_details": {"cached_tokens": float("nan")},
+            }
+        }
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_read_input_tokens is None
+
+
+def test_llm_call_adapter_preserves_explicit_zero_and_omits_missing_cache_tokens():
+    for usage_object, expected_read, expected_creation in (
+        ({"prompt_tokens_details": {"cached_tokens": 0}}, 0, None),
+        ({}, None, None),
+    ):
+        case_payload = _sample_payload(metadata={"usage_object": usage_object})
+        data = LLMCallSpanData.from_standard_logging_payload(case_payload)
+        assert data.usage.cache_read_input_tokens == expected_read
+        assert data.usage.cache_creation_input_tokens == expected_creation
+
+
 def test_llm_call_adapter_cache_tokens_none_without_usage_object():
     data = LLMCallSpanData.from_standard_logging_payload(_sample_payload())
     assert data.usage.cache_creation_input_tokens is None
@@ -652,6 +720,39 @@ def test_request_identity_falls_back_to_legacy_team_keys():
     ident = RequestIdentity.from_payload(payload)
     assert ident.team_id == "legacy-team"
     assert ident.team_alias == "legacy"
+
+
+def test_llm_span_carries_proxy_request_route():
+    """The LLM span records the proxy route the request arrived on, so it can be
+    filtered by endpoint (``/v1/responses`` vs ``/v1/chat/completions``) without
+    joining back to the root SERVER span's ``http.route``. The value is that
+    span's ``http.route`` verbatim, so a parameterized route reports the template
+    the SERVER span reports and not the path the caller happened to send."""
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(metadata={"user_api_key_request_route": "/v1/responses/resp_abc123"}),
+        request_route="/v1/responses/{response_id}",
+    )
+    attrs: Final = GenAIMapper().map(data)
+
+    assert attrs[LiteLLM.REQUEST_ROUTE] == "/v1/responses/{response_id}"
+
+
+def test_llm_span_falls_back_to_the_logged_route_without_a_server_span():
+    """The route the proxy recorded at auth is the backstop for a deployment whose
+    FastAPI instrumentation never mounted: there is no server span to disagree with
+    there, and an endpoint name is worth more than an absent attribute."""
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(metadata={"user_api_key_request_route": "/v1/responses"})
+    )
+
+    assert GenAIMapper().map(data)[LiteLLM.REQUEST_ROUTE] == "/v1/responses"
+
+
+def test_llm_span_omits_request_route_off_the_proxy():
+    """An SDK call has no inbound route, so the key is absent rather than empty."""
+    attrs: Final = GenAIMapper().map(LLMCallSpanData.from_standard_logging_payload(_sample_payload(metadata={})))
+
+    assert LiteLLM.REQUEST_ROUTE not in attrs
 
 
 def test_guardrail_span_data_block_carries_verdict_and_error():

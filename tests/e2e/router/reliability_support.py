@@ -19,12 +19,26 @@ from models import (
     ChatMessage,
     ChatResponse,
     LiteLLMParamsBody,
+    ModelInfoBody,
+    ModelNewBody,
     ReliabilityChatBody,
     RouterSettingsOverride,
 )
 
 REAL_MODEL = "openai/gpt-5.5"
 REAL_KEY = "os.environ/OPENAI_API_KEY"
+
+# The smallest-context chat model OpenAI still serves (16385 tokens). A prompt
+# past that limit comes back as a real `context_length_exceeded` 400, which is
+# what litellm maps to ContextWindowExceededError.
+SMALL_CONTEXT_MODEL = "openai/gpt-3.5-turbo"
+SMALL_CONTEXT_LIMIT_TOKENS = 16385
+
+
+def oversized_prompt(marker: str) -> str:
+    """A prompt comfortably past SMALL_CONTEXT_MODEL's context limit, so the
+    provider refuses it on length rather than answering a truncated version."""
+    return f"{marker} " + ("token " * (SMALL_CONTEXT_LIMIT_TOKENS + 4000))
 
 
 def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
@@ -38,6 +52,38 @@ def create_bad_base_deployment(proxy: ProxyClient, name: str) -> str:
 def create_timeout_deployment(proxy: ProxyClient, name: str) -> str:
     """Register a deployment with a 1ms deadline the real backend always exceeds."""
     return proxy.create_model(name, LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001))
+
+
+def create_small_context_deployment(proxy: ProxyClient, name: str) -> str:
+    """Register a deployment on the smallest-context model OpenAI still serves, so an
+    oversized prompt earns a real context-window refusal from the provider."""
+    return proxy.create_model(name, LiteLLMParamsBody(model=SMALL_CONTEXT_MODEL, api_key=REAL_KEY))
+
+
+def create_always_timing_out_deployment(proxy: ProxyClient, name: str) -> str:
+    """The always-picked half of a retry pair: a 1ms deadline the backend always
+    exceeds, all of the model group's shuffle weight, and a cooldown policy that
+    benches it on its first Timeout so the retry cannot land on it again."""
+    return proxy.register_model(
+        ModelNewBody(
+            model_name=name,
+            litellm_params=LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, timeout=0.001, weight=1),
+            model_info=ModelInfoBody(allowed_fails_policy={"TimeoutErrorAllowedFails": 0}),
+        )
+    )
+
+
+def create_zero_weight_backup_deployment(proxy: ProxyClient, name: str) -> str:
+    """The other half of a retry pair: healthy, but weight 0, so the weighted shuffle
+    never opens on it. It is reachable only once its sibling is benched and the
+    weighted pick falls through to a uniform one over what is left."""
+    return proxy.register_model(
+        ModelNewBody(
+            model_name=name,
+            litellm_params=LiteLLMParamsBody(model=REAL_MODEL, api_key=REAL_KEY, weight=0),
+            model_info=ModelInfoBody(),
+        )
+    )
 
 
 def chat_override(

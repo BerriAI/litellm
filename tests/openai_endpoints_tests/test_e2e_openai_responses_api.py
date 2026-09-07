@@ -1,6 +1,13 @@
+import time
+from collections.abc import Iterator
+from typing import Final
+
 import httpx
-from openai import OpenAI, BadRequestError, APIStatusError
 import pytest
+from openai import APIStatusError, BadRequestError, NotFoundError, OpenAI, Stream
+from openai.types.responses import ResponseStreamEvent
+
+BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS: Final = 90
 
 
 def generate_key():
@@ -105,10 +112,9 @@ def test_streaming_response():
     assert len(collected_chunks) > 0
 
 
-def test_bad_request_error():
+def test_model_not_found_error():
     client = get_test_client()
-    with pytest.raises(BadRequestError):
-        # Trigger error with invalid model name
+    with pytest.raises(NotFoundError):
         client.responses.create(model="non-existent-model", input="This should fail")
 
 
@@ -154,43 +160,48 @@ def test_cancel_response():
             raise e
 
 
+def admitted_response_id(chunk: ResponseStreamEvent) -> str | None:
+    response: Final = getattr(chunk, "response", None)
+    return None if response is None else response.id
+
+
+def events_until_admission(stream: Stream[ResponseStreamEvent], started: float) -> Iterator[ResponseStreamEvent]:
+    for chunk in stream:
+        print("stream chunk=", chunk)
+        yield chunk
+        if admitted_response_id(chunk) is not None:
+            return
+        if time.monotonic() - started > BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS:
+            return
+
+
 def test_cancel_streaming_response():
-    try:
-        client = get_test_client()
-        from litellm.types.llms.openai import ResponsesAPIResponse
+    client: Final = get_test_client()
+    started: Final = time.monotonic()
+    stream: Final = client.responses.create(
+        model="gpt-5.5",
+        input="count from 1 to 500, one number per line",
+        stream=True,
+        background=True,
+        timeout=BACKGROUND_STREAM_ADMISSION_DEADLINE_SECONDS,
+    )
 
-        stream = client.responses.create(
-            model="gpt-5.5",
-            input="just respond with the word 'ping'",
-            stream=True,
-            background=True,
+    with stream:
+        events: Final = tuple(events_until_admission(stream, started))
+
+    elapsed: Final = time.monotonic() - started
+    keepalive_events: Final = sum(1 for chunk in events if chunk.type == "keepalive")
+    response_id: Final = next((rid for rid in map(admitted_response_id, events) if rid is not None), None)
+    if response_id is None and keepalive_events:
+        pytest.skip(
+            f"OpenAI held the background stream in keepalive for {elapsed:.0f}s "
+            f"({keepalive_events} keepalive events) without creating the response"
         )
+    assert response_id is not None, f"no response event within {elapsed:.0f}s of streaming a background response"
 
-        collected_chunks = []
-        response_id = None
-        for chunk in stream:
-            print("stream chunk=", chunk)
-            collected_chunks.append(chunk)
-            # Extract response ID from the first chunk that has it
-            if (
-                response_id is None
-                and hasattr(chunk, "response")
-                and hasattr(chunk.response, "id")
-            ):
-                response_id = chunk.response.id
-
-        assert len(collected_chunks) > 0
-
-        # cancel the response if we got a response ID
-        if response_id:
-            cancel_response = client.responses.cancel(response_id)
-            print("CANCEL streaming response=", cancel_response)
-            assert hasattr(cancel_response, "id")
-    except Exception as e:
-        if "Cannot cancel a completed response" in str(e):
-            pass
-        else:
-            raise e
+    cancel_response: Final = client.responses.cancel(response_id)
+    print("CANCEL streaming response=", cancel_response)
+    assert cancel_response.status == "cancelled"
 
 
 def test_cancel_invalid_response_id():

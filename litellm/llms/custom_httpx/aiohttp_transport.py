@@ -3,6 +3,7 @@ import concurrent.futures
 import contextlib
 import os
 import ssl
+import sys
 import typing
 import urllib.request
 from collections.abc import Callable, Generator
@@ -75,10 +76,22 @@ except ImportError:
     pass
 
 
+def _current_task_is_cancelling() -> bool:
+    task: Final = asyncio.current_task()
+    if task is None or sys.version_info < (3, 11):
+        return True
+    return task.cancelling() > 0
+
+
 @contextlib.contextmanager
 def map_aiohttp_exceptions() -> Generator[None, None, None]:
     try:
         yield
+    except asyncio.CancelledError as exc:
+        # a closing connector cancels its shielded DNS task; that surfaces here without the request task being cancelled
+        if _current_task_is_cancelling():
+            raise
+        raise httpx.ConnectError("aiohttp transport cancelled the request internally") from exc
     except Exception as exc:
         mapped_exc: type[Exception] | None = None
 

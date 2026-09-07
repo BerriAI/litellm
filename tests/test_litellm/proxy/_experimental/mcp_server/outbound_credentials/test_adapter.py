@@ -12,6 +12,8 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from litellm.experimental_mcp_client.client import MCPClient
+from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
     oauth_protected_resource_path,
     raise_public,
@@ -92,6 +94,49 @@ def test_basic_scheme_base64_encodes_the_token():
     assert spec.config.value_prefix == "Basic"
     expected = base64.b64encode(b"user:pass").decode()
     assert spec.config.key_source.value.get_secret_value() == expected
+
+
+@pytest.mark.parametrize(
+    "auth_type, authentication_token, expected_value, expected_header",
+    [
+        (MCPAuth.bearer_token, "Bearer abc", "abc", ("Authorization", "Bearer abc")),
+        (MCPAuth.token, "token abc", "abc", ("Authorization", "token abc")),
+        (MCPAuth.basic, "user:pass", "dXNlcjpwYXNz", ("Authorization", "Basic dXNlcjpwYXNz")),
+        (MCPAuth.basic, "Basic dXNlcjpwYXNz", "dXNlcjpwYXNz", ("Authorization", "Basic dXNlcjpwYXNz")),
+        (MCPAuth.basic, "Basic user:pass", "dXNlcjpwYXNz", ("Authorization", "Basic dXNlcjpwYXNz")),
+    ],
+)
+def test_shared_key_normalizes_schemed_authentication_token(
+    auth_type, authentication_token, expected_value, expected_header
+):
+    spec = to_server_spec(_server(auth_type=auth_type, authentication_token=authentication_token))
+    assert spec is not None and isinstance(spec.config, ApiKeyConfig)
+    assert spec.config.key_source.value.get_secret_value() == expected_value
+    assert spec.config.header(expected_value) == expected_header
+
+
+@pytest.mark.parametrize(
+    "auth_type, authentication_token",
+    [
+        (MCPAuth.bearer_token, "Bearer abc"),
+        (MCPAuth.bearer_token, "abc"),
+        (MCPAuth.token, "token abc"),
+        (MCPAuth.token, "abc"),
+        (MCPAuth.basic, "user:pass"),
+        (MCPAuth.basic, "Basic dXNlcjpwYXNz"),
+        (MCPAuth.basic, "Basic user:pass"),
+    ],
+)
+def test_shared_key_authorization_matches_v1(auth_type, authentication_token):
+    spec = to_server_spec(_server(auth_type=auth_type, authentication_token=authentication_token))
+    assert spec is not None and isinstance(spec.config, ApiKeyConfig)
+
+    client = MCPClient(server_url="https://x", auth_type=auth_type)
+    client.update_auth_value(authentication_token)
+
+    assert spec.config.header(spec.config.key_source.value.get_secret_value())[1] == client._get_auth_headers()[
+        "Authorization"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -396,6 +441,17 @@ def test_raise_public_maps_each_error_to_its_status(error, status):
     with pytest.raises(HTTPException) as exc_info:
         raise_public(error)
     assert exc_info.value.status_code == status
+
+
+def test_raise_public_marks_only_url_credentials_error_as_safe_for_preview():
+    with pytest.raises(HTTPException) as generic_exc_info:
+        raise_public(CredError.of_misconfigured("private operator detail"))
+    assert not isinstance(generic_exc_info.value, MCPServerURLCredentialsError)
+
+    error = CredError.of_url_credentials_not_allowed()
+    with pytest.raises(MCPServerURLCredentialsError) as url_exc_info:
+        raise_public(error)
+    assert url_exc_info.value.detail == error.summary
 
 
 def test_raise_public_emits_unauthorized_challenge():

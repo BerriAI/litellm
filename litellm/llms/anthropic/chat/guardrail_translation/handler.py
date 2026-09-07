@@ -26,7 +26,10 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
 )
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+)
 from litellm.llms.base_llm.guardrail_translation.utils import (
     anthropic_tool_name,
     anthropic_tool_names,
@@ -36,6 +39,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     scoped_structured_message_indices,
+    stream_item_fingerprint,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
@@ -1175,6 +1179,25 @@ class AnthropicMessagesHandler(BaseTranslation):
         if response_model:
             inputs["model"] = response_model
         return inputs
+
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
+        return StreamingScanKey(
+            texts=(self.get_streaming_string_so_far(responses_so_far),),
+            tool_calls=self._streamed_tool_use_fingerprints(responses_so_far) if stream_ended else (),
+            stream_ended=stream_ended,
+        )
+
+    @classmethod
+    def _streamed_tool_use_fingerprints(cls, responses_so_far: Sequence[object]) -> tuple[str, ...]:
+        return tuple(
+            stream_item_fingerprint(block)
+            for item in responses_so_far
+            for event in cls._iter_sse_events(item)
+            if event.get("type") == "content_block_start"
+            and isinstance(block := event.get("content_block"), Mapping)
+            and block.get("type") == "tool_use"
+        )
 
     def get_streaming_string_so_far(self, responses_so_far: Sequence[object]) -> str:
         """

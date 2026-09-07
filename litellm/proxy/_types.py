@@ -670,6 +670,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_bulk_update",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
             # model
@@ -737,6 +738,9 @@ class LiteLLMRoutes(enum.Enum):
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
             "/public/v1/model_hub",
+            "/public/v1/model_hub/providers",
+            "/public/v1/model_hub/modes",
+            "/public/v1/model_hub/features",
             "/public/model_hub/info",
             "/public/agent_hub",
             "/public/mcp_hub",
@@ -829,6 +833,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
+        "/team/spend/by_user",
         "/team/{team_id}/members/me",
         "/model/new",
         "/model/update",
@@ -1216,6 +1221,13 @@ class GenerateKeyRequest(KeyRequestBase):
     organization_id: str | None = None
     project_id: str | None = None
 
+    @field_validator("team_id", "organization_id", "project_id", mode="before")
+    @classmethod
+    def treat_cleared_id_as_unset(cls, v: object) -> object:
+        if v == "":
+            return None
+        return v
+
 
 class GenerateKeyResponse(KeyRequestBase):
     key: str
@@ -1270,6 +1282,13 @@ class UpdateKeyRequest(KeyRequestBase):
     auto_rotate: bool | None = None
     rotation_interval: str | None = None
     organization_id: str | None = None
+
+    @field_validator("organization_id", mode="before")
+    @classmethod
+    def treat_cleared_organization_id_as_unset(cls, v: object) -> object:
+        if v == "":
+            return None
+        return v
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "UpdateKeyRequest":
@@ -1360,6 +1379,35 @@ def _dcr_bridge_auth_type_error(auth_type: object) -> ValueError:
     )
 
 
+def _per_server_oauth_discovery_error() -> ValueError:
+    return ValueError(
+        "per_server_oauth_discovery is only supported for auth_type oauth2 with oauth2_flow "
+        "authorization_code and without delegate_auth_to_upstream."
+    )
+
+
+def is_per_server_oauth_discovery_eligible(
+    auth_type: object, oauth2_flow: object, delegate_auth_to_upstream: object
+) -> bool:
+    return auth_type == MCPAuth.oauth2 and oauth2_flow == "authorization_code" and not delegate_auth_to_upstream
+
+
+def _reject_unsupported_per_server_oauth_discovery(values: object, require_auth_type: bool) -> None:
+    """Partial updates may omit eligibility fields; those are checked against the stored row by the
+    update endpoint. Every field the payload does carry must be eligible on its own."""
+    if not isinstance(values, dict) or not values.get("per_server_oauth_discovery"):
+        return
+    auth_type_ok: Final = values.get("auth_type") == MCPAuth.oauth2 or (
+        not require_auth_type and "auth_type" not in values
+    )
+    oauth2_flow_ok: Final = values.get("oauth2_flow") == "authorization_code" or (
+        not require_auth_type and "oauth2_flow" not in values
+    )
+    if auth_type_ok and oauth2_flow_ok and not values.get("delegate_auth_to_upstream"):
+        return
+    raise _per_server_oauth_discovery_error()
+
+
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str | None = None
     server_name: str | None = None
@@ -1401,6 +1449,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None
@@ -1465,6 +1514,12 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
             return values
         raise _dcr_bridge_auth_type_error(auth_type)
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_per_server_oauth_discovery_auth_type(cls, values: object) -> object:
+        _reject_unsupported_per_server_oauth_discovery(values, require_auth_type=True)
+        return values
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1507,6 +1562,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None
@@ -1550,6 +1606,12 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
         if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
             return values
         raise _dcr_bridge_auth_type_error(auth_type)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_per_server_oauth_discovery_auth_type(cls, values: object) -> object:
+        _reject_unsupported_per_server_oauth_discovery(values, require_auth_type=False)
+        return values
 
 
 from litellm.models.mcp_server import (  # noqa: E402
@@ -1915,6 +1977,13 @@ class NewTeamRequest(TeamBase):
     enforced_file_expires_after: dict | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @field_validator("team_id", mode="before")
+    @classmethod
+    def treat_blank_team_id_as_unset(cls, v: object) -> object:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
 
 class GlobalEndUsersSpend(LiteLLMPydanticObjectBase):
@@ -2383,6 +2452,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
 
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
+    max_in_flight_requests_per_worker: int | None = Field(
+        None, gt=0, description="maximum concurrent requests handled by each worker"
+    )
+    max_queued_requests_per_worker: int | None = Field(
+        None, ge=0, description="maximum requests waiting for a worker slot"
+    )
+    admission_queue_timeout_seconds: float = Field(
+        1.0, gt=0, description="maximum time a request waits for a worker slot"
+    )
     plugins: list[PluginConfig] | None = Field(
         None, description="external services registered as embeddable UI plugins"
     )
@@ -2436,9 +2514,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     database_socket_timeout: float | None = Field(
         None,
         description=(
-            "Prisma `socket_timeout` URL param (seconds). When set, an idle/slow "
-            "connection that has not produced data within this window is closed. "
-            "This is the main knob for capping idle DB connections from LiteLLM."
+            "Prisma `socket_timeout` URL param (seconds). When set, an in-flight "
+            "operation that has not produced data within this window is aborted. "
+            "For capping how long idle pooled connections are kept, see "
+            "`database_max_idle_connection_lifetime`."
+        ),
+    )
+    database_max_idle_connection_lifetime: float | None = Field(
+        60,
+        description=(
+            "Prisma `max_idle_connection_lifetime` URL param (seconds). A pooled "
+            "connection idle longer than this is closed and replaced instead of "
+            "being handed to the next request. Defaults to 60 so connections are "
+            "recycled before common infra idle timeouts (AWS NLB / RDS Proxy "
+            "~350s, many LBs 60-350s) silently drop them and requests fail with "
+            "`Error { kind: Closed }`. A value pinned on the DATABASE_URL or set "
+            "via `database_extra_connection_params` takes precedence."
         ),
     )
     database_extra_connection_params: dict[str, Any] | None = Field(
@@ -2487,6 +2578,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     max_batch_file_size_mb: int | None = Field(
         None,
         description="max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider",
+    )
+    max_file_size_mb: int | None = Field(
+        None,
+        description="max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider",
+    )
+    blocked_file_extensions: tuple[str, ...] | None = Field(
+        None,
+        description="file extensions (e.g. ['.exe', '.sh']) rejected on /v1/files uploads, for any purpose, matched case-insensitively against the uploaded filename",
     )
     max_response_size_mb: int | None = Field(
         None,
@@ -2566,6 +2665,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.",
     )
+    missing_session_id: Literal["generate", "reject", "omit"] | None = Field(
+        None,
+        description="What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.",
+    )
     enable_public_model_hub: bool = Field(
         default=False,
         description="Public model hub for users to see what models they have access to, supported openai params, etc.",
@@ -2577,6 +2680,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
+    )
+    enable_openai_websocket_passthrough: bool | None = Field(
+        default=None,
+        description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
     )
     user_header_name: str | None = Field(
         None,
@@ -2675,6 +2782,40 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_required_fields: list[str] | None = Field(
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
+    )
+    password_policy_min_length: int | None = Field(
+        None,
+        description=(
+            "Minimum length required for a locally-managed user's password. Default is 12; "
+            "a value below 8 is floored to 8 rather than weakening the requirement further."
+        ),
+    )
+    password_policy_require_uppercase: bool | None = Field(
+        None,
+        description="If True (default), a locally-managed user's password must contain an uppercase letter.",
+    )
+    password_policy_require_lowercase: bool | None = Field(
+        None,
+        description="If True (default), a locally-managed user's password must contain a lowercase letter.",
+    )
+    password_policy_require_numbers: bool | None = Field(
+        None,
+        description="If True (default), a locally-managed user's password must contain a number.",
+    )
+    password_policy_require_special_characters: bool | None = Field(
+        None,
+        description="If True (default), a locally-managed user's password must contain a special (non-alphanumeric) character.",
+    )
+    disable_password_login_when_sso_enabled: bool | None = Field(
+        None,
+        description=(
+            "If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, "
+            "GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password "
+            "login on /login, /v2/login, and /v3/login so SSO is the only way to reach the "
+            "Admin UI. An admin locked out of the UI can still administer the proxy over the "
+            "API with the master key; unset this setting and restart the proxy to restore "
+            "UI username/password login. Default is False."
+        ),
     )
     disable_budget_reservation: bool | None = Field(
         None,
@@ -4159,6 +4300,8 @@ class TeamAccessGroupModelGrant(LiteLLMPydanticObjectBase):
     access_group_id: str
     access_group_name: str
     models: tuple[str, ...]
+    mcp_server_ids: tuple[str, ...] = ()
+    agent_ids: tuple[str, ...] = ()
 
 
 class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):

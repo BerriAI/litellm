@@ -64,6 +64,7 @@ class RequestIdentity:
     # completes (routing has picked a deployment), so it's absent from the
     # auth-time seed and filled only from the payload.
     provider_model: str | None = None
+    request_route: str | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -87,6 +88,7 @@ class RequestIdentity:
             key_hash=as_str(raw_meta.get("user_api_key_hash")),
             end_user=as_str(payload.get("end_user")) or as_str(raw_meta.get("user_api_key_end_user_id")),
             provider_model=resolve_provider_model(payload),
+            request_route=as_str(raw_meta.get("user_api_key_request_route")),
             metadata=metadata,
         )
 

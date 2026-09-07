@@ -136,6 +136,7 @@ class SupportedGuardrailIntegrations(Enum):
     HEADROOM = "headroom"
     COMPRESR = "compresr"
     STRAIKER = "straiker"
+    ALICE = "alice"
 
 
 class Role(Enum):
@@ -828,6 +829,15 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "agent feeds back into the model, and skip system, user, and assistant content. "
             "Intended for agent harnesses whose own prompt scaffolding is trusted but often "
             "trips prompt-attack detectors."
+        ),
+    )
+
+    inspect_embeddings: bool | None = Field(
+        default=None,
+        description=(
+            "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as "
+            "user messages. Off by default because embedding input is documents being indexed, not a "
+            "conversation."
         ),
     )
 

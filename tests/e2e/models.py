@@ -35,6 +35,8 @@ class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
+    wandb_api_key: str | None = None
+    weave_project_id: str | None = None
 
 
 class KeyLoggingCallback(BaseModel):
@@ -83,6 +85,16 @@ class KeyGenerateResponse(BaseModel):
 
 class KeyRegenerateBody(BaseModel):
     key: str
+    grace_period: str | None = None
+
+
+class KeyResetSpendBody(BaseModel):
+    reset_to: float
+
+
+class KeyResetSpendResponse(BaseModel):
+    spend: float
+    previous_spend: float
 
 
 class KeyDeleteBody(BaseModel):
@@ -114,6 +126,7 @@ class KeyInfo(BaseModel):
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
     budget_limits: list[BudgetWindowState] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyInfoResponse(BaseModel):
@@ -170,6 +183,7 @@ class ChatMessage(BaseModel):
 
 class CacheControl(BaseModel):
     type: str = "ephemeral"
+    ttl: str | None = None
 
 
 class TextBlock(BaseModel):
@@ -805,6 +819,7 @@ class LiteLLMParamsBody(BaseModel):
     mock_response: str | None = None
     timeout: float | None = None
     tpm: int | None = None
+    weight: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -819,6 +834,7 @@ class ModelInfoBody(BaseModel):
     mode: ModelMode | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
+    allowed_fails_policy: dict[str, int] | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -846,6 +862,15 @@ class ModelUpdateBody(BaseModel):
 
 class ModelListEntry(BaseModel):
     id: str
+
+
+class ModelsListParams(BaseModel):
+    """Query for GET /v1/models. A wildcard route such as ``openai/gpt-5.4*`` is
+    listed only under ``return_wildcard_routes``; without it the route is dropped
+    and only its expansions remain, so a readiness poll for the pattern itself
+    never resolves."""
+
+    return_wildcard_routes: bool = True
 
 
 class ModelsListResponse(BaseModel):
