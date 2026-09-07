@@ -1390,6 +1390,28 @@ def warn_once_if_custom_auth_skips_common_checks(
     _custom_auth_common_checks_warning_emitted = True
 
 
+_budget_reservation_disabled_info_emitted = False  # rebind-ok: process-wide one-shot sentinel
+
+
+def log_once_if_budget_reservation_disabled(
+    *,
+    disabled: bool,
+    logger: Logger = verbose_proxy_logger,
+) -> None:
+    global _budget_reservation_disabled_info_emitted
+    if _budget_reservation_disabled_info_emitted or not disabled:
+        return
+    logger.info(
+        "disable_budget_reservation is enabled: skipping optimistic budget "
+        "reservation. Budget enforcement is read-time only. Concurrent "
+        "requests can each pass the spend check before their cost is recorded, "
+        "so a configured budget may be briefly exceeded under high concurrency. "
+        "Set disable_budget_reservation to False or remove it to restore "
+        "hard per-request budget enforcement."
+    )
+    _budget_reservation_disabled_info_emitted = True  # rebind-ok: process-wide one-shot sentinel
+
+
 def is_pass_through_provider_route(route: str) -> bool:
     PROVIDER_SPECIFIC_PASS_THROUGH_ROUTES: Final = [
         "vertex-ai",
