@@ -11,10 +11,13 @@ import sys
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import functools
+import configparser
+import contextlib
+import re
 import tempfile
+from collections.abc import Generator, Sequence
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, ClassVar, Literal, Optional
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -433,10 +436,72 @@ _default_detect_secrets_config = {
             "name": "ZendeskSecretKeyDetector",
             "path": _custom_plugins_path + "/zendesk_secret_key.py",
         },
+        {
+            "name": "CredentialKeywordDetector",
+            "path": _custom_plugins_path + "/credential_keyword.py",
+        },
         {"name": "Base64HighEntropyString", "limit": 4.5},
         {"name": "HexHighEntropyString", "limit": 3.0},
     ],
 }
+
+
+_CONFIG_SECTION: Final = "litellm-prompt"
+
+# A .py suffix keeps detect_secrets' own config transformers off this file (they only fire on
+# FileType.OTHER and FileType.YAML) while leaving every plugin's regex set unchanged.
+_SCAN_SUFFIX: Final = ".py"
+
+
+@contextlib.contextmanager
+def _temp_file(text: str) -> Generator[str, None, None]:
+    temp_file: Final = tempfile.NamedTemporaryFile(suffix=_SCAN_SUFFIX, delete=False)
+    try:
+        temp_file.write(text.encode("utf-8"))
+        temp_file.close()
+        yield temp_file.name
+    finally:
+        temp_file.close()
+        os.remove(temp_file.name)
+
+
+def _scan_lines(lines: Sequence[str]) -> frozenset[tuple[str, str]]:
+    from detect_secrets import SecretsCollection
+
+    secrets: Final = SecretsCollection()
+    with _temp_file("\n".join(lines)) as path:
+        secrets.scan_file(path)
+
+    return frozenset(
+        (found_secret.secret_value, found_secret.type)
+        for file in secrets.files
+        for found_secret in secrets[file]
+        if found_secret.secret_value is not None
+    )
+
+
+def _quoted_assignments(text: str) -> tuple[str, ...]:
+    """Rewrites the bare ``key = value`` assignments in ``text`` as quoted ones.
+
+    detect_secrets does this itself, but only when its first pass over the raw text found
+    nothing, so one vendor-prefixed key in a message hides every unquoted assignment beside
+    it. Interpolation stays off so that no emitted value is one the message never contained.
+    """
+    parser: Final = configparser.ConfigParser(interpolation=None)
+    # Keys keep their case, exactly as detect_secrets' own parser does.
+    parser.optionxform = str  # pyright: ignore[reportAttributeAccessIssue]  # configparser types optionxform as a method
+    try:
+        parser.read_string(f"[{_CONFIG_SECTION}]\n{text}")
+    except (configparser.Error, UnicodeDecodeError):
+        return ()
+
+    return tuple(
+        f'{key} = "{value}"'
+        for section in parser
+        for key, values in parser.items(section)
+        for value in values.splitlines()
+        if value and '"' not in value
+    )
 
 
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
@@ -449,35 +514,21 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         super().__init__(**kwargs)
 
     def scan_message_for_secrets(self, message_content: str):
-        from detect_secrets import SecretsCollection
         from detect_secrets.settings import transient_settings
-
-        temp_file = tempfile.NamedTemporaryFile(delete=False)
-        temp_file.write(message_content.encode("utf-8"))
-        temp_file.close()
-
-        secrets = SecretsCollection()
 
         detect_secrets_config = (
             self.user_defined_detect_secrets_config or _default_detect_secrets_config
         )
         with transient_settings(detect_secrets_config):
-            secrets.scan_file(temp_file.name)
-
-        os.remove(temp_file.name)
+            found: Final = _scan_lines(
+                (*message_content.splitlines(), *_quoted_assignments(message_content))
+            )
 
         return [
-            {"type": found_secret.type, "value": found_secret.secret_value}
-            for file in sorted(secrets.files)
-            for found_secret in sorted(
-                secrets[file],
-                key=lambda secret: (
-                    -len(secret.secret_value or ""),
-                    secret.type,
-                    secret.secret_value or "",
-                ),
+            {"type": secret_type, "value": value}
+            for value, secret_type in sorted(
+                found, key=lambda pair: (-len(pair[0]), pair[1], pair[0])
             )
-            if found_secret.secret_value is not None
         ]
 
     def redact_text(self, text: str, source: str = "message") -> str:
@@ -490,15 +541,18 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         if counts is not None:
             for secret in detected_secrets:
                 counts[secret["type"]] = counts.get(secret["type"], 0) + 1
-        secret_types = [secret["type"] for secret in detected_secrets]
+        secret_types: Final = sorted(
+            dict.fromkeys(secret["type"] for secret in detected_secrets)
+        )
         verbose_proxy_logger.warning(
-            f"Detected and redacted secrets in {source}: {secret_types}"
+            "Detected and redacted secrets in %s: %s", source, secret_types
         )
-        return functools.reduce(
-            lambda redacted, secret: redacted.replace(secret["value"], "[REDACTED]"),
-            detected_secrets,
-            text,
+        # detected_secrets is ordered longest value first, so the alternation redacts a
+        # secret that contains another one as a whole rather than in pieces.
+        pattern: Final = re.compile(
+            "|".join(re.escape(secret["value"]) for secret in detected_secrets)
         )
+        return pattern.sub("[REDACTED]", text)
 
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:

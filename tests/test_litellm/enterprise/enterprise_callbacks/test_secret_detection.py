@@ -10,12 +10,15 @@ Covers the three defects from the ticket:
   handling live only on the native path).
 """
 
+import tempfile
 import time
 
 import pytest
 
 from litellm_enterprise.enterprise_callbacks.secret_detection import (
     _ENTERPRISE_SecretDetection,
+    _default_detect_secrets_config,
+    _masked_entity_count,
 )
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -27,6 +30,13 @@ UNICODE_DIGIT_SUFFIX = "sk-notification٣"
 STRIPE_LIVE_KEY = f"sk_live_{'1234567890' * 3}"
 URL_ENCODED_KEY = "Bearer%20sk-Ab3dEf6Gh7Ij8Kl9Mn0Pq2Rs3Tu4Vw5X"
 AWS_KEYS = [f"AKIAIOSFODNN7EXAMPL{suffix}" for suffix in "FEDCBA"]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_masked_entity_count():
+    token = _masked_entity_count.set(None)
+    yield
+    _masked_entity_count.reset(token)
 
 
 def _guardrail() -> _ENTERPRISE_SecretDetection:
@@ -56,6 +66,323 @@ def test_scan_message_preserves_quoted_benign_identifiers():
 
     assert guardrail.scan_message_for_secrets(content) == []
     assert guardrail.redact_text(content) == content
+
+
+@pytest.mark.parametrize(
+    "content,secret",
+    [
+        ("REDIS_PASSWORD=aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
+        ("SESSION_SECRET=Kp7Nq2Wz9Bt4Xr6Vm1Ls", "Kp7Nq2Wz9Bt4Xr6Vm1Ls"),
+        ('{"db_password": "Tq8Zm2XpLv9KdNbRcYw3"}', "Tq8Zm2XpLv9KdNbRcYw3"),
+        ("api_secret: Zx4Kp9Lm2Qr7Ns3Vt", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("password = hunter2brahms9x", "hunter2brahms9x"),
+        ("client_secret=Hq7Zm3XkLp9Wd2Nb", "Hq7Zm3XkLp9Wd2Nb"),
+        ('apiKey: "aB3dE6gH9jK2mN5p"', "aB3dE6gH9jK2mN5p"),
+        ('{"clientSecret": "Kp7Nq2Wz9Bt4Xr6Vm1Ls"}', "Kp7Nq2Wz9Bt4Xr6Vm1Ls"),
+        ('dbPassword = "Zx4Kp9Lm2Qr7Ns3Vt"', "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("MY_APP_DB_PASSWORD=Kp7Nq2Wz9Bt4Xr6Vm1Ls", "Kp7Nq2Wz9Bt4Xr6Vm1Ls"),
+        ("x_api_key: 8f3Kd9Lm2Qr7Ns3Vt", "8f3Kd9Lm2Qr7Ns3Vt"),
+        ("password: Zm9vYmFyYmF6+abc/def123=", "Zm9vYmFyYmF6+abc/def123="),
+        ("REDIS_PASSWORD=correcthorsebattery", "correcthorsebattery"),
+        ('SECRET_KEY = "django-insecure-9v2xk4qw8z"', "django-insecure-9v2xk4qw8z"),
+        (
+            "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        ),
+        ("password=aB3dE6gH9jK2", "aB3dE6gH9jK2"),
+    ],
+    ids=[
+        "env-password",
+        "env-secret",
+        "json-field",
+        "yaml-field",
+        "bare-assignment",
+        "client-secret",
+        "camel-case-key",
+        "camel-case-secret",
+        "camel-case-password",
+        "namespaced-env",
+        "underscored-header",
+        "base64-padding",
+        "digit-free-value",
+        "django-secret-key",
+        "slashed-aws-secret",
+        "shortest-accepted-value",
+    ],
+)
+def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, secret):
+    guardrail = _guardrail()
+
+    assert secret not in guardrail.redact_text(content)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "The user forgot their password and asked for a reset link",
+        "Rotate the client secret every 90 days",
+        "The secret: keep it quiet",
+        "My password: correct horse battery staple",
+        "secretary: Maria Gonzalez",
+        "password_reset_email: Please click the link below to reset",
+        'config = {"api_key": "YOUR_API_KEY_HERE"}',
+        "api_key: <your-key-here>",
+        '{"max_tokens": 4096, "model": "gpt-4o-mini"}',
+        'def get_api_key():\n    return os.environ["OPENAI_API_KEY"]',
+        '    valid_token = UserAPIKeyAuth(user_id="u1")',
+        'password = get_password(user, "prod")',
+        "monkey=aB3dE6gH9jK2mN5p",
+        "idempotency_key: req_2026090712000000",
+        'cache_key = "u1_user_api_key_user_id"',
+        "the key: 2026-09-07T12:00:00Z",
+        "api_key: os.environ/E2B_API_KEY",
+        "langfuse_secret: os.environ/LANGFUSE_PROJECT1_SECRET",
+        "api_key = OPENAI_API_KEY",
+        "password = pwd12345678",
+        "api_key: hunter2!brahms",
+        "model_key: gpt-4o-mini-2024-07-18",
+        "openrouter/anthropic/claude-3-5-sonnet-20240620",
+        '{"content-type": "application/json"}',
+        "passwordless_login: enabled-for-all-users",
+        "secret_sauce: tomatoes-basil-garlic-oregano",
+        "user_secret_question: what-was-your-first-pet",
+        "password_reset_url: example.com/reset-password/flow",
+        "private_key_path: keys/prod/server-cert.pem",
+        "litellm.completion(model=model, api_key=openai_api_key)",
+        "params['aws_secret_access_key'] = aws_secret_access_key",
+    ],
+    ids=[
+        "prose-password",
+        "prose-secret",
+        "colon-prose-secret",
+        "colon-prose-password",
+        "secretary",
+        "sentence-after-keyword",
+        "uppercase-placeholder",
+        "templated-placeholder",
+        "max-tokens",
+        "code-paste",
+        "constructor-call",
+        "indirect-reference",
+        "word-ending-in-key",
+        "idempotency-key",
+        "cache-key",
+        "timestamp-after-key",
+        "env-reference",
+        "env-reference-nested",
+        "env-variable-name",
+        "below-minimum-length",
+        "non-credential-charset",
+        "model-name",
+        "namespaced-model-name",
+        "media-type",
+        "hyphenated-english",
+        "hyphenated-phrase",
+        "hyphenated-question",
+        "url-under-credential-key",
+        "path-under-credential-key",
+        "snake-case-argument",
+        "snake-case-assignment",
+    ],
+)
+def test_scan_message_keeps_benign_values(content):
+    guardrail = _guardrail()
+
+    assert guardrail.scan_message_for_secrets(content) == []
+    assert guardrail.redact_text(content) == content
+
+
+@pytest.mark.parametrize(
+    "value,redacted",
+    [("aB3dE6gH9jK2", True), ("aB3dE6gH9jK", False)],
+    ids=["at-minimum-length", "below-minimum-length"],
+)
+def test_credential_keyword_detector_honours_its_minimum_length(value, redacted):
+    guardrail = _guardrail()
+
+    assert (value not in guardrail.redact_text(f"password={value}")) is redacted
+
+
+@pytest.mark.parametrize(
+    "value,redacted",
+    [("aB3dE6gH9jK2", True), ("aB3dE6gH9jK", False)],
+    ids=["at-default-minimum-length", "below-default-minimum-length"],
+)
+def test_credential_keyword_detector_defaults_its_minimum_length(value, redacted):
+    """An operator config that names the plugin without sizing it keeps the same floor."""
+    guardrail = _ENTERPRISE_SecretDetection(
+        guardrail_name="hide-secrets",
+        event_hook="pre_call",
+        default_on=True,
+        detect_secrets_config={
+            "plugins_used": [
+                {key: setting for key, setting in plugin.items() if key != "minimum_length"}
+                for plugin in _default_detect_secrets_config["plugins_used"]
+            ]
+        },
+    )
+
+    assert (value not in guardrail.redact_text(f"password={value}")) is redacted
+
+
+@pytest.mark.parametrize("minimum_length", ["12", 0, -1, 1.5], ids=["string", "zero", "negative", "float"])
+def test_credential_keyword_detector_rejects_an_unusable_minimum_length(minimum_length):
+    """A bad value in an operator config has to fail while the guardrail is being built;
+    reaching the scan with one turns every single request into a 500."""
+    guardrail = _ENTERPRISE_SecretDetection(
+        guardrail_name="hide-secrets",
+        event_hook="pre_call",
+        default_on=True,
+        detect_secrets_config={
+            "plugins_used": [
+                {**plugin, "minimum_length": minimum_length}
+                if plugin["name"] == "CredentialKeywordDetector"
+                else plugin
+                for plugin in _default_detect_secrets_config["plugins_used"]
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="minimum_length"):
+        guardrail.scan_message_for_secrets("password=aB3dE6gH9jK2mN5p")
+
+
+@pytest.mark.parametrize(
+    "content,secret",
+    [
+        (
+            f"api_key: {OPENAI_KEY}\nREDIS_PASSWORD=aB3dE6gH9jK2mN5p",
+            "aB3dE6gH9jK2mN5p",
+        ),
+        (
+            f"OPENAI_API_KEY={OPENAI_KEY}\nDB_PASSWORD=Kp7Nq2Wz9Bt4Xr6Vm1Ls",
+            "Kp7Nq2Wz9Bt4Xr6Vm1Ls",
+        ),
+        (
+            f"api_key: {OPENAI_KEY}\npassword =\n    Zx4Kp9Lm2Qr7Ns3Vt",
+            "Zx4Kp9Lm2Qr7Ns3Vt",
+        ),
+    ],
+    ids=["flat-assignment", "env-file", "continuation-line"],
+)
+def test_scan_message_still_sees_assignments_sharing_a_message_with_a_vendor_key(
+    content, secret
+):
+    """detect_secrets stops quoting assignments as soon as its first pass matches."""
+    guardrail = _guardrail()
+
+    redacted = guardrail.redact_text(content)
+    assert secret not in redacted
+    assert OPENAI_KEY not in redacted
+
+
+def test_environment_reference_filter_only_drops_the_whole_value():
+    guardrail = _guardrail()
+
+    for reference in ("os.environ/OPENAI_API_KEY", "os.environ/e2b_api_key"):
+        assert guardrail.redact_text(f"password={reference}") == f"password={reference}"
+    assert guardrail.redact_text("password=notos.environ/OPENAI_API_KEY") == (
+        "password=[REDACTED]"
+    )
+
+
+def test_environment_variable_names_are_dropped_only_for_the_keyword_plugin():
+    """The exclusion lives on the plugin, so it cannot suppress a vendor detector's hit."""
+    guardrail = _guardrail()
+
+    assert guardrail.redact_text("password=REDIS_PASSWORD") == "password=REDIS_PASSWORD"
+    assert guardrail.scan_message_for_secrets('k = "ABCD1234_EFGH5678_IJKLMN"') == [
+        {"type": "Base64 High Entropy String", "value": "ABCD1234_EFGH5678_IJKLMN"}
+    ]
+
+
+def test_masked_entity_count_keeps_the_vendor_type_beside_the_entropy_type():
+    guardrail = _guardrail()
+    _masked_entity_count.set({})
+
+    guardrail.redact_text('k = "ghp_abcdefghijklmnopqrstuvwxyzABCDEF1234"')
+
+    assert _masked_entity_count.get() == {
+        "Base64 High Entropy String": 1,
+        "GitHub Token": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        f"api_key: '{OPENAI_KEY}'\n"
+        + "a: &a [" + ", ".join(['"x"'] * 9) + "]\n"
+        + "".join(
+            f"{chr(98 + i)}: &{chr(98 + i)} ["
+            + ", ".join([f"*{chr(97 + i)}"] * 9)
+            + "]\n"
+            for i in range(7)
+        ),
+        f"api_key: '{OPENAI_KEY}'\ndeep: " + "[" * 400 + "]" * 400,
+        f"api_key: '{OPENAI_KEY}'\nbroken: [unclosed",
+    ],
+    ids=["anchor-expansion", "deep-nesting", "unparseable"],
+)
+def test_scan_message_contains_hostile_config_text(content, monkeypatch, tmp_path):
+    """The retry pass parses attacker-controlled text, so it must not raise, hang, or
+    leave the prompt behind in a temp file."""
+    guardrail = _guardrail()
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    started = time.perf_counter()
+    found = guardrail.scan_message_for_secrets(content)
+
+    assert time.perf_counter() - started < 10.0
+    assert OPENAI_KEY in [secret["value"] for secret in found]
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        f"api_key = '{OPENAI_KEY}'\nbase = abcdefghijkl\npassword = x\n    %(base)sZZZZQQQQ\n",
+        "base = abcdefghijkl\npassword = x\n    %(base)sZZZZQQQQ\n",
+        f"api_key = '{OPENAI_KEY}'\nbase = Kp7Nq2Wz9Bt4\npassword = x\n"
+        "    %(base)s-primary\nnote = Kp7Nq2Wz9Bt4-primary is the hostname\n",
+        'base = "abcdefghijkl"\npassword = "%(base)sZZZZQQQQ"\n',
+    ],
+    ids=[
+        "vendor-key-present",
+        "no-vendor-key",
+        "value-echoed-elsewhere",
+        "quoted-interpolation",
+    ],
+)
+def test_scan_message_never_reports_a_value_the_message_does_not_hold(content):
+    """The rewritten copy is parsed with interpolation off, so no reported value can be one
+    the parser assembled rather than read; reporting one would mask unrelated text."""
+    guardrail = _guardrail()
+
+    for secret in guardrail.scan_message_for_secrets(content):
+        assert secret["value"] in content
+
+
+def test_scan_message_leaves_unrelated_text_alone_when_a_value_is_echoed():
+    """A value the parser could assemble also appears verbatim in a benign sentence; redacting
+    it would destroy the sentence while leaving the line it came from untouched."""
+    guardrail = _guardrail()
+    content = (
+        f"api_key = '{OPENAI_KEY}'\nbase = Kp7Nq2Wz9Bt4\npassword = x\n"
+        "    %(base)s-primary\nnote = Kp7Nq2Wz9Bt4-primary is the hostname\n"
+    )
+
+    assert "note = Kp7Nq2Wz9Bt4-primary is the hostname" in guardrail.redact_text(content)
+
+
+def test_masked_entity_count_counts_each_secret_once():
+    guardrail = _guardrail()
+    _masked_entity_count.set({})
+
+    guardrail.redact_text(f"first {OPENAI_KEY} second {OPENAI_KEY}")
+
+    assert _masked_entity_count.get() == {"Strict OpenAI API Key": 1}
 
 
 def test_scan_message_redacts_every_openai_key_occurrence():
@@ -102,6 +429,34 @@ def test_scan_message_stays_linear_on_repeated_sk_separators():
     assert time.perf_counter() - started < 2.0
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        f"api_key: '{OPENAI_KEY}'\npassword=" + "a-" * 10_000 + "!",
+        f"api_key: '{OPENAI_KEY}'\npassword:" + '"' * 20_000,
+        f"api_key: '{OPENAI_KEY}'\n" + "api_key:" * 10_000,
+        f"api_key: '{OPENAI_KEY}'\nsecret=" + "aB3dE6gH9jK2mN5p " * 2_000,
+        f"api_key: '{OPENAI_KEY}'\n"
+        + "\n".join(f"password{i}=aB3dE6gH9jK2mN5p{i}" for i in range(3_000)),
+    ],
+    ids=[
+        "value-run",
+        "quote-run",
+        "keyword-run",
+        "value-repeat",
+        "assignment-flood",
+    ],
+)
+def test_scan_message_stays_linear_on_adversarial_credential_lines(content):
+    """A backtracking blow-up on these runs takes minutes, so the bound is loose enough
+    to stay green on a loaded CI box."""
+    guardrail = _guardrail()
+
+    started = time.perf_counter()
+    guardrail.redact_text(content)
+    assert time.perf_counter() - started < 10.0
+
+
 def test_scan_message_redacts_whole_stripe_live_key():
     guardrail = _guardrail()
 
@@ -119,8 +474,8 @@ def test_scan_message_replaces_longest_overlapping_match_first():
     guardrail = _guardrail()
     content = f'token = "{OPENAI_KEY}/extra"'
 
-    detected = guardrail.scan_message_for_secrets(content)
-    assert [secret["value"] for secret in detected] == [f"{OPENAI_KEY}/extra", OPENAI_KEY]
+    values = [secret["value"] for secret in guardrail.scan_message_for_secrets(content)]
+    assert values == [f"{OPENAI_KEY}/extra", OPENAI_KEY]
     assert guardrail.redact_text(content) == 'token = "[REDACTED]"'
 
 
