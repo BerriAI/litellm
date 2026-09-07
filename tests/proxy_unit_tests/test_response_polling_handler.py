@@ -1711,7 +1711,7 @@ class TestBackgroundStreamingTerminalEvents:
             client_already_left,
         )
 
-        with patch(
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
             "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
         ) as MockProcessor:
             MockProcessor.return_value.base_process_llm_request = upstream_call_behind_disconnect_guard
