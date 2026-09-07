@@ -1287,7 +1287,6 @@ class CustomGuardrail(CustomLogger):
         """
         verdict: Final = _guardrail_verdict.get()
 
-        # Convert None to empty dict to satisfy type requirements
         guardrail_response: dict[str, object] | str = (
             dict(verdict)  # mutable-ok: a TypedDict is not assignable to dict[str, object]
             if verdict is not None
@@ -1298,7 +1297,7 @@ class CustomGuardrail(CustomLogger):
                 and self._inputs_were_modified(original_inputs, response)
                 else "allow"
                 if original_inputs is not None and isinstance(response, dict)
-                else {}
+                else {}  # mutable-ok: the logging payload requires a mutable response mapping
                 if response is None
                 else response
             )
@@ -1338,6 +1337,7 @@ class CustomGuardrail(CustomLogger):
 
         This gets logged on downsteam Langfuse, DataDog, etc.
         """
+        verdict: Final = _guardrail_verdict.get()
         guardrail_status: Final[GuardrailStatus] = (
             "guardrail_intervened" if self._is_guardrail_intervention(e) else "guardrail_failed_to_respond"
         )
@@ -1348,13 +1348,17 @@ class CustomGuardrail(CustomLogger):
             guardrail_response = "deny"
 
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=guardrail_response,
+            guardrail_json_response=dict(verdict)  # mutable-ok: logging requires a mutable dict
+            if verdict is not None
+            else guardrail_response,
             request_data=request_data,
             guardrail_status=guardrail_status,
             duration=duration,
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
+            guardrail_provider=self.guardrail_provider if verdict is not None else None,
+            tracing_detail=_verdict_tracing_detail(verdict),
         )
         raise e
 

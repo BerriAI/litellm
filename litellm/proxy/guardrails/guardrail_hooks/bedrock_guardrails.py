@@ -2028,16 +2028,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _build_invoke_checks_tracing_detail(
         violations: list[BedrockChecksViolation],
     ) -> GuardrailTracingDetail:
-        tracing_detail: Final[GuardrailTracingDetail] = {}
-        categories: Final = [
+        categories: Final = tuple(
             label
             for label in (v.get("category") or v.get("type") for v in violations)
             if isinstance(label, str) and label
-        ]
-        if categories:
-            tracing_detail["violation_categories"] = categories
-        tracing_detail["guardrail_action"] = "GUARDRAIL_INTERVENED" if violations else "NONE"
-        return tracing_detail
+        )
+        categories_detail: Final[GuardrailTracingDetail] = {"violation_categories": categories}
+        return {
+            **(categories_detail if categories else _NO_TRACING_DETAIL),
+            "guardrail_action": "GUARDRAIL_INTERVENED" if violations else "NONE",
+        }
 
     def _get_block_exception_for_checks(
         self, violations: list[BedrockChecksViolation], request_data: dict | None = None

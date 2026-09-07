@@ -228,6 +228,7 @@ class ZscalerAIGuard(CustomGuardrail):
                 )
                 verbose_proxy_logger.debug("response from zscaler ai guards: %s", zscaler_ai_guard_result)
             if zscaler_ai_guard_result and zscaler_ai_guard_result.get("action") == "BLOCK":
+                self.record_guardrail_verdict(self._build_verdict(zscaler_ai_guard_result))
                 blocking_info: Final = zscaler_ai_guard_result.get("zscaler_ai_guard_response")
                 error_message = f"Content blocked by Zscaler AI Guard: {self.extract_blocking_info(blocking_info)}"
                 raise HTTPException(status_code=400, detail={"error": error_message})

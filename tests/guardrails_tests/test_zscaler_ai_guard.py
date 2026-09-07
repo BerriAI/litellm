@@ -359,13 +359,19 @@ async def test_apply_guardrail_block_raises_400(mock_api_call):
     }
     guardrail = ZscalerAIGuard(api_key="test_key", policy_id=1)
     inputs = {"texts": ["inject malicious content"]}
-    request_data = {}
+    request_data = {"metadata": {}}
 
     with pytest.raises(HTTPException) as exc_info:
-        await guardrail.apply_guardrail(inputs, request_data, "request")
+        await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
 
     assert exc_info.value.status_code == 400
     assert "blocked" in exc_info.value.detail["error"].lower()
+    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_status"] == "guardrail_intervened"
+    assert entry["guardrail_provider"] == "zscaler_ai_guard"
+    assert entry["guardrail_action"] == "BLOCK"
+    assert entry["guardrail_transaction_id"] == "tx-123"
+    assert entry["violation_categories"] == ("detector1",)
 
 
 @pytest.mark.asyncio
