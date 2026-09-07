@@ -30,6 +30,46 @@ def test_zai_responses_url_defaults_to_responses_endpoint(monkeypatch):
         assert config.get_complete_url(api_base=api_base, litellm_params={}) == expected_url
 
 
+def test_zai_responses_url_ignores_chat_completions_api_base(monkeypatch):
+    monkeypatch.delenv("ZAI_RESPONSES_API_BASE", raising=False)
+    config = ZAIResponsesAPIConfig()
+
+    chat_bases = (
+        "https://api.z.ai/api/paas/v4",
+        "https://api.z.ai/api/paas/v4/",
+        "https://api.z.ai/api/coding/paas/v4",
+    )
+
+    for chat_base in chat_bases:
+        assert config.get_complete_url(api_base=chat_base, litellm_params={}) == "https://api.z.ai/api/v1/responses"
+
+
+def test_zai_responses_url_keeps_custom_api_base(monkeypatch):
+    monkeypatch.delenv("ZAI_RESPONSES_API_BASE", raising=False)
+    config = ZAIResponsesAPIConfig()
+
+    assert (
+        config.get_complete_url(
+            api_base="https://gateway.example.com/openai/v1",
+            litellm_params={},
+        )
+        == "https://gateway.example.com/openai/v1/responses"
+    )
+
+
+def test_zai_responses_url_env_overrides_chat_completions_api_base(monkeypatch):
+    monkeypatch.setenv("ZAI_RESPONSES_API_BASE", "https://gateway.example.com/responses-root")
+    config = ZAIResponsesAPIConfig()
+
+    assert (
+        config.get_complete_url(
+            api_base="https://api.z.ai/api/paas/v4",
+            litellm_params={},
+        )
+        == "https://gateway.example.com/responses-root/responses"
+    )
+
+
 def test_zai_responses_headers_use_bearer_token():
     config = ZAIResponsesAPIConfig()
     litellm_params = GenericLiteLLMParams(api_key="sk-zai")
