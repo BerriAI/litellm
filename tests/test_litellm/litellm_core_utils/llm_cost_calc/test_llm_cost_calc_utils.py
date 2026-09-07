@@ -3874,6 +3874,70 @@ def test_token_type_cost_breakdown_reconciles_with_generic_total(_local_model_co
     assert text_input_cost + breakdown.cache_read_cost == pytest.approx(prompt_cost)
 
 
+def _custom_priced_usage() -> Usage:
+    return Usage(
+        prompt_tokens=1000,
+        completion_tokens=500,
+        total_tokens=1500,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=800, cache_creation_tokens=100),
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=200),
+    )
+
+
+def test_token_type_cost_breakdown_prices_custom_pricing_from_its_flat_rates():
+    """
+    A custom-priced deployment, usually absent from the cost map, used to get zero cache and
+    reasoning lines while its total already billed cache tokens at the custom cache rates.
+    The lines must come from the same flat rates: a configured cache rate, else the input
+    rate for cache tokens and the output rate for reasoning tokens.
+    """
+    from litellm.types.utils import CostPerToken
+
+    breakdown = get_token_type_cost_breakdown(
+        model="openai/onprem-model",
+        custom_llm_provider="openai",
+        usage=_custom_priced_usage(),
+        custom_cost_per_token=CostPerToken(
+            input_cost_per_token=1e-6, output_cost_per_token=2e-6, cache_read_input_token_cost=1e-7
+        ),
+    )
+
+    assert breakdown.cache_read_cost == pytest.approx(800 * 1e-7)
+    assert breakdown.cache_creation_cost == pytest.approx(100 * 1e-6)
+    assert breakdown.reasoning_cost == pytest.approx(200 * 2e-6)
+
+
+def test_token_type_cost_breakdown_reconciles_with_custom_pricing_totals():
+    from litellm.cost_calculator import cost_per_token
+    from litellm.types.utils import CostPerToken
+
+    usage = _custom_priced_usage()
+    custom_cost_per_token = CostPerToken(
+        input_cost_per_token=1e-6,
+        output_cost_per_token=2e-6,
+        cache_read_input_token_cost=1e-7,
+        cache_creation_input_token_cost=1.25e-6,
+    )
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="openai/onprem-model",
+        custom_llm_provider="openai",
+        prompt_tokens=1000,
+        completion_tokens=500,
+        usage_object=usage,
+        custom_cost_per_token=custom_cost_per_token,
+    )
+    breakdown = get_token_type_cost_breakdown(
+        model="openai/onprem-model",
+        custom_llm_provider="openai",
+        usage=usage,
+        custom_cost_per_token=custom_cost_per_token,
+    )
+
+    assert 100 * 1e-6 + breakdown.cache_read_cost + breakdown.cache_creation_cost == pytest.approx(prompt_cost)
+    assert 300 * 2e-6 + breakdown.reasoning_cost == pytest.approx(completion_cost)
+
+
 def test_token_type_cost_breakdown_zero_without_special_tokens(_local_model_cost_map):
 
     usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
