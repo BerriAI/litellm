@@ -163,6 +163,34 @@ def filter_team_based_models(
     ]
 
 
+def _is_server_tool_type(tool: object, family: str) -> bool:
+    if not isinstance(tool, Mapping):
+        return False
+    tool_type: Final = tool.get("type")
+    if not isinstance(tool_type, str):
+        return False
+    if tool_type == family:
+        return True
+    if family == "web_search" and tool_type == "web_search_preview":
+        return True
+    prefix: Final = f"{family}_"
+    version_suffix: Final = tool_type[len(prefix) :] if tool_type.startswith(prefix) else ""
+    preview_prefix: Final = "preview_"
+    version_value: Final = (
+        version_suffix[len(preview_prefix) :]
+        if family == "web_search" and version_suffix.startswith(preview_prefix)
+        else version_suffix
+    )
+    date_parts: Final = version_value.split("_")
+    compact_date: Final = len(version_value) == 8 and version_value.isdigit()
+    underscored_date: Final = (
+        len(date_parts) == 3
+        and tuple(len(part) for part in date_parts) == (4, 2, 2)
+        and all(part.isdigit() for part in date_parts)
+    )
+    return compact_date or underscored_date
+
+
 def _deployment_supports_web_search(deployment: dict) -> bool:
     """
     Check if a deployment supports web search.
@@ -183,36 +211,47 @@ def _deployment_supports_web_search(deployment: dict) -> bool:
     return True
 
 
+def _deployment_supports_web_fetch(deployment: Mapping[str, object]) -> bool:
+    model_info: Final = deployment.get("model_info")
+    if not isinstance(model_info, Mapping):
+        return True
+    supports_web_fetch: Final = model_info.get("supports_web_fetch")
+    return supports_web_fetch if isinstance(supports_web_fetch, bool) else True
+
+
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
     request_kwargs: dict | None = None,
 ) -> list[dict] | dict:
-    """
-    If the request is websearch, filter out deployments that don't support web search
-    """
+    """Filter routed deployments by native web-search and web-fetch requirements."""
     if request_kwargs is None:
         return healthy_deployments
-    # When a specific deployment was already chosen, it's returned as a dict
-    # rather than a list - nothing to filter, just pass through
     if isinstance(healthy_deployments, dict):
         return healthy_deployments
 
-    is_web_search_request = False
     tools: Final = request_kwargs.get("tools") or []
-    for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure.
-        if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
-            is_web_search_request = True
-            break
-
-    if not is_web_search_request:
+    requires_web_search: Final = any(_is_server_tool_type(tool, "web_search") for tool in tools)
+    requires_web_fetch: Final = any(_is_server_tool_type(tool, "web_fetch") for tool in tools)
+    if not requires_web_search and not requires_web_fetch:
         return healthy_deployments
 
-    # Filter out deployments that don't support web search
-    final_deployments: Final = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
-    if len(healthy_deployments) > 0 and len(final_deployments) == 0:
+    web_search_deployments: Final = (
+        [deployment for deployment in healthy_deployments if _deployment_supports_web_search(deployment)]
+        if requires_web_search
+        else healthy_deployments
+    )
+    if requires_web_search and healthy_deployments and not web_search_deployments:
         verbose_logger.warning("No deployments support web search for request")
-    return final_deployments
+
+    web_fetch_deployments: Final = (
+        [deployment for deployment in web_search_deployments if _deployment_supports_web_fetch(deployment)]
+        if requires_web_fetch
+        else web_search_deployments
+    )
+    if requires_web_fetch and web_search_deployments and not web_fetch_deployments:
+        verbose_logger.warning("No deployments support web fetch for request")
+
+    return web_fetch_deployments
 
 
 # Credential params that only one provider family reads, paired with the providers
