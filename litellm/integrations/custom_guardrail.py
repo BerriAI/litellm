@@ -1348,9 +1348,7 @@ class CustomGuardrail(CustomLogger):
             guardrail_response = "deny"
 
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=dict(verdict)  # mutable-ok: logging requires a mutable dict
-            if verdict is not None
-            else guardrail_response,
+            guardrail_json_response=guardrail_response,
             request_data=request_data,
             guardrail_status=guardrail_status,
             duration=duration,

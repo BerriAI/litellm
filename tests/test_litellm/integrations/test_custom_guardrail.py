@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
@@ -2621,12 +2622,18 @@ class _VerdictGuardrail(CustomGuardrail):
 
     guardrail_provider = "acme_scanner"
 
-    def __init__(self, verdict: GuardrailProviderVerdict, **kwargs: object) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, verdict: GuardrailProviderVerdict, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
         self.verdict = verdict
 
     @log_guardrail_information
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
         self.record_guardrail_verdict(self.verdict)
         return inputs
 
@@ -2634,14 +2641,42 @@ class _VerdictGuardrail(CustomGuardrail):
 class _DelegatingGuardrail(CustomGuardrail):
     """apply_guardrail that runs another guardrail and reports no verdict of its own."""
 
-    def __init__(self, inner: CustomGuardrail, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, inner: CustomGuardrail, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
         self.inner = inner
 
     @log_guardrail_information
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
         await self.inner.apply_guardrail(inputs=inputs, request_data=request_data, input_type=input_type)
         return inputs
+
+
+class _RaisingVerdictGuardrail(CustomGuardrail):
+    """apply_guardrail that reports the provider's verdict and then raises."""
+
+    guardrail_provider = "acme_scanner"
+
+    def __init__(self, verdict: GuardrailProviderVerdict, error: Exception, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.verdict = verdict
+        self.error = error
+
+    @log_guardrail_information
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.record_guardrail_verdict(self.verdict)
+        raise self.error
 
 
 DETECT_VERDICT = GuardrailProviderVerdict(
@@ -2769,3 +2804,37 @@ class TestApplyGuardrailProviderVerdict:
         assert _guardrail_entries(flagged_data)[0]["guardrail_status"] == "guardrail_flagged"
         assert _guardrail_entries(plain_data)[0]["guardrail_status"] == "success"
         assert _guardrail_entries(plain_data)[0]["guardrail_response"] == "allow"
+
+    @pytest.mark.asyncio
+    async def test_a_failure_after_a_verdict_keeps_the_error_in_the_response(self):
+        """A recorded verdict must not replace the diagnostics of an exception raised afterwards."""
+        request_data: dict = {"model": "gpt-4o"}
+        guardrail = _RaisingVerdictGuardrail(ALLOW_VERDICT, RuntimeError("vendor exploded"), guardrail_name="zg")
+
+        with pytest.raises(RuntimeError, match="vendor exploded"):
+            await _run(guardrail, request_data)
+
+        entry = _guardrail_entries(request_data)[0]
+        assert entry["guardrail_status"] == "guardrail_failed_to_respond"
+        assert "vendor exploded" in str(entry["guardrail_response"])
+        assert entry["guardrail_provider"] == "acme_scanner"
+        assert entry["guardrail_transaction_id"] == "tx-allow-1"
+
+    @pytest.mark.asyncio
+    async def test_a_block_verdict_survives_the_intervention_exception(self):
+        request_data: dict = {"model": "gpt-4o"}
+        block_verdict = GuardrailProviderVerdict(
+            action="BLOCK", transaction_id="tx-block-1", violation_categories=("prompt_injection",), flagged=True
+        )
+        error = GuardrailRaisedException(guardrail_name="zg", message="Content blocked")
+
+        with pytest.raises(GuardrailRaisedException):
+            await _run(_RaisingVerdictGuardrail(block_verdict, error, guardrail_name="zg"), request_data)
+
+        entry = _guardrail_entries(request_data)[0]
+        assert entry["guardrail_status"] == "guardrail_intervened"
+        assert entry["guardrail_action"] == "BLOCK"
+        assert entry["guardrail_transaction_id"] == "tx-block-1"
+        assert entry["violation_categories"] == ("prompt_injection",)
+        assert entry["guardrail_provider"] == "acme_scanner"
+        assert "Content blocked" in str(entry["guardrail_response"])
