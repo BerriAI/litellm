@@ -16,6 +16,10 @@ async def checkpoint():
     await ready.wait()
 
 
+async def settle(pending, awaited):
+    return await pending if awaited else pending
+
+
 class Value:
     pass
 

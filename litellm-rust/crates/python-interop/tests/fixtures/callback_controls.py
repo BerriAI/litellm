@@ -7,6 +7,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol, cast
 
+from callback_lifecycle import ReferenceFactory, run_checked, settle
+
 
 class PreparedInvocation(Protocol):
     def invoke(self) -> object: ...
@@ -256,7 +258,7 @@ async def argument_identity(owners: CallFactory, awaited: bool) -> IdentityObser
     owner = owners.prepare(observe_async if awaited else observe, (original,), {"alias": nested}, awaited=awaited)
     try:
         pending = owner.invoke()
-        return await pending if awaited else pending
+        return await settle(pending, awaited)
     finally:
         owner.close()
 
@@ -283,7 +285,7 @@ async def mutation_timing(owners: CallFactory, awaited: bool) -> TimingObservati
         original.stage = nested.stage = 1
         pending = owner.invoke()
         original.stage = nested.stage = 2
-        return await pending if awaited else pending
+        return await settle(pending, awaited)
     finally:
         owner.close()
 
@@ -300,7 +302,7 @@ async def result_identity(owners: CallFactory, awaited: bool) -> IdentityObserva
     owner = owners.prepare(callback_async if awaited else callback, (), awaited=awaited)
     try:
         pending = owner.invoke()
-        result = await pending if awaited else pending
+        result = await settle(pending, awaited)
         return IdentityObservation(result is original, result.nested is original.nested, True)
     finally:
         owner.close()
@@ -349,7 +351,7 @@ async def deferred_lifetime(owners: CallFactory, awaited: bool) -> LifetimeObser
         gc.collect()
         alive = tuple(reference() is not None for reference in references)
         pending = owner.invoke()
-        result = await pending if awaited else pending
+        result = await settle(pending, awaited)
         observation = LifetimeObservation(alive, result)
     finally:
         owner.close()
@@ -381,7 +383,7 @@ async def borrowed_lifetime(owners: CallFactory, awaited: bool) -> BorrowedObser
         value.stage, alias.stage = 13, 29
         pending = owner.invoke()
         value.stage, alias.stage = 17, 31
-        return await pending if awaited else pending
+        return await settle(pending, awaited)
     finally:
         owner.close()
 
@@ -467,11 +469,22 @@ def expected_control(witness: str, control: str, awaited: bool) -> object:
 
 
 def run_control(witness: str, control: str, retained: bool, awaited: bool, factory: LiveCallFactory) -> None:
-    inner = factory if retained else cast(Callable[[], LiveCallFactory], globals()["ReferenceFactory"])()
+    inner = factory if retained else ReferenceFactory()
     owners = control_factory(control, inner)
 
     async def run() -> None:
-        observed = await globals()[witness](owners, awaited)
+        observed = await WITNESSES[witness](owners, awaited)
         assert observed == expected_control(witness, control, awaited), (witness, control, awaited, observed)
 
-    globals()["run_checked"](inner, run())
+    run_checked(inner, run())
+
+
+WITNESSES: dict[str, Callable[[CallFactory, bool], object]] = {
+    "argument_identity": argument_identity,
+    "mutation_timing": mutation_timing,
+    "result_identity": result_identity,
+    "deferred_lifetime": deferred_lifetime,
+    "borrowed_lifetime": borrowed_lifetime,
+    "pending_handoff": pending_handoff,
+    "direct_coroutine": direct_coroutine,
+}

@@ -64,6 +64,14 @@ fn scenario_scope(initialized_python: &InitializedPython) -> Py<PyDict> {
                 Py::new(py, callback_owner::OwnerFactory::default()).unwrap(),
             )
             .unwrap();
+        globals
+            .set_item(
+                "AWAIT_ADAPTER_FILENAME",
+                litellm_python_interop::AWAIT_ADAPTER_FILENAME
+                    .to_str()
+                    .unwrap(),
+            )
+            .unwrap();
         run_fixture(
             py,
             &globals,
@@ -135,7 +143,6 @@ fn component_contract(
 }
 
 #[rstest]
-#[case::real_logging_queue_chain("real_logging_queue_chain")]
 #[case::real_logging_queue_copy_control("real_logging_queue_copy_control")]
 #[case::real_crowdstrike_translator_identity("real_crowdstrike_translator_identity")]
 #[case::real_rubrik_block_lifecycle("real_rubrik_block_lifecycle")]
@@ -198,10 +205,8 @@ fn run_scenario_fixture(
 #[case::shallow_result("result_identity", "result_shallow")]
 #[case::deep_result("result_identity", "result_deep")]
 #[case::retained_lifetime("deferred_lifetime", "identity")]
-#[case::expired_borrow("deferred_lifetime", "weak")]
 #[case::prepared_ownership("deferred_lifetime", "missing_handoff")]
 #[case::externally_owned_retained("borrowed_lifetime", "identity")]
-#[case::externally_owned_borrow("borrowed_lifetime", "weak")]
 #[case::original_coroutine("direct_coroutine", "identity")]
 #[case::passthrough_coroutine("direct_coroutine", "result_passthrough")]
 #[serial(python_interpreter)]
@@ -213,6 +218,20 @@ fn control_contract(
     #[values(false, true)] awaited: bool,
 ) -> PyResult<()> {
     run_control_fixture(scenario_scope, witness, control, retained, awaited)
+}
+
+// The `weak` control wraps nothing: it holds only weak references and never
+// calls the factory, so the `retained` axis has no effect on it.
+#[rstest]
+#[case::expired_borrow("deferred_lifetime")]
+#[case::externally_owned_borrow("borrowed_lifetime")]
+#[serial(python_interpreter)]
+fn weak_control(
+    scenario_scope: Py<PyDict>,
+    #[case] witness: &str,
+    #[values(false, true)] awaited: bool,
+) -> PyResult<()> {
+    run_control_fixture(scenario_scope, witness, "weak", false, awaited)
 }
 
 #[rstest]

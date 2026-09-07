@@ -6,7 +6,6 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
-from functools import wraps
 from typing import Literal
 from unittest import TestCase
 
@@ -40,23 +39,6 @@ def integration_response(url, body, status=200, headers=None):
     return httpx.Response(status, json=body, headers=headers, request=httpx.Request("POST", url))
 
 
-def integration_callback_scope(scenario):
-    @wraps(scenario)
-    async def run(owners):
-        callbacks = tuple(litellm.callbacks)
-        try:
-            return await scenario(owners)
-        finally:
-            litellm.callbacks[:] = callbacks
-
-    return run
-
-
-@integration_callback_scope
-async def real_logging_queue_chain(owners):
-    return await integration_logging_queue_case(owners)
-
-
 @dataclass(frozen=True, slots=True)
 class QueueObservation:
     gcs_model_parameters: str
@@ -64,7 +46,6 @@ class QueueObservation:
     literal_prepared_settings: str
 
 
-@integration_callback_scope
 async def real_logging_queue_copy_control(owners):
     baseline = await integration_logging_queue_case(owners)
     copied = await integration_logging_queue_case(owners, literal_copy="payload")
@@ -239,7 +220,6 @@ async def integration_logging_queue_case(owners, *, literal_copy: Literal["direc
     )
 
 
-@integration_callback_scope
 async def real_crowdstrike_translator_identity(owners):
     entered, release = asyncio.Event(), asyncio.Event()
     calls = []
@@ -304,7 +284,6 @@ async def real_crowdstrike_translator_identity(owners):
     assert detached[0]["content"] == user["content"] == "private text"
 
 
-@integration_callback_scope
 async def real_rubrik_block_lifecycle(owners):
     for input_type, populated in (("request", False), ("response", True)):
         entered, release = asyncio.Event(), asyncio.Event()
@@ -419,7 +398,6 @@ async def real_rubrik_block_lifecycle(owners):
                 await asyncio.gather(rubrik._periodic_flush_task, return_exceptions=True)
 
 
-@integration_callback_scope
 async def real_parallel_guardrail_snapshots(owners):
     original_mode = litellm.safe_memory_mode
     try:
@@ -516,7 +494,6 @@ async def integration_parallel_snapshot_case(owners):
         await asyncio.gather(task, return_exceptions=True)
 
 
-@integration_callback_scope
 async def real_purview_sync_background(owners):
     entered, release = threading.Event(), threading.Event()
     calls, workers = [], []

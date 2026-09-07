@@ -21,6 +21,12 @@ impl InitializedPython {
 #[once]
 pub fn initialized_python() -> InitializedPython {
     Python::initialize();
+    Python::attach(|py| {
+        let sys = py.import("sys").unwrap();
+        let path = sys.getattr("path").unwrap();
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+        path.call_method1("append", (fixtures,)).unwrap();
+    });
     InitializedPython
 }
 

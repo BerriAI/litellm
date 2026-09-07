@@ -4,9 +4,9 @@ use std::sync::{
 };
 
 use litellm_python_interop::{InvocationMode, InvocationOutcome, PreparedCall};
-use pyo3::class::gc::{PyTraverseError, PyVisit};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::pyclass::{PyTraverseError, PyVisit};
 use pyo3::types::{PyDict, PyTuple};
 
 #[pyclass]
