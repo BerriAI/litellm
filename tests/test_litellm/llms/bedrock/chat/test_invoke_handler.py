@@ -623,3 +623,44 @@ async def test_async_invoke_streaming_error_forwards_headers_when_body_was_never
         )
 
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-unread-async"
+
+
+def test_invoke_streaming_non_200_forwards_bedrock_response_headers():
+    """A caller-supplied client that returns a failure instead of raising still reaches the
+    provider's headers, and reading the streamed body for the message must not throw (LIT-5428)."""
+    error_response = _unread_bedrock_stream_error_response(500, "req-non200-sync")
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=error_response)
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        litellm.completion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-non200-sync"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_non_200_forwards_bedrock_response_headers():
+    error_response = _unread_bedrock_stream_error_response(500, "req-non200-async")
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=error_response)
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await litellm.acompletion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-non200-async"

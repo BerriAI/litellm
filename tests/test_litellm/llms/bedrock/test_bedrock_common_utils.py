@@ -721,3 +721,103 @@ def test_bedrock_error_keeps_duplicate_httpx_header_values():
     )
 
     assert error.response.headers.get_list("set-cookie") == ["a=1", "b=2"]
+
+
+def _bedrock_httpx_status_error_sites():
+    """Every `except httpx.HTTPStatusError as err` that raises a BedrockError, across bedrock."""
+    import ast
+    import pathlib
+
+    sites = []
+    for path in sorted(pathlib.Path("litellm/llms/bedrock").rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)):
+            caught = ast.unparse(handler.type) if handler.type is not None else ""
+            if "HTTPStatusError" not in caught or handler.name is None:
+                continue
+            for call in (
+                n
+                for n in ast.walk(handler)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "BedrockError"
+            ):
+                sites.append((str(path), call.lineno, handler.name, {k.arg for k in call.keywords}))
+    return sites
+
+
+def test_every_bedrock_httpx_status_error_site_keeps_provider_headers():
+    """A raise site holding the provider's failed response must hand its headers on (LIT-5428).
+
+    These sites are the only place x-amzn-RequestId still exists; a site that drops it
+    silently shadows the fix for that whole surface.
+    """
+    sites = _bedrock_httpx_status_error_sites()
+
+    assert len(sites) >= 12
+    dropped = [f"{path}:{lineno}" for path, lineno, _, kwargs in sites if "headers" not in kwargs]
+    assert dropped == []
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_bedrock_embedding_call_keeps_provider_headers(is_async):
+    """The embeddings surface raises from the same shape as chat and lost the same header."""
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+    from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    failure = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-embed-500"},
+        text='{"message":"Amazon Bedrock is unable to process your request."}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+
+    class _SyncUpstream(HTTPHandler):
+        def post(self, *args, **kwargs):
+            return failure
+
+    class _AsyncUpstream(AsyncHTTPHandler):
+        async def post(self, *args, **kwargs):
+            return failure
+
+    async def _drive():
+        embedding = BedrockEmbedding()
+        kwargs = dict(
+            timeout=None,
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/",
+            headers={},
+            data={},
+        )
+        if is_async:
+            return await embedding._make_async_call(client=_AsyncUpstream(), **kwargs)
+        return embedding._make_sync_call(client=_SyncUpstream(), **kwargs)
+
+    with pytest.raises(BedrockError) as exc_info:
+        await _drive()
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-embed-500"
+
+
+def _bedrock_mantle_error_configs():
+    from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
+    from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
+
+    return [BedrockMantleChatConfig, BedrockMantleResponsesAPIConfig]
+
+
+@pytest.mark.parametrize("config", _bedrock_mantle_error_configs())
+def test_bedrock_mantle_get_error_class_keeps_provider_headers(config):
+    """bedrock_mantle rides the OpenAI-compatible surfaces, whose errors drop the headers.
+
+    A chat request for a responses-API model is bridged onto the responses config, so
+    fixing only the chat one leaves the model the customer actually calls uncovered.
+    """
+    error = config().get_error_class(
+        error_message="prompt tokens exceed model maximum",
+        status_code=400,
+        headers={"x-amzn-RequestId": "req-mantle-400"},
+    )
+
+    assert error.response.headers["x-amzn-requestid"] == "req-mantle-400"

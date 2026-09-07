@@ -470,6 +470,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(
                 message=f"Error processing response: {e}",
                 status_code=raw_response.status_code,
+                headers=raw_response.headers,
             )
 
     def validate_environment(

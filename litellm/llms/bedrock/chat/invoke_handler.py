@@ -185,7 +185,12 @@ async def make_call(
         )
 
         if response.status_code != 200:
-            raise BedrockError(status_code=response.status_code, message=response.text)
+            raise BedrockError(
+                status_code=response.status_code,
+                message=error_response_text(response),
+                headers=response.headers,
+                response=response,
+            )
 
         if fake_stream:
             model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
@@ -229,6 +234,8 @@ async def make_call(
         )
 
         return completion_stream, response.headers
+    except BedrockError:
+        raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
         raise BedrockError(
@@ -276,7 +283,12 @@ def make_sync_call(
         )
 
         if response.status_code != 200:
-            raise BedrockError(status_code=response.status_code, message=response.text)
+            raise BedrockError(
+                status_code=response.status_code,
+                message=error_response_text(response),
+                headers=response.headers,
+                response=response,
+            )
 
         if fake_stream:
             model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
@@ -320,6 +332,8 @@ def make_sync_call(
         )
 
         return completion_stream, response.headers
+    except BedrockError:
+        raise
     except httpx.HTTPStatusError as err:
         error_code: Final = err.response.status_code
         raise BedrockError(

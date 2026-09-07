@@ -66,7 +66,12 @@ def make_sync_call(
     )
 
     if response.status_code != 200:
-        raise BedrockError(status_code=response.status_code, message=str(response.read()))
+        raise BedrockError(
+            status_code=response.status_code,
+            message=str(response.read()),
+            headers=response.headers,
+            response=response,
+        )
 
     if fake_stream:
         model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
