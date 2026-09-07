@@ -6,16 +6,8 @@ use pyo3::types::{PyDict, PyTuple};
 use rstest::rstest;
 use serial_test::serial;
 
-#[path = "support/mod.rs"]
-mod support;
-
-use support::python::{InitializedPython, initialized_python, item, run_fixture, scope};
-
-#[derive(Clone, Copy, Debug)]
-enum Backend {
-    Python,
-    PreparedCall,
-}
+use crate::support::Backend;
+use crate::support::python::{InitializedPython, initialized_python, item, run_fixture, scope};
 
 #[pyfunction]
 fn invoke_prepared<'py>(

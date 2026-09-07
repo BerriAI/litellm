@@ -1,36 +1,51 @@
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use litellm_python_interop::{InvocationMode, InvocationOutcome, PreparedCall};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use serial_test::{parallel, serial};
 
-#[path = "support/callback_owner.rs"]
-mod callback_owner;
-
-#[path = "support/mod.rs"]
-mod support;
-
-use support::python::{InitializedPython, initialized_python, item, run_fixture};
+use crate::support::Backend;
+use crate::support::python::{InitializedPython, initialized_python, item, run_fixture};
+use crate::support::scenarios::{run_scenario_fixture, scenario_scope};
 
 #[test]
 fn cold_awaited_adapter_initialization_allows_reentry() -> PyResult<()> {
-    let test = "cold_awaited_adapter_initialization_allows_reentry";
+    let test = concat!(
+        module_path!(),
+        "::cold_awaited_adapter_initialization_allows_reentry"
+    )
+    .split_once("::")
+    .unwrap()
+    .1;
     let child_env = "LITELLM_INTEROP_COLD_REENTRY_CHILD";
     if std::env::var(child_env).as_deref() != Ok(test) {
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--nocapture"])
             .env(child_env, test)
+            .stdout(Stdio::piped())
             .spawn()
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             if let Some(status) = child.try_wait().unwrap() {
+                let mut output = String::new();
+                child
+                    .stdout
+                    .take()
+                    .unwrap()
+                    .read_to_string(&mut output)
+                    .unwrap();
                 assert!(
                     status.success(),
-                    "awaited adapter reentry child failed: {status}"
+                    "awaited adapter reentry child failed: {status}\n{output}"
+                );
+                assert!(
+                    output.contains("test result: ok. 1 passed; 0 failed; 0 ignored;"),
+                    "awaited adapter reentry child did not run exactly one test:\n{output}"
                 );
                 return Ok(());
             }
@@ -54,39 +69,6 @@ fn cold_awaited_adapter_initialization_allows_reentry() -> PyResult<()> {
     })
 }
 
-#[fixture]
-fn scenario_scope(initialized_python: &InitializedPython) -> Py<PyDict> {
-    let _ = initialized_python;
-    Python::attach(|py| {
-        let globals = PyDict::new(py);
-        globals
-            .set_item(
-                "factory",
-                Py::new(py, callback_owner::OwnerFactory::default()).unwrap(),
-            )
-            .unwrap();
-        globals
-            .set_item(
-                "AWAIT_ADAPTER_FILENAME",
-                litellm_python_interop::AWAIT_ADAPTER_FILENAME
-                    .to_str()
-                    .unwrap(),
-            )
-            .unwrap();
-        run_fixture(
-            py,
-            &globals,
-            include_str!("fixtures/callback_lifecycle.py"),
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/callback_lifecycle.py"
-            ),
-        )
-        .unwrap();
-        globals.unbind()
-    })
-}
-
 #[rstest]
 #[case::awaitable_kinds("awaitable_kinds")]
 #[case::identity_and_context("identity_and_context")]
@@ -106,116 +88,9 @@ fn scenario_scope(initialized_python: &InitializedPython) -> Py<PyDict> {
 fn lifecycle_contract(
     scenario_scope: Py<PyDict>,
     #[case] scenario: &str,
-    #[values(false, true)] retained: bool,
+    #[values(Backend::Python, Backend::PreparedCall)] backend: Backend,
 ) -> PyResult<()> {
-    run_scenario_fixture(scenario_scope, scenario, retained, None)
-}
-
-#[rstest]
-#[case::identity_and_ignored_returns("pre_call_identity_and_ignored_returns")]
-#[case::mutations_visible_to_later_callbacks("pre_call_mutations_visible_to_later_callbacks")]
-#[case::mutation_survives_failure("pre_call_mutation_survives_failure")]
-#[ignore = "requires the repository Python environment and LiteLLM on PYTHONPATH"]
-#[serial(python_interpreter)]
-fn pre_call_contract(
-    scenario_scope: Py<PyDict>,
-    #[case] scenario: &str,
-    #[values(false, true)] retained: bool,
-) -> PyResult<()> {
-    run_scenario_fixture(
-        scenario_scope,
-        scenario,
-        retained,
-        Some((
-            include_str!("fixtures/callback_components.py"),
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/callback_components.py"
-            ),
-        )),
-    )
-}
-
-#[rstest]
-#[case::real_post_call_logging("real_post_call_logging")]
-#[case::real_post_call_dict_response("real_post_call_dict_response")]
-#[case::real_sync_logging("real_sync_logging")]
-#[case::real_sync_logging_hook_failure("real_sync_logging_hook_failure")]
-#[case::real_sync_failure_chain("real_sync_failure_chain")]
-#[case::real_async_failure_chain("real_async_failure_chain")]
-#[case::real_async_logging("real_async_logging")]
-#[case::real_copy_boundaries("real_copy_boundaries")]
-#[case::real_logging_worker("real_logging_worker")]
-#[case::real_sync_stream_copies("real_sync_stream_copies")]
-#[case::real_stream_completion("real_stream_completion")]
-#[case::real_stream_close("real_stream_close")]
-#[case::real_stream_cancellation("real_stream_cancellation")]
-#[ignore = "requires the repository Python environment and LiteLLM on PYTHONPATH"]
-#[serial(python_interpreter)]
-fn component_contract(
-    scenario_scope: Py<PyDict>,
-    #[case] scenario: &str,
-    #[values(false, true)] retained: bool,
-) -> PyResult<()> {
-    run_scenario_fixture(
-        scenario_scope,
-        scenario,
-        retained,
-        Some((
-            include_str!("fixtures/callback_components.py"),
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/callback_components.py"
-            ),
-        )),
-    )
-}
-
-#[rstest]
-#[case::real_logging_queue_copy_control("real_logging_queue_copy_control")]
-#[case::real_crowdstrike_translator_identity("real_crowdstrike_translator_identity")]
-#[case::real_rubrik_block_lifecycle("real_rubrik_block_lifecycle")]
-#[case::real_parallel_guardrail_sharing_and_exception_order("real_parallel_guardrail_snapshots")]
-#[case::real_purview_sync_background_and_active_loop("real_purview_sync_background")]
-#[ignore = "requires the repository Python environment and LiteLLM on PYTHONPATH"]
-#[serial(python_interpreter)]
-fn integration_contract(
-    scenario_scope: Py<PyDict>,
-    #[case] scenario: &str,
-    #[values(false, true)] retained: bool,
-) -> PyResult<()> {
-    run_scenario_fixture(
-        scenario_scope,
-        scenario,
-        retained,
-        Some((
-            include_str!("fixtures/callback_integrations.py"),
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/callback_integrations.py"
-            ),
-        )),
-    )
-}
-
-fn run_scenario_fixture(
-    scenario_scope: Py<PyDict>,
-    scenario: &str,
-    retained: bool,
-    fixture: Option<(&str, &str)>,
-) -> PyResult<()> {
-    Python::attach(|py| {
-        let globals = scenario_scope.bind(py);
-        if let Some((source, filename)) = fixture {
-            run_fixture(py, globals, source, filename)?;
-        }
-        globals.get_item("run_scenario")?.unwrap().call1((
-            scenario,
-            retained,
-            globals.get_item("factory")?.unwrap(),
-        ))?;
-        Ok(())
-    })
+    run_scenario_fixture(scenario_scope, scenario, backend)
 }
 
 #[rstest]
@@ -229,14 +104,12 @@ fn control_contract(
     scenario_scope: Py<PyDict>,
     #[case] witness: &str,
     #[case] control: &str,
-    #[values(false, true)] retained: bool,
+    #[values(Backend::Python, Backend::PreparedCall)] backend: Backend,
     #[values(false, true)] awaited: bool,
 ) -> PyResult<()> {
-    run_control_fixture(scenario_scope, witness, control, retained, awaited)
+    run_control_fixture(scenario_scope, witness, control, backend, awaited)
 }
 
-// The `weak` control wraps nothing: it holds only weak references and never
-// calls the factory, so the `retained` axis has no effect on it.
 #[rstest]
 #[case::expired_borrow("deferred_lifetime")]
 #[case::externally_owned_borrow("borrowed_lifetime")]
@@ -246,7 +119,7 @@ fn weak_control(
     #[case] witness: &str,
     #[values(false, true)] awaited: bool,
 ) -> PyResult<()> {
-    run_control_fixture(scenario_scope, witness, "weak", false, awaited)
+    run_control_fixture(scenario_scope, witness, "weak", Backend::Python, awaited)
 }
 
 #[rstest]
@@ -256,16 +129,16 @@ fn weak_control(
 fn pending_handoff_control(
     scenario_scope: Py<PyDict>,
     #[case] control: &str,
-    #[values(false, true)] retained: bool,
+    #[values(Backend::Python, Backend::PreparedCall)] backend: Backend,
 ) -> PyResult<()> {
-    run_control_fixture(scenario_scope, "pending_handoff", control, retained, true)
+    run_control_fixture(scenario_scope, "pending_handoff", control, backend, true)
 }
 
 fn run_control_fixture(
     scenario_scope: Py<PyDict>,
     witness: &str,
     control: &str,
-    retained: bool,
+    backend: Backend,
     awaited: bool,
 ) -> PyResult<()> {
     Python::attach(|py| {
@@ -273,7 +146,7 @@ fn run_control_fixture(
         run_fixture(
             py,
             globals,
-            include_str!("fixtures/callback_controls.py"),
+            include_str!("../fixtures/callback_controls.py"),
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/fixtures/callback_controls.py"
@@ -282,7 +155,7 @@ fn run_control_fixture(
         globals.get_item("run_control")?.unwrap().call1((
             witness,
             control,
-            retained,
+            matches!(backend, Backend::PreparedCall),
             awaited,
             globals.get_item("factory")?.unwrap(),
         ))?;
@@ -295,10 +168,10 @@ fn invoke_direct_callback(
     globals: &Bound<'_, PyDict>,
     callback: &str,
     argument: &str,
-    retained: bool,
+    backend: Backend,
 ) -> PyResult<Py<PyAny>> {
     let args = PyTuple::new(py, [item(globals, argument)])?;
-    if !retained {
+    if matches!(backend, Backend::Python) {
         let factory = item(globals, "ReferenceFactory").call0()?;
         let owner = factory.call_method1("prepare", (item(globals, callback), args))?;
         let result = owner.call_method0("invoke");
@@ -322,7 +195,7 @@ fn invoke_direct_callback(
 #[serial(python_interpreter)]
 fn retained_field_survives_replacement_and_observes_original_mutations(
     scenario_scope: Py<PyDict>,
-    #[values(false, true)] retained: bool,
+    #[values(Backend::Python, Backend::PreparedCall)] backend: Backend,
 ) -> PyResult<()> {
     Python::attach(|py| {
         let globals = scenario_scope.bind(py);
@@ -344,7 +217,7 @@ def replace(value):
             None,
         )?;
         for callback in ["retain", "replace"] {
-            assert!(invoke_direct_callback(py, globals, callback, "event", retained)?.is_none(py));
+            assert!(invoke_direct_callback(py, globals, callback, "event", backend)?.is_none(py));
         }
         let original = item(globals, "original");
         let replacement = item(globals, "replacement");
@@ -390,7 +263,7 @@ def replace(value):
 #[serial(python_interpreter)]
 fn queued_graph_outlives_invocation_and_stays_live_until_serialized(
     scenario_scope: Py<PyDict>,
-    #[values(false, true)] retained: bool,
+    #[values(Backend::Python, Backend::PreparedCall)] backend: Backend,
 ) -> PyResult<()> {
     Python::attach(|py| {
         let globals = scenario_scope.bind(py);
@@ -408,7 +281,7 @@ def enqueue(value):
             Some(globals),
             None,
         )?;
-        assert!(invoke_direct_callback(py, globals, "enqueue", "payload", retained)?.is_none(py));
+        assert!(invoke_direct_callback(py, globals, "enqueue", "payload", backend)?.is_none(py));
         py.run(c"del sentinel, payload\ngc.collect()", Some(globals), None)?;
         let reference = item(globals, "reference");
         assert!(!reference.call0()?.is_none());

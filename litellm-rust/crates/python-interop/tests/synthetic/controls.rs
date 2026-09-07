@@ -6,10 +6,8 @@ use pyo3::types::{PyDict, PyTuple};
 use rstest::rstest;
 use serial_test::serial;
 
-#[path = "support/mod.rs"]
-mod support;
-
-use support::python::{InitializedPython, initialized_python, item, scope};
+use crate::support::Backend;
+use crate::support::python::{InitializedPython, initialized_python, item, scope};
 
 enum ControlCall {
     Reference(Py<PyAny>),
@@ -22,10 +20,10 @@ impl ControlCall {
         callback: Bound<'_, PyAny>,
         args: Bound<'_, PyTuple>,
         kwargs: Option<Bound<'_, PyDict>>,
-        retained: bool,
+        backend: Backend,
         mode: InvocationMode,
     ) -> PyResult<Self> {
-        if retained {
+        if matches!(backend, Backend::PreparedCall) {
             return Ok(Self::Prepared(PreparedCall::new(
                 mode,
                 callback.unbind(),
@@ -76,7 +74,7 @@ fn argument_copy_boundaries_determine_identity_and_mutation_visibility(
     #[case] transform: &CStr,
     #[case] expected_identity: (bool, bool, bool),
     #[case] live_stages: (u8, u8, u8),
-    #[values(false, true)] retained: bool,
+    #[values(Backend::Python, Backend::PreparedCall)] backend: Backend,
     #[values(InvocationMode::Direct, InvocationMode::Await)] mode: InvocationMode,
 ) -> PyResult<()> {
     initialized_python.attach(|py| {
@@ -110,7 +108,7 @@ async def observe_async(value, *, alias):
             ),
             transformed.get_item(0)?.cast_into::<PyTuple>()?,
             Some(transformed.get_item(1)?.cast_into::<PyDict>()?),
-            retained,
+            backend,
             mode,
         )?;
         let original = item(&globals, "original");
@@ -163,7 +161,7 @@ fn result_copy_boundaries_determine_root_and_nested_identity(
     initialized_python: &InitializedPython,
     #[case] transform: Option<&CStr>,
     #[case] expected_identity: (bool, bool),
-    #[values(false, true)] retained: bool,
+    #[values(Backend::Python, Backend::PreparedCall)] backend: Backend,
     #[values(InvocationMode::Direct, InvocationMode::Await)] mode: InvocationMode,
 ) -> PyResult<()> {
     initialized_python.attach(|py| {
@@ -194,7 +192,7 @@ async def callback_async():
             ),
             PyTuple::empty(py),
             None,
-            retained,
+            backend,
             mode,
         )?;
         let pending = call.invoke(py, mode)?;

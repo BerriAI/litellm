@@ -133,7 +133,7 @@ fixtures. These generic proofs complement, rather than replace, native OCR
 private proof tests
 
 The standard-library-only tests in
-`crates/python-interop/tests/callback_patterns.rs` define small inline Python
+`crates/python-interop/tests/synthetic/patterns.rs` define small inline Python
 callbacks, with Rust controlling invocation, ownership and assertions. They
 compare Python-reference and Rust-retained calls using both direct and awaited
 invocation. They model the behavior
@@ -147,13 +147,33 @@ Existing synthetic lifecycle cases also cover streams, context and cancellation
 Run this matrix without LiteLLM, vendor SDKs, credentials or services:
 
 ```bash
-cargo test --manifest-path litellm-rust/Cargo.toml -p litellm-python-interop --test callback_patterns
+cargo test --manifest-path litellm-rust/Cargo.toml -p litellm-python-interop --test synthetic
 ```
 
 These are behavioral models, not tests of vendor authentication, delivery or
 production dispatcher policy. The optional component and integration fixtures
 exercise existing LiteLLM implementations with fake transports and credentials
 as supplementary coverage; run them with `make test-rust-python`
+
+The interop tests have two explicit Cargo targets, each rooted in its directory's
+`mod.rs`: `tests/synthetic/` for custom, minimal Python implementations and
+`tests/integration/` for real LiteLLM components with fake transports. The latter
+are component-level compatibility tests, not complete SDK or proxy route tests.
+Shared Rust fixtures live in `tests/support/`, and Python scenarios live in
+`tests/fixtures/`
+
+Use `#[fixture]` composition for setup: initialize Python once, but create a fresh
+scenario scope and owner factory for each case. Use named `#[case::behavior]`
+entries for scenarios and `#[values(Backend::Python, Backend::PreparedCall)]` for
+the invocation matrix. Keep copying and ownership controls alongside the behavior
+they distinguish. Register new Rust modules in the appropriate `mod.rs`; Cargo
+test autodiscovery is disabled so new files cannot silently become a third group
+
+Run `--test synthetic` for the standard-library-only group. Integration cases
+remain explicitly ignored without the repository Python environment;
+`make test-rust-python` configures that environment and runs both groups with
+`--include-ignored`. To inspect the groups without running them, use
+`cargo test --manifest-path litellm-rust/Cargo.toml -p litellm-python-interop --tests -- --list`
 
 The callback lifecycle scenarios use
 `#[serial(python_interpreter)]` to isolate CPython GC and interpreter-wide
