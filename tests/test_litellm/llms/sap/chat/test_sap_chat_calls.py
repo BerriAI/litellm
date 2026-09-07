@@ -204,3 +204,113 @@ async def test_sap_chat_required_headers(
                 f"Header '{header_name}' has incorrect value. "
                 f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
             )
+
+
+def _final_chunk_payload() -> dict:
+    return {
+        "id": "chatcmpl-sap-final",
+        "object": "chat.completion.chunk",
+        "created": 1761319270,
+        "model": "anthropic--claude-4.7-opus",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {},
+                "logprobs": {},
+                "finish_reason": "tool_calls",
+            }
+        ],
+        "usage": {
+            "completion_tokens": 206,
+            "prompt_tokens": 62322,
+            "total_tokens": 62528,
+        },
+    }
+
+
+def test_validate_chunk_drops_empty_logprobs():
+    from litellm.llms.sap.chat.handler import _StreamParser
+
+    chunk = _StreamParser._validate_chunk(_final_chunk_payload())
+    assert chunk.choices[0].logprobs is None
+
+
+def test_validate_chunk_preserves_real_logprobs():
+    from litellm.llms.sap.chat.handler import _StreamParser
+
+    payload = _final_chunk_payload()
+    payload["choices"][0]["logprobs"] = {
+        "content": [{"token": "Hello", "logprob": -0.1, "bytes": None, "top_logprobs": []}]
+    }
+    chunk = _StreamParser._validate_chunk(payload)
+    assert chunk.choices[0].logprobs is not None
+    assert chunk.choices[0].logprobs.content[0].token == "Hello"
+
+
+def test_validate_chunk_converts_usage_to_litellm_usage():
+    from litellm.llms.sap.chat.handler import _StreamParser
+    from litellm.types.utils import Usage
+
+    chunk = _StreamParser._validate_chunk(_final_chunk_payload())
+    assert isinstance(chunk.usage, Usage)
+    assert chunk.usage.completion_tokens == 206
+    assert chunk.usage.prompt_tokens == 62322
+    assert chunk.usage.total_tokens == 62528
+
+
+def test_validate_chunk_without_usage_keeps_none():
+    from litellm.llms.sap.chat.handler import _StreamParser
+
+    payload = _final_chunk_payload()
+    del payload["usage"]
+    chunk = _StreamParser._validate_chunk(payload)
+    assert chunk.usage is None
+
+
+def test_validated_usage_survives_nested_model_dump():
+    from litellm.llms.sap.chat.handler import _StreamParser
+    from litellm.types.utils import ModelResponseStream
+
+    chunk = _StreamParser._validate_chunk(_final_chunk_payload())
+
+    model_response = ModelResponseStream()
+    setattr(model_response, "usage", chunk.usage)
+
+    dumped = model_response.model_dump()
+    assert dumped["usage"]["total_tokens"] == 62528
+
+
+def test_to_openai_chunk_normalizes_openai_shaped_event():
+    from litellm.llms.sap.chat.handler import _StreamParser
+    from litellm.types.utils import Usage
+
+    chunk = _StreamParser.to_openai_chunk(_final_chunk_payload())
+    assert chunk is not None
+    assert chunk.choices[0].logprobs is None
+    assert isinstance(chunk.usage, Usage)
+
+
+def test_to_openai_chunk_from_orchestration_result():
+    from litellm.llms.sap.chat.handler import _StreamParser
+
+    event = {
+        "request_id": "a07127d3-cb74-9427-a4dc-ef9bf424fb43",
+        "orchestration_result": {
+            "id": "chatcmpl-sap-delta",
+            "object": "chat.completion.chunk",
+            "created": 1761319270,
+            "model": "anthropic--claude-4.7-opus",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "Hello "},
+                    "logprobs": {},
+                    "finish_reason": None,
+                }
+            ],
+        },
+    }
+    chunk = _StreamParser.to_openai_chunk(event)
+    assert chunk is not None
+    assert chunk.choices[0].delta.content == "Hello "
+    assert chunk.choices[0].logprobs is None
