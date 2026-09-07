@@ -311,16 +311,15 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
     )
 
 
-def _find_base_llm_exception(error: BaseException, depth: int = 0) -> BaseLLMException | None:
-    if depth >= 10:
-        return None
-    if isinstance(error, BaseLLMException):
-        return error
-
-    cause: Final = error.__cause__
-    if cause is None:
-        return None
-    return _find_base_llm_exception(cause, depth + 1)
+def _find_base_llm_exception(error: BaseException) -> BaseLLMException | None:
+    current: BaseException | None = error
+    for _ in range(10):
+        if current is None:
+            return None
+        if isinstance(current, BaseLLMException):
+            return current
+        current = current.__cause__  # rebind-ok: traverse the bounded exception cause chain
+    return None
 
 
 class BaseLLMHTTPHandler:
