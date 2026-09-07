@@ -60,6 +60,18 @@ const optionByLabel = (label: string): HTMLElement | undefined =>
 
 const isOptionDisabled = (option: HTMLElement): boolean => option.getAttribute("aria-disabled") === "true";
 
+// A tier's models are the chips in its multi-select, reachable by the placeholder on that row's
+// input. Nothing accessible enumerates the chips as a set, so they are collected by the data-slot
+// the combobox primitive sets and read back off the label each chip carries.
+const tierModels = (tier: string): string[] => {
+  const chips = screen
+    .getByLabelText(`Select model(s) for ${tier.toLowerCase()} queries`)
+    .closest('[data-slot="combobox-chips"]') as HTMLElement;
+  return [...chips.querySelectorAll('[data-slot="combobox-chip"]')].map(
+    (chip) => chip.getAttribute("aria-label") ?? "",
+  );
+};
+
 const selectTemplate = async (label: string): Promise<void> => {
   await userEvent.click(optionByLabel(label)!);
 };
@@ -188,11 +200,10 @@ describe("AddAutoRouterTab", () => {
     const button = await screen.findByTestId("configure-automatically-button");
     await userEvent.click(button);
 
-    expect(
-      screen.getByText(
-        /Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: claude-opus-5.*Reasoning: claude-opus-5/,
-      ),
-    ).toBeInTheDocument();
+    expect(tierModels("Simple")).toEqual(["gpt-5.6-luna"]);
+    expect(tierModels("Medium")).toEqual(["claude-sonnet-5"]);
+    expect(tierModels("Complex")).toEqual(["claude-opus-5"]);
+    expect(tierModels("Reasoning")).toEqual(["claude-opus-5"]);
     expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining("Configured with"));
   });
 
@@ -209,9 +220,24 @@ describe("AddAutoRouterTab", () => {
     const button = await screen.findByTestId("configure-automatically-button");
     await userEvent.click(button);
 
-    expect(
-      screen.getByText(/Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: gpt-5.6-sol.*Reasoning: gpt-5.6-sol/),
-    ).toBeInTheDocument();
+    expect(tierModels("Simple")).toEqual(["gpt-5.6-luna"]);
+    expect(tierModels("Medium")).toEqual(["claude-sonnet-5"]);
+    expect(tierModels("Complex")).toEqual(["gpt-5.6-sol"]);
+    expect(tierModels("Reasoning")).toEqual(["gpt-5.6-sol"]);
+  });
+
+  // The whole point of the button is that a caller can see what it filled in, so it opens Detailed
+  // Configuration rather than leaving the tiers behind a collapsed summary.
+  it("opens Detailed Configuration on the tiers automatic setup just filled in", async () => {
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+
+    expect(screen.queryByText("Complexity Tier Configuration")).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByTestId("configure-automatically-button"));
+
+    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+    expect(tierModels("Simple")).not.toHaveLength(0);
   });
 
   // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of

@@ -207,10 +207,10 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
-  // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
-  // (which expands it automatically, since there's nothing else to show them their config from). A
-  // preset re-collapses it after prefilling, offering the same "here's what got filled in, expand to
-  // change it" affordance. A caller can always toggle it manually at any point.
+  // Closed by default, and opened by a deliberate act: clicking it, choosing Custom, or running
+  // automatic setup. The latter two expand it so the tiers they just filled in are visible. A
+  // preset re-collapses it after prefilling, since its own label already says what got applied.
+  // A caller can always toggle it manually at any point.
   const [detailsExpanded, setDetailsExpanded] = useState<boolean>(false);
 
   const [isRoutingTestVisible, setIsRoutingTestVisible] = useState<boolean>(false);
@@ -335,7 +335,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (automaticRouterConfig === null) return;
     setSelectedPreset(undefined);
     applyPrefill({ ...buildEmptyPrefill(), complexityRouterConfig: automaticRouterConfig });
-    setDetailsExpanded(false);
+    setDetailsExpanded(true);
     toast.success("Automatic setup created", { description: tierConfigSummary(automaticRouterConfig) });
   };
 
