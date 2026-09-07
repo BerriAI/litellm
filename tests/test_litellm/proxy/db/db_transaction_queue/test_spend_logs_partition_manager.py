@@ -336,17 +336,15 @@ async def test_partition_maintenance_issues_nothing_when_the_budget_is_already_s
 
 
 def test_unsupported_interval_raises():
-    with pytest.raises(ValueError, match='Unsupported partition interval: year'):
+    with pytest.raises(ValueError, match="Unsupported partition interval: year"):
         period_start(date(2026, 6, 1), "year")
-    with pytest.raises(ValueError, match='Unsupported partition interval: year'):
+    with pytest.raises(ValueError, match="Unsupported partition interval: year"):
         next_period_start(date(2026, 6, 1), "year")
 
 
 def test_parse_partition_upper_bound_unparseable_to_value_is_none():
     """A TO(...) value that is not a valid timestamp must not raise; return None."""
-    assert (
-        parse_partition_upper_bound("FOR VALUES FROM ('x') TO ('not-a-date')") is None
-    )
+    assert parse_partition_upper_bound("FOR VALUES FROM ('x') TO ('not-a-date')") is None
 
 
 @pytest.mark.asyncio
