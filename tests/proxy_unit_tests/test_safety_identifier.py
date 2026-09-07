@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.safety_identifier import enforce_safety_identifier
 from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -22,6 +23,16 @@ def test_enforce_safety_identifier_hashes_authenticated_user(monkeypatch: pytest
     )
 
     assert data["safety_identifier"] == hashlib.sha256(b"user-123").hexdigest()
+
+
+def test_enforce_safety_identifier_is_idempotent():
+    safety_identifier = hashlib.sha256(b"user-123").hexdigest()
+    data = {"safety_identifier": safety_identifier}
+
+    modified = enforce_safety_identifier(data=data, user_id="user-123", enabled=True)
+
+    assert modified is False
+    assert data == {"safety_identifier": safety_identifier}
 
 
 @pytest.mark.parametrize("setting", [None, "false"])
