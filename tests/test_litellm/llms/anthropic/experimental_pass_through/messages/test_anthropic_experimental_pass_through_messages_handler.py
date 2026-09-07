@@ -702,6 +702,27 @@ def test_handler_strips_when_no_presanitized_flag():
     assert result is not None
 
 
+def test_handler_forwards_api_base_to_tool_id_sanitize():
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    with patch.object(
+        handler,
+        "sanitize_tool_use_ids_in_anthropic_messages",
+        wraps=handler.sanitize_tool_use_ids_in_anthropic_messages,
+    ) as spy:
+        result = handler.anthropic_messages_handler(
+            max_tokens=10,
+            messages=[{"role": "user", "content": "Hello"}],
+            model="anthropic/claude-3-5-sonnet-20241022",
+            custom_llm_provider="anthropic",
+            api_base="http://127.0.0.1:8000/v1",
+            mock_response="hi there",
+        )
+    assert result is not None
+    assert spy.call_count == 1
+    assert spy.call_args.kwargs["api_base"] == "http://127.0.0.1:8000/v1"
+
+
 def test_handler_skips_strip_when_presanitized():
     """Async wrapper already sanitized -> handler must NOT rescan."""
     from litellm.llms.anthropic.experimental_pass_through.messages import handler

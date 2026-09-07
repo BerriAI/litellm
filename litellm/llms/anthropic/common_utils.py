@@ -1240,17 +1240,38 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
     return block
 
 
-def sanitize_tool_use_ids_in_anthropic_messages(messages: list[Any]) -> list[Any]:
-    """
-    Return a new message list with ``tool_use`` / ``server_tool_use`` ``id`` and
-    ``tool_result`` ``tool_use_id`` values rewritten to satisfy Anthropic's
-    ``^[a-zA-Z0-9_-]+$`` requirement.
+_ANTHROPIC_TOOL_ID_CHARSET_HOST_MARKERS: Final = frozenset(
+    (
+        "api.anthropic.com",
+        "amazonaws.com",
+        "googleapis.com",
+        "cloud.google.com",
+    )
+)
 
-    Cross-provider clients (e.g. Claude Code routed through kimi) may replay
-    conversation history containing ids like ``functions.Bash:0`` with ``.``
-    and ``:`` — valid on the upstream provider but rejected by Anthropic when
-    the session is switched to a native Anthropic deployment.
+
+def _upstream_enforces_anthropic_tool_id_charset(api_base: str | None) -> bool:
+    if api_base is None or not api_base.strip():
+        return True
+    host: Final = api_base.casefold()
+    return any(marker in host for marker in _ANTHROPIC_TOOL_ID_CHARSET_HOST_MARKERS)
+
+
+def sanitize_tool_use_ids_in_anthropic_messages(
+    messages: list[Any],
+    *,
+    api_base: str | None = None,
+) -> list[Any]:
     """
+    Rewrite ``tool_use`` / ``server_tool_use`` ``id`` and ``tool_result``
+    ``tool_use_id`` values to Anthropic's ``^[a-zA-Z0-9_-]+$`` pattern.
+
+    No-op when ``api_base`` is a host that is not Anthropic, Bedrock, or Vertex.
+    Those upstreams (vLLM, Kimi, SGLang) echo the original ids; rewriting them
+    breaks the next tool_result turn. See #32214.
+    """
+    if not _upstream_enforces_anthropic_tool_id_charset(api_base):
+        return messages
     out: Final[list[Any]] = []
     for m in messages:
         if not isinstance(m, dict) or not isinstance(m.get("content"), list):
