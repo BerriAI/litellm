@@ -4,7 +4,7 @@ selection, the non-partitioned no-op safety path, and the drop/ensure SQL flow.
 """
 
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,7 +19,6 @@ from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
     upcoming_partitions,
 )
 
-
 DDL_TIMEOUT_MS = 30000
 
 
@@ -28,36 +27,40 @@ def _budget(ms: "int | None" = DDL_TIMEOUT_MS):
     return lambda: ms
 
 
-def _wire_tx(db) -> list[str]:
+def _wire_tx(client) -> "tuple[list[str], list[int | timedelta | None]]":
     """
     Model the prisma seam the partition DDL uses.
 
     Every statement this manager issues, DDL and catalog query alike, runs inside
-    db.tx() so it can carry SET LOCAL timeouts. Those SET LOCAL statements are
-    collected in the returned list rather than forwarded, so assertions on
-    db.execute_raw and db.query_raw still see only the real statements.
+    client.tx() so it can carry SET LOCAL timeouts. Those SET LOCAL statements are
+    collected in the first returned list rather than forwarded, so assertions on
+    db.execute_raw and db.query_raw still see only the real statements. The
+    second list records the interactive-transaction timeout each tx was opened
+    with.
     """
     session_settings: list[str] = []
+    tx_timeouts: list[int | timedelta | None] = []
 
     @asynccontextmanager
-    async def _tx():
+    async def _tx(*, max_wait: "int | timedelta | None" = None, timeout: "int | timedelta | None" = None):
+        tx_timeouts.append(timeout)
         tx = MagicMock()
 
         async def _execute_raw(sql, *args):
             if sql.lstrip().upper().startswith("SET LOCAL"):
                 session_settings.append(sql.strip())
                 return 0
-            return await db.execute_raw(sql, *args)
+            return await client.db.execute_raw(sql, *args)
 
         async def _query_raw(sql, *args):
-            return await db.query_raw(sql, *args)
+            return await client.db.query_raw(sql, *args)
 
         tx.execute_raw = _execute_raw
         tx.query_raw = _query_raw
         yield tx
 
-    db.tx = _tx
-    return session_settings
+    client.tx = _tx
+    return session_settings, tx_timeouts
 
 
 def test_period_start_per_interval():
@@ -119,12 +122,12 @@ async def test_is_partitioned_true_and_false():
 
     client_true = MagicMock()
     client_true.db.query_raw = AsyncMock(return_value=[{"partitioned": True}])
-    _wire_tx(client_true.db)
+    _wire_tx(client_true)
     assert await mgr.is_partitioned(client_true, _budget()) is True
 
     client_false = MagicMock()
     client_false.db.query_raw = AsyncMock(return_value=[{"partitioned": False}])
-    _wire_tx(client_false.db)
+    _wire_tx(client_false)
     assert await mgr.is_partitioned(client_false, _budget()) is False
 
 
@@ -137,7 +140,7 @@ async def test_catalog_queries_are_scoped_to_current_schema():
     mgr = SpendLogsPartitionManager()
     client = MagicMock()
     client.db.query_raw = AsyncMock(return_value=[])
-    _wire_tx(client.db)
+    _wire_tx(client)
 
     await mgr.is_partitioned(client, _budget())
     is_partitioned_sql = client.db.query_raw.call_args.args[0]
@@ -158,7 +161,7 @@ async def test_is_partitioned_swallows_errors_and_returns_false():
     client.db.query_raw = AsyncMock(side_effect=Exception("db down"))
     # Wire the real seam: without it the async with itself raises, and the test
     # would pass on the wrong exception.
-    _wire_tx(client.db)
+    _wire_tx(client)
     assert await mgr.is_partitioned(client, _budget()) is False
 
 
@@ -180,7 +183,7 @@ async def test_drop_partitions_older_than_drops_expired_only():
         ]
     )
     client.db.execute_raw = AsyncMock(return_value=0)
-    _wire_tx(client.db)
+    _wire_tx(client)
 
     cutoff = datetime(2026, 6, 5, 0, 0, 0, tzinfo=timezone.utc)
     dropped = await mgr.drop_partitions_older_than(client, cutoff, _budget())
@@ -197,7 +200,7 @@ async def test_ensure_partitions_issues_create_for_each_period():
     mgr = SpendLogsPartitionManager(interval="day", precreate_ahead=2)
     client = MagicMock()
     client.db.execute_raw = AsyncMock(return_value=0)
-    _wire_tx(client.db)
+    _wire_tx(client)
 
     created = await mgr.ensure_partitions(client, _budget())
 
@@ -227,7 +230,7 @@ async def test_partition_ddl_carries_a_statement_and_lock_timeout():
             }
         ]
     )
-    session_settings = _wire_tx(client.db)
+    session_settings, _ = _wire_tx(client)
 
     await mgr.ensure_partitions(client, _budget(7000))
     await mgr.drop_partitions_older_than(client, datetime(2026, 6, 5, tzinfo=timezone.utc), _budget(7000))
@@ -249,7 +252,7 @@ async def test_catalog_queries_carry_a_statement_timeout():
     mgr = SpendLogsPartitionManager()
     client = MagicMock()
     client.db.query_raw = AsyncMock(return_value=[])
-    session_settings = _wire_tx(client.db)
+    session_settings, _ = _wire_tx(client)
 
     await mgr.is_partitioned(client, _budget(4000))
     assert session_settings == ["SET LOCAL statement_timeout = 4000"], (
@@ -264,6 +267,31 @@ async def test_catalog_queries_carry_a_statement_timeout():
 
 
 @pytest.mark.asyncio
+async def test_partition_transactions_outlive_their_statement_bound():
+    """
+    prisma's interactive transaction has its own timeout, 5s by default, which
+    keeps ticking while a statement waits on the partition lock. A tx shorter
+    than the SET LOCAL bound it carries is closed mid-lock-wait and the engine
+    then answers the next call with a 422, so the partition is silently not
+    created.
+    """
+    mgr = SpendLogsPartitionManager()
+    client = MagicMock()
+    client.db.execute_raw = AsyncMock(return_value=0)
+    client.db.query_raw = AsyncMock(return_value=[])
+    _, tx_timeouts = _wire_tx(client)
+
+    await mgr.is_partitioned(client, _budget())
+    await mgr.ensure_partitions(client, _budget())
+    await mgr.drop_partitions_older_than(client, datetime(2026, 6, 5, tzinfo=timezone.utc), _budget())
+
+    assert len(tx_timeouts) > 0
+    for tx_timeout in tx_timeouts:
+        assert isinstance(tx_timeout, timedelta)
+        assert tx_timeout.total_seconds() * 1000 >= DDL_TIMEOUT_MS
+
+
+@pytest.mark.asyncio
 async def test_partition_loops_stop_when_the_budget_runs_out_mid_way():
     """
     Each loop issues one statement per partition, so a bound read once at entry
@@ -273,7 +301,7 @@ async def test_partition_loops_stop_when_the_budget_runs_out_mid_way():
     mgr = SpendLogsPartitionManager(interval="day", precreate_ahead=4)
     client = MagicMock()
     client.db.execute_raw = AsyncMock(return_value=0)
-    _wire_tx(client.db)
+    _wire_tx(client)
 
     # Budget for two statements, then spent.
     calls = {"n": 0}
@@ -295,7 +323,7 @@ async def test_partition_maintenance_issues_nothing_when_the_budget_is_already_s
     client = MagicMock()
     client.db.execute_raw = AsyncMock(return_value=0)
     client.db.query_raw = AsyncMock(return_value=[])
-    _wire_tx(client.db)
+    _wire_tx(client)
 
     spent = _budget(None)
 
@@ -326,7 +354,7 @@ async def test_ensure_partitions_continues_when_one_create_fails():
     mgr = SpendLogsPartitionManager(interval="day", precreate_ahead=2)
     client = MagicMock()
     client.db.execute_raw = AsyncMock(side_effect=[0, Exception("overlap"), 0])
-    _wire_tx(client.db)
+    _wire_tx(client)
 
     created = await mgr.ensure_partitions(client, _budget())
 
@@ -351,7 +379,7 @@ async def test_invalid_interval_does_not_abort_ensure_partitions():
     mgr = SpendLogsPartitionManager(interval="fortnight", precreate_ahead=1)
     client = MagicMock()
     client.db.execute_raw = AsyncMock(return_value=0)
-    _wire_tx(client.db)
+    _wire_tx(client)
 
     created = await mgr.ensure_partitions(client, _budget())
 
@@ -375,7 +403,7 @@ async def test_drop_partitions_continues_when_one_drop_fails():
         ]
     )
     client.db.execute_raw = AsyncMock(side_effect=[Exception("locked"), 0])
-    _wire_tx(client.db)
+    _wire_tx(client)
 
     cutoff = datetime(2026, 6, 10, 0, 0, 0, tzinfo=timezone.utc)
     dropped = await mgr.drop_partitions_older_than(client, cutoff, _budget())

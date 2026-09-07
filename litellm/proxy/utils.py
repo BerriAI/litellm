@@ -3697,13 +3697,17 @@ class PrismaClient:
             return self.db.read_target
         return self.db
 
-    def tx(self) -> "TransactionManager":
+    def tx(self, *, timeout: "int | timedelta | None" = None) -> "TransactionManager":
         """Open an interactive transaction on the writer.
 
         Callers go through this instead of reaching into ``self.db`` so writer
         selection and read-replica routing stay encapsulated in the wrapper.
+        ``timeout`` bounds the whole transaction; it must outlive any
+        SET LOCAL statement_timeout the transaction carries, since prisma's
+        default 5s would close it while a statement is still waiting on a lock.
         """
-        return cast("TransactionManager", self.db.tx())  # cast-ok: wrappers delegate tx via __getattr__ (untyped)
+        tx_kwargs: Final[dict[str, int | timedelta]] = {} if timeout is None else {"timeout": timeout}
+        return cast("TransactionManager", self.db.tx(**tx_kwargs))  # cast-ok: wrappers delegate tx via __getattr__ (untyped)
 
     def get_request_status(self, payload: dict | SpendLogsPayload) -> Literal["success", "failure"]:
         """
