@@ -490,17 +490,19 @@ describe("KeyInfoView handleKeyUpdate empty strings", () => {
 });
 
 describe("KeyInfoView handleKeyUpdate soft_budget", () => {
+  const premiumAdminAuth = {
+    accessToken: "access_abc",
+    userId: "user_1",
+    userRole: "Admin",
+    premiumUser: true,
+    token: "token_123",
+    userEmail: "test@example.com",
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  };
+
   const renderWithSoftBudget = (softBudget: number | null) => {
-    mockUseAuthorized.mockReturnValue({
-      accessToken: "access_abc",
-      userId: "user_1",
-      userRole: "Admin",
-      premiumUser: true,
-      token: "token_123",
-      userEmail: "test@example.com",
-      disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
-    });
+    mockUseAuthorized.mockReturnValue(premiumAdminAuth);
 
     return render(
       <KeyInfoView
