@@ -4568,3 +4568,28 @@ def test_gemini_live_native_audio_declares_prompt_caching_unsupported(
     assert litellm.get_model_info(model, custom_llm_provider=provider)["supports_prompt_caching"] is False
     assert supports_prompt_caching(model=model, custom_llm_provider=provider) is False
     assert supports_prompt_caching(model="gemini-2.5-flash", custom_llm_provider="vertex_ai") is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-live-2.5-flash-native-audio", "vertex_ai/gemini-live-2.5-flash-native-audio"],
+)
+def test_gemini_live_native_audio_limits_and_capabilities_match_vendor_model_card(
+    _local_model_cost_map: None, model: str
+) -> None:
+    """Google's card for model ID gemini-live-2.5-flash-native-audio gives a 128K context window and
+    64K maximum output tokens, and marks structured output and URL context as not supported. Its
+    modality list is text, image, audio and video, with no document input, so pdf input cannot be
+    advertised either. The entry claimed a 1M window, an off-by-one 65535 output cap, and all three
+    capabilities.
+
+    Both ids resolve to the one bare entry, which is why no vertex_ai/-prefixed twin is needed.
+    """
+    info = litellm.get_model_info(model)
+
+    assert info["max_input_tokens"] == 131072
+    assert info["max_output_tokens"] == 65536
+    assert info["max_tokens"] == 65536
+    assert info["supports_response_schema"] is False
+    assert info["supports_url_context"] is False
+    assert info["supports_pdf_input"] is False
