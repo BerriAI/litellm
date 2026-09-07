@@ -9,15 +9,17 @@ key from the stored row (JSON Merge Patch), a call after the price clear is bill
 the cost map's rate rather than the cleared override, and a delete removes the
 deployment from /model/info and makes the model name unknown to /chat/completions.
 
-Every read-back goes through ProxyClient.read_back_everywhere, which polls /model/info
-on every URL in PROXY_REPLICA_URLS, so a write that reached only one gateway fails
-naming the gateway that never converged.
+The stored row is read back from /model/info, a control-plane route with one answer
+behind it. What every gateway must agree on is which models it serves, so the create
+and delete steps poll /v1/models on every URL in PROXY_REPLICA_URLS through
+ProxyClient.read_back_everywhere, failing by name on the gateway that never converged.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final
 
@@ -39,6 +41,7 @@ from models import (
     ModelInfoResponse,
     ModelNewBody,
     ModelPatchBody,
+    ModelsListResponse,
     SpendLogRow,
 )
 
@@ -50,6 +53,13 @@ PINNED_MAX_INPUT_TOKENS: Final = 4096
 PINNED_INPUT_RATE: Final = 1e-05
 UPDATED_INPUT_RATE: Final = 2e-05
 PINNED_OUTPUT_RATE: Final = 3e-05
+
+# A PATCH lands on the control plane, and each gateway picks it up on its own config
+# reload, so the first call after the write can still be billed at the old rate. There
+# is no price on the gateway's data-plane surface to poll, so the billing steps drive
+# calls until the new rate shows up in the spend row and let the deadline be what fails.
+BILLING_CONVERGENCE_TIMEOUT: Final = 90.0
+BILLING_CONVERGENCE_INTERVAL: Final = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,28 +105,44 @@ def _entry(body: ModelInfoResponse, model_name: str) -> ModelInfoEntry | None:
     return next((entry for entry in body.data if entry.model_name == model_name), None)
 
 
-def _entry_everywhere(
+def _stored_entry(
     client: ManagementClient,
     model_name: str,
     *,
     converged: Callable[[ModelInfoEntry], bool],
-) -> Mapping[str, ModelInfoEntry]:
-    """The /model/info row for `model_name` from every replica, once each replica's
-    row satisfies `converged`."""
+) -> ModelInfoEntry:
+    """The stored /model/info row for `model_name`, once it satisfies `converged`.
+
+    /model/info is a control-plane route: the gateways named in PROXY_REPLICA_URLS
+    serve the LLM surface only, so the stored row has one answer, not one per
+    gateway. What every gateway must agree on is which models it serves, and
+    `_assert_served_everywhere` / `_assert_absent_everywhere` poll /v1/models for
+    that."""
 
     def has_converged(body: ModelInfoResponse) -> bool:
         entry: Final = _entry(body, model_name)
         return entry is not None and converged(entry)
 
-    bodies: Final = client.proxy.read_back_everywhere("/model/info", ModelInfoResponse, predicate=has_converged)
-    return {replica: entry for replica, body in bodies.items() if (entry := _entry(body, model_name)) is not None}
+    body: Final = client.proxy.read_back("/model/info", ModelInfoResponse, predicate=has_converged)
+    entry: Final = _entry(body, model_name)
+    assert entry is not None, f"/model/info stopped listing {model_name!r} between the poll and the read"
+    return entry
+
+
+def _serves(body: ModelsListResponse, model_name: str) -> bool:
+    return any(entry.id == model_name for entry in body.data)
+
+
+def _assert_served_everywhere(client: ManagementClient, model_name: str) -> None:
+    _ = client.proxy.read_back_everywhere(
+        "/v1/models", ModelsListResponse, predicate=lambda body: _serves(body, model_name)
+    )
 
 
 def _assert_absent_everywhere(client: ManagementClient, model_name: str) -> None:
-    def gone(body: ModelInfoResponse) -> bool:
-        return _entry(body, model_name) is None
-
-    _ = client.proxy.read_back_everywhere("/model/info", ModelInfoResponse, predicate=gone)
+    _ = client.proxy.read_back_everywhere(
+        "/v1/models", ModelsListResponse, predicate=lambda body: not _serves(body, model_name)
+    )
 
 
 def _assert_untouched_keys_as_created(entry: ModelInfoEntry, replica: str) -> None:
@@ -165,26 +191,45 @@ def _billed_input_cost(client: ManagementClient, model_name: str, key: str) -> t
     return prompt_tokens, input_cost
 
 
+def _await_billed_input_cost(
+    client: ManagementClient, model_name: str, key: str, *, expected_rate: float
+) -> tuple[int, float]:
+    """Drive calls through `model_name` until one is billed at `expected_rate`, and
+    return the prompt tokens and input cost of the last spend row either way.
+
+    Only the deadline ends the wait unsatisfied: a rate that never reaches the gateway
+    comes back as the stale cost for the caller to assert on, so the rate the caller
+    expects is still what decides the test."""
+    deadline: Final = time.monotonic() + BILLING_CONVERGENCE_TIMEOUT
+    while True:
+        prompt_tokens, input_cost = _billed_input_cost(client, model_name, key)
+        if _approx_equal(input_cost, prompt_tokens * expected_rate) or time.monotonic() >= deadline:
+            return prompt_tokens, input_cost
+        time.sleep(BILLING_CONVERGENCE_INTERVAL)
+
+
 class TestModelLifecycle:
     @pytest.mark.covers("mgmt.model.add.persists")
-    def test_create_reads_back_every_field_on_every_replica(
+    def test_create_reads_back_every_field_and_serves_on_every_replica(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         registered = _register(client, resources)
 
-        entries = _entry_everywhere(client, registered.model_name, converged=lambda _entry: True)
+        entry = _stored_entry(client, registered.model_name, converged=lambda _entry: True)
+        stored = "/model/info"
 
-        for replica, entry in entries.items():
-            _assert_untouched_keys_as_created(entry, replica)
-            assert entry.litellm_params.input_cost_per_token == PINNED_INPUT_RATE, (
-                f"{replica}: input_cost_per_token {entry.litellm_params.input_cost_per_token} != {PINNED_INPUT_RATE}"
-            )
-            assert entry.litellm_params.max_input_tokens == PINNED_MAX_INPUT_TOKENS, (
-                f"{replica}: max_input_tokens {entry.litellm_params.max_input_tokens} != {PINNED_MAX_INPUT_TOKENS}"
-            )
-            assert entry.model_info.id == registered.model_id, (
-                f"{replica}: model_info.id {entry.model_info.id!r} != {registered.model_id!r}"
-            )
+        _assert_untouched_keys_as_created(entry, stored)
+        assert entry.litellm_params.input_cost_per_token == PINNED_INPUT_RATE, (
+            f"{stored}: input_cost_per_token {entry.litellm_params.input_cost_per_token} != {PINNED_INPUT_RATE}"
+        )
+        assert entry.litellm_params.max_input_tokens == PINNED_MAX_INPUT_TOKENS, (
+            f"{stored}: max_input_tokens {entry.litellm_params.max_input_tokens} != {PINNED_MAX_INPUT_TOKENS}"
+        )
+        assert entry.model_info.id == registered.model_id, (
+            f"{stored}: model_info.id {entry.model_info.id!r} != {registered.model_id!r}"
+        )
+
+        _assert_served_everywhere(client, registered.model_name)
 
     @pytest.mark.covers("mgmt.model.update.preserves_unrelated_fields")
     def test_partial_update_changes_only_the_named_key(
@@ -201,23 +246,25 @@ class TestModelLifecycle:
             f"sent {UPDATED_INPUT_RATE}"
         )
 
-        entries = _entry_everywhere(
+        entry = _stored_entry(
             client,
             registered.model_name,
             converged=lambda entry: entry.litellm_params.input_cost_per_token == UPDATED_INPUT_RATE,
         )
+        stored = "/model/info"
 
-        for replica, entry in entries.items():
-            _assert_untouched_keys_as_created(entry, replica)
-            assert entry.litellm_params.max_input_tokens == PINNED_MAX_INPUT_TOKENS, (
-                f"{replica}: max_input_tokens {entry.litellm_params.max_input_tokens} != {PINNED_MAX_INPUT_TOKENS}"
-            )
-            assert entry.model_info.input_cost_per_token == UPDATED_INPUT_RATE, (
-                f"{replica}: model_info.input_cost_per_token {entry.model_info.input_cost_per_token} "
-                f"did not mirror the updated {UPDATED_INPUT_RATE}"
-            )
+        _assert_untouched_keys_as_created(entry, stored)
+        assert entry.litellm_params.max_input_tokens == PINNED_MAX_INPUT_TOKENS, (
+            f"{stored}: max_input_tokens {entry.litellm_params.max_input_tokens} != {PINNED_MAX_INPUT_TOKENS}"
+        )
+        assert entry.model_info.input_cost_per_token == UPDATED_INPUT_RATE, (
+            f"{stored}: model_info.input_cost_per_token {entry.model_info.input_cost_per_token} "
+            f"did not mirror the updated {UPDATED_INPUT_RATE}"
+        )
 
-        prompt_tokens, input_cost = _billed_input_cost(client, registered.model_name, scoped_key)
+        prompt_tokens, input_cost = _await_billed_input_cost(
+            client, registered.model_name, scoped_key, expected_rate=UPDATED_INPUT_RATE
+        )
         assert _approx_equal(input_cost, prompt_tokens * UPDATED_INPUT_RATE), (
             f"input_cost {input_cost} != {prompt_tokens} tokens * updated rate {UPDATED_INPUT_RATE} "
             f"= {prompt_tokens * UPDATED_INPUT_RATE}; the partial update did not reach billing"
@@ -251,26 +298,25 @@ class TestModelLifecycle:
 
         cost_map_input_rate = client.proxy.model_cost_map()[BACKEND_MODEL].input_cost_per_token
         assert cost_map_input_rate is not None, f"cost map has no input rate for {BACKEND_MODEL}"
-        entries = _entry_everywhere(
+        entry = _stored_entry(
             client,
             registered.model_name,
             converged=lambda entry: "max_input_tokens" not in entry.litellm_params.model_fields_set,
         )
+        stored = "/model/info"
 
-        for replica, entry in entries.items():
-            _assert_untouched_keys_as_created(entry, replica)
-            served = entry.litellm_params.model_fields_set
-            assert "max_input_tokens" not in served, (
-                f"{replica}: litellm_params still serves max_input_tokens {entry.litellm_params.max_input_tokens}"
-            )
-            assert "input_cost_per_token" not in served, (
-                f"{replica}: litellm_params still serves input_cost_per_token "
-                f"{entry.litellm_params.input_cost_per_token}"
-            )
-            assert entry.model_info.input_cost_per_token == cost_map_input_rate, (
-                f"{replica}: model_info.input_cost_per_token {entry.model_info.input_cost_per_token} is not the "
-                f"cost map's {cost_map_input_rate}; the cleared override {PINNED_INPUT_RATE} still resolves"
-            )
+        _assert_untouched_keys_as_created(entry, stored)
+        served = entry.litellm_params.model_fields_set
+        assert "max_input_tokens" not in served, (
+            f"{stored}: litellm_params still serves max_input_tokens {entry.litellm_params.max_input_tokens}"
+        )
+        assert "input_cost_per_token" not in served, (
+            f"{stored}: litellm_params still serves input_cost_per_token {entry.litellm_params.input_cost_per_token}"
+        )
+        assert entry.model_info.input_cost_per_token == cost_map_input_rate, (
+            f"{stored}: model_info.input_cost_per_token {entry.model_info.input_cost_per_token} is not the "
+            f"cost map's {cost_map_input_rate}; the cleared override {PINNED_INPUT_RATE} still resolves"
+        )
 
     @pytest.mark.covers("mgmt.model.update.clear_persists")
     def test_cleared_price_is_billed_at_the_cost_map_rate(
@@ -281,7 +327,7 @@ class TestModelLifecycle:
             registered.model_id,
             ModelPatchBody(litellm_params=LiteLLMParamsPatch(max_input_tokens=Clear(), input_cost_per_token=Clear())),
         )
-        _ = _entry_everywhere(
+        _ = _stored_entry(
             client,
             registered.model_name,
             converged=lambda entry: "input_cost_per_token" not in entry.litellm_params.model_fields_set,
@@ -289,7 +335,9 @@ class TestModelLifecycle:
         cost_map_input_rate = client.proxy.model_cost_map()[BACKEND_MODEL].input_cost_per_token
         assert cost_map_input_rate is not None, f"cost map has no input rate for {BACKEND_MODEL}"
 
-        prompt_tokens, input_cost = _billed_input_cost(client, registered.model_name, scoped_key)
+        prompt_tokens, input_cost = _await_billed_input_cost(
+            client, registered.model_name, scoped_key, expected_rate=cost_map_input_rate
+        )
 
         assert _approx_equal(input_cost, prompt_tokens * cost_map_input_rate), (
             f"input_cost {input_cost} != {prompt_tokens} tokens * cost map rate {cost_map_input_rate} "
@@ -304,7 +352,7 @@ class TestModelLifecycle:
         self, client: ManagementClient, resources: ResourceManager, scoped_key: str
     ) -> None:
         registered = _register(client, resources)
-        _ = _entry_everywhere(client, registered.model_name, converged=lambda _entry: True)
+        _ = _stored_entry(client, registered.model_name, converged=lambda _entry: True)
 
         client.delete_model_strict(registered.model_id)
 

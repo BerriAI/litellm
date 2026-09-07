@@ -84,7 +84,7 @@ from e2e_config import (
     SLOW_PROVIDER_TIMEOUT_SECONDS,
     settle_propagation,
 )
-from transport import HttpTransport, SplitTransport, Transport
+from transport import HttpTransport, SplitTransport, Transport, is_control_plane_path
 
 RowsPredicate = Callable[[list[SpendLogRow]], bool]
 
@@ -543,7 +543,19 @@ class ProxyClient:
         Fails naming the replica that never converged, so a write that reached one
         gateway but not the others is caught instead of passing on whichever gateway
         the balancer answered from. Falls back to the single proxy address when no
-        replica list is configured."""
+        replica list is configured.
+
+        `path` must be a data-plane route. The replicas are gateways, which serve only
+        the LLM surface, so a control-plane path answers on exactly one service and
+        404s on every replica in a split deployment: asking each replica for one is
+        never the question the caller means. Read those through `self.transport`
+        instead, which routes them to the control plane."""
+        if is_control_plane_path(path):
+            raise AssertionError(
+                f"read_back_everywhere({path!r}) asks every data-plane replica for a control-plane route. "
+                "The replicas are gateways and do not serve it; poll a data-plane path such as /v1/models "
+                "here, and read the control plane through the shared transport."
+            )
         readers: Final = {
             url: self._body_reader(transport, path, response_type)
             for url, transport in self._read_back_replicas().items()
@@ -563,6 +575,31 @@ class ProxyClient:
             case NeverConvergedOn(replica=replica, last_result=last_result):
                 raise AssertionError(
                     f"GET {path} on {replica} never answered the expected body within "
+                    f"{self.poll_timeout}s; last read: {last_result}"
+                )
+
+    def read_back[R: BaseModel](self, path: str, response_type: type[R], *, predicate: Callable[[R], bool]) -> R:
+        """GET `path` through the shared transport until the body satisfies `predicate`,
+        polling to poll_timeout, and return that body.
+
+        The counterpart to `read_back_everywhere` for a control-plane route such as
+        /model/info: the stored row lives in one database behind one control plane, so
+        there is a single answer to converge on rather than one per gateway."""
+        outcome: Final = await_converged_everywhere(
+            {CONTROL_PLANE_BASE_URL: self._body_reader(self.transport, path, response_type)},
+            predicate=predicate,
+            timeout=self.poll_timeout,
+            interval=self.poll_interval,
+            request_timeout=REQUEST_TIMEOUT,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        match outcome:
+            case Converged(bodies=bodies):
+                return bodies[CONTROL_PLANE_BASE_URL]
+            case NeverConvergedOn(last_result=last_result):
+                raise AssertionError(
+                    f"GET {path} never answered the expected body within "
                     f"{self.poll_timeout}s; last read: {last_result}"
                 )
 
