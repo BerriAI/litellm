@@ -531,6 +531,83 @@ class TestPartitionedSpendLogsDriftFilter:
         assert 'PRIMARY KEY ("team_id")' in filtered
 
 
+    # The clause list is not always one clause per line: whether a drift script
+    # wraps, pads, or schema-qualifies is formatting, and the primary-key
+    # rewrite is rejected by Postgres either way.
+    _PK_ADD = 'ADD CONSTRAINT "LiteLLM_SpendLogs_pkey" PRIMARY KEY ("request_id")'
+
+    @pytest.mark.parametrize(
+        "statement",
+        [
+            pytest.param(
+                'ALTER TABLE "LiteLLM_SpendLogs" DROP CONSTRAINT '
+                '"LiteLLM_SpendLogs_pkey", ' + _PK_ADD + ";\n",
+                id="clauses-on-one-line",
+            ),
+            pytest.param(
+                'ALTER TABLE "LiteLLM_SpendLogs" DROP CONSTRAINT '
+                '"LiteLLM_SpendLogs_pkey",  \n' + _PK_ADD + ";\n",
+                id="trailing-space-before-newline",
+            ),
+            pytest.param(
+                'ALTER TABLE "LiteLLM_SpendLogs" DROP CONSTRAINT '
+                '"LiteLLM_SpendLogs_pkey",\r\n' + _PK_ADD + ";\r\n",
+                id="crlf-line-endings",
+            ),
+            pytest.param(
+                'ALTER TABLE "public"."LiteLLM_SpendLogs" DROP CONSTRAINT '
+                '"LiteLLM_SpendLogs_pkey",\n' + _PK_ADD + ";\n",
+                id="quoted-schema-qualified",
+            ),
+            pytest.param(
+                'ALTER TABLE litellm."LiteLLM_SpendLogs" DROP CONSTRAINT '
+                '"LiteLLM_SpendLogs_pkey", ' + _PK_ADD + ";\n",
+                id="bare-schema-qualified",
+            ),
+            pytest.param(
+                'ALTER TABLE ONLY "LiteLLM_SpendLogs" DROP CONSTRAINT '
+                '"LiteLLM_SpendLogs_pkey", ' + _PK_ADD + ";\n",
+                id="only-prefix",
+            ),
+        ],
+    )
+    def test_the_pk_rewrite_is_removed_however_the_script_is_formatted(self, statement):
+        assert filter_partitioned_spend_logs_diff(statement).strip() == ""
+
+    def test_a_schema_qualified_runbook_artifact_drop_is_removed(self):
+        sql = 'DROP TABLE "public"."LiteLLM_SpendLogs_legacy";\n'
+        assert filter_partitioned_spend_logs_diff(sql).strip() == ""
+
+    def test_column_work_survives_when_it_shares_a_line_with_the_pk_rewrite(self):
+        sql = (
+            'ALTER TABLE "LiteLLM_SpendLogs" DROP CONSTRAINT "LiteLLM_SpendLogs_pkey", '
+            'ADD COLUMN "created_at" TIMESTAMP(3), ' + self._PK_ADD + ";\n"
+        )
+        filtered = filter_partitioned_spend_logs_diff(sql)
+        assert 'ADD COLUMN "created_at" TIMESTAMP(3)' in filtered
+        assert "PRIMARY KEY" not in filtered
+        assert "DROP CONSTRAINT" not in filtered
+
+    def test_a_composite_pk_is_one_clause_not_two(self):
+        """The comma inside PRIMARY KEY ("request_id", "startTime") is not a
+        clause separator; splitting there would leave a `"startTime")` fragment
+        that no longer matches the primary-key pattern and would survive."""
+        sql = (
+            'ALTER TABLE "LiteLLM_SpendLogs" ADD CONSTRAINT "LiteLLM_SpendLogs_pkey" '
+            'PRIMARY KEY ("request_id", "startTime");\n'
+        )
+        assert filter_partitioned_spend_logs_diff(sql).strip() == ""
+
+    def test_other_tables_are_untouched_when_schema_qualified(self):
+        sql = (
+            'ALTER TABLE "public"."LiteLLM_TeamTable" DROP CONSTRAINT '
+            '"LiteLLM_TeamTable_pkey", ADD CONSTRAINT "LiteLLM_TeamTable_pkey" '
+            'PRIMARY KEY ("team_id");\n'
+        )
+        filtered = filter_partitioned_spend_logs_diff(sql)
+        assert 'PRIMARY KEY ("team_id")' in filtered
+        assert 'DROP CONSTRAINT "LiteLLM_TeamTable_pkey"' in filtered
+
 class _FakeCompleted:
     stdout = ""
     stderr = ""

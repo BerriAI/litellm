@@ -79,9 +79,17 @@ class _MigrateAttemptBudget:
         return replace(self, recoveries=self.recoveries | {recovery})
 
 
-_SPEND_LOGS_ALTER_RE = re.compile(r'^ALTER\s+TABLE\s+"LiteLLM_SpendLogs"\s', re.IGNORECASE)
+# Prisma qualifies DDL with the datasource schema when it is not the default,
+# which LiteLLM supports through the `schema` URL parameter (see
+# _prisma_schema_param). Match the qualified and bare spellings alike, plus the
+# ONLY that dump-shaped scripts carry, so the guard below does not depend on
+# which one the drift script happens to use.
+_QUALIFIED_SPEND_LOGS = r'(?:ONLY\s+)?(?:(?:"[^"]+"|\w+)\s*\.\s*)?"LiteLLM_SpendLogs'
+_SPEND_LOGS_ALTER_RE = re.compile(
+    r'^ALTER\s+TABLE\s+' + _QUALIFIED_SPEND_LOGS + r'"\s', re.IGNORECASE
+)
 _SPEND_LOGS_ARTIFACT_DROP_RE = re.compile(
-    r'^DROP\s+TABLE\s+"LiteLLM_SpendLogs_[^"]*"', re.IGNORECASE
+    r'^DROP\s+TABLE\s+' + _QUALIFIED_SPEND_LOGS + r'_[^"]*"', re.IGNORECASE
 )
 _SPEND_LOGS_PK_CLAUSE_RE = re.compile(
     r'^(?:DROP\s+CONSTRAINT\s+"[^"]*_pkey"'
@@ -108,14 +116,44 @@ def _without_sql_comments(statement: str) -> str:
     ).strip()
 
 
+def _split_alter_clauses(body: str) -> list[str]:
+    """Split an ALTER TABLE clause list on its top-level commas.
+
+    Commas inside parentheses (`PRIMARY KEY ("request_id", "startTime")`) and
+    inside quoted identifiers separate nothing, so only depth-zero commas
+    outside quotes end a clause. Splitting on the comma itself rather than on
+    `",\n"` keeps the guard working whichever way the drift script wraps
+    lines -- one clause per line, all on one line, or with trailing spaces.
+    """
+    clauses = []
+    depth = 0
+    quoted = False
+    start = 0
+    for i, ch in enumerate(body):
+        if ch == '"':
+            quoted = not quoted
+        elif quoted:
+            continue
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            clauses.append(body[start:i])
+            start = i + 1
+    clauses.append(body[start:])
+    return clauses
+
+
 def _without_spend_logs_pk_clauses(statement: str) -> Optional[str]:
     prefix_match = _SPEND_LOGS_ALTER_RE.match(statement)
     if not prefix_match:
         return statement
     kept = tuple(
-        clause.strip()
-        for clause in statement[prefix_match.end():].split(",\n")
-        if not _SPEND_LOGS_PK_CLAUSE_RE.match(clause.strip())
+        stripped
+        for clause in _split_alter_clauses(statement[prefix_match.end():])
+        for stripped in (clause.strip(),)
+        if stripped and not _SPEND_LOGS_PK_CLAUSE_RE.match(stripped)
     )
     if not kept:
         return None
