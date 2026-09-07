@@ -272,11 +272,15 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             )
 
         # Only add tool_choice for models that explicitly support it
-        if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
+        if self._get_model_cost_capability_exact(
+            model=model, capability="supports_tool_choice"
+        ) or supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
 
         # Only add reasoning params for models that support it
-        if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
+        if self._get_model_cost_capability_exact(model=model, capability="supports_reasoning") or supports_reasoning(
+            model=model, custom_llm_provider="fireworks_ai"
+        ):
             supported_params.append("reasoning_effort")
             supported_params.append("reasoning_history")
             supported_params.append("thinking")

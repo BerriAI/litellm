@@ -2815,6 +2815,7 @@ async def test_mcp_server_manager_with_access_groups_integration():
     """Integration test for MCPServerManager with access group filtering"""
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
+        MCPServerAccess,
     )
     from litellm.proxy._types import UserAPIKeyAuth
 
@@ -2848,11 +2849,11 @@ async def test_mcp_server_manager_with_access_groups_integration():
     )
 
     # Mock the permission lookup to return staff access group
-    with patch.object(MCPRequestHandler, "get_allowed_mcp_servers") as mock_get_allowed:
-        mock_get_allowed.return_value = [
-            "staff-server-id",
-            "ops-server-id",
-        ]  # User has access to staff and ops
+    with patch.object(MCPRequestHandler, "get_mcp_server_access") as mock_get_allowed:  # test-quality-ok: manager resolver seam
+        mock_get_allowed.return_value = MCPServerAccess(
+            server_ids=("staff-server-id", "ops-server-id"),
+            scope="scoped",
+        )
 
         allowed_servers = await test_manager.get_allowed_mcp_servers(user_auth)
 
@@ -2901,6 +2902,7 @@ async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permi
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
+        MCPServerAccess,
     )
 
     test_manager = MCPServerManager()
@@ -2923,9 +2925,9 @@ async def test_get_allowed_mcp_servers_returns_empty_for_non_admin_without_permi
     )
 
     with patch.object(
-        MCPRequestHandler, "get_allowed_mcp_servers", new_callable=AsyncMock
+        MCPRequestHandler, "get_mcp_server_access", new_callable=AsyncMock
     ) as mock_permission_lookup:
-        mock_permission_lookup.return_value = []
+        mock_permission_lookup.return_value = MCPServerAccess(server_ids=())
         allowed_servers = await test_manager.get_allowed_mcp_servers(user_auth)
 
     assert allowed_servers == []

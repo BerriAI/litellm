@@ -1,10 +1,12 @@
 import json
 import re
-from collections.abc import Collection
-from typing import Any, Final
+from collections.abc import Collection, Mapping
+from types import MappingProxyType, UnionType
+from typing import Annotated, Any, Final, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
+from typing_extensions import NotRequired, ReadOnly, Required
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
@@ -15,6 +17,8 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+
+_ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 
 
 def _normalize_media_type(content_type: str) -> str:
@@ -38,6 +42,73 @@ def _is_form_content_type(content_type: str) -> bool:
 def _is_json_content_type(content_type: str) -> bool:
     """True iff the body should be parsed as JSON."""
     return _normalize_media_type(content_type) == "application/json"
+
+
+def _unqualified(annotation: object) -> object:
+    """Which qualifiers ``get_type_hints`` already stripped varies by interpreter version, so peel them all."""
+    if get_origin(annotation) not in _ANNOTATION_QUALIFIERS:
+        return annotation
+    qualified: Final[tuple[object, ...]] = get_args(annotation)
+    return _unqualified(qualified[0])
+
+
+def _numeric_form_type(annotation: object) -> type[int] | type[float] | None:
+    """The scalar to parse an ``int``/``float``-typed field as, else ``None``."""
+    unwrapped: Final = _unqualified(annotation)
+    candidates: Final = (
+        tuple(arg for arg in get_args(unwrapped) if arg is not type(None))
+        if get_origin(unwrapped) in (Union, UnionType)
+        else (unwrapped,)
+    )
+    if len(candidates) != 1:
+        return None
+    if candidates[0] is int:
+        return int
+    if candidates[0] is float:
+        return float
+    return None
+
+
+def numeric_form_fields(annotations: Mapping[str, object]) -> Mapping[str, type[int] | type[float]]:
+    """
+    The numeric fields of a request schema, mapped to the scalar to parse them as.
+
+    Only a bare ``int``/``float`` or an optional one qualifies, so container and
+    literal fields are left alone and ``bool`` is excluded on purpose.
+    """
+    return MappingProxyType(
+        {
+            name: scalar
+            for name, annotation in annotations.items()
+            if (scalar := _numeric_form_type(annotation)) is not None
+        }
+    )
+
+
+def _numeric_form_value(value: object, scalar: type[int] | type[float]) -> object:
+    if not isinstance(value, str):
+        return value
+    try:
+        return scalar(value)
+    except ValueError:
+        return value
+
+
+def coerce_numeric_form_fields(
+    parsed_body: Mapping[str, object],
+    numeric_fields: Mapping[str, type[int] | type[float]],
+) -> Mapping[str, object]:
+    """
+    Parse the numeric fields of a form-encoded body back into numbers.
+
+    ``request.form()`` yields every field as a string, so a provider that puts the
+    value in a JSON body would send a string where its API requires a number. A
+    value that will not parse is left as-is for the provider to reject as before.
+    """
+    return {
+        name: _numeric_form_value(value, numeric_fields[name]) if name in numeric_fields else value
+        for name, value in parsed_body.items()
+    }
 
 
 async def _read_request_body(request: Request | None) -> dict:
@@ -186,7 +257,7 @@ def _safe_get_request_headers(request: Request | None) -> dict:
     if request is None:
         return {}
     state: Final = getattr(request, "state", None)
-    cached: Final = getattr(state, "_cached_headers", None)
+    cached: Final[object] = getattr(state, "_cached_headers", None)
     if isinstance(cached, dict):
         return cached
     if cached is not None:
@@ -344,7 +415,9 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     return {}
 
 
-def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litellm_metadata[") -> dict[str, Any]:
+def extract_nested_form_metadata(
+    form_data: Mapping[str, object], prefix: str = "litellm_metadata["
+) -> dict[str, object]:
     """
     Extract nested metadata from form data with bracket notation.
 
@@ -382,7 +455,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
     if not form_data:
         return {}
 
-    metadata: Final[dict[str, Any]] = {}
+    metadata: Final[dict[str, object]] = {}
 
     for key, value in form_data.items():
         # Skip keys that don't start with the prefix
@@ -430,7 +503,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
     return metadata
 
 
-def get_tags_from_request_body(request_body: dict) -> list[str]:
+def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     """
     Extract tags from request body metadata.
 
@@ -447,12 +520,12 @@ def get_tags_from_request_body(request_body: dict) -> list[str]:
     if isinstance(metadata, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final = safe_json_loads(metadata)
+        parsed: Final[object] = safe_json_loads(metadata)
         metadata = parsed if isinstance(parsed, dict) else {}
     elif not isinstance(metadata, dict):
         metadata = {}
-    tags_in_metadata: Final[Any] = metadata.get("tags", [])
-    tags_in_request_body: Final[Any] = request_body.get("tags", [])
+    tags_in_metadata: Final[object] = metadata.get("tags", [])
+    tags_in_request_body: Final[object] = request_body.get("tags", [])
     combined_tags: Final[list[str]] = []
 
     ######################################

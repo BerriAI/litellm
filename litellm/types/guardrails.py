@@ -832,6 +832,15 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    inspect_embeddings: bool | None = Field(
+        default=None,
+        description=(
+            "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as "
+            "user messages. Off by default because embedding input is documents being indexed, not a "
+            "conversation."
+        ),
+    )
+
     # Lakera specific params
     category_thresholds: LakeraCategoryThresholds | None = Field(
         default=None,

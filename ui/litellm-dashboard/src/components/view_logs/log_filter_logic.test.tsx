@@ -91,6 +91,7 @@ describe("useLogFilterLogic", () => {
       { id: LOG_FILTER_IDS.ERROR_CODE, value: "429", param: "error_code" },
       { id: LOG_FILTER_IDS.ERROR_MESSAGE, value: "rate limited", param: "error_message" },
       { id: LOG_FILTER_IDS.USER_ID, value: "user-9", param: "user_id" },
+      { id: LOG_FILTER_IDS.SEARCH, value: "any-id", param: "search" },
     ];
 
     it.each(cases)("sends $id as $param", async ({ id, value, param }) => {

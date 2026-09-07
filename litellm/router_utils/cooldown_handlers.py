@@ -259,7 +259,7 @@ def _should_run_cooldown_logic(
     litellm_router_instance: LitellmRouter,
     deployment: str | None,
     exception_status: str | int,
-    original_exception: Any,
+    original_exception: Exception,
     time_to_cooldown: float | None = None,
 ) -> bool:
     """
@@ -318,7 +318,7 @@ def _should_cooldown_deployment(
     litellm_router_instance: LitellmRouter,
     deployment: str,
     exception_status: str | int,
-    original_exception: Any,
+    original_exception: Exception,
     requested_model_group: str | None = None,
 ) -> bool:
     """
@@ -412,7 +412,7 @@ def _should_cooldown_deployment(
 
 def _set_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
-    original_exception: Any,
+    original_exception: Exception,
     exception_status: str | int,
     deployment: str | None = None,
     time_to_cooldown: float | None = None,
@@ -547,7 +547,7 @@ def _get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_ote
 def should_cooldown_based_on_allowed_fails_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
-    original_exception: Any,
+    original_exception: Exception,
     allowed_fails_override: int | None = None,
     cooldown_time_override: float | None = None,
     cache_key_suffix: str | None = None,

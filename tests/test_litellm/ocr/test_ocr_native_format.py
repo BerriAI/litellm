@@ -4,11 +4,14 @@ providers that don't support a native response must reject it, and the Rust
 bridge (which only returns the normalized shape) must not serve native requests.
 """
 
+import dataclasses
 from unittest.mock import MagicMock
 
 import pytest
 
 import litellm
+from litellm.llms.azure_ai.ocr.cohere_parse_transformation import AzureAICohereParseConfig
+from litellm.llms.cohere.ocr.transformation import CohereParseConfig
 from litellm.ocr.main import _PreparedOCRRequest, _rust_ocr_supported
 
 DOCUMENT = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
@@ -37,6 +40,13 @@ def test_rust_ocr_serves_default_format(optional_params):
 
 def test_rust_ocr_skipped_for_native_format():
     assert _rust_ocr_supported(_prepared({"req_format": "native"})) is False
+
+
+@pytest.mark.parametrize("provider_config", [CohereParseConfig(), AzureAICohereParseConfig()])
+def test_rust_ocr_skipped_for_configs_without_bridge_support(provider_config):
+    prepared = dataclasses.replace(_prepared({}), provider_config=provider_config)
+
+    assert _rust_ocr_supported(prepared) is False
 
 
 @pytest.mark.asyncio

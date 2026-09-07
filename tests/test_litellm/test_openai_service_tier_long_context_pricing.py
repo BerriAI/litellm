@@ -52,6 +52,12 @@ PRIORITY_LONG_CONTEXT = {
         "cache_read_input_token_cost_above_272k_tokens_priority": 8e-08,
         "cache_creation_input_token_cost_above_272k_tokens_priority": 1e-06,
     },
+    "gpt-6-astra": {
+        "input_cost_per_token_above_272k_tokens_priority": 4e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 0.00015,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 4e-06,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 5e-05,
+    },
 }
 
 EXPECTED = {**FLEX_LONG_CONTEXT, **PRIORITY_LONG_CONTEXT}
@@ -63,6 +69,7 @@ NO_PUBLISHED_PRIORITY_LONG_CONTEXT = ("gpt-5.4", "gpt-5.5")
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.add_known_models()
 
 
 @lru_cache(maxsize=2)
@@ -114,6 +121,7 @@ TIERED_COST_CASES = [
     ("gpt-5.6-sol", "priority", 1.6e-05, 6e-05),
     ("gpt-5.6-terra", "priority", 8e-06, 3.6e-05),
     ("gpt-5.6-luna", "priority", 8e-07, 3.6e-06),
+    ("gpt-6-astra", "priority", 4e-05, 0.00015),
 ]
 
 

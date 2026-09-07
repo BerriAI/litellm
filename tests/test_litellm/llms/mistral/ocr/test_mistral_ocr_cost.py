@@ -15,6 +15,7 @@ from litellm.cost_calculator import completion_cost
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
 
 OCR4_COST_PER_PAGE = 0.004
+OCR4_ANNOTATION_COST_PER_PAGE = 0.005
 
 REPO_ROOT = Path(__file__).parents[5]
 MAIN_COST_MAP = REPO_ROOT / "model_prices_and_context_window.json"
@@ -133,3 +134,16 @@ def test_azure_doc_ai_annotation_pages_fall_back_to_ocr_rate(local_model_cost_ma
         call_type="ocr",
     )
     assert cost == pytest.approx(AZURE_DOC_AI_COST_PER_PAGE)
+
+
+def test_azure_ocr4_bills_ocr_and_annotation_pages_at_their_own_rates(local_model_cost_map) -> None:
+    info = litellm.get_model_info(model="azure_ai/mistral-ocr-4-0", custom_llm_provider="azure_ai")
+    assert info["ocr_cost_per_page"] == OCR4_COST_PER_PAGE
+    assert info["annotation_cost_per_page"] == OCR4_ANNOTATION_COST_PER_PAGE
+    cost = completion_cost(
+        completion_response=_annotated_ocr_response("mistral-ocr-4-0", 2, 3),
+        model="azure_ai/mistral-ocr-4-0",
+        custom_llm_provider="azure_ai",
+        call_type="ocr",
+    )
+    assert cost == pytest.approx(2 * OCR4_COST_PER_PAGE + 3 * OCR4_ANNOTATION_COST_PER_PAGE)

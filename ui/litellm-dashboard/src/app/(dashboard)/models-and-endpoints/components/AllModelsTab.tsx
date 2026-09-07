@@ -7,7 +7,7 @@ import DeleteResourceModal from "@/components/common_components/DeleteResourceMo
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import { ModelData } from "@/components/model_dashboard/types";
 import { toast } from "@/lib/toast";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
@@ -86,6 +86,11 @@ const AllModelsTab = ({
     selectedModelGroup !== ALL_MODEL_GROUPS_VALUE &&
     selectedModelGroup !== WILDCARD_MODEL_GROUP_VALUE;
   const modelNameForQuery = isConcreteModelGroup ? selectedModelGroup ?? undefined : undefined;
+  const accessGroupForQuery =
+    selectedModelAccessGroupFilter && selectedModelAccessGroupFilter !== ALL_MODEL_GROUPS_VALUE
+      ? selectedModelAccessGroupFilter
+      : undefined;
+  const wildcardOnlyForQuery = selectedModelGroup === WILDCARD_MODEL_GROUP_VALUE;
 
   const sortBy = useMemo(() => {
     if (sorting.length === 0) return undefined;
@@ -114,6 +119,8 @@ const AllModelsTab = ({
     // lists and manages them. Excluded server-side so total_count stays honest.
     true,
     modelNameForQuery,
+    accessGroupForQuery,
+    wildcardOnlyForQuery,
   );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
@@ -129,31 +136,10 @@ const AllModelsTab = ({
     [modelCostMapData],
   );
 
-  const modelData = useMemo(() => {
+  const modelData = useMemo<{ data: ModelData[] }>(() => {
     if (!rawModelData) return { data: [] };
     return transformModelData(rawModelData, getProviderFromModel);
   }, [rawModelData, getProviderFromModel]);
-
-  const filteredData = useMemo<ModelData[]>(() => {
-    if (!modelData || !modelData.data || modelData.data.length === 0) {
-      return [];
-    }
-
-    return modelData.data.filter((model: ModelData) => {
-      const modelNameMatch =
-        selectedModelGroup === ALL_MODEL_GROUPS_VALUE ||
-        model.model_name === selectedModelGroup ||
-        !selectedModelGroup ||
-        (selectedModelGroup === WILDCARD_MODEL_GROUP_VALUE && model.model_name?.includes("*"));
-
-      const accessGroupMatch =
-        selectedModelAccessGroupFilter === ALL_MODEL_GROUPS_VALUE ||
-        model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter ?? "") ||
-        !selectedModelAccessGroupFilter;
-
-      return modelNameMatch && accessGroupMatch;
-    });
-  }, [modelData, selectedModelGroup, selectedModelAccessGroupFilter]);
 
   const columnFilters = useMemo<ColumnFiltersState>(
     () =>
@@ -270,7 +256,7 @@ const AllModelsTab = ({
     <div className="w-full">
       <div className="flex flex-col gap-3">
         <AllModelsTable
-          data={filteredData}
+          data={modelData.data}
           rowCount={rawModelData?.total_count ?? 0}
           isLoading={isLoading}
           isRefreshing={isFetchingModelsInfo}
@@ -308,7 +294,7 @@ const AllModelsTab = ({
             {selectedTeamValue === PERSONAL_TEAM_VALUE ? (
               <span>
                 To access these models, create a Virtual Key without selecting a team on the{" "}
-                <a href={migratedHref("api-keys")} className="font-medium text-info hover:underline">
+                <a href={uiHref("api-keys")} className="font-medium text-info hover:underline">
                   Virtual Keys page
                 </a>
                 .
@@ -316,7 +302,7 @@ const AllModelsTab = ({
             ) : (
               <span>
                 To access these models, create a Virtual Key and select Team as &quot;{teamAccessLabel}&quot; on the{" "}
-                <a href={migratedHref("api-keys")} className="font-medium text-info hover:underline">
+                <a href={uiHref("api-keys")} className="font-medium text-info hover:underline">
                   Virtual Keys page
                 </a>
                 .

@@ -455,6 +455,151 @@ async def test_get_api_key_metadata_regenerated_key_uses_most_recent_deleted_rec
 
 
 @pytest.mark.asyncio
+async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash():
+    """
+    v1.99 spend logging re-hashed already-hashed api_key values when provenance was
+    missing. Usage joins DailyUserSpend.api_key to VerificationToken.token, so those
+    rows looked like key-hash-... with a null alias. Recovery asks Postgres for the
+    key whose hashed token matches the dirty value and maps it back to its alias.
+    """
+    from litellm.proxy.utils import hash_token
+
+    double_hashed = hash_token("a" * 64)
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com")]
+    )
+    mock_prisma.db.query_raw = AsyncMock(
+        return_value=[
+            {"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": "alice"}
+        ]
+    )
+
+    result = await get_api_key_metadata(
+        prisma_client=mock_prisma,
+        api_keys={double_hashed},
+    )
+
+    assert result[double_hashed]["key_alias"] == "batch-worker"
+    assert result[double_hashed]["team_id"] == "team-1"
+    assert result[double_hashed]["user_email"] == "alice@example.com"
+    ((digest_sql, digests),) = [call.args for call in mock_prisma.db.query_raw.call_args_list]
+    assert '"LiteLLM_VerificationToken"' in digest_sql
+    assert digests == [double_hashed]
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_spend_logs():
+    """A dirty key no table can explain costs two digest lookups, never a token page walk or a SpendLogs scan."""
+    from litellm.proxy.utils import hash_token
+
+    double_hashed = hash_token("b" * 64)
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+
+    result = await get_api_key_metadata(
+        prisma_client=mock_prisma,
+        api_keys={double_hashed},
+    )
+
+    assert double_hashed not in result
+    issued_sql = [call.args[0] for call in mock_prisma.db.query_raw.call_args_list]
+    assert len(issued_sql) == 2
+    assert not any("LiteLLM_SpendLogs" in sql for sql in issued_sql)
+    token_lookups = (
+        mock_prisma.db.litellm_verificationtoken.find_many.call_args_list
+        + mock_prisma.db.litellm_deletedverificationtoken.find_many.call_args_list
+    )
+    assert all("take" not in call.kwargs and "skip" not in call.kwargs for call in token_lookups)
+
+
+def test_key_metadata_includes_recovered_user_email():
+    from litellm.proxy.management_endpoints.common_daily_activity import _key_metadata
+
+    meta = _key_metadata(
+        {
+            "dirty-key": {
+                "key_alias": "batch-worker",
+                "team_id": "team-1",
+                "user_email": "alice@example.com",
+            }
+        },
+        "dirty-key",
+    )
+
+    assert meta.key_alias == "batch-worker"
+    assert meta.user_email == "alice@example.com"
+
+
+def test_update_breakdown_metrics_includes_user_email():
+    from litellm.proxy.management_endpoints.common_daily_activity import update_breakdown_metrics
+    from litellm.types.proxy.management_endpoints.common_daily_activity import BreakdownMetrics
+
+    breakdown = BreakdownMetrics()
+    record = SimpleNamespace(
+        api_key="dirty-key",
+        model="gpt-4o-mini",
+        model_group="grp",
+        mcp_namespaced_tool_name="srv/tool",
+        custom_llm_provider="openai",
+        endpoint="/v1/chat/completions",
+        spend=1.23,
+        prompt_tokens=1,
+        completion_tokens=1,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+        compression_saved_tokens=0,
+        compression_savings_spend=0,
+        prompt_caching_savings_spend=0,
+        gateway_injected_caching_savings_spend=0,
+        autorouter_savings_spend=0,
+        total_tokens=2,
+        api_requests=1,
+        successful_requests=1,
+        failed_requests=0,
+        ptu_flat_cost=0.0,
+        user_id="alice",
+    )
+    api_key_metadata = {
+        "dirty-key": {
+            "key_alias": "batch-worker",
+            "team_id": "team-1",
+            "user_email": "alice@example.com",
+        }
+    }
+
+    update_breakdown_metrics(
+        breakdown,
+        record,
+        {},
+        {},
+        api_key_metadata,
+        entity_id_field="user_id",
+    )
+
+    expected = ("batch-worker", "alice@example.com")
+    top = breakdown.api_keys["dirty-key"].metadata
+    assert (top.key_alias, top.user_email) == expected
+    assert (
+        breakdown.models["gpt-4o-mini"].api_key_breakdown["dirty-key"].metadata.key_alias,
+        breakdown.models["gpt-4o-mini"].api_key_breakdown["dirty-key"].metadata.user_email,
+    ) == expected
+    assert (
+        breakdown.providers["openai"].api_key_breakdown["dirty-key"].metadata.key_alias,
+        breakdown.providers["openai"].api_key_breakdown["dirty-key"].metadata.user_email,
+    ) == expected
+    assert (
+        breakdown.entities["alice"].api_key_breakdown["dirty-key"].metadata.key_alias,
+        breakdown.entities["alice"].api_key_breakdown["dirty-key"].metadata.user_email,
+    ) == expected
+
+
+@pytest.mark.asyncio
 async def test_tag_daily_activity_metadata_totals_not_zero():
     """Test that tag daily activity returns correct metadata totals.
 

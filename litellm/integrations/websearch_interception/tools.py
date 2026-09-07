@@ -6,12 +6,13 @@ Native provider tools (like Anthropic's web_search_20250305) are converted
 to this format for consistent interception and execution.
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 
 
-def get_litellm_web_search_tool() -> dict[str, Any]:
+def get_litellm_web_search_tool() -> dict[str, object]:
     """
     Get the standard LiteLLM web search tool definition.
 
@@ -49,7 +50,7 @@ def get_litellm_web_search_tool() -> dict[str, Any]:
     }
 
 
-def get_litellm_web_search_tool_openai() -> dict[str, Any]:
+def get_litellm_web_search_tool_openai() -> dict[str, object]:
     """
     Get the standard LiteLLM web search tool definition in OpenAI format.
 
@@ -82,7 +83,7 @@ def get_litellm_web_search_tool_openai() -> dict[str, Any]:
     }
 
 
-def get_litellm_web_search_tool_responses() -> dict[str, Any]:
+def get_litellm_web_search_tool_responses() -> dict[str, object]:
     """
     Get the standard LiteLLM web search tool definition in Responses API format.
 
@@ -114,7 +115,7 @@ def get_litellm_web_search_tool_responses() -> dict[str, Any]:
     }
 
 
-def is_web_search_tool_responses(tool: dict[str, Any]) -> bool:
+def is_web_search_tool_responses(tool: Mapping[str, object]) -> bool:
     """
     Check if a tool is a web search tool for the Responses API.
 
@@ -195,7 +196,7 @@ def is_web_search_tool_chat_completion(tool: dict[str, Any]) -> bool:
     return False
 
 
-def is_anthropic_native_web_search_tool(tool: dict[str, Any]) -> bool:
+def is_anthropic_native_web_search_tool(tool: Mapping[str, object]) -> bool:
     """
     Check if a tool is an Anthropic-native ``web_search_*`` tool.
 

@@ -14,7 +14,9 @@ from litellm.proxy.hooks.responses_id_security import (
     _is_responses_api_create_route,
 )
 from litellm.types.llms.openai import (
+    GenericEvent,
     ResponseCompletedEvent,
+    ResponseCreatedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
 )
@@ -689,6 +691,126 @@ class TestAsyncPostCallStreamingIteratorHook:
 
         assert streamed_id == "resp_rawprovider123"
         assert not responses_id_security._is_encrypted_response_id(streamed_id)
+
+
+class TestStreamedGenericEventIdEncryption:
+    """A background stream carries event types with no typed model, which arrive as
+    GenericEvent holding a plain dict. Those used to skip encryption while their typed
+    siblings were encrypted, so one stream advertised two ids and the unencrypted one
+    skipped the ownership check. Asserts the property rather than one event type: every
+    id a client can see is the same encrypted id, and the raw one appears in no frame."""
+
+    RAW_ID = "resp_rawprovider123"
+
+    @staticmethod
+    async def _agen(chunks):
+        for chunk in chunks:
+            yield chunk
+
+    @classmethod
+    def _typed_event(cls, event_type):
+        return {
+            ResponsesAPIStreamEvents.RESPONSE_CREATED: ResponseCreatedEvent,
+            ResponsesAPIStreamEvents.RESPONSE_COMPLETED: ResponseCompletedEvent,
+        }[event_type](
+            type=event_type,
+            response=ResponsesAPIResponse(
+                id=cls.RAW_ID,
+                created_at=0,
+                model="gpt-5.1",
+                object="response",
+                output=[],
+                parallel_tool_calls=False,
+                tool_choice="auto",
+                tools=[],
+            ),
+        )
+
+    @classmethod
+    def _background_stream(cls):
+        return [
+            cls._typed_event(ResponsesAPIStreamEvents.RESPONSE_CREATED),
+            GenericEvent(
+                type="response.queued",
+                response={"id": cls.RAW_ID, "status": "queued"},
+            ),
+            GenericEvent(type="keepalive"),
+            GenericEvent(
+                type="response.some_event_openai_adds_later",
+                response={"id": cls.RAW_ID, "status": "in_progress"},
+            ),
+            cls._typed_event(ResponsesAPIStreamEvents.RESPONSE_COMPLETED),
+        ]
+
+    @staticmethod
+    def _advertised_ids(events):
+        nested = (getattr(event, "response", None) for event in events)
+        return [
+            payload["id"] if isinstance(payload, dict) else payload.id
+            for payload in nested
+            if payload is not None
+        ] + [
+            event.id for event in events if isinstance(getattr(event, "id", None), str)
+        ]
+
+    async def _drain(self, responses_id_security, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-abcdefghij")
+
+        mock_auth = MagicMock()
+        mock_auth.user_id = "user-a"
+        mock_auth.team_id = "team-a"
+        mock_auth.request_route = "/v1/responses"
+
+        return [
+            out
+            async for out in responses_id_security.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=mock_auth,
+                response=self._agen(self._background_stream()),
+                request_data={},
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_every_event_advertises_the_same_encrypted_id(
+        self, responses_id_security, monkeypatch
+    ):
+        events = await self._drain(responses_id_security, monkeypatch)
+        advertised = self._advertised_ids(events)
+
+        assert len(advertised) == 4
+        assert len(set(advertised)) == 1
+
+        streamed_id = advertised[0]
+        assert streamed_id != self.RAW_ID
+        assert responses_id_security._is_encrypted_response_id(streamed_id)
+        assert responses_id_security._decrypt_response_id(streamed_id) == (
+            self.RAW_ID,
+            "user-a",
+            "team-a",
+        )
+
+    @pytest.mark.asyncio
+    async def test_raw_provider_id_never_reaches_the_client(
+        self, responses_id_security, monkeypatch
+    ):
+        events = await self._drain(responses_id_security, monkeypatch)
+
+        assert [self.RAW_ID in event.model_dump_json() for event in events] == [
+            False
+        ] * len(events)
+
+    @pytest.mark.asyncio
+    async def test_sibling_fields_survive_the_rewrite(
+        self, responses_id_security, monkeypatch
+    ):
+        _, queued, keepalive, later, _ = await self._drain(
+            responses_id_security, monkeypatch
+        )
+
+        assert queued.response["status"] == "queued"
+        assert later.response["status"] == "in_progress"
+        assert keepalive.type == "keepalive"
+        assert getattr(keepalive, "response", None) is None
 
 
 class TestAsyncPostCallSuccessHook:

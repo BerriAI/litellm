@@ -158,6 +158,7 @@ class MCPServer(BaseModel):
     # be set explicitly to avoid regressing servers that did not opt in.
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = []
     byok_api_key_help_url: str | None = None
@@ -240,6 +241,16 @@ class MCPServer(BaseModel):
         DCR-bridge, and token-exchange servers are their own auth types and client-forwarded,
         so they are excluded by construction."""
         return self.auth_type == MCPAuth.oauth2 and not self.delegate_auth_to_upstream
+
+    @property
+    def uses_per_server_oauth_relay(self) -> bool:
+        """Whether named discovery should advertise the configured per-server OAuth relay."""
+        return self.per_server_oauth_discovery and self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
+
+    @property
+    def advertises_gateway_authorization_server(self) -> bool:
+        """Whether named discovery should advertise the aggregate gateway authorization server."""
+        return self.is_gateway_managed_oauth2 and not self.uses_per_server_oauth_relay
 
     @property
     def is_true_passthrough(self) -> bool:

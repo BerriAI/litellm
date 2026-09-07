@@ -597,9 +597,20 @@ class TestSemanticAutoRouterResponses:
             )
         )
         assert answer.id, "/v1/responses through the semantic auto-router returned no response id"
-        rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
+        rows: Final = proxy.poll_logs_for_key(
+            key,
+            min_rows=2,
+            predicate=lambda logged: any(row.model == EMBEDDING_MODEL for row in logged),
+        )
+        embedding_rows: Final = tuple(row for row in rows if row.model == EMBEDDING_MODEL)
+        assert embedding_rows, (
+            "the routing embedding was not billed to the caller's key; "
+            f"spend logs show {tuple(row.model for row in rows)}"
+        )
         _assert_served_only_by(
-            rows, CHEAP_SERVED | {semantic_auto_router.target}, "semantic auto-router /v1/responses string input"
+            [row for row in rows if row.model != EMBEDDING_MODEL],
+            CHEAP_SERVED | {semantic_auto_router.target},
+            "semantic auto-router /v1/responses string input",
         )
 
 

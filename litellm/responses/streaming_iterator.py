@@ -496,10 +496,9 @@ class BaseResponsesAPIStreamingIterator:
         if logging_response is self.completed_response:
             return
         target: Final[object] = getattr(logging_response, "response", None)
-        existing_hidden: Final[object] = getattr(target, "_hidden_params", None)
-        if not isinstance(existing_hidden, Mapping):
+        if not isinstance(target, ResponsesAPIResponse):
             return
-        existing: Final[Mapping[str, object]] = existing_hidden
+        existing: Final[Mapping[str, object]] = target._hidden_params
         source_hidden: Final[object] = getattr(
             getattr(self.completed_response, "response", None), "_hidden_params", None
         )
@@ -510,15 +509,11 @@ class BaseResponsesAPIStreamingIterator:
         raw_headers: Final[Mapping[str, object]] = raw if isinstance(raw, Mapping) else EMPTY_MAPPING
         # rebuild by value and let existing keys win: sharing the source dicts would alias what the proxy
         # splats into the client's HTTP headers, and copying non-header keys would carry response_cost
-        setattr(  # noqa: B010  # target is typed object here, so a plain attribute store does not type check
-            target,
-            "_hidden_params",
-            {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
-                "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
-                "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
-                **existing,
-            },
-        )
+        target._hidden_params = {  # mutable-ok: the cost calculator writes optional_params into _hidden_params
+            "additional_headers": {**headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+            "headers": {**raw_headers},  # mutable-ok: fresh copy, logging callbacks may mutate it
+            **existing,
+        }
 
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""

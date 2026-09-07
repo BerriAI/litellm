@@ -654,23 +654,16 @@ class InMemoryGuardrailHandler:
         source: Literal["db", "config"] = "db",
     ) -> None:
         """
-        Update a guardrail in memory
-
-        - updates the guardrail in memory
-        - updates the guardrail params in litellm.callback_manager
+        Update a guardrail in memory: a changed name or litellm_params rebuilds the
+        live callback from the new row (fail-closed: an invalid row keeps the
+        previous instance and raises), anything else only refreshes the stored row
         """
-        self.IN_MEMORY_GUARDRAILS[guardrail_id] = guardrail
-        self._sources[guardrail_id] = source
-
-        tracked_callbacks: Final = self._tracked_callbacks(guardrail_id)
-        if not tracked_callbacks:
+        updated_guardrail: Final = cast(Guardrail, {**guardrail, "guardrail_id": guardrail_id})
+        if self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
+            self.reinitialize_guardrail(guardrail=updated_guardrail, source=source)
             return
-        updated_litellm_params: Final = cast(LitellmParams, guardrail.get("litellm_params", {}))
-        tracked_callbacks[0].update_in_memory_litellm_params(litellm_params=updated_litellm_params)
-        for sibling_callback in tracked_callbacks[1:]:
-            sibling_stage = sibling_callback.event_hook
-            sibling_callback.update_in_memory_litellm_params(litellm_params=updated_litellm_params)
-            sibling_callback.event_hook = sibling_stage
+        self.IN_MEMORY_GUARDRAILS[guardrail_id] = updated_guardrail
+        self._sources[guardrail_id] = source
 
     def delete_in_memory_guardrail(self, guardrail_id: str) -> None:
         """

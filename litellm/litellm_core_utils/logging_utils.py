@@ -3,12 +3,15 @@ import functools
 import inspect
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
+from litellm.constants import (
+    BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS,
+    MAX_BASE64_LENGTH_FOR_LOGGING,
+)
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -141,6 +144,39 @@ def truncate_base64_in_messages(
         return messages
 
 
+_StringTree = str | Sequence["_StringTree"] | Mapping[str, "_StringTree"] | None
+
+
+def _iter_string_leaves(value: _StringTree) -> Iterator[str]:
+    stack: Final[list[_StringTree]] = [value]  # mutable-ok: explicit stack, recursive functions are banned in litellm/
+    while stack:
+        match stack.pop():
+            case str() as text:
+                yield text
+            case Mapping() as mapping:
+                stack.extend(mapping.values())
+            case Sequence() as items:
+                stack.extend(items)
+            case None:
+                pass
+
+
+async def truncate_base64_in_messages_async(
+    messages: str | list | dict | None,  # mutable-ok: same contract as truncate_base64_in_messages
+) -> str | list | dict | None:  # mutable-ok: same contract as truncate_base64_in_messages
+    """
+    Same result as truncate_base64_in_messages, but payloads whose string content
+    reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are scanned in a worker
+    thread so the regex pass over multi-MB base64 images does not block the event loop.
+    """
+    if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return messages
+    total_chars: Final = sum(len(leaf) for leaf in _iter_string_leaves(messages))
+    if total_chars < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS:
+        return truncate_base64_in_messages(messages)
+    return await asyncio.to_thread(truncate_base64_in_messages, messages)
+
+
 # Global service logger instance to avoid recreating it
 _service_logger = None
 
@@ -184,7 +220,7 @@ def _get_parent_otel_span_from_logging_obj(
 
 
 def convert_litellm_response_object_to_str(
-    response_obj: Any | LiteLLMModelResponse,
+    response_obj: object,
 ) -> str | None:
     """
     Get the string of the response object from LiteLLM

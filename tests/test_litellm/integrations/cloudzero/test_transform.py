@@ -86,6 +86,33 @@ class TestCBFTransformer:
 
             assert result.is_empty()
 
+    def test_transform_keeps_tags_first_seen_after_row_100(self):
+        transformer = CBFTransformer()
+        teamless_rows = 101
+        team_rows = 2
+        total_rows = teamless_rows + team_rows
+        data = pl.DataFrame(
+            {
+                "date": ["2025-01-19"] * total_rows,
+                "successful_requests": [1] * total_rows,
+                "spend": [0.5] * total_rows,
+                "prompt_tokens": [10] * total_rows,
+                "completion_tokens": [5] * total_rows,
+                "model": ["gpt-4"] * total_rows,
+                "custom_llm_provider": ["openai"] * total_rows,
+                "api_key": ["sk-late-team"] * total_rows,
+                "team_id": pl.Series([None] * teamless_rows + ["team-late"] * team_rows, dtype=pl.String),
+                "team_alias": pl.Series([None] * teamless_rows + ["Late Team"] * team_rows, dtype=pl.String),
+            }
+        )
+
+        result = transformer.transform(data)
+
+        assert len(result) == total_rows
+        assert "resource/tag:team_alias" in result.columns
+        assert result["resource/tag:team_alias"].to_list() == [None] * teamless_rows + ["Late Team"] * team_rows
+        assert result["resource/tag:entity_id"].to_list() == [None] * teamless_rows + ["Late Team"] * team_rows
+
     def test_create_cbf_record(self):
         """Test _create_cbf_record method with valid row data."""
         transformer = CBFTransformer()

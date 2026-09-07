@@ -1,4 +1,4 @@
-"""Live e2e: POST /embeddings returns a real vector across OpenAI, Bedrock, Vertex.
+"""Live e2e: POST /embeddings returns a real vector across OpenAI, Bedrock, Vertex, Cohere.
 
 Each test registers the deployment it needs at runtime (deleted on teardown) and
 asserts a non-empty, non-zero vector came back. The LIT-3167 guard in
@@ -74,6 +74,26 @@ class TestEmbeddingsEndpoint:
                 aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
                 aws_region_name="os.environ/AWS_REGION",
             ),
+        )
+        resources.defer(lambda: endpoints_client.delete_model(model_id))
+        key = resources.key()
+
+        result = endpoints_client.embeddings(key, model, "Say this is a test!")
+        require_successful_call(result)
+        parsed = EmbeddingsResult.model_validate_json(result.body)
+        assert parsed.first_vector, f"/embeddings returned no vector: {result.body[:300]}"
+        assert any(component != 0.0 for component in parsed.first_vector), (
+            f"embedding vector is all zeros: {result.body[:300]}"
+        )
+
+    @pytest.mark.covers("llm.embeddings.cohere.basic.nonstream.works")
+    def test_cohere_embeddings_returns_vector(
+        self, endpoints_client: EndpointsClient, resources: ResourceManager
+    ) -> None:
+        model = f"e2e-embeddings-cohere-{unique_marker()}"
+        model_id = endpoints_client.create_model(
+            model,
+            LiteLLMParamsBody(model="cohere/embed-v4.0", api_key="os.environ/COHERE_API_KEY"),
         )
         resources.defer(lambda: endpoints_client.delete_model(model_id))
         key = resources.key()

@@ -81,6 +81,7 @@ from litellm.llms.together_ai.cost_calculator import (
     get_model_params_and_category,
     has_together_registry_pricing,
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_generation_cost
 from litellm.llms.vertex_ai.cost_calculator import (
     cost_per_character as google_cost_per_character,
 )
@@ -496,6 +497,13 @@ def cost_per_token(
 
     # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     if call_type == "speech" or call_type == "aspeech":
+        lyria_generation_cost: Final = (
+            get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
+            if custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
+            else None
+        )
+        if lyria_generation_cost is not None:
+            return 0.0, lyria_generation_cost
         speech_model_info = litellm.get_model_info(model=model_without_prefix, custom_llm_provider=custom_llm_provider)
         cost_metric: Final = select_cost_metric_for_model(speech_model_info)
         prompt_cost: float = 0.0

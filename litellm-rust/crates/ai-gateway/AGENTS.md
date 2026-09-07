@@ -9,19 +9,15 @@ such as `litellm_core::messages::messages`. No provider handler lives here.
 src/
   main.rs            # entrypoint: build AppState (router + master key), bind, serve
   state.rs           # AppState — shared Arc<Router> + master_key
-  gil.rs             # GIL-activity tracker (records Python acquisitions)
   auth/              # authentication as an axum extractor — added to handler args
     mod.rs           #   RequireMasterKey: FromRequestParts, single master key (LITELLM_MASTER_KEY)
   routes/            # one module per route, all matching the same template
     AGENTS.md        #   ← the route template (read this before adding a route)
     mod.rs           #   app(): merges every module's router()
     health.rs        #   simple route (one file): router() + liveness/readiness
-    gil.rs           #   simple route (one file): router() + GET /health/gil
     realtime/        #   route with logic → axum surface + a no-axum service:
       mod.rs         #     router() + handler + WS<->events adapter (the axum surface)
       service.rs     #     business logic (select deployment, call provider) — no axum, testable
-  python/            # Python interop (feature: python-config) — load-time only
-    mod.rs, config.rs, AGENTS.md
 ```
 
 ## Rules
@@ -53,5 +49,6 @@ proxy in a later phase. Health routes don't add the extractor (unauthenticated).
 
 ## Python interop
 
-Anything that calls into Python lives in `python/` and is **load-time only** — see
-`python/AGENTS.md`. The realtime data path never takes the GIL.
+Python-backed loading lives in `litellm-config` and is **load-time only**. The
+gateway's `python-config` feature forwards to that crate. The realtime data path
+never takes the GIL.

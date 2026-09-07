@@ -1075,6 +1075,37 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert result == responses_so_far
 
 
+class TestUndecoratedGuardrailIsRecorded:
+    """LIT-5983 regression: the handler calls apply_guardrail bare, so a custom guardrail
+    without @log_guardrail_information must still end up in the request's guardrail
+    information on both the request and response paths."""
+
+    @pytest.mark.asyncio
+    async def test_request_path_records_undecorated_guardrail(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="docs-style")
+        data = {"messages": [{"role": "user", "content": "hello"}], "metadata": {}}
+
+        await handler.process_input_messages(data, guardrail)
+
+        entries = data["metadata"]["standard_logging_guardrail_information"]
+        assert [(e["guardrail_name"], e["guardrail_status"]) for e in entries] == [("docs-style", "success")]
+
+    @pytest.mark.asyncio
+    async def test_response_path_records_undecorated_guardrail(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="docs-style")
+        response = ModelResponse(
+            choices=[Choices(finish_reason="stop", index=0, message=Message(content="hi", role="assistant"))]
+        )
+        request_data: dict = {"metadata": {}}
+
+        await handler.process_output_response(response, guardrail, request_data=request_data)
+
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert [(e["guardrail_name"], e["guardrail_status"]) for e in entries] == [("docs-style", "success")]
+
+
 class TestGetStructuredMessages:
     """Test the get_structured_messages method."""
 

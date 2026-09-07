@@ -181,14 +181,6 @@ def assert_success(route: str, response: object) -> None:
         raise AssertionError(f"{route} returned {actual!r}, expected {expected!r}")
 
 
-def assert_traced_success(route: str, response: object) -> None:
-    if not isinstance(response, dict):
-        raise TypeError(f"{route} returned {type(response).__name__}, expected a traced dict")
-    assert_success(route, response["response"])
-    expected_function: Final = "audio_transcription" if route == "transcription" else route
-    assert response["trace"][0] == {"function": expected_function, "depth": 0}
-
-
 def success_value(route: str, response: dict[object, object]) -> object:
     if route == "ocr":
         return response["pages"][0]["markdown"]
@@ -200,7 +192,7 @@ def success_value(route: str, response: dict[object, object]) -> object:
 
 
 def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
-    if route == "chat_completions":
+    if route in {"ocr", "chat_completions"}:
         upstream_error: Final = native.RustUpstreamError
         if not isinstance(error, upstream_error) or error.args[0] != 429:
             raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
@@ -213,7 +205,6 @@ def exercise_sync(native: object, api_base: str) -> None:
     for route in ("ocr", "transcription", "messages", "chat_completions"):
         function: Final = getattr(native, route)
         assert_success(route, function(**route_kwargs(route, api_base, "success")))
-        assert_traced_success(route, function(**route_kwargs(route, api_base, "success"), trace=True))
         try:
             function(**route_kwargs(route, api_base, "429"))
         except (RuntimeError, native.RustUpstreamError) as error:
@@ -226,7 +217,6 @@ async def exercise_async(native: object, api_base: str) -> None:
     for route in ("ocr", "transcription", "messages", "chat_completions"):
         function: Final = getattr(native, f"a{route}")
         assert_success(route, await function(**route_kwargs(route, api_base, "success")))
-        assert_traced_success(route, await function(**route_kwargs(route, api_base, "success"), trace=True))
         try:
             await function(**route_kwargs(route, api_base, "429"))
         except (RuntimeError, native.RustUpstreamError) as error:
@@ -251,6 +241,8 @@ async def exercise_async_concurrency(native: object, api_base: str) -> None:
 
 def exercise_routes(native_path: Path, api_base: str) -> object:
     native: Final = load_native(native_path)
+    if hasattr(native, "_trace"):
+        raise AssertionError("release wheel exposed trace-parity diagnostics")
     exercise_sync(native, api_base)
     asyncio.run(exercise_async(native, api_base))
     asyncio.run(exercise_async_concurrency(native, api_base))

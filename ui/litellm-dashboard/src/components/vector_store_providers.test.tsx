@@ -28,6 +28,47 @@ describe("getVectorStoreProviderLogoAndName", () => {
     });
   });
 
+  it("registers mongodb in the provider, logo, and field maps", () => {
+    expect(getVectorStoreProviderLogoAndName("mongodb")).toEqual({
+      logo: expect.stringContaining("mongodb"),
+      displayName: VectorStoreProviders.MongoDB,
+    });
+    expect(vectorStoreProviderMap.MongoDB).toBe("mongodb");
+    expect(getProviderSpecificFields("mongodb").map((field) => field.name)).toEqual([
+      "mongodb_connection_string",
+      "mongodb_database",
+      "mongodb_collection",
+      "embedding_model",
+      "mongodb_embedding_field",
+      "mongodb_text_field",
+      "mongodb_num_candidates",
+    ]);
+  });
+
+  it("hides the mongodb connection string, which carries the database password", () => {
+    const connectionString = getProviderSpecificFields("mongodb").find(
+      (field) => field.name === "mongodb_connection_string",
+    );
+
+    expect(connectionString).toMatchObject({ type: "password", required: true });
+  });
+
+  it("picks the mongodb embedding model from the proxy's models rather than a fixed list", () => {
+    const embeddingField = getProviderSpecificFields("mongodb").find((field) => field.name === "embedding_model");
+
+    expect(embeddingField).toMatchObject({ type: "select", required: true });
+    expect(embeddingField).not.toHaveProperty("options");
+  });
+
+  it("defaults the mongodb field names so a standard collection needs no extra input", () => {
+    const fields = getProviderSpecificFields("mongodb");
+    const byName = (name: string) => fields.find((field) => field.name === name);
+
+    expect(byName("mongodb_embedding_field")).toMatchObject({ required: false, initialValue: "embedding" });
+    expect(byName("mongodb_text_field")).toMatchObject({ required: false, initialValue: "text" });
+    expect(byName("mongodb_num_candidates")).toMatchObject({ required: false });
+  });
+
   it("registers valkey in the provider, logo, and field maps", () => {
     expect(vectorStoreProviderMap.Valkey).toBe("valkey");
     expect(vectorStoreProviderLogoMap[VectorStoreProviders.Valkey]).toContain("valkey");

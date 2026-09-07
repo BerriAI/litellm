@@ -77,6 +77,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { uiHref } from "@/utils/uiHref";
 import {
   AUDIO_ACCEPT,
   IMAGE_EDIT_ACCEPT,
@@ -1650,7 +1651,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         Select vector store(s) to use for this LLM API call. You can set up your vector store{" "}
-                        <a href="?page=vector-stores" className="text-info underline">
+                        <a href={uiHref("vector-stores")} className="text-info underline">
                           here
                         </a>
                         .
@@ -1674,7 +1675,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       </TooltipTrigger>
                       <TooltipContent className="max-w-xs">
                         Select guardrail(s) to use for this LLM API call. You can set up your guardrails{" "}
-                        <a href="?page=guardrails" className="text-info underline">
+                        <a href={uiHref("guardrails")} className="text-info underline">
                           here
                         </a>
                         .
@@ -1700,7 +1701,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         <TooltipContent className="max-w-xs">
                           Select policy/policies to apply to this LLM API call. Policies define which guardrails are
                           applied based on conditions. You can set up your policies{" "}
-                          <a href="?page=policies" className="text-info underline">
+                          <a href={uiHref("policies")} className="text-info underline">
                             here
                           </a>
                           .

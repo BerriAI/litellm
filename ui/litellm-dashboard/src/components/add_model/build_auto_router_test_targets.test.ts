@@ -126,4 +126,32 @@ describe("buildAutoRouterTestTargets", () => {
     });
     expect(targets).toEqual([{ labels: ["SIMPLE"], modelGroup: "gpt-4o-mini", mode: "chat" }]);
   });
+
+  it("adds a distinct classifier probe with its reasoning effort", () => {
+    const targets = buildAutoRouterTestTargets({
+      tiers: tierEntries(["gpt-5-mini"]),
+      semanticMatchingEnabled: false,
+      embeddingModel: undefined,
+      classifier: { model: "gpt-5-mini", reasoningEffort: "low" },
+    });
+    expect(targets).toEqual([
+      { labels: ["SIMPLE"], modelGroup: "gpt-5-mini", mode: "chat" },
+      {
+        labels: ["Classifier"],
+        modelGroup: "gpt-5-mini",
+        mode: "chat",
+        requestParams: { reasoning_effort: "low" },
+      },
+    ]);
+  });
+
+  it("omits an empty classifier and omits params when the classifier uses provider defaults", () => {
+    const base = { tiers: tierEntries([]), semanticMatchingEnabled: false, embeddingModel: undefined };
+    const emptyClassifier = { ...base, classifier: { model: "   " } };
+    const providerDefaultClassifier = { ...base, classifier: { model: "gpt-5-mini" } };
+    expect(buildAutoRouterTestTargets(emptyClassifier)).toEqual([]);
+    expect(buildAutoRouterTestTargets(providerDefaultClassifier)).toEqual([
+      { labels: ["Classifier"], modelGroup: "gpt-5-mini", mode: "chat" },
+    ]);
+  });
 });

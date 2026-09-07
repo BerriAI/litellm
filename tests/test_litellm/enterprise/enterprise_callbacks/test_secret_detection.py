@@ -10,6 +10,8 @@ Covers the three defects from the ticket:
   handling live only on the native path).
 """
 
+import time
+
 import pytest
 
 from litellm_enterprise.enterprise_callbacks.secret_detection import (
@@ -19,18 +21,107 @@ from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 
 AWS_KEY = "AKIAIOSFODNN7EXAMPLE"
+OPENAI_KEY = "sk-test-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH"
+SHORT_OPENAI_KEY = "sk-12345"
+UNICODE_DIGIT_SUFFIX = "sk-notification٣"
+STRIPE_LIVE_KEY = f"sk_live_{'1234567890' * 3}"
+URL_ENCODED_KEY = "Bearer%20sk-Ab3dEf6Gh7Ij8Kl9Mn0Pq2Rs3Tu4Vw5X"
+AWS_KEYS = [f"AKIAIOSFODNN7EXAMPL{suffix}" for suffix in "FEDCBA"]
 
 
 def _guardrail() -> _ENTERPRISE_SecretDetection:
-    return _ENTERPRISE_SecretDetection(
-        guardrail_name="hide-secrets", event_hook="pre_call", default_on=True
-    )
+    return _ENTERPRISE_SecretDetection(guardrail_name="hide-secrets", event_hook="pre_call", default_on=True)
 
 
 def _recorded(request_data: dict) -> dict:
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     assert len(entries) == 1
     return entries[0]
+
+
+def test_scan_message_preserves_benign_identifiers_and_xml_tags():
+    guardrail = _guardrail()
+    content = "<task-notification> model: claude-sonnet-4-5-20250929 </task-notification>"
+
+    assert guardrail.scan_message_for_secrets(content) == []
+    assert guardrail.redact_text(content) == content
+    assert guardrail.redact_text("result = compute(x) </task-notification>") == (
+        "result = compute(x) </task-notification>"
+    )
+
+
+def test_scan_message_preserves_quoted_benign_identifiers():
+    guardrail = _guardrail()
+    content = '{"content-type": "application/json", "model": "claude-sonnet-4-5-20250929"}'
+
+    assert guardrail.scan_message_for_secrets(content) == []
+    assert guardrail.redact_text(content) == content
+
+
+def test_scan_message_redacts_every_openai_key_occurrence():
+    guardrail = _guardrail()
+    content = f"first {OPENAI_KEY}, second {OPENAI_KEY}"
+
+    assert guardrail.redact_text(content) == "first [REDACTED], second [REDACTED]"
+
+
+def test_scan_message_redacts_short_numeric_openai_like_values():
+    guardrail = _guardrail()
+
+    assert guardrail.redact_text(f"value {SHORT_OPENAI_KEY}") == "value [REDACTED]"
+
+
+def test_scan_message_requires_ascii_digits_for_openai_like_values():
+    guardrail = _guardrail()
+
+    assert guardrail.scan_message_for_secrets(UNICODE_DIGIT_SUFFIX) == []
+    assert guardrail.redact_text(UNICODE_DIGIT_SUFFIX) == UNICODE_DIGIT_SUFFIX
+
+
+def test_scan_message_redacts_openai_key_after_separator():
+    guardrail = _guardrail()
+
+    assert guardrail.redact_text(f"openai_{OPENAI_KEY} key-{OPENAI_KEY}") == (
+        "openai_[REDACTED] key-[REDACTED]"
+    )
+    assert guardrail.redact_text(URL_ENCODED_KEY) == "Bearer%20[REDACTED]"
+
+
+def test_scan_message_does_not_stop_openai_key_at_token_characters():
+    guardrail = _guardrail()
+
+    assert guardrail.redact_text("key sk-proj-abcde12345/extra") == "key [REDACTED]/extra"
+
+
+def test_scan_message_stays_linear_on_repeated_sk_separators():
+    guardrail = _guardrail()
+    content = "-sk-" * 25_000
+
+    started = time.perf_counter()
+    assert guardrail.scan_message_for_secrets(content) == []
+    assert time.perf_counter() - started < 2.0
+
+
+def test_scan_message_redacts_whole_stripe_live_key():
+    guardrail = _guardrail()
+
+    assert guardrail.redact_text(f"stripe {STRIPE_LIVE_KEY} end") == "stripe [REDACTED] end"
+
+
+def test_scan_message_returns_matches_in_stable_order():
+    guardrail = _guardrail()
+    detected = guardrail.scan_message_for_secrets(" ".join(AWS_KEYS))
+
+    assert [secret["value"] for secret in detected] == sorted(AWS_KEYS)
+
+
+def test_scan_message_replaces_longest_overlapping_match_first():
+    guardrail = _guardrail()
+    content = f'token = "{OPENAI_KEY}/extra"'
+
+    detected = guardrail.scan_message_for_secrets(content)
+    assert [secret["value"] for secret in detected] == [f"{OPENAI_KEY}/extra", OPENAI_KEY]
+    assert guardrail.redact_text(content) == 'token = "[REDACTED]"'
 
 
 @pytest.mark.asyncio
@@ -199,9 +290,7 @@ async def test_apply_guardrail_without_texts_records_nothing():
                 "messages": [
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": "https://x/y.png"}}
-                        ],
+                        "content": [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}],
                     }
                 ],
                 "metadata": {},

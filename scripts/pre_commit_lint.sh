@@ -142,6 +142,8 @@ fi
 
 lint_dashboard() {
     (
+        trap 'exit 143' TERM
+        trap 'rm -f "${report:-}"' EXIT
         rc=0
         prettier_rel=()
         eslint_rel=()
@@ -168,7 +170,6 @@ EOF
         report=$(mktemp)
         npx eslint . -f json -o "$report" || true
         node scripts/check-lint-budgets.mjs "$report" eslint-budgets.json || rc=1
-        rm -f "$report"
         exit $rc
     )
 }

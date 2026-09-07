@@ -73,16 +73,16 @@ bridge_route! {
     required = {
         model: String,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        messages: Value,
+        messages: serde_json::Value,
     },
     optional = {
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        optional_params: Option<Value>,
+        optional_params: Option<serde_json::Value>,
         api_key: Option<String>,
         api_base: Option<String>,
         custom_llm_provider: Option<String>,
         #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        extra_headers: Option<Value>,
+        extra_headers: Option<serde_json::Value>,
         timeout_seconds: Option<f64>,
     },
     prepare = prepare_chat_completions,

@@ -26,6 +26,8 @@ ANTHROPIC_BASE_URL_KEY: Final = "ANTHROPIC_BASE_URL"
 ANTHROPIC_API_KEY_KEY: Final = "ANTHROPIC_API_KEY"
 ENABLE_TOOL_SEARCH_KEY: Final = "ENABLE_TOOL_SEARCH"
 ENABLE_TOOL_SEARCH_VALUE: Final = "true"
+ENABLE_GATEWAY_MODEL_DISCOVERY_KEY: Final = "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"
+ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
 
 CLAUDE_SETTINGS_PATH: Final = Path.home() / ".claude" / "settings.json"
 BACKUP_PATH: Final = Path.home() / ".litellm" / "claude_settings_backup.json"
@@ -77,13 +79,16 @@ def merge_claude_settings(
     stray env.ANTHROPIC_API_KEY is dropped so it cannot outrank the helper-issued
     token (same reasoning as build_agent_env in agents.py). ENABLE_TOOL_SEARCH
     defaults to true because Claude Code turns tool search off when
-    ANTHROPIC_BASE_URL is not a first-party Anthropic host; an existing value is
-    left alone. Every other key is preserved untouched.
+    ANTHROPIC_BASE_URL is not a first-party Anthropic host, and
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY defaults to 1 so the /model picker
+    is filled from the proxy's /v1/models; existing values of both are left
+    alone. Every other key is preserved untouched.
     """
     raw_env: Final = settings.get(ENV_KEY, {})
     base_env: Final = raw_env if isinstance(raw_env, dict) else {}
     env: Final = {
         ENABLE_TOOL_SEARCH_KEY: ENABLE_TOOL_SEARCH_VALUE,
+        ENABLE_GATEWAY_MODEL_DISCOVERY_KEY: ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE,
         **{key: value for key, value in base_env.items() if key != ANTHROPIC_API_KEY_KEY},
         ANTHROPIC_BASE_URL_KEY: base_url.rstrip("/"),
     }
@@ -156,6 +161,8 @@ __all__ = (
     "AUTOROUTE_BACKUP_PATH",
     "BACKUP_PATH",
     "CLAUDE_SETTINGS_PATH",
+    "ENABLE_GATEWAY_MODEL_DISCOVERY_KEY",
+    "ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE",
     "ENABLE_TOOL_SEARCH_KEY",
     "ENABLE_TOOL_SEARCH_VALUE",
     "ENV_KEY",

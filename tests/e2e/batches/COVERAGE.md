@@ -19,11 +19,13 @@ failures are hard test failures (see `tests/e2e/CLAUDE.md`).
 | OpenAI    | yes | yes | yes | yes | yes (lifecycle + terminal output) | OpenAI Files |
 | Azure     | yes | yes | yes | yes | yes (byte-verbatim) | Azure Files |
 | Vertex AI | yes | yes | yes | yes | yes (provider-transformed) | GCS (`gcs_bucket_name` / `GCS_BUCKET_NAME` on model) |
-| Bedrock   | yes (unified only) | yes | no (limited upstream) | no | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
+| Bedrock   | yes (unified only) | yes | yes | yes (unfiltered managed list) | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 
-Bedrock cancel is unreliable upstream and list is unsupported, so both are gated off
-(`can_cancel=False`, `can_list=False`) when that provider is enabled in the matrix;
-flipping those gates is tracked in LIT-4774 and deliberately not part of this suite.
+Bedrock cancel maps to `StopModelInvocationJob` and comes back `cancelling`; the
+lifecycle asserts it the same way it does for OpenAI (`_CANCEL_ASSERTED_PROVIDERS`).
+Bedrock has no provider-side list, so list is the proxy's DB-backed managed view: the
+unified lifecycle lists with the plain `GET /v1/batches` and the batch must appear
+there. Both were gated off until LIT-5730, after LIT-4774 landed cancel support. A batch that completes inside the 2 s pre-cancel window skips the cancel assertion (a documented vacuous pass for the cancel cell, same as OpenAI); the list assertion runs either way.
 Bedrock file upload requires a model on the request (`encoded` / `unified` scenarios only);
 `model_param` and `provider_fallback` are omitted because `POST /bedrock/v1/files` has no
 model-less passthrough path.
@@ -148,6 +150,6 @@ never landed.
 Unified (managed) batch cost is owned by the hourly `CheckBatchCost` poller, and a
 terminal DB status short-circuits retrieve for those ids, so the terminal-state cell
 uses the encoded path; poller timing does not fit an e2e gate and belongs in a
-DI-stubbed proxy integration test under `tests/test_litellm/proxy/`. Bedrock
-cancel/list stay gated pending LIT-4774. Gemini (non-Vertex) file content raises
-`NotImplementedError` upstream and is not a coverage cell.
+DI-stubbed proxy integration test under `tests/test_litellm/proxy/`. Gemini
+(non-Vertex) file content raises `NotImplementedError` upstream and is not a
+coverage cell.

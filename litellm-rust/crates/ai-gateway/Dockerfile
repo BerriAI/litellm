@@ -36,12 +36,12 @@ FROM chef AS builder
 # whenever only gateway source changes.
 COPY --from=planner /build/litellm-rust/recipe.json recipe.json
 RUN cargo chef cook --locked --release \
-        -p litellm-ai-gateway --features python-config \
+        -p litellm-ai-gateway --features server,python-config \
         --recipe-path recipe.json
 # Now copy the real sources and build the gateway binary. Deps are already cooked
 # above, so this step only recompiles the gateway crate.
 COPY litellm-rust/ .
-RUN cargo build --locked --release -p litellm-ai-gateway --features python-config
+RUN cargo build --locked --release -p litellm-ai-gateway --bin litellm-ai-gateway --features server,python-config
 
 # ---- Runtime ----------------------------------------------------------------
 # python:3.11-slim-bookworm ships libpython3.11, matching the builder's PyO3

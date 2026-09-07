@@ -882,6 +882,7 @@ def _leg_record(**overrides: object) -> MagicMock:
         "target_id": "key-hash",
         "router_name": "my-router",
         "router_names": (),
+        "models": (),
         "direction": "forward",
         "baseline_model": None,
         "judge_model": "anthropic/claude-sonnet-5",
@@ -1033,6 +1034,7 @@ def _shadow_prisma(
             "target_id",
             "router_name",
             "router_names",
+            "models",
             "direction",
             "baseline_model",
             "judge_model",
@@ -1531,6 +1533,87 @@ async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(monkey
     rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
     assert rows[0]["direction"] == "forward"
     assert rows[0]["baseline_model"] is None
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_writes_the_model_scope_on_every_leg_and_echoes_it(monkeypatch: pytest.MonkeyPatch):
+    """A model scope is job config, so every leg carries the same copy and both the start
+    response and a later list read report it; an auto-router is a legitimate scope (a
+    forward job on one router may sample what another router serves today)."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    response = await start_shadow_eval(
+        _start_request(api_key_ids=("key-hash", "key-hash-2"), models=("cheap", "sonnet-router")), ADMIN
+    )
+
+    rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+    assert [row["models"] for row in rows] == [["cheap", "sonnet-router"], ["cheap", "sonnet-router"]]
+    assert response.models == ("cheap", "sonnet-router")
+
+    listed = _shadow_prisma(legs=[_leg_record(models=("cheap",)), _leg_record(id="leg-0", group_id="job-0")])
+    monkeypatch.setattr(proxy_server, "prisma_client", listed)
+    jobs = await list_shadow_eval_jobs(VIEWER, target_type=None, target_id=None, limit=50)
+    assert {job.job_id: job.models for job in jobs} == {"job-1": ("cheap",), "job-0": ()}
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_accepts_a_team_public_scope_for_a_user_target(monkeypatch: pytest.MonkeyPatch):
+    """A user's traffic can arrive on any team's key, so a name only one team can ask for
+    is a legitimate scope for a user target even though it resolves for nobody unscoped."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma = _shadow_prisma(known_users={"dev-alice": "alice@example.com"})
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    response = await start_shadow_eval(
+        _start_request(api_key_ids=(), user_ids=("dev-alice",), models=("house-judge",)), ADMIN
+    )
+
+    assert response.models == ("house-judge",)
+    assert prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"][0]["models"] == ["house-judge"]
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_rejects_a_model_scope_this_proxy_does_not_serve(monkeypatch: pytest.MonkeyPatch):
+    """A typo'd model name would otherwise start a job that samples nothing. Only the
+    unresolvable names are reported, so the caller fixes them in one round."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(models=("cheap", "no-such-model-zzz")), ADMIN)
+    assert exc.value.status_code == 400
+    assert "'no-such-model-zzz'" in exc.value.detail
+    assert "'cheap'" not in exc.value.detail
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+def test_start_request_dedupes_the_model_scope_and_rejects_blank_names():
+    assert _start_request(models=("cheap", "mid", "cheap")).models == ("cheap", "mid")
+    assert _start_request().models == ()
+    with pytest.raises(ValidationError, match="non-empty model group names"):
+        _start_request(models=("cheap", " "))
+
+
+def test_start_request_rejects_a_model_scope_on_a_reverse_job():
+    """Reverse admission is the router's own traffic, whose requested group is always the
+    router, so a plain-model scope would sample nothing and the router itself is a no-op."""
+    with pytest.raises(ValidationError, match="only meaningful for a forward job"):
+        _start_request(direction="reverse", baseline_model="cheap", models=("mid",))
+    with pytest.raises(ValidationError, match="only meaningful for a forward job"):
+        _start_request(direction="reverse", baseline_model="cheap", models=("my-router",))
+    assert _start_request(direction="reverse", baseline_model="cheap").models == ()
 
 
 @pytest.mark.asyncio

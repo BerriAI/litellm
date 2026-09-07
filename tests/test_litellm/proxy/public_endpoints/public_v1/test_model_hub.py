@@ -193,12 +193,12 @@ def test_sorting_by_a_numeric_field_puts_the_unset_ones_last_in_both_directions(
 def test_an_undeclared_sort_field_is_a_problem_naming_the_allowed_fields(monkeypatch):
     _publish(monkeypatch, _named(3))
 
-    response = _get("sort=providers")
+    response = _get("sort=health_status")
 
     assert response.status_code == 400
     assert response.headers["content-type"].startswith("application/problem+json")
     body = response.json()
-    assert "providers" in body["detail"]
+    assert "health_status" in body["detail"]
     assert body["allowed"] == [
         "input_cost_per_token",
         "max_input_tokens",
@@ -206,6 +206,9 @@ def test_an_undeclared_sort_field_is_a_problem_naming_the_allowed_fields(monkeyp
         "mode",
         "model_group",
         "output_cost_per_token",
+        "providers",
+        "rpm",
+        "tpm",
     ]
 
 
@@ -347,3 +350,131 @@ def test_the_endpoint_it_supersedes_still_answers_with_its_bare_array(monkeypatc
     body = response.json()
     assert isinstance(body, list)
     assert [row["model_group"] for row in body] == ["model-000", "model-001", "model-002"]
+
+
+FACET_PATHS = ("providers", "modes", "features")
+
+
+def _facet(name: str, query: str = ""):
+    suffix = f"?{query}" if query else ""
+    return client.get(f"{MODEL_HUB_PATH}/{name}{suffix}")
+
+
+def test_providers_filter_accepts_several_providers_at_once(monkeypatch):
+    """The hub's provider control is a multi-select, so the route has to OR the values."""
+    _publish(
+        monkeypatch,
+        (
+            _info("gpt-4", providers=("openai",)),
+            _info("claude", providers=("anthropic",)),
+            _info("mistral-large", providers=("mistral",)),
+            _info("router", providers=("openai", "anthropic")),
+        ),
+    )
+
+    response = _get("filter[providers][in]=openai,anthropic")
+
+    assert response.status_code == 200, response.text
+    assert sorted(_groups(response)) == ["claude", "gpt-4", "router"]
+
+
+def test_features_filter_matches_a_model_with_any_of_the_named_features(monkeypatch):
+    """Selecting two features widens the result set, the way the hub's multi-select always did."""
+    _publish(
+        monkeypatch,
+        (
+            _info("sees", supports_vision=True),
+            _info("calls", supports_function_calling=True),
+            _info("both", supports_vision=True, supports_function_calling=True),
+            _info("plain"),
+        ),
+    )
+
+    response = _get("filter[features][in]=vision,function_calling")
+
+    assert response.status_code == 200, response.text
+    assert sorted(_groups(response)) == ["both", "calls", "sees"]
+
+
+def test_a_single_feature_filter_selects_only_models_with_it(monkeypatch):
+    _publish(monkeypatch, (_info("sees", supports_vision=True), _info("plain"), _info("reasons", supports_reasoning=True)))
+
+    assert _groups(_get("filter[features][in]=vision")) == ["sees"]
+    assert _groups(_get("filter[features][in]=reasoning")) == ["reasons"]
+
+
+def test_providers_and_limits_are_sortable(monkeypatch):
+    """The hub sorted on these columns before it paged; they stay sortable now that the route orders."""
+    _publish(
+        monkeypatch,
+        (
+            _info("b-model", providers=("mistral",), rpm=10),
+            _info("a-model", providers=("anthropic",), rpm=30),
+            _info("c-model", providers=("openai",), rpm=20),
+        ),
+    )
+
+    assert _groups(_get("sort=providers")) == ["a-model", "b-model", "c-model"]
+    assert _groups(_get("sort=-rpm")) == ["a-model", "c-model", "b-model"]
+
+
+@pytest.mark.parametrize("facet", FACET_PATHS)
+def test_a_facet_serves_the_distinct_values_of_its_column(monkeypatch, facet):
+    _publish(
+        monkeypatch,
+        (
+            _info("a", providers=("openai",), mode="chat", supports_vision=True),
+            _info("b", providers=("anthropic", "openai"), mode="embedding", supports_vision=True),
+            _info("c", providers=("mistral",), mode="chat"),
+        ),
+    )
+
+    response = _facet(facet)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == {
+        "providers": ["anthropic", "mistral", "openai"],
+        "modes": ["chat", "embedding"],
+        "features": ["vision"],
+    }[facet]
+
+
+def test_a_facet_offers_only_values_the_table_can_show(monkeypatch):
+    """Section 12's reason for hanging facets off the resource: the dropdown matches the filtered table."""
+    _publish(
+        monkeypatch,
+        (
+            _info("chat-openai", providers=("openai",), mode="chat"),
+            _info("embed-cohere", providers=("cohere",), mode="embedding"),
+        ),
+    )
+
+    assert _facet("providers", "filter[mode][in]=chat").json()["data"] == ["openai"]
+    assert _facet("providers", "q=embed").json()["data"] == ["cohere"]
+
+
+def test_a_facet_pages_and_reports_whether_more_remain(monkeypatch):
+    _publish(monkeypatch, tuple(_info(f"m-{index}", providers=(f"p-{index:02d}",)) for index in range(5)))
+
+    first = _facet("providers", "page_size=2")
+    last = _facet("providers", "page=3&page_size=2")
+
+    assert first.json()["data"] == ["p-00", "p-01"]
+    assert first.json()["meta"] == {"page": 1, "page_size": 2, "has_more": True}
+    assert last.json()["data"] == ["p-04"]
+    assert last.json()["meta"]["has_more"] is False
+
+
+def test_a_facet_rejects_a_sort_it_does_not_offer(monkeypatch):
+    """Facet values are always ascending, so `sort` is not part of the facet contract."""
+    _publish(monkeypatch, _named(3))
+
+    response = _facet("providers", "sort=-providers")
+
+    assert response.status_code == 400
+    assert response.json()["type"].endswith("unknown-query-parameter")
+
+
+@pytest.mark.parametrize("facet", FACET_PATHS)
+def test_a_facet_is_reachable_without_a_key(facet):
+    assert f"{MODEL_HUB_PATH}/{facet}" in LiteLLMRoutes.public_routes.value

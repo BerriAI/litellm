@@ -189,6 +189,45 @@ class LangfuseCreds:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class WeaveCreds:
+    """Weights & Biases Weave credentials for a key-scoped ``weave_otel`` callback.
+
+    The proxy still needs WANDB_API_KEY / WANDB_PROJECT_ID in its own environment:
+    the weave_otel logger is constructed from those before the per-key vars are
+    applied, so a key-scoped callback on a proxy without them never initializes.
+    The per-key vars are what direct THIS key's spans at this project.
+    """
+
+    api_key: str
+    project_id: str
+
+    def key_logging_metadata(self) -> KeyMetadata:
+        return KeyMetadata(
+            logging=[
+                KeyLoggingCallback(
+                    callback_name="weave_otel",
+                    callback_type="success_and_failure",
+                    callback_vars=KeyLoggingCallbackVars(
+                        wandb_api_key=self.api_key,
+                        weave_project_id=self.project_id,
+                    ),
+                )
+            ]
+        )
+
+
+def load_weave_creds() -> WeaveCreds:
+    api_key = os.getenv("WANDB_API_KEY")
+    project_id = (os.getenv("WEAVE_PROJECT_ID") or os.getenv("WANDB_PROJECT_ID") or "").strip()
+    if not (api_key and project_id):
+        pytest.fail(
+            "Weave e2e requires WANDB_API_KEY and WEAVE_PROJECT_ID (or WANDB_PROJECT_ID, "
+            "format <entity>/<project>); missing credentials is a hard failure, not a skip"
+        )
+    return WeaveCreds(api_key=api_key, project_id=project_id)
+
+
 def load_langfuse_creds() -> LangfuseCreds:
     public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
     secret_key = os.getenv("LANGFUSE_SECRET_KEY")

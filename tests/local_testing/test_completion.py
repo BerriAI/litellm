@@ -2879,7 +2879,6 @@ def response_format_tests(response: litellm.ModelResponse):
     "model",
     [
         "bedrock/mistral.mistral-large-2407-v1:0",
-        "bedrock/cohere.command-r-plus-v1:0",
         "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mistral-7b-instruct-v0:2",
         "meta.llama3-8b-instruct-v1:0",

@@ -433,9 +433,9 @@ _default_detect_secrets_config = {
             "name": "ZendeskSecretKeyDetector",
             "path": _custom_plugins_path + "/zendesk_secret_key.py",
         },
-        {"name": "Base64HighEntropyString", "limit": 3.0},
+        {"name": "Base64HighEntropyString", "limit": 4.5},
         {"name": "HexHighEntropyString", "limit": 3.0},
-    ]
+    ],
 }
 
 
@@ -466,16 +466,19 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
 
         os.remove(temp_file.name)
 
-        detected_secrets = []
-        for file in secrets.files:
-            for found_secret in secrets[file]:
-                if found_secret.secret_value is None:
-                    continue
-                detected_secrets.append(
-                    {"type": found_secret.type, "value": found_secret.secret_value}
-                )
-
-        return detected_secrets
+        return [
+            {"type": found_secret.type, "value": found_secret.secret_value}
+            for file in sorted(secrets.files)
+            for found_secret in sorted(
+                secrets[file],
+                key=lambda secret: (
+                    -len(secret.secret_value or ""),
+                    secret.type,
+                    secret.secret_value or "",
+                ),
+            )
+            if found_secret.secret_value is not None
+        ]
 
     def redact_text(self, text: str, source: str = "message") -> str:
         """Replace every detected secret in ``text`` with ``[REDACTED]`` and

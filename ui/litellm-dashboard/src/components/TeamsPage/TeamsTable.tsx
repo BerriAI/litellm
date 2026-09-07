@@ -164,7 +164,7 @@ export function TeamsTable({ userRole, userID, onSelectTeam, onEditTeam, onDelet
       isLoading={isLoading}
       loadingMessage="Loading teams..."
       noDataMessage="No teams found"
-      maxBodyHeight="calc(75vh - 210px)"
+      fillHeight
       size="compact"
       toolbar={(table) => (
         <>

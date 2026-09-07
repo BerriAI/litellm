@@ -14,11 +14,15 @@ default = ["abi3"]
 abi3 = ["pyo3/abi3-py310"]
 extension-module = ["pyo3/extension-module"]
 panic-test = []
+trace-parity = [
+    "dep:tracing",
+    "litellm-core/observability",
+    "litellm-ai-gateway/trace-parity",
+]
 
 [dependencies]
 futures-util.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing = { workspace = true, optional = true }
 litellm-core = { workspace = true, features = ["bedrock-auth"] }
 litellm-ai-gateway = { workspace = true, default-features = false }
 litellm-python-interop.workspace = true
@@ -31,6 +35,7 @@ tokio.workspace = true
 [dev-dependencies]
 criterion = "0.8.2"
 tokio-tungstenite.workspace = true
+tracing.workspace = true
 
 [[bench]]
 name = "serialization"

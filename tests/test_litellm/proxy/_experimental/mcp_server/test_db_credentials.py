@@ -1362,3 +1362,75 @@ async def test_refresh_user_oauth_token_uses_admin_entered_token_url_when_issuer
 
     assert result is not None
     assert captured["url"] == "https://idp.example.com/token"
+
+
+def test_prepare_mcp_server_data_carries_per_server_oauth_discovery():
+    request = NewMCPServerRequest(
+        server_name="relay_create",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        per_server_oauth_discovery=True,
+    )
+
+    data = _prepare_mcp_server_data(request)
+
+    assert data["per_server_oauth_discovery"] is True
+
+
+def test_prepare_mcp_server_data_update_carries_per_server_oauth_discovery():
+    request = UpdateMCPServerRequest(
+        server_id="relay-update",
+        url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        per_server_oauth_discovery=True,
+    )
+
+    data = _prepare_mcp_server_data(request, exclude_unset=True)
+
+    assert data["per_server_oauth_discovery"] is True
+
+
+@pytest.mark.parametrize(
+    "request_cls, extra, overrides",
+    [
+        (NewMCPServerRequest, {"server_name": "relay_create"}, {"auth_type": MCPAuth.oauth_delegate}),
+        (NewMCPServerRequest, {"server_name": "relay_create"}, {"oauth2_flow": "client_credentials"}),
+        (UpdateMCPServerRequest, {"server_id": "relay-update"}, {"delegate_auth_to_upstream": True}),
+    ],
+)
+def test_request_models_reject_unsupported_per_server_oauth_discovery(request_cls, extra, overrides):
+    payload = {
+        "url": "https://upstream.example.com/mcp",
+        "transport": MCPTransport.http,
+        "auth_type": MCPAuth.oauth2,
+        "oauth2_flow": "authorization_code",
+        "per_server_oauth_discovery": True,
+        **extra,
+        **overrides,
+    }
+
+    with pytest.raises(ValueError, match="per_server_oauth_discovery is only supported"):
+        request_cls(**payload)
+
+
+@pytest.mark.parametrize(
+    "partial_payload",
+    [
+        {"oauth2_flow": "client_credentials"},
+        {"delegate_auth_to_upstream": True},
+        {"auth_type": MCPAuth.api_key},
+    ],
+)
+def test_partial_update_rejects_ineligible_field_alongside_per_server_oauth_discovery(partial_payload):
+    with pytest.raises(ValueError, match="per_server_oauth_discovery is only supported"):
+        UpdateMCPServerRequest(server_id="relay-update", per_server_oauth_discovery=True, **partial_payload)
+
+
+def test_partial_update_defers_omitted_eligibility_fields_to_the_stored_row():
+    request = UpdateMCPServerRequest(server_id="relay-update", per_server_oauth_discovery=True)
+
+    assert request.per_server_oauth_discovery is True

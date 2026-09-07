@@ -15,7 +15,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.common_utils import is_foundry_model_inference_base
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
+from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.common_utils import drop_params_from_unprocessable_entity_error
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.xai.chat.transformation import XAIChatConfig
@@ -41,12 +43,37 @@ NON_OPENAI_SPEC_MESSAGE_FIELDS: Final = (
 )
 
 
+class AzureAIGPT5Config(OpenAIGPT5Config):
+    @classmethod
+    def _model_map_lookup_name(cls, model: str) -> str:
+        """Normalise a Foundry routing name to its cost-map key, when the map has one.
+
+        A Foundry deployment and its OpenAI-hosted namesake are different products with
+        different capabilities, so ``azure_ai/<model>`` is the entry to read whenever the map
+        carries it. Most gpt-5-family names have no ``azure_ai/`` row, though, and prefixing
+        those anyway costs them every flag: ``get_llm_provider`` re-resolves an ``azure_ai/``
+        name to the azure provider when a global AZURE_AI_API_BASE points at an
+        openai.azure.com host, ``azure/<model>`` is not a key either, so the lookup lands
+        nowhere and every effort answer degrades to False. A missing key defers to the base
+        resolver instead.
+        """
+        prefixed: Final = model if model.startswith("azure_ai/") else f"azure_ai/{model}"
+        return prefixed if prefixed in litellm.model_cost else super()._model_map_lookup_name(model)
+
+
+azureAIGPT5Config: Final = AzureAIGPT5Config()
+
+
 class AzureAIStudioConfig(OpenAIConfig):
     def get_supported_openai_params(self, model: str) -> list:
         model_supports_tool_choice = True  # azure ai supports this by default
         if not supports_tool_choice(model=f"azure_ai/{model}"):
             model_supports_tool_choice = False
-        supported_params = super().get_supported_openai_params(model)
+        supported_params = (
+            azureAIGPT5Config.get_supported_openai_params(model)
+            if azureAIGPT5Config.is_model_gpt_5_model(model)
+            else super().get_supported_openai_params(model)
+        )
         if not model_supports_tool_choice:
             filtered_supported_params: Final = []
             for param in supported_params:
@@ -59,6 +86,27 @@ class AzureAIStudioConfig(OpenAIConfig):
             supported_params = [param for param in supported_params if param != "stop"]
 
         return supported_params
+
+    def map_openai_params(
+        self,
+        non_default_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAIConfig.map_openai_params signature
+        model: str,
+        drop_params: bool,
+    ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
+        if not azureAIGPT5Config.is_model_gpt_5_model(model):
+            return super().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+            )
+        return azureAIGPT5Config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
 
     def _supports_stop_reason(self, model: str) -> bool:
         """
@@ -207,20 +255,18 @@ class AzureAIStudioConfig(OpenAIConfig):
                 message["content"] = texts
         return stripped_messages
 
-    def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
-        try:
-            if "/" in model:
-                model = model.split("/", 1)[1]
-            if (
-                model in litellm.open_ai_chat_completion_models
-                or model in litellm.open_ai_text_completion_models
-                or model in litellm.open_ai_embedding_models
-            ):
-                return True
+    def _is_foundry_model_inference_base(self, api_base: str) -> bool:
+        return is_foundry_model_inference_base(api_base)
 
-        except Exception:
+    def _is_azure_openai_model(self, model: str, api_base: str | None) -> bool:
+        if api_base is None or self._is_foundry_model_inference_base(api_base):
             return False
-        return False
+        stripped_model: Final = model.split("/", 1)[1] if "/" in model else model
+        return (
+            stripped_model in litellm.open_ai_chat_completion_models
+            or stripped_model in litellm.open_ai_text_completion_models
+            or stripped_model in litellm.open_ai_embedding_models
+        )
 
     def _get_openai_compatible_provider_info(
         self,

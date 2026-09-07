@@ -72,7 +72,7 @@ class NomaBlockedMessage(HTTPException):
             },
         )
 
-    def _is_result_true(self, result_obj: dict[str, Any] | None) -> bool:
+    def _is_result_true(self, result_obj: dict[str, object] | None) -> bool:
         """
         Check if a result object has a "result" field that is True.
 
@@ -454,7 +454,7 @@ class NomaGuardrail(CustomGuardrail):
 
         return False
 
-    def _is_result_true(self, result_obj: dict[str, Any] | None) -> bool:
+    def _is_result_true(self, result_obj: dict[str, object] | None) -> bool:
         """
         Check if a result object has a "result" field that is True.
 

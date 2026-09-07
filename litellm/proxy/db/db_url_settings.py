@@ -124,6 +124,42 @@ def add_missing_query_params(url: str, params: Mapping[str, str | int | float]) 
     return urllib.parse.urlunsplit(parsed._replace(query=query))
 
 
+LIBPQ_VERIFY_SSLMODES: Final[frozenset[str]] = frozenset({"verify-ca", "verify-full"})
+
+
+def translate_libpq_ssl_params(url: str) -> str:
+    """Rewrite libpq's certificate-verification params into Prisma's dialect.
+
+    Prisma's engine only knows ``sslmode=disable|prefer|require``, ``sslcert``
+    (the CA bundle) and ``sslaccept=strict``. It silently discards
+    ``sslrootcert`` and downgrades ``sslmode=verify-ca`` / ``verify-full`` to
+    ``prefer``, so a URL copied from libpq / RDS docs connects over TLS with no
+    certificate check at all. ``verify-ca`` and ``verify-full`` both become
+    ``require`` (Prisma has no CA-only mode), ``sslrootcert`` becomes
+    ``sslcert``, and either one turns on ``sslaccept=strict`` (chain and
+    hostname), matching libpq where a root cert makes ``require`` verify.
+    Prisma params the operator pinned themselves win; anything else is left
+    untouched.
+    """
+    parsed: Final = urllib.parse.urlsplit(url)
+    pairs: Final = tuple(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    keys: Final = frozenset(key for key, _ in pairs)
+    wants_verify: Final = any(key == "sslmode" and value in LIBPQ_VERIFY_SSLMODES for key, value in pairs)
+    if not wants_verify and "sslrootcert" not in keys:
+        return url
+    translated: Final = tuple(
+        ("sslmode", "require") if key == "sslmode" and value in LIBPQ_VERIFY_SSLMODES else (key, value)
+        for key, value in pairs
+        if key != "sslrootcert"
+    )
+    root_cert: Final = tuple(
+        ("sslcert", value) for key, value in pairs if key == "sslrootcert" and "sslcert" not in keys
+    )
+    strict: Final = () if "sslaccept" in keys else (("sslaccept", "strict"),)
+    query: Final = urllib.parse.urlencode(translated + root_cert + strict)
+    return urllib.parse.urlunsplit(parsed._replace(query=query))
+
+
 def reader_shareable_params(params: Mapping[str, str | int | float]) -> Mapping[str, str | int | float]:
     """Return the subset of ``params`` the read replica is allowed to inherit."""
     return MappingProxyType({key: value for key, value in params.items() if key in CONNECTION_PARAM_KEYS})
@@ -403,6 +439,11 @@ class DatabaseURLSettings(BaseSettings):
         self._raise_for_unsupported_scheme()
         wrote_writer: Final = self.apply_writer_url_to_env()
 
+        for env_var in ("DATABASE_URL", "DIRECT_URL"):
+            url = os.environ.get(env_var)
+            if url:
+                os.environ[env_var] = translate_libpq_ssl_params(url)
+
         # DATABASE_DISABLE_PREPARED_STATEMENTS maps to Prisma's `pgbouncer=true`
         # URL param, same as the CLI's `database_disable_prepared_statements`
         # config key. An explicit `pgbouncer` value already on the URL wins.
@@ -418,7 +459,7 @@ class DatabaseURLSettings(BaseSettings):
         reader_url: Final = self.build_reader_url() or self.database_url_read_replica
         if reader_url is not None:
             os.environ["DATABASE_URL_READ_REPLICA"] = add_missing_query_params(
-                reader_url,
+                translate_libpq_ssl_params(reader_url),
                 connection_params_from_url(os.environ.get("DATABASE_URL", "")),
             )
 

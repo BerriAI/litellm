@@ -18,13 +18,16 @@ from typing import Literal
 import pytest
 
 from e2e_config import unique_marker
-from e2e_http import NoBody, unwrap
+from e2e_http import NoBody, StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyDeleteBody, KeyGenerateBody, KeyUpdateBody
 from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
+
+TINY_BUDGET = 3e-6
+SPEND_MODEL = "claude-haiku-4-5"
 
 
 class KeyToggleBlockBody(BaseModel):
@@ -80,6 +83,30 @@ def _generate_key(client: ManagementClient, resources: ResourceManager, body: Ke
     key = client.proxy.generate_key(body)
     resources.defer(lambda: client.proxy.delete_key(key))
     return key
+
+
+def _is_budget_block(outcome: StreamingResponse) -> bool:
+    return not outcome.ok and "budget_exceeded" in outcome.body
+
+
+def _spend_until_budget_blocks(client: ManagementClient, key: str) -> None:
+    for _ in range(40):
+        outcome = client.chat_status(key, SPEND_MODEL, f"spend {unique_marker()}")
+        if _is_budget_block(outcome):
+            assert outcome.status_code == 429, (
+                f"budget refusal must be 429, got {outcome.status_code}: {outcome.body[:200]}"
+            )
+            return
+        assert outcome.ok, f"paid call failed before the budget tripped ({outcome.status_code}): {outcome.body[:300]}"
+        time.sleep(2)
+    pytest.fail(f"max_budget={TINY_BUDGET} never blocked a call on the key")
+
+
+def _settled_spend(client: ManagementClient, key: str) -> float | None:
+    first = client.proxy.key_info(key).spend or 0.0
+    time.sleep(client.proxy.poll_interval)
+    second = client.proxy.key_info(key).spend or 0.0
+    return second if first > 0 and first == second else None
 
 
 def _block(client: ManagementClient, key: str) -> None:
@@ -196,6 +223,32 @@ class TestKeyManagementRoutes:
             lambda: True if client.proxy.key_info(key).max_budget == 42.0 else None,
             "/key/info never reported max_budget 42.0 after /key/bulk_update before the deadline",
         )
+
+    @pytest.mark.covers("other.key_mgmt.spend_reset.resets_to_value")
+    def test_reset_spend_zeroes_recorded_spend_and_lifts_the_budget_block(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        key = _generate_key(client, resources, KeyGenerateBody(models=[SPEND_MODEL], max_budget=TINY_BUDGET))
+        _spend_until_budget_blocks(client, key)
+        recorded = _poll(
+            client, lambda: _settled_spend(client, key), "key spend never landed in /key/info before the deadline"
+        )
+
+        reset = client.reset_key_spend(key, reset_to=0.0)
+        assert reset.previous_spend == recorded, (
+            f"reset_spend reported previous_spend {reset.previous_spend}, /key/info had recorded {recorded}"
+        )
+        assert reset.spend == 0.0, f"reset_spend to 0 reported spend {reset.spend}"
+        assert client.proxy.key_info(key).spend == 0.0, "/key/info still reports spend after the reset to 0"
+
+        def call_allowed_again() -> bool | None:
+            outcome = client.chat_status(key, SPEND_MODEL, f"after reset {unique_marker()}")
+            if _is_budget_block(outcome):
+                return None
+            assert outcome.ok, f"post-reset call failed ({outcome.status_code}): {outcome.body[:300]}"
+            return True
+
+        _ = _poll(client, call_allowed_again, "the key stayed budget-blocked after its spend was reset to 0")
 
     @pytest.mark.covers("mgmt.key.generate.admin_only")
     def test_generate_forbidden_for_non_admin_key(

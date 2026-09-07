@@ -9,6 +9,7 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 """
 
 import json
+from collections.abc import Mapping
 from typing import Any, Final, cast
 
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -38,7 +39,7 @@ class FakeAnthropicMessagesStreamIterator:
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
-    def _create_content_block_chunks(self, block_dict: dict[str, Any], index: int) -> list[bytes]:
+    def _create_content_block_chunks(self, block_dict: Mapping[str, object], index: int) -> list[bytes]:
         """Build SSE chunks for a single content block."""
         chunks: Final = []
         block_type: Final = block_dict.get("type")
@@ -133,14 +134,14 @@ class FakeAnthropicMessagesStreamIterator:
         response_dict: Final = cast(dict[str, Any], self.response)
 
         # 1. message_start event
-        usage: Final = response_dict.get("usage", {})
+        usage: Final = self.response.get("usage")
         message_start: Final = {
             "type": "message_start",
             "message": {
-                "id": response_dict.get("id"),
+                "id": self.response.get("id"),
                 "type": "message",
-                "role": response_dict.get("role", "assistant"),
-                "model": response_dict.get("model"),
+                "role": self.response.get("role", "assistant"),
+                "model": self.response.get("model"),
                 "content": [],
                 "stop_reason": None,
                 "stop_sequence": None,
@@ -161,21 +162,24 @@ class FakeAnthropicMessagesStreamIterator:
         # 5. message_delta event (with final usage and stop_reason)
         # Include cache usage fields so clients that only read message_delta
         # (like Claude Code's SDK) see the full input token breakdown.
-        delta_usage: Final[dict[str, Any]] = {
+        delta_usage: Final[dict[str, int]] = {
             "output_tokens": usage.get("output_tokens", 0) if usage else 0,
         }
         if usage:
-            if usage.get("input_tokens") is not None:
-                delta_usage["input_tokens"] = usage["input_tokens"]
-            if usage.get("cache_creation_input_tokens") is not None:
-                delta_usage["cache_creation_input_tokens"] = usage["cache_creation_input_tokens"]
-            if usage.get("cache_read_input_tokens") is not None:
-                delta_usage["cache_read_input_tokens"] = usage["cache_read_input_tokens"]
+            input_tokens: Final = usage.get("input_tokens")
+            if input_tokens is not None:
+                delta_usage["input_tokens"] = input_tokens
+            cache_creation_input_tokens: Final = usage.get("cache_creation_input_tokens")
+            if cache_creation_input_tokens is not None:
+                delta_usage["cache_creation_input_tokens"] = cache_creation_input_tokens
+            cache_read_input_tokens: Final = usage.get("cache_read_input_tokens")
+            if cache_read_input_tokens is not None:
+                delta_usage["cache_read_input_tokens"] = cache_read_input_tokens
         message_delta: Final = {
             "type": "message_delta",
             "delta": {
-                "stop_reason": response_dict.get("stop_reason"),
-                "stop_sequence": response_dict.get("stop_sequence"),
+                "stop_reason": self.response.get("stop_reason"),
+                "stop_sequence": self.response.get("stop_sequence"),
             },
             "usage": delta_usage,
         }

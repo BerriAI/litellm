@@ -7,6 +7,7 @@ on:
       - ".cargo/**"
       - "pyproject.toml"
       - "rust-toolchain.toml"
+      - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
@@ -22,6 +23,7 @@ on:
       - ".cargo/**"
       - "pyproject.toml"
       - "rust-toolchain.toml"
+      - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
@@ -34,95 +36,89 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  rust-checks:
-    name: rustfmt, clippy, test
+  rust-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
         working-directory: litellm-rust
-    env:
-      CARGO_TERM_COLOR: always
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
 
-      - name: Set up Rust
-        run: rustup toolchain install
+      - run: rustup toolchain install --no-self-update
 
-      - name: Cache Cargo registry and target
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - run: cargo fmt --check
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             litellm-rust/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust-toolchain.toml', 'litellm-rust/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'litellm-rust/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-${{ github.job }}-
 
-      - name: Check Rust formatting
-        run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      - name: Run Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy -p litellm-core --all-targets --features bedrock-auth --locked -- -D warnings
 
-      - name: Run Clippy with Bedrock auth
-        run: cargo clippy -p litellm-core --all-targets --features bedrock-auth --locked -- -D warnings
+      - run: cargo clippy -p litellm-ai-gateway --all-targets --all-features --locked -- -D warnings
 
-      - name: Run Rust tests
-        run: cargo test --workspace --locked
-
-      - name: Run core tests with Bedrock auth
-        run: cargo test -p litellm-core --features bedrock-auth --locked
-
-  release-wheel:
-    name: release wheel
+  rust-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    env:
-      CARGO_TERM_COLOR: always
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
-      - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+      - uses: ./.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
-      - name: Set up Rust
-        run: rustup toolchain install
+      - run: rustup toolchain install --no-self-update
 
-      - name: Build release wheel
-        run: uv build --wheel --out-dir dist
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            litellm-rust/target
+          key: ${{ runner.os }}-cargo-${{ github.job }}-${{ hashFiles('rust-toolchain.toml', '.cargo/**', 'litellm-rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ github.job }}-
 
-      - name: Build panic contract wheel
-        run: >-
+      - run: cargo test --workspace --locked
+        working-directory: litellm-rust
+
+      - run: cargo test -p litellm-core --features bedrock-auth --locked
+        working-directory: litellm-rust
+
+      - run: cargo test -p litellm-ai-gateway --features server --locked
+        working-directory: litellm-rust
+
+      - run: uv build --wheel --out-dir dist
+
+      - run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
+        env:
+          RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
+
+      - run: >-
           uv build --wheel --out-dir panic-dist
           --config-setting "maturin.build-args=--features panic-test,extension-module"
 
-      - name: Smoke-test native panic unwinding
-        run: python .github/scripts/smoke_test_native_wheel.py panic-dist/*.whl
-
-      - name: Verify stripped native extension
-        env:
-          RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
-
-      - name: Test native route wheel
-        run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
+      - run: python .github/scripts/smoke_test_native_wheel.py panic-dist/*.whl

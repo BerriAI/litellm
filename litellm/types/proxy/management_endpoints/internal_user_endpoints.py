@@ -1,12 +1,25 @@
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Any, Final, Literal
 
 from pydantic import BaseModel, field_validator
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import (
     LiteLLM_UserTableWithKeyCount,
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
 )
+
+
+class InsensitiveContains(TypedDict):
+    contains: ReadOnly[str]
+    mode: ReadOnly[Literal["insensitive"]]
+
+
+class UserSearchWhere(TypedDict):
+    """Prisma filter behind `/user/list?search=`: user_id or user_email contains the term, case-insensitive."""
+
+    OR: ReadOnly[tuple[Mapping[Literal["user_id", "user_email"], InsensitiveContains], ...]]
 
 
 class UserListResponse(BaseModel):

@@ -852,7 +852,7 @@ def test_the_served_arm_is_read_from_the_record_not_repriced():
 @pytest.mark.parametrize(
     "basis, expected_multiplier",
     [
-        pytest.param({"service_tier": "priority"}, 2.0, id="priority tier doubles the baseline"),
+        pytest.param({"service_tier": "priority"}, 2.5, id="priority tier uplifts the baseline"),
         pytest.param({"data_residency": "eu"}, 1.1, id="eu residency uplifts the baseline"),
         pytest.param({}, 1.0, id="no basis recorded prices at standard"),
         pytest.param(None, 1.0, id="row predating the field prices at standard"),
@@ -872,7 +872,8 @@ def test_the_baseline_is_priced_on_the_basis_the_request_was_billed_at(basis, ex
     """
     gpt = litellm.get_model_info("gpt-5.5", "openai")
     haiku = litellm.get_model_info("claude-haiku-4-5", "anthropic")
-    assert gpt.get("input_cost_per_token_priority") == 2 * gpt["input_cost_per_token"]
+    assert gpt.get("input_cost_per_token_priority") == pytest.approx(2.5 * gpt["input_cost_per_token"])
+    assert gpt.get("output_cost_per_token_priority") == pytest.approx(2.5 * gpt["output_cost_per_token"])
     assert gpt.get("regional_processing_uplift_multiplier_eu") == 1.1
     assert haiku.get("input_cost_per_token_priority") is None, "served model must not move with the basis"
     assert haiku.get("regional_processing_uplift_multiplier_eu") is None

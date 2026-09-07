@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import time
-from typing import Any, Final
+from typing import Final, Protocol
 
 from redis.credentials import CredentialProvider
 
@@ -16,6 +16,19 @@ _GCP_IAM_TOKEN_TTL_SECONDS: Final = 3300
 # Keyed by service_account → (token, expiry_monotonic_timestamp).
 _token_cache: Final[dict[str, tuple[str, float]]] = {}
 _token_cache_lock: Final = threading.Lock()
+
+
+class AzureAccessToken(Protocol):
+    """The ``azure.core.credentials.AccessToken`` shape this module reads."""
+
+    @property
+    def token(self) -> str: ...
+
+
+class AzureCredential(Protocol):
+    """The ``azure-identity`` credential surface this module calls."""
+
+    def get_token(self, *scopes: str) -> AzureAccessToken: ...
 
 
 def _generate_gcp_iam_access_token(service_account: str) -> str:
@@ -115,7 +128,7 @@ class AzureADCredentialProvider(CredentialProvider):
     fail authentication after the initial token expired (~1 hour TTL).
     """
 
-    def __init__(self, credential: Any, username: str | None = None) -> None:
+    def __init__(self, credential: AzureCredential, username: str | None = None) -> None:
         self._credential = credential
         self._username = username
 

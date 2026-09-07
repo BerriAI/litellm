@@ -3,7 +3,8 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm.models.model import LiteLLM_ProxyModelTable
@@ -104,6 +105,13 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         """Find all models that are not blocked."""
         records: Final = await self.table.find_many(where={"blocked": False})
         return self._to_model_list(records)
+
+    async def find_all_except(self, model_id: str) -> Sequence[LiteLLM_ProxyModelTable]:
+        """Find every model except the row currently being updated."""
+        records: Final = await self.table.find_many(
+            where=MappingProxyType({"model_id": MappingProxyType({"not": model_id})})
+        )
+        return tuple(self._to_model_list(records))
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProxyModelTable]:
         """Find models associated with a specific team.

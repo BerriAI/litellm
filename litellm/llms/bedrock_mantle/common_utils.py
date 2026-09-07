@@ -29,7 +29,7 @@ from litellm.secret_managers.main import get_secret_str
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
 
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
-MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws", re.IGNORECASE)
+MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
 
 
 def resolve_mantle_bearer_token(api_key: str | None) -> str | None:

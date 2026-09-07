@@ -1,4 +1,5 @@
 import type { ComplexityTier } from "./KeywordTierRules";
+import type { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { TIER_ORDER } from "./tier_rows";
 
 export type TierModelParams = Record<string, unknown>;
@@ -17,6 +18,23 @@ export const REASONING_EFFORT_OPTIONS = ["none", "minimal", "low", "medium", "hi
  * hand-authored configs can carry any level, so the known literals only add autocompletion.
  */
 export type ReasoningEffort = (typeof REASONING_EFFORT_OPTIONS)[number] | (string & {});
+
+export const tierEffortOptionsForModels = (modelInfo: ModelGroup[]): Record<string, string[]> =>
+  Object.fromEntries(
+    modelInfo.map((model) => [
+      model.model_group,
+      model.supported_reasoning_efforts ?? (model.supports_reasoning ? [...REASONING_EFFORT_OPTIONS] : []),
+    ]),
+  );
+
+/**
+ * Stricter than the tier variant on purpose: classifier overrides are new in this release, so an
+ * unknown capability list stays unknown instead of inventing provider levels.
+ */
+export const classifierEffortOptionsForModels = (
+  modelInfo: ModelGroup[],
+): Record<string, string[] | null | undefined> =>
+  Object.fromEntries(modelInfo.map((model) => [model.model_group, model.supported_reasoning_efforts]));
 
 const asRecord = (raw: unknown): Record<string, unknown> | undefined =>
   typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;

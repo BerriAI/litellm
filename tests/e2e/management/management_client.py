@@ -40,6 +40,8 @@ from models import (
     KeyListParams,
     KeyListResponse,
     KeyRegenerateBody,
+    KeyResetSpendBody,
+    KeyResetSpendResponse,
     KeyUpdateBody,
     ModelDeleteBody,
     OrgDeleteBody,
@@ -191,15 +193,25 @@ class ManagementClient:
                 response_type=NoBody,
             )
         )
-    def regenerate_key(self, key: str) -> str:
+    def regenerate_key(self, key: str, *, grace_period: str | None = None) -> str:
         return unwrap(
             self.proxy.transport.post(
                 "/key/regenerate",
                 headers=self.proxy.transport.master,
-                json=KeyRegenerateBody(key=key),
+                json=KeyRegenerateBody(key=key, grace_period=grace_period),
                 response_type=KeyGenerateResponse,
             )
         ).key
+
+    def reset_key_spend(self, key: str, reset_to: float) -> KeyResetSpendResponse:
+        return unwrap(
+            self.proxy.transport.post(
+                f"/key/{key}/reset_spend",
+                headers=self.proxy.transport.master,
+                json=KeyResetSpendBody(reset_to=reset_to),
+                response_type=KeyResetSpendResponse,
+            )
+        )
 
     def key_list(self, key_alias: str, *, caller_key: str | None = None) -> Result[KeyListResponse]:
         """GET /key/list, the Virtual Keys page's own inventory call. `caller_key` is
