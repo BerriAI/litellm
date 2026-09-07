@@ -107,7 +107,7 @@ class TestLogOnceIfBudgetReservationDisabled:
     @pytest.fixture(autouse=True)
     def _reset_sentinel(self, monkeypatch):
         monkeypatch.setattr(
-            "litellm.constants._budget_reservation_disabled_info_emitted",
+            "litellm.constants.budget_reservation_disabled_info_emitted",
             False,
         )
 

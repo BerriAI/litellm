@@ -1395,7 +1395,7 @@ def log_once_if_budget_reservation_disabled(
     disabled: bool,
     logger: Logger = verbose_proxy_logger,
 ) -> None:
-    if constants._budget_reservation_disabled_info_emitted or not disabled:
+    if constants.budget_reservation_disabled_info_emitted or not disabled:
         return
     logger.info(
         "disable_budget_reservation is enabled: skipping optimistic budget "
@@ -1405,7 +1405,7 @@ def log_once_if_budget_reservation_disabled(
         "Set disable_budget_reservation to False or remove it to restore "
         "hard per-request budget enforcement."
     )
-    constants._budget_reservation_disabled_info_emitted = True  # rebind-ok: process-wide one-shot sentinel
+    constants.budget_reservation_disabled_info_emitted = True  # rebind-ok: process-wide one-shot sentinel
 
 
 def is_pass_through_provider_route(route: str) -> bool:
