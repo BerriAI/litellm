@@ -1282,3 +1282,59 @@ def test_bedrock_500_preserves_provider_response_headers():
         )
 
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-map-500"
+
+
+@pytest.mark.parametrize(
+    "custom_llm_provider, status_code, provider_message, expected_exception",
+    [
+        (
+            "bedrock_mantle",
+            400,
+            (
+                '{"error":{"code":"validation_error",'
+                '"message":"prompt tokens (1055489) exceed model maximum (1050000) for openai.gpt-5.6-sol",'
+                '"param":null,"type":"invalid_request_error"}}'
+            ),
+            litellm.ContextWindowExceededError,
+        ),
+        (
+            "bedrock",
+            400,
+            '{"message":"Input is too long for requested model."}',
+            litellm.ContextWindowExceededError,
+        ),
+        (
+            "bedrock",
+            400,
+            '{"message":"Could not process image"}',
+            litellm.InternalServerError,
+        ),
+    ],
+)
+def test_bedrock_classified_errors_preserve_provider_response_headers(
+    custom_llm_provider, status_code, provider_message, expected_exception
+):
+    """Branches that classify a Bedrock error by its text must keep x-amzn-RequestId (LIT-5428)."""
+    provider_response = httpx.Response(
+        status_code=status_code,
+        headers={"x-amzn-RequestId": "req-classified"},
+        text=provider_message,
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message=provider_message,
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(expected_exception) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider=custom_llm_provider,
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-classified"

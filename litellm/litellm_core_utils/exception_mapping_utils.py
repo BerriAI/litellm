@@ -860,6 +860,7 @@ def _map_bedrock_exception(
                 message=mantle_context_window_message,
                 model=model,
                 llm_provider=custom_llm_provider,
+                response=getattr(original_exception, "response", None),
             )
     if (
         "too many tokens" in error_str
@@ -873,6 +874,7 @@ def _map_bedrock_exception(
             message=f"BedrockException: Context Window Error - {error_str}",
             model=model,
             llm_provider="bedrock",
+            response=getattr(original_exception, "response", None),
         )
     elif "Conversation blocks and tool result blocks cannot be provided in the same turn." in error_str:
         raise BadRequestError(
@@ -930,6 +932,7 @@ def _map_bedrock_exception(
             message=f"BedrockException - {error_str}",
             model=model,
             llm_provider="bedrock",
+            response=getattr(original_exception, "response", None),
         )
     elif hasattr(original_exception, "status_code"):
         if original_exception.status_code == 500:

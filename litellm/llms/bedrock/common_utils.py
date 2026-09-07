@@ -37,7 +37,7 @@ _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 
 
 def error_response_text(response: httpx.Response) -> str:
-    """A streamed response that was never read has no body to report, only its status line."""
+    """Return the error body, or the status line when the body was never read."""
     try:
         return response.text
     except httpx.ResponseNotRead:
@@ -45,10 +45,9 @@ def error_response_text(response: httpx.Response) -> str:
 
 
 def _synthesize_error_response(
-    *, status_code: int, headers: dict | httpx.Headers, request: httpx.Request | None
+    *, status_code: int, headers: dict[str, object] | httpx.Headers, request: httpx.Request | None
 ) -> tuple[httpx.Request, httpx.Response]:
-    """httpx rejects a header value that is not str or bytes, and the shared HTTP handler
-    copies an arbitrary exception's header values in verbatim, so a plain dict is filtered."""
+    """Build the request and response carrying the provider's headers, dropping values httpx rejects."""
     error_request: Final = request or httpx.Request(method="POST", url=_ERROR_REQUEST_URL)
     safe_headers: Final = (
         headers
@@ -59,23 +58,16 @@ def _synthesize_error_response(
 
 
 class BedrockError(BaseLLMException):
-    """Bedrock error that keeps the provider's response headers.
-
-    AWS support asks for `x-amzn-RequestId` to investigate a failed call, and both
-    exception mapping and the proxy error handler read those headers off
-    `exc.response.headers`. Callers that only hold the headers (the shared HTTP
-    handler hands `get_error_class` a header dict and no response) would otherwise
-    lose them to a blank stand-in response.
-    """
+    """Bedrock error whose response carries the provider's headers, synthesizing one if needed."""
 
     def __init__(
         self,
         status_code: int,
         message: str,
-        headers: dict | httpx.Headers | None = None,
+        headers: dict[str, object] | httpx.Headers | None = None,
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
-        body: dict | None = None,
+        body: dict[str, object] | None = None,
         status_code_is_synthesized: bool = False,
     ) -> None:
         error_request, error_response = (
