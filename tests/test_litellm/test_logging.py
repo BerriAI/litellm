@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import importlib
 import json
 import logging
 import re
@@ -1365,3 +1366,56 @@ def test_get_uvicorn_json_log_config_uses_ecs_formatter_when_ecs_logs_enabled(mo
 
     for formatter_config in log_config["formatters"].values():
         assert formatter_config["()"] == "litellm._logging.ECSFormatter"
+
+
+def _run_sitecustomize_hook():
+    """Re-run litellm/sitecustomize.py's module body the way a copy of it in
+    site-packages runs at interpreter startup."""
+    return importlib.reload(importlib.import_module("litellm.sitecustomize"))
+
+
+def _loggers_are_on_ecs() -> bool:
+    return any(isinstance(handler.formatter, ECSFormatter) for handler in verbose_logger.handlers)
+
+
+def test_sitecustomize_hook_turns_on_ecs_when_the_env_var_is_set(monkeypatch):
+    """The hook is the documented zero-code-change path to ECS logs. Without this,
+    renaming _turn_on_ecs would leave the hook's except-Exception swallowing the
+    ImportError and ECS logging would silently never switch on."""
+    plain = logging.StreamHandler()
+    plain.setFormatter(JsonFormatter())
+    _initialize_loggers_with_handler(plain)
+    monkeypatch.setenv("LITELLM_ECS_LOGS", "true")
+
+    _run_sitecustomize_hook()
+
+    assert _loggers_are_on_ecs()
+
+
+def test_sitecustomize_hook_leaves_logging_alone_when_the_env_var_is_unset(monkeypatch):
+    plain = logging.StreamHandler()
+    plain.setFormatter(JsonFormatter())
+    _initialize_loggers_with_handler(plain)
+    monkeypatch.delenv("LITELLM_ECS_LOGS", raising=False)
+
+    _run_sitecustomize_hook()
+
+    assert not _loggers_are_on_ecs()
+
+
+def test_sitecustomize_hook_never_breaks_interpreter_startup(monkeypatch):
+    """A copy of this file in site-packages runs for every process in the environment,
+    so a broken or half-installed litellm must not raise out of it."""
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("litellm is half-installed")
+
+    plain = logging.StreamHandler()
+    plain.setFormatter(JsonFormatter())
+    _initialize_loggers_with_handler(plain)
+    monkeypatch.setenv("LITELLM_ECS_LOGS", "true")
+    monkeypatch.setattr(litellm._logging, "_turn_on_ecs", _raise)
+
+    _run_sitecustomize_hook()
+
+    assert not _loggers_are_on_ecs()
