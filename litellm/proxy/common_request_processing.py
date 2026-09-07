@@ -1,8 +1,10 @@
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import math
+import os
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
@@ -67,6 +69,7 @@ from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guard
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 
@@ -1533,6 +1536,23 @@ class ProxyBaseLLMRequestProcessing:
         self.data = data
 
     @staticmethod
+    def _enforce_safety_identifier(
+        *,
+        data: dict[str, object],
+        route_type: ProxyRouteType,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> dict[str, object]:
+        if route_type not in {"acompletion", "aresponses"}:
+            return data
+        if str_to_bool(os.getenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER")) is not True:
+            return data
+        user_id: Final = user_api_key_dict.user_id
+        if not user_id:
+            return data
+        safety_identifier: Final = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+        return {**data, "safety_identifier": safety_identifier}
+
+    @staticmethod
     def _merge_passthrough_streaming_headers(
         response_headers: httpx.Headers | dict | None,
         custom_headers: dict,
@@ -2005,6 +2025,12 @@ class ProxyBaseLLMRequestProcessing:
             trust_client_model_info=False,
         )
 
+        self.data = self._enforce_safety_identifier(
+            data=self.data,
+            route_type=route_type,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # An auto router with its own compression policy is authoritative for this
         # request: suppress every other compression guardrail and arm whichever one
         # the policy names for the model call, before those guardrails get a chance
@@ -2015,6 +2041,12 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict,
             data=self.data,
             call_type=route_type,
+        )
+
+        self.data = self._enforce_safety_identifier(
+            data=self.data,
+            route_type=route_type,
+            user_api_key_dict=user_api_key_dict,
         )
 
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may

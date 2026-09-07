@@ -246,7 +246,8 @@ general_settings:
       forward_headers: True
 
 # environment_variables:
+  # LITELLM_ENFORCE_SAFETY_IDENTIFIER: "true" # Hash the authenticated user_id and overwrite client safety_identifier values on chat/responses requests
   # settings for using redis caching
   # REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
   # REDIS_PORT: "16337"
-  # REDIS_PASSWORD: 
+  # REDIS_PASSWORD:

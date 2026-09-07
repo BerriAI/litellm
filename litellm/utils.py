@@ -4254,6 +4254,14 @@ def get_optional_params(
     allowed_openai_params = allowed_openai_params or []
     supported_params.extend(allowed_openai_params)
 
+    # safety_identifier is injected by the proxy for trusted attribution. It is
+    # optional and provider-specific, so do not make providers that do not
+    # advertise it reject the entire request. Providers that support it still
+    # receive it through their normal parameter mapping, and callers can opt
+    # into an unlisted provider parameter via allowed_openai_params.
+    if "safety_identifier" in non_default_params and "safety_identifier" not in supported_params:
+        non_default_params.pop("safety_identifier")
+
     _check_valid_arg(
         supported_params=supported_params or [],
     )
