@@ -10,9 +10,10 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 from starlette.responses import Response
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.image_endpoints import endpoints
+from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
 
 
 @pytest.mark.asyncio
@@ -118,6 +119,69 @@ async def test_image_generation_prompt_rerouting(monkeypatch):
     assert captured_route_request_data["prompt"] == "sanitized prompt"
     assert "messages" not in captured_route_request_data
     assert response.headers.get("x-callback-test") == "value"
+
+
+@pytest.mark.asyncio
+async def test_image_generation__missing_required_param_is_400(monkeypatch):
+    """image_generation()'s except block only special-cased HTTPException, so a
+    ProxyMissingRequiredParamError (a ProxyException with code=400) fell into the
+    `else` branch's `getattr(e, "status_code", 500)` and surfaced as a 500."""
+
+    async def fake_add_litellm_data_to_request(**kwargs):
+        return kwargs["data"]
+
+    async def fake_pre_call_hook(*, user_api_key_dict, data, call_type):  # type: ignore[override]
+        return data
+
+    async def fake_post_call_failure_hook(**_: Any) -> None:
+        return None
+
+    async def fake_route_request(*, data, **kwargs):  # type: ignore[override]
+        raise ProxyMissingRequiredParamError(route="/image/generations", param="prompt")
+
+    fake_proxy_logger = SimpleNamespace(
+        pre_call_hook=fake_pre_call_hook,
+        post_call_failure_hook=fake_post_call_failure_hook,
+    )
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/images/generations",
+        "headers": [],
+    }
+    body = orjson.dumps({"model": "dall-e-3"})
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(scope, receive)
+    response = Response()
+    user_api_key = UserAPIKeyAuth()
+
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.add_litellm_data_to_request",
+        fake_add_litellm_data_to_request,
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", fake_proxy_logger)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
+    monkeypatch.setattr(
+        "litellm.proxy.image_endpoints.endpoints.route_request", fake_route_request
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await endpoints.image_generation(
+            request=request,
+            fastapi_response=response,
+            user_api_key_dict=user_api_key,
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "prompt"
 
 
 def _image_edit_client(monkeypatch, captured: Dict[str, Any]) -> TestClient:

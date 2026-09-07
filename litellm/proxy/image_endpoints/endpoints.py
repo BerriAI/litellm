@@ -197,6 +197,8 @@ async def image_generation(
         )
         verbose_proxy_logger.error("litellm.proxy.proxy_server.image_generation(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, ProxyException):
+            raise
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
