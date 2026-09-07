@@ -11,10 +11,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FieldGroup } from "@/components/ui/field";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { changePasswordCall } from "@/components/networking";
+import { changePasswordCall, getProxyBaseUrl } from "@/components/networking";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
+import { clearTokenCookies } from "@/utils/cookieUtils";
+import { getLoginUrl } from "@/utils/returnUrlUtils";
 
 const changePasswordSchema = z
   .object({
@@ -30,7 +32,7 @@ const changePasswordSchema = z
 type ChangePasswordValues = z.infer<typeof changePasswordSchema>;
 
 export function ChangePasswordForm() {
-  const { accessToken } = useAuthorized();
+  const { accessToken, passwordResetRequired } = useAuthorized();
   const form = useZodForm(changePasswordSchema, {
     defaultValues: { currentPassword: "", newPassword: "", confirmNewPassword: "" },
   });
@@ -43,6 +45,13 @@ export function ChangePasswordForm() {
     setIsPending(true);
     try {
       await changePasswordCall(accessToken, values.currentPassword, values.newPassword);
+      if (passwordResetRequired) {
+        // The session key was minted restricted; only a fresh login lifts it.
+        toast.success("Password updated. Please log in with your new password.");
+        clearTokenCookies();
+        window.location.replace(getLoginUrl(getProxyBaseUrl()));
+        return;
+      }
       toast.success("Password updated");
       form.reset();
     } catch (error) {
@@ -61,6 +70,16 @@ export function ChangePasswordForm() {
             Enter your current password and choose a new one. The new password must meet this proxy&apos;s password
             policy.
           </p>
+
+          {passwordResetRequired && (
+            <Alert variant="warning" className="mt-4">
+              <CircleAlert />
+              <AlertTitle>
+                Your password must be changed before you can use the dashboard. After updating it, you will be signed
+                out to log in again.
+              </AlertTitle>
+            </Alert>
+          )}
 
           <form className="mb-2 mt-8" onSubmit={form.handleSubmit(handleSubmit)}>
             <FieldGroup>

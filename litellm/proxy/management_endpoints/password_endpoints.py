@@ -66,7 +66,8 @@ async def change_password(
     Requires the current password. The new password must satisfy the
     configured password policy (`general_settings.password_policy_*`: minimum
     length, character classes, and, when enabled, breached-password screening
-    via haveibeenpwned.com).
+    via haveibeenpwned.com). A successful change lifts any pending forced
+    password reset (`password_reset_required`) on the account.
 
     Parameters:
     - current_password: str - The user's current password.
@@ -105,7 +106,11 @@ async def change_password(
     validate_password_policy(data.new_password, general_settings)
     await validate_password_not_breached(data.new_password, general_settings)
 
-    password_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {"password": hash_password(data.new_password)}
+    password_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {
+        "password": hash_password(data.new_password),
+        "password_reset_required": False,
+        "last_breach_check_at": None,
+    }
     await _user_table(prisma_client).update(where=find_user, data=password_update)
 
     verbose_proxy_logger.info("Password changed via /user/password/change for user_id=%s", user_id)

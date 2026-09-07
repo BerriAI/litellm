@@ -3717,6 +3717,67 @@ def test_non_admin_roles_can_change_own_password(user_role):
     assert allowed is None
 
 
+def _password_reset_session_token() -> UserAPIKeyAuth:
+    """The UI session key `authenticate_user` mints for a user flagged
+    `password_reset_required`."""
+    return UserAPIKeyAuth(
+        user_id="flagged_user",
+        allowed_routes=["/user/password/change"],
+        metadata={"password_reset_required": True},
+    )
+
+
+def test_password_reset_session_can_reach_change_password():
+    result = RouteChecks.is_virtual_key_allowed_to_call_route(
+        route="/user/password/change",
+        valid_token=_password_reset_session_token(),
+    )
+
+    assert result is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/user/info",
+        "/key/generate",
+        "/user/update",
+        "/chat/completions",
+    ],
+)
+def test_password_reset_session_is_blocked_everywhere_else_with_reset_message(route):
+    """Server-side enforcement of the forced reset: a script that logs in via
+    /v2/login and drives the management API with the session key must get a 403
+    naming the remediation endpoint, on every route but the change-password one."""
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route,
+            valid_token=_password_reset_session_token(),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "password must be changed" in str(exc_info.value.detail)
+    assert "/user/password/change" in str(exc_info.value.detail)
+
+
+def test_restricted_key_without_reset_marker_keeps_generic_message():
+    """The reset-specific 403 must not leak onto ordinary allowed_routes keys."""
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["/chat/completions"],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/user/info",
+            valid_token=valid_token,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "password must be changed" not in str(exc_info.value.detail)
+    assert "not allowed to call this route" in str(exc_info.value.detail)
+
+
 TEAM_CALLBACK_ROUTES = (
     "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/callback",
     "/team/06bda574-5ca9-43d3-beb8-3b23c2f17112/callback/langfuse",

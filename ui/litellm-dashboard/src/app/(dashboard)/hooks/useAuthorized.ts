@@ -52,6 +52,7 @@ const useAuthorized = () => {
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
     loginMethod: decoded?.login_method ?? null,
     showSSOBanner: decoded?.login_method === "username_password",
+    passwordResetRequired: decoded?.password_reset_required === true,
   };
 };
 
