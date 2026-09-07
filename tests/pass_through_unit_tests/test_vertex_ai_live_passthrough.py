@@ -6,12 +6,14 @@ including the logging handler, cost tracking, and WebSocket message processing.
 """
 
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import Dict, List, Any, Optional
 
 import pytest
 import httpx
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 # Add the parent directory to the system path
 
@@ -22,8 +24,14 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, Usage
 from litellm.proxy._types import UserAPIKeyAuth
+
+
+class _LiveTurn(TypedDict):
+    prompt: ReadOnly[tuple[int, int]]
+    candidates: ReadOnly[tuple[int, int]]
+    candidate_audio_token_count_missing: NotRequired[ReadOnly[bool]]
 
 
 class TestVertexAILivePassthroughLoggingHandler:
@@ -257,7 +265,7 @@ class TestVertexAILivePassthroughLoggingHandler:
     # window, so the prompt side repeats the accumulated audio while the candidates side reports
     # only that turn's own response. The last turn names AUDIO and omits its tokenCount, which is
     # the shape Live really emits at the end of a spoken answer.
-    AUDIO_SESSION = (
+    AUDIO_SESSION: tuple[_LiveTurn, ...] = (
         {"prompt": (14, 122), "candidates": (8, 20)},
         {"prompt": (21, 182), "candidates": (5, 50)},
         {"prompt": (24, 203), "candidates": (13, 27)},
@@ -265,7 +273,7 @@ class TestVertexAILivePassthroughLoggingHandler:
     )
 
     @staticmethod
-    def _live_messages(turns):
+    def _live_messages(turns: Sequence[_LiveTurn]) -> list[dict[str, object]]:
         """Wrap (text, audio) prompt/candidate pairs as the server messages a Live session emits."""
         return [{"type": "session.created", "session": {"id": "s"}}] + [
             {
@@ -292,7 +300,12 @@ class TestVertexAILivePassthroughLoggingHandler:
         ]
 
     @staticmethod
-    def _session_usage(handler, mock_logging_obj, messages, model):
+    def _session_usage(
+        handler: VertexAILivePassthroughLoggingHandler,
+        mock_logging_obj: MagicMock,
+        messages: list[dict[str, object]],
+        model: str,
+    ) -> Usage:
         result = handler.vertex_ai_live_passthrough_handler(
             websocket_messages=messages,
             logging_obj=mock_logging_obj,
@@ -306,7 +319,13 @@ class TestVertexAILivePassthroughLoggingHandler:
         return result["result"].usage
 
     @classmethod
-    def _session_cost(cls, handler, mock_logging_obj, messages, model):
+    def _session_cost(
+        cls,
+        handler: VertexAILivePassthroughLoggingHandler,
+        mock_logging_obj: MagicMock,
+        messages: list[dict[str, object]],
+        model: str,
+    ) -> float:
         from litellm.cost_calculator import completion_cost
         from litellm.types.utils import ModelResponse
 
@@ -321,7 +340,7 @@ class TestVertexAILivePassthroughLoggingHandler:
         )
 
     @classmethod
-    def _expected_session_cost(cls, turns):
+    def _expected_session_cost(cls, turns: Sequence[_LiveTurn]) -> float:
         from litellm.utils import get_model_info
 
         info = get_model_info(model=cls.NATIVE_AUDIO_MODEL, custom_llm_provider="vertex_ai")
