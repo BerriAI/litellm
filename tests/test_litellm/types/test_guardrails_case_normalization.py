@@ -93,6 +93,29 @@ class TestLitellmParamsCaseNormalization:
             assert params.on_disallowed_action.islower()
 
 
+class TestOnViolationAcceptedValues:
+    """on_violation is shared by /v1/realtime guardrails and the mcp_security guardrail"""
+
+    @pytest.mark.parametrize("action", ["block", "alert"])
+    def test_mcp_security_policy_template_on_violation_is_accepted(self, action):
+        params = LitellmParams(
+            guardrail="mcp_security",
+            mode="pre_call",
+            default_on=True,
+            on_violation=action,
+        )
+        assert params.on_violation == action
+
+    @pytest.mark.parametrize("action", ["warn", "end_session"])
+    def test_realtime_on_violation_still_accepted(self, action):
+        params = LitellmParams(guardrail="presidio", mode="pre_call", on_violation=action)
+        assert params.on_violation == action
+
+    def test_unknown_on_violation_is_rejected(self):
+        with pytest.raises(ValidationError):
+            LitellmParams(guardrail="mcp_security", mode="pre_call", on_violation="ignore")
+
+
 class TestSensitiveDataRoutingValidation:
     """on_sensitive_data='route' requires a target model to be set"""
 

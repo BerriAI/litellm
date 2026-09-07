@@ -11,11 +11,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.mcp_security import initialize_guardrail
 from litellm.proxy.guardrails.guardrail_hooks.mcp_security.mcp_security_guardrail import (
     MCPSecurityGuardrail,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmParams
 
 
 @pytest.fixture
@@ -182,3 +184,19 @@ class TestMCPSecurityGuardrailPreCall:
             call_type="acompletion",
         )
         assert result == data
+
+
+class TestInitializeGuardrail:
+    @pytest.mark.parametrize(
+        "configured,expected",
+        [("block", "block"), ("alert", "alert"), (None, "block")],
+    )
+    def test_on_violation_from_litellm_params(self, configured, expected):
+        litellm_params = LitellmParams(guardrail="mcp_security", mode="pre_call", on_violation=configured)
+        guardrail = Guardrail(guardrail_name="mcp-security-block", litellm_params=litellm_params)
+
+        result = initialize_guardrail(litellm_params=litellm_params, guardrail=guardrail)
+
+        assert isinstance(result, MCPSecurityGuardrail)
+        assert result.on_violation == expected
+        assert result in litellm.callbacks

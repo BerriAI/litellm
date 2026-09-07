@@ -886,9 +886,13 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         description="For /v1/realtime sessions: automatically close the session after this many guardrail violations.",
     )
-    on_violation: Literal["warn", "end_session"] | None = Field(
+    on_violation: Literal["warn", "end_session", "block", "alert"] | None = Field(
         default=None,
-        description="For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+        description=(
+            "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
+            "'end_session' speaks the message and closes the connection. "
+            "For guardrail='mcp_security': 'block' (default) rejects the request; 'alert' only logs a warning."
+        ),
     )
     realtime_violation_message: str | None = Field(
         default=None,
