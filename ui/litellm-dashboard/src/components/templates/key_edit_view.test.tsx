@@ -2300,5 +2300,57 @@ describe("KeyEditView", () => {
       });
       expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("tag_rpm_limit", { "test-tag": 7 });
     });
+
+    const setRpmLimit = (value: string) => {
+      fireEvent.change(screen.getByLabelText("RPM Limit"), { target: { value } });
+    };
+
+    it("carries an edited RPM limit and the key identifier onto the wire", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      setRpmLimit("25");
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalledTimes(1);
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({ token: "test-token-123", rpm_limit: "25" });
+    });
+
+    it.fails(
+      "sends max_budget as an explicit null when the field is cleared (expected to fail until the forms revamp, tri-state PATCH tracker: today the view hands KeyInfoView an empty string and handleKeyUpdate maps it to null)",
+      async () => {
+        const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+        renderForPayload(onSubmitMock);
+        await screen.findByRole("button", { name: /save changes/i });
+
+        await userEvent.clear(screen.getByLabelText("Max Budget (USD)"));
+        await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(onSubmitMock).toHaveBeenCalledTimes(1);
+        });
+        expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("max_budget", null);
+      },
+    );
+
+    it.fails(
+      "sends only the key identifier and the edited RPM limit (expected to fail until the forms revamp, tri-state PATCH tracker)",
+      async () => {
+        const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+        renderForPayload(onSubmitMock);
+        await screen.findByRole("button", { name: /save changes/i });
+
+        setRpmLimit("25");
+        await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(onSubmitMock).toHaveBeenCalledTimes(1);
+        });
+        expect(onSubmitMock.mock.calls[0][0]).toStrictEqual({ token: "test-token-123", rpm_limit: "25" });
+      },
+    );
   });
 });

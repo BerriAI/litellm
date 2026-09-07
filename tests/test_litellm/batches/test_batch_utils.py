@@ -21,11 +21,12 @@ from types import MappingProxyType
 import httpx
 import pytest
 import respx
+from openai.types.batch import BatchRequestCounts
 
 
 import litellm
 import litellm.batches.batch_utils as bu
-from litellm.types.utils import Usage
+from litellm.types.utils import LiteLLMBatch, Usage
 
 # --------------------------------------------------------------------------- #
 # Builders for batch OUTPUT file rows.
@@ -1718,3 +1719,57 @@ def test_unparsable_bedrock_batch_usage_warns(caplog):
     assert usage.total_tokens == 0
     assert "does not understand" in caplog.text
     assert "inputTextTokenCount" in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+# batch_cost_is_final
+# --------------------------------------------------------------------------- #
+
+def _retrieved_batch(
+    status: str, output_file_id: str | None = None, counts: BatchRequestCounts | None = None
+) -> LiteLLMBatch:
+    return LiteLLMBatch(
+        id="batch_abc",
+        completion_window="24h",
+        created_at=1,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status="validating",
+        output_file_id=output_file_id,
+        request_counts=counts,
+    ).model_copy(update={"status": status})
+
+
+class TestBatchCostIsFinal:
+    """Every retrieve of one batch writes the same spend row, so the first retrieve
+    that prices it decides the row for good. A poll before the output exists must
+    therefore not count as final: pricing it recorded $0 and pinned it (LIT-7048)."""
+
+    @pytest.mark.parametrize("status", ["validating", "in_progress", "finalizing", "cancelling"])
+    def test_in_flight_batch_is_not_final(self, status):
+        assert bu.batch_cost_is_final(_retrieved_batch(status)) is False
+
+    @pytest.mark.parametrize("status", ["completed", "complete"])
+    def test_completed_with_output_is_final(self, status):
+        assert bu.batch_cost_is_final(_retrieved_batch(status, output_file_id="file-out")) is True
+
+    def test_completed_without_output_and_unknown_counts_is_not_final(self):
+        assert bu.batch_cost_is_final(_retrieved_batch("completed")) is False
+
+    def test_completed_without_output_and_zero_counts_is_not_final(self):
+        counts = BatchRequestCounts(total=0, completed=0, failed=0)
+        assert bu.batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is False
+
+    def test_completed_without_output_but_successful_lines_is_not_final(self):
+        counts = BatchRequestCounts(total=2, completed=2, failed=0)
+        assert bu.batch_cost_is_final(_retrieved_batch("completed", counts=counts)) is False
+
+    @pytest.mark.parametrize("status", ["completed", "complete"])
+    def test_completed_without_output_and_every_line_failed_is_final(self, status):
+        counts = BatchRequestCounts(total=2, completed=0, failed=2)
+        assert bu.batch_cost_is_final(_retrieved_batch(status, counts=counts)) is True
+
+    @pytest.mark.parametrize("status", ["failed", "expired", "cancelled"])
+    def test_other_terminal_statuses_are_final(self, status):
+        assert bu.batch_cost_is_final(_retrieved_batch(status)) is True

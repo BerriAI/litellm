@@ -1015,6 +1015,16 @@ describe("KeyInfoView", () => {
 
       expect(keyUpdateCall).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ policies: [] }));
     });
+
+    it("puts the key identifier and an explicit null max_budget on the wire when the edit view hands over a cleared budget", async () => {
+      await enterEditMode({ ...MOCK_KEY_DATA, user_id: "proxy-admin-user" } as KeyResponse);
+      await editViewMocks.onSubmit!({ token: MOCK_KEY_DATA.token, max_budget: "" });
+
+      expect(keyUpdateCall).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ key: "test-token-123", max_budget: null }),
+      );
+    });
   });
 
   describe("MCP tool permissions on save", () => {

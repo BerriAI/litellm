@@ -10,17 +10,12 @@ base.
 
 Every rule is seeded at exactly its count on the day the gate landed, so the
 suite's existing debt is grandfathered and any net-new violation trips the gate
-immediately. ``--update`` ratchets a limit down by the violations this branch
-fixed relative to its branch point (the merge-base), so the ceilings only ever
-fall. Base counts are measured with the *current* checker, so a rule introduced
-on this branch is counted at the base too and ratchets like every other one.
-
-Only ever falling is not the same as always falling, so the gate enforces the
-second half: a branch that clears violations and leaves the ceiling above its
-new count fails, naming the rules and telling the author to run
-``make lint-budget-update``. Without that, a removed violation could come back
-later under a ceiling nobody lowered. Drift already in the base is never
-blamed, so this fires only on the branch that did the clearing.
+immediately. ``--update`` ratchets a limit down by the violations fixed relative
+to ``--base``, so the ceilings only ever fall. Base counts are measured with the
+*current* checker, so a rule introduced on this branch is counted at the base too
+and ratchets like every other one. The ratchet runs as a scheduled automation
+against litellm_internal_staging, not on PR branches, so concurrent PRs never
+race to edit the same limit.
 
 The deliberate difference from its sibling: this gate has no headroom anywhere.
 Type discipline seeded LIT010/LIT011 at 1.5x to leave room for an in-flight
@@ -144,21 +139,6 @@ def over_ceiling(head: Mapping[str, int], budget: Mapping[str, Mapping[str, int]
     )
 
 
-def unratcheted(
-    head: Mapping[str, int],
-    base: Mapping[str, int],
-    budget: Mapping[str, Mapping[str, int]],
-) -> tuple[Breach, ...]:
-    """Rules this branch cleared without lowering the ceiling behind them. Requires
-    both `head < base`, so drift already in the base is never blamed on this change,
-    and `head < limit`, so a ceiling already at the count is left alone."""
-    return tuple(sorted(
-        Breach(rule, head.get(rule, 0), spec["limit"], head.get(rule, 0) - base.get(rule, 0))
-        for rule, spec in budget.items()
-        if head.get(rule, 0) < base.get(rule, 0) and head.get(rule, 0) < spec["limit"]
-    ))
-
-
 def evaluate(
     head: Mapping[str, int],
     base: Mapping[str, int],
@@ -198,38 +178,15 @@ def introduced(
     return tuple(v for v in violations if v.line in changed.get(v.file, frozenset()))
 
 
-def touches_measured_tree(base_point: str) -> bool:
-    """Whether this branch changed anything that can move a count. A branch that
-    touches neither the test tree nor the checker cannot have cleared a violation,
-    so the base scan is skipped and the gate stays cheap on the common change."""
-    changed: Final = _run(
-        ["git", "diff", "--name-only", base_point, "--", TARGET, str(CHECKER.relative_to(REPO_ROOT))]
-    )
-    return bool(changed.strip())
-
-
 def cmd_check(base: str) -> None:
     budget: Final = json.loads(BUDGET_PATH.read_text())
     head: Final = head_violations()
     head_counts: Final = count_by_rule(head)
-    base_point: Final = resolve_base_point(base)
-    if not over_ceiling(head_counts, budget) and not touches_measured_tree(base_point):
+    if not over_ceiling(head_counts, budget):
         print(f"OK: every TQ rule is within its test-suite ceiling (base {base})")
         return
+    base_point: Final = resolve_base_point(base)
     base_at_point: Final = base_counts(base_point)
-    stale: Final = unratcheted(head_counts, base_at_point, budget)
-    if stale:
-        print(f"FAIL: TQ-rule limits were left above the count this branch reached (base {base}):")
-        for breach in stale:
-            print(
-                f"  {breach.rule}: this branch cleared {-breach.added} down to {breach.total}, "
-                f"but the limit is still {breach.cap}"
-            )
-        print(
-            "Run `make lint-budget-update` and commit the lowered limits, so the "
-            "violations you cleared cannot come back under a ceiling nobody moved."
-        )
-        raise SystemExit(1)
     breaches: Final = evaluate(head_counts, base_at_point, budget)
     if not breaches:
         print(f"OK: every TQ rule is within its test-suite ceiling (base {base})")
