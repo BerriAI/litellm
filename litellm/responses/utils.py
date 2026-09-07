@@ -210,6 +210,12 @@ class ResponsesAPIRequestUtils:
         should_drop_params: Final = litellm.drop_params or drop_params is True
 
         non_default_params: Final = cast(dict, response_api_optional_params)
+        if (
+            "safety_identifier" in non_default_params
+            and "safety_identifier" not in supported_params
+            and (allowed_openai_params is None or "safety_identifier" not in allowed_openai_params)
+        ):
+            non_default_params.pop("safety_identifier")
         # Check for unsupported parameters
         ResponsesAPIRequestUtils._check_valid_arg(
             supported_params=supported_params + (allowed_openai_params or []),

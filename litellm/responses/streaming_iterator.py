@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload, runtime_checkable
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -29,9 +30,11 @@ from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_b
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
+from litellm.litellm_core_utils.safety_identifier import enforce_safety_identifier
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequestUtils
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
     ResponseAPIUsage,
@@ -90,6 +93,19 @@ def _json_array_or_empty(value: object) -> Sequence[object]:
 
 def _is_str_mapping(value: object) -> TypeIs[dict[str, str]]:  # guard-ok: verifies every value is str
     return _is_json_object(value) and all(isinstance(item, str) for item in value.values())
+
+
+def _enforce_responses_ws_safety_identifier(
+    msg_obj: _MutableJsonObject,
+    user_api_key_dict: UserAPIKeyAuth | None,
+) -> bool:
+    return enforce_safety_identifier(
+        data=cast(  # cast-ok: JSON protocol is backed by a mutable response.create dictionary
+            MutableMapping[str, object], msg_obj
+        ),
+        user_id=user_api_key_dict.user_id if user_api_key_dict is not None else None,
+        enabled=str_to_bool(os.getenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER")) is True,
+    )
 
 
 class _MutableJsonObject(Protocol):
@@ -1744,16 +1760,18 @@ class ResponsesWebSocketStreaming:
         if msg_obj.get("type") != "response.create":
             return message
 
+        safety_identifier_modified: Final = _enforce_responses_ws_safety_identifier(msg_obj, self.user_api_key_dict)
+
         # Always enforce the authorized model, even when PII masking is off.
         model_modified: Final = self._enforce_authorized_model(msg_obj)
 
         if not self.guardrail_callbacks:
-            return json.dumps(msg_obj) if model_modified else message
+            return json.dumps(msg_obj) if model_modified or safety_identifier_modified else message
 
         if "metadata" not in self.request_data:
             self.request_data["metadata"] = {}
 
-        modified = model_modified
+        modified = model_modified or safety_identifier_modified
         guardrail_cbs: Final[tuple[PresidioGuardrailCallback, ...]] = tuple(self.guardrail_callbacks)
         for cb in guardrail_cbs:
             presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
@@ -2520,6 +2538,8 @@ class ManagedResponsesWebSocketHandler:
         msg_obj: Final = await self._parse_message(raw_message)
         if msg_obj is None:
             return
+
+        _enforce_responses_ws_safety_identifier(msg_obj, self.user_api_key_dict)
 
         # generate=false is a prompt-cache warmup hint (sent by codex prewarm).
         # Native provider sockets handle it server-side, but there is no HTTP

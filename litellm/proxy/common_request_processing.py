@@ -1,11 +1,10 @@
 import asyncio
 import contextlib
-import hashlib
 import json
 import logging
 import math
 import os
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, MutableMapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -46,6 +45,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safety_identifier import enforce_safety_identifier
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
@@ -1538,22 +1538,19 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     def _enforce_safety_identifier(
         *,
-        data: dict[str, Any],
+        data: MutableMapping[str, object],
         route_type: ProxyRouteType,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> dict[str, Any]:
+    ) -> None:
         if route_type not in ("acompletion", "aresponses"):
-            return data
+            return
         if str_to_bool(os.getenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER")) is not True:
-            return data
-        user_id: Final = user_api_key_dict.user_id
-        if not user_id:
-            return data
-        safety_identifier: Final = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
-        return {  # mutable-ok: downstream request processing mutates payloads
-            **data,
-            "safety_identifier": safety_identifier,
-        }
+            return
+        enforce_safety_identifier(
+            data=data,
+            user_id=user_api_key_dict.user_id,
+            enabled=True,
+        )
 
     @staticmethod
     def _merge_passthrough_streaming_headers(
@@ -2028,7 +2025,7 @@ class ProxyBaseLLMRequestProcessing:
             trust_client_model_info=False,
         )
 
-        self.data = self._enforce_safety_identifier(
+        self._enforce_safety_identifier(
             data=self.data,
             route_type=route_type,
             user_api_key_dict=user_api_key_dict,
@@ -2046,7 +2043,7 @@ class ProxyBaseLLMRequestProcessing:
             call_type=route_type,
         )
 
-        self.data = self._enforce_safety_identifier(
+        self._enforce_safety_identifier(
             data=self.data,
             route_type=route_type,
             user_api_key_dict=user_api_key_dict,

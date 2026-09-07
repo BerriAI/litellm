@@ -1,74 +1,78 @@
 import hashlib
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import Request
 
 import litellm
+from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.responses.utils import ResponsesAPIRequestUtils
 
 
-def test_enforce_safety_identifier_hashes_authenticated_user(monkeypatch):
+def test_enforce_safety_identifier_hashes_authenticated_user(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", "true")
 
-    result = ProxyBaseLLMRequestProcessing._enforce_safety_identifier(
-        data={"safety_identifier": "caller-value"},
+    data = {"safety_identifier": "caller-value"}
+    ProxyBaseLLMRequestProcessing._enforce_safety_identifier(
+        data=data,
         route_type="acompletion",
         user_api_key_dict=UserAPIKeyAuth(user_id="user-123"),
     )
 
-    assert result["safety_identifier"] == hashlib.sha256(b"user-123").hexdigest()
+    assert data["safety_identifier"] == hashlib.sha256(b"user-123").hexdigest()
 
 
 @pytest.mark.parametrize("setting", [None, "false"])
-def test_enforce_safety_identifier_is_opt_in(monkeypatch, setting):
+def test_enforce_safety_identifier_is_opt_in(monkeypatch: pytest.MonkeyPatch, setting: str | None):
     if setting is None:
         monkeypatch.delenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", raising=False)
     else:
         monkeypatch.setenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", setting)
     data = {"safety_identifier": "caller-value"}
 
-    result = ProxyBaseLLMRequestProcessing._enforce_safety_identifier(
+    ProxyBaseLLMRequestProcessing._enforce_safety_identifier(
         data=data,
         route_type="acompletion",
         user_api_key_dict=UserAPIKeyAuth(user_id="user-123"),
     )
 
-    assert result == data
+    assert data == {"safety_identifier": "caller-value"}
 
 
-def test_enforce_safety_identifier_skips_missing_user_id(monkeypatch):
+def test_enforce_safety_identifier_removes_untrusted_identifier(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", "true")
     data = {"safety_identifier": "caller-value"}
 
-    result = ProxyBaseLLMRequestProcessing._enforce_safety_identifier(
+    ProxyBaseLLMRequestProcessing._enforce_safety_identifier(
         data=data,
         route_type="aresponses",
         user_api_key_dict=UserAPIKeyAuth(user_id=None),
     )
 
-    assert result == data
+    assert data == {}
 
 
-def test_enforce_safety_identifier_only_applies_to_openai_generation_routes(monkeypatch):
+def test_enforce_safety_identifier_only_applies_to_openai_generation_routes(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", "true")
     data = {"safety_identifier": "caller-value"}
 
-    result = ProxyBaseLLMRequestProcessing._enforce_safety_identifier(
+    ProxyBaseLLMRequestProcessing._enforce_safety_identifier(
         data=data,
         route_type="aembedding",
         user_api_key_dict=UserAPIKeyAuth(user_id="user-123"),
     )
 
-    assert result == data
+    assert data == {"safety_identifier": "caller-value"}
 
 
 @pytest.mark.parametrize(
     ("provider", "model"),
     [("anthropic", "claude-3-5-sonnet-20241022"), ("gemini", "gemini-2.0-flash")],
 )
-def test_unsupported_safety_identifier_is_dropped_by_provider_translation(provider, model):
+def test_unsupported_safety_identifier_is_dropped_by_provider_translation(provider: str, model: str):
     result = litellm.get_optional_params(
         model=model,
         custom_llm_provider=provider,
@@ -88,9 +92,21 @@ def test_supported_safety_identifier_is_preserved_by_provider_translation():
     assert result["safety_identifier"] == "trusted-value"
 
 
+def test_unsupported_safety_identifier_is_dropped_by_responses_translation():
+    result = ResponsesAPIRequestUtils.get_optional_params_responses_api(
+        model="sonar",
+        responses_api_provider_config=PerplexityResponsesConfig(),
+        response_api_optional_params={"safety_identifier": "trusted-value"},
+    )
+
+    assert "safety_identifier" not in result
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route_type", ["acompletion", "aresponses"])
-async def test_pre_call_hook_cannot_override_enforced_safety_identifier(monkeypatch, route_type):
+async def test_pre_call_hook_cannot_override_enforced_safety_identifier(
+    monkeypatch: pytest.MonkeyPatch, route_type: Literal["acompletion", "aresponses"]
+):
     monkeypatch.setenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", "true")
     request = MagicMock(spec=Request)
     request.headers.get.return_value = "call-id"

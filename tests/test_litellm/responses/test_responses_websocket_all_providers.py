@@ -7,8 +7,9 @@ Tests that:
 3. Providers without native websocket support use ManagedResponsesWebSocketHandler
 """
 
+import hashlib
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -1196,6 +1197,66 @@ class TestWebSocketProjectQuotaEnforcement:
 
 
 class TestNativeWebSocketGuardrails:
+    @pytest.mark.asyncio
+    async def test_response_create_overwrites_safety_identifier(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        monkeypatch.setenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", "true")
+        handler = ResponsesWebSocketStreaming(
+            websocket=MagicMock(),
+            backend_ws=MagicMock(),
+            logging_obj=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-123"),
+        )
+
+        masked = await handler._mask_response_create(
+            json.dumps({"type": "response.create", "safety_identifier": "caller-value"})
+        )
+
+        assert json.loads(masked)["safety_identifier"] == hashlib.sha256(b"user-123").hexdigest()
+
+    @pytest.mark.asyncio
+    async def test_response_create_removes_safety_identifier_without_user_id(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        monkeypatch.setenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", "true")
+        handler = ResponsesWebSocketStreaming(
+            websocket=MagicMock(),
+            backend_ws=MagicMock(),
+            logging_obj=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(user_id=None),
+        )
+
+        masked = await handler._mask_response_create(
+            json.dumps({"type": "response.create", "safety_identifier": "caller-value"})
+        )
+
+        assert "safety_identifier" not in json.loads(masked)
+
+    @pytest.mark.asyncio
+    async def test_managed_response_create_forwards_trusted_safety_identifier(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        monkeypatch.setenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", "true")
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=MagicMock(),
+            model="gpt-4o",
+            logging_obj=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-123"),
+        )
+        stream_and_forward = AsyncMock(return_value=None)
+        monkeypatch.setattr(handler, "_stream_and_forward", stream_and_forward)
+
+        await handler._process_response_create(
+            json.dumps({"type": "response.create", "input": "hi", "safety_identifier": "caller-value"})
+        )
+
+        call_kwargs = stream_and_forward.call_args.args[1]
+        assert call_kwargs["safety_identifier"] == hashlib.sha256(b"user-123").hexdigest()
+
     @pytest.mark.asyncio
     async def test_response_create_injects_authorized_model(self):
         import json
