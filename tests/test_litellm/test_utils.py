@@ -54,6 +54,11 @@ from litellm.utils import (
 # Adds the parent directory to the system path
 
 
+def test_cloudflare_model_info_includes_rpm(local_model_cost_map):
+    assert litellm.get_model_info("cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8")["rpm"] == 300
+    assert litellm.get_model_info("cloudflare/@cf/moonshotai/kimi-k2.6")["rpm"] == 20
+
+
 def test_get_utc_datetime_returns_current_aware_utc_time() -> None:
     before: Final = datetime.now(timezone.utc)
     result: Final = litellm.utils.get_utc_datetime()
