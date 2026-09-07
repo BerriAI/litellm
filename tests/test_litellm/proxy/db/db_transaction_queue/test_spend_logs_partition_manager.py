@@ -273,7 +273,8 @@ async def test_partition_transactions_outlive_their_statement_bound():
     keeps ticking while a statement waits on the partition lock. A tx shorter
     than the SET LOCAL bound it carries is closed mid-lock-wait and the engine
     then answers the next call with a 422, so the partition is silently not
-    created.
+    created. A tx equal to the bound is closed too: the statement can consume
+    its whole bound waiting on the lock, then still needs to commit.
     """
     mgr = SpendLogsPartitionManager()
     client = MagicMock()
@@ -288,7 +289,9 @@ async def test_partition_transactions_outlive_their_statement_bound():
     assert len(tx_timeouts) > 0
     for tx_timeout in tx_timeouts:
         assert isinstance(tx_timeout, timedelta)
-        assert tx_timeout.total_seconds() * 1000 >= DDL_TIMEOUT_MS
+        assert tx_timeout > timedelta(milliseconds=DDL_TIMEOUT_MS), (
+            f"tx timeout {tx_timeout} does not outlive its {DDL_TIMEOUT_MS}ms statement bound"
+        )
 
 
 @pytest.mark.asyncio
