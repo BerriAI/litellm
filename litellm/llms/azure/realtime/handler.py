@@ -4,7 +4,9 @@ This file contains the calling Azure OpenAI's `/openai/realtime` endpoint.
 This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
-from typing import Any, Final, cast
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Final, Protocol, cast
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -29,7 +31,28 @@ async def forward_messages(client_ws: Any, backend_ws: Any):
         pass
 
 
+class _ProxyClientWebSocket(Protocol):
+    """Client-facing websocket handle: this path only closes it after a failed handshake."""
+
+    async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
+
+
 class AzureOpenAIRealtime(AzureChatCompletion):
+    @staticmethod
+    def get_auth_headers(api_key: str | None, azure_ad_token: str | None) -> Mapping[str, str]:
+        """
+        Build the websocket handshake auth headers, preferring a static api-key and falling back to
+        an Azure AD (Entra ID) bearer token. Never sends both.
+        """
+        if api_key:
+            return MappingProxyType({"api-key": api_key})
+        if azure_ad_token:
+            return MappingProxyType({"Authorization": f"Bearer {azure_ad_token}"})
+        raise ValueError(
+            "Missing Azure credentials for the realtime endpoint. Set an api_key, or configure Azure AD auth "
+            "(azure_ad_token, tenant_id/client_id/client_secret, or a managed identity)"
+        )
+
     def _construct_url(
         self,
         api_base: str,
@@ -87,17 +110,17 @@ class AzureOpenAIRealtime(AzureChatCompletion):
     async def async_realtime(
         self,
         model: str,
-        websocket: Any,
+        websocket: _ProxyClientWebSocket,
         logging_obj: LiteLLMLogging,
         api_base: str | None = None,
         api_key: str | None = None,
         api_version: str | None = None,
         azure_ad_token: str | None = None,
-        client: Any | None = None,
+        client: object | None = None,
         timeout: float | None = None,
         realtime_protocol: str | None = None,
         query_params: RealtimeQueryParams | None = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: object | None = None,
         litellm_metadata: dict | None = None,
     ):
         import websockets
@@ -117,13 +140,13 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             query_params=query_params,
         )
 
+        auth_headers: Final = self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
+
         try:
             ssl_context: Final = get_shared_realtime_ssl_context()
             async with websockets.connect(
                 url,
-                additional_headers={
-                    "api-key": api_key,
-                },
+                additional_headers=auth_headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_context,
             ) as backend_ws:

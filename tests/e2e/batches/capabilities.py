@@ -5,9 +5,9 @@ from __future__ import annotations
 import base64
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
-from e2e_config import unique_marker
+from e2e_config import provider_edge_base, unique_marker
 from models import LiteLLMParamsBody
 
 _BATCH_RUN = unique_marker()
@@ -15,6 +15,21 @@ _BATCH_RUN = unique_marker()
 
 def batch_model_name(base: str) -> str:
     return f"{base}-{_BATCH_RUN}"
+
+
+OPENAI_BATCH_BACKEND: Final = "gpt-4o-mini"
+
+
+def openai_batch_params() -> LiteLLMParamsBody:
+    """The OpenAI batch deployment, wired through the record/replay edge when a fixture
+    mode is active and straight at OpenAI otherwise (LIT-5974). Azure, Vertex, and
+    Bedrock stay live: none of them has an edge mount."""
+    base = provider_edge_base("openai")
+    return LiteLLMParamsBody(
+        model=f"openai/{OPENAI_BATCH_BACKEND}",
+        api_key="os.environ/OPENAI_API_KEY",
+        api_base=None if base is None else f"{base}/v1",
+    )
 
 
 def _env_ref(*names: str) -> str:
@@ -47,10 +62,7 @@ class Provider:
     def litellm_params(self) -> LiteLLMParamsBody:
         match self.name:
             case "openai":
-                return LiteLLMParamsBody(
-                    model="openai/gpt-4o-mini",
-                    api_key="os.environ/OPENAI_API_KEY",
-                )
+                return openai_batch_params()
             case "azure":
                 return LiteLLMParamsBody(
                     model="azure/gpt-5.4-mini-batch",
@@ -107,7 +119,11 @@ class Capability:
 
 PROVIDERS: tuple[Provider, ...] = (
     Provider(
-        "openai", batch_model_name("openai-batch"), "gpt-4o-mini", can_cancel=True, can_list=True
+        "openai",
+        batch_model_name("openai-batch"),
+        OPENAI_BATCH_BACKEND,
+        can_cancel=True,
+        can_list=True,
     ),
     Provider(
         "azure",
@@ -127,8 +143,8 @@ PROVIDERS: tuple[Provider, ...] = (
         "bedrock",
         batch_model_name("bedrock-batch"),
         "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        can_cancel=False,
-        can_list=False,
+        can_cancel=True,
+        can_list=True,
     ),
 )
 
@@ -210,6 +226,16 @@ def is_model_encoded_id(id_str: str) -> bool:
     return False
 
 
+def decoded_model_from_id(id_str: str) -> str | None:
+    """Deployment name embedded in a model-encoded file/batch id, or None."""
+    for prefix in ("file-", "batch_"):
+        if id_str.startswith(prefix):
+            decoded = _b64_decode(id_str[len(prefix) :])
+            if decoded.startswith("litellm:") and ";model," in decoded:
+                return decoded.split(";model,", 1)[1].split(";")[0]
+    return None
+
+
 def matches_id_shape(shape: IdShape, id_str: str) -> bool:
     if shape == "managed":
         return is_managed_id(id_str)
@@ -222,8 +248,9 @@ def coverage_cells_for_lifecycle(cap: Capability) -> tuple[str, ...]:
     """Registry cell ids that the parametrized lifecycle test covers for one capability.
 
     OpenAI has per-scenario cells plus granular create/retrieve/cancel/list/file
-    cells. Other providers have one basic cell each. File-upload cells for the
-    batch-backing path are included when the lifecycle uploads for that provider.
+    cells. Bedrock adds cancel and list cells behind its gates. Other providers
+    have one basic cell each. File-upload cells for the batch-backing path are
+    included when the lifecycle uploads for that provider.
     """
     match cap.provider:
         case "openai":
@@ -253,6 +280,8 @@ def coverage_cells_for_lifecycle(cap: Capability) -> tuple[str, ...]:
             return (
                 "llm.batches.bedrock.basic.nonstream.works",
                 "llm.files.bedrock.upload.nonstream.works",
+                *(("llm.batches.bedrock.cancel.nonstream.works",) if cap.can_cancel else ()),
+                *(("llm.batches.bedrock.list.nonstream.works",) if cap.can_list else ()),
             )
         case _:
             return ()

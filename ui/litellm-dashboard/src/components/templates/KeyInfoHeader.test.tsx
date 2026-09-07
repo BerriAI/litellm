@@ -3,13 +3,20 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { KeyInfoHeader, KeyInfoData } from "./KeyInfoHeader";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const MOCK_DATA: KeyInfoData = {
   keyName: "My Test Key",
   keyId: "sk-1234567890abcdef",
   userId: "user-abc-123",
   userEmail: "test@example.com",
   userAlias: null,
+  teamId: "team-xyz-789",
+  teamAlias: "Platform Team",
+  orgId: "org-abc-001",
+  orgAlias: "Acme Org",
   createdBy: "admin@example.com",
+  createdById: "admin-user-456",
   createdAt: "Oct 29, 2025 at 1:26 AM",
   lastUpdated: "Oct 29, 2025 at 1:47 AM",
   lastActive: "Oct 29, 2025 at 2:00 AM",
@@ -37,6 +44,74 @@ describe("KeyInfoHeader", () => {
     expect(screen.getByText("Expires")).toBeInTheDocument();
     expect(screen.getByText("Last Updated")).toBeInTheDocument();
     expect(screen.getByText("Last Active")).toBeInTheDocument();
+    expect(screen.getByText("Team")).toBeInTheDocument();
+    expect(screen.getByText("Organization")).toBeInTheDocument();
+  });
+
+  describe("entity links", () => {
+    it("links the user to the users page", () => {
+      render(<KeyInfoHeader data={MOCK_DATA} />);
+      expect(screen.getByRole("link", { name: "test@example.com" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=user-abc-123"),
+      );
+    });
+
+    it("links the creator to the users page by user id, not by the displayed alias", () => {
+      render(<KeyInfoHeader data={MOCK_DATA} />);
+      expect(screen.getByRole("link", { name: "admin@example.com" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/users?user=admin-user-456"),
+      );
+    });
+
+    it("shows the team alias and links it to the team page by id", () => {
+      render(<KeyInfoHeader data={MOCK_DATA} />);
+      expect(screen.getByRole("link", { name: "Platform Team" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/teams?team=team-xyz-789"),
+      );
+    });
+
+    it("falls back to the team id when no alias is known", () => {
+      render(<KeyInfoHeader data={{ ...MOCK_DATA, teamAlias: null }} />);
+      expect(screen.getByRole("link", { name: "team-xyz-789" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/teams?team=team-xyz-789"),
+      );
+    });
+
+    it("shows the organization alias and links it to the organization page by id", () => {
+      render(<KeyInfoHeader data={MOCK_DATA} />);
+      expect(screen.getByRole("link", { name: "Acme Org" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/organizations?org=org-abc-001"),
+      );
+    });
+
+    it("renders '-' without a link when the key has no organization", () => {
+      render(<KeyInfoHeader data={{ ...MOCK_DATA, orgId: "", orgAlias: null }} />);
+      expect(screen.queryByRole("link", { name: /org/i })).not.toBeInTheDocument();
+      expect(screen.getByText("Organization").parentElement?.parentElement).toHaveTextContent("-");
+    });
+
+    it("renders '-' without a link when the key has no team", () => {
+      render(<KeyInfoHeader data={{ ...MOCK_DATA, teamId: "", teamAlias: null }} />);
+      expect(screen.queryByRole("link", { name: /team/i })).not.toBeInTheDocument();
+      expect(screen.getByText("Team").parentElement?.parentElement).toHaveTextContent("-");
+    });
+
+    it("does not link the user when the key has no user id", () => {
+      render(<KeyInfoHeader data={{ ...MOCK_DATA, userId: "", userEmail: "orphan@example.com" }} />);
+      expect(screen.getByText("orphan@example.com")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "orphan@example.com" })).not.toBeInTheDocument();
+    });
+
+    it("keeps the Default Proxy Admin creator unlinked", () => {
+      render(<KeyInfoHeader data={{ ...MOCK_DATA, createdBy: "default_user_id", createdById: "default_user_id" }} />);
+      expect(screen.getByText("Default Proxy Admin")).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: /default/i })).not.toBeInTheDocument();
+    });
   });
 
   describe("back button", () => {
@@ -86,7 +161,7 @@ describe("KeyInfoHeader", () => {
 
     it("should not disable Regenerate button by default", () => {
       render(<KeyInfoHeader data={MOCK_DATA} />);
-      expect(screen.getByRole("button", { name: /regenerate key/i })).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: /regenerate key/i })).toBeEnabled();
     });
   });
 

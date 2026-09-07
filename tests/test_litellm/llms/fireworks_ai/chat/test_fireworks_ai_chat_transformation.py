@@ -1,17 +1,11 @@
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
-
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
-
 from litellm import get_model_info, supports_reasoning, supports_vision
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
@@ -78,7 +72,13 @@ def test_validate_environment_sets_session_affinity_from_session_id():
     assert headers["x-session-affinity"] == "session-id-123"
 
 
-def test_validate_environment_sets_session_affinity_from_trace_id():
+def test_validate_environment_ignores_trace_id_for_session_affinity():
+    """A trace id must not become the session id.
+
+    litellm_trace_id defaults to a fresh uuid4 per request, so pinning
+    x-session-affinity to it sent every request to a different Fireworks node and
+    prompt caching never hit (cached_tokens stayed 0 across identical prompts).
+    """
     config = FireworksAIConfig()
 
     headers = config.validate_environment(
@@ -90,7 +90,25 @@ def test_validate_environment_sets_session_affinity_from_trace_id():
         api_key="test-key",
     )
 
-    assert headers["x-session-affinity"] == "trace-id-123"
+    assert "x-session-affinity" not in headers
+
+
+def test_validate_environment_prefers_session_id_over_trace_id():
+    config = FireworksAIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="accounts/fireworks/models/test-model",
+        messages=[],
+        optional_params={},
+        litellm_params={
+            "litellm_session_id": "session-123",
+            "litellm_trace_id": "trace-id-123",
+        },
+        api_key="test-key",
+    )
+
+    assert headers["x-session-affinity"] == "session-123"
 
 
 def test_validate_environment_does_not_set_session_affinity_without_session_id():
@@ -216,6 +234,21 @@ def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
     )
 
 
+def test_get_fireworks_session_id_ignores_proxy_generated_session_id():
+    """general_settings.missing_session_id: generate stamps a fresh id per request; sending it
+    as x-session-affinity would pin every request to a different node."""
+    assert (
+        get_fireworks_session_id(
+            {
+                "litellm_session_id": "generated-1",
+                "litellm_trace_id": "generated-1",
+                "metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True},
+            }
+        )
+        is None
+    )
+
+
 def test_handle_message_content_with_tool_calls():
     config = FireworksAIConfig()
     message = Message(
@@ -326,6 +359,27 @@ def test_get_supported_openai_params_parallel_tool_calls():
         "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
     )
     assert "parallel_tool_calls" not in unsupported_params
+
+
+def test_get_supported_openai_params_short_model_name_resolves_account_prefixed_entry():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/deepseek-v4-pro-0813"
+    )
+
+    assert "tool_choice" in supported_params
+    assert "reasoning_effort" in supported_params
+
+
+def test_get_supported_openai_params_preserves_generic_reasoning_fallback():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/accounts/fireworks/models/glm-5p3-flash"
+    )
+
+    assert "reasoning_effort" in supported_params
 
 
 def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
@@ -478,12 +532,14 @@ def test_transform_messages_helper_strips_thinking_blocks():
             "thinking_blocks": [
                 {"type": "thinking", "thinking": "internal", "signature": ""}
             ],
+            "reasoning_content": "internal",
         },
     ]
     out = config._transform_messages_helper(
         messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
     )
     assert "thinking_blocks" not in out[1]
+    assert "reasoning_content" not in out[1]
     assert out[1]["content"] == "I can help."
 
 
@@ -1698,3 +1754,82 @@ def test_in_schema_unsupported_params_still_raise():
         store=True,
     )
     assert "store" not in optional_params
+
+
+def test_streaming_preserves_selected_model_for_private_accounting():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    requested_route = (
+        "accounts/fireworks/routers/firerouter/"
+        "kimi-k3/deepseek-v4-pro-0813/deepseek-v4-flash-0731"
+    )
+    selected_model = "deepseek-v4-flash-0731"
+    sse_lines = [
+        "data: "
+        + json.dumps(
+            {
+                "id": "stream-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": selected_model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": "Hi"},
+                    }
+                ],
+            }
+        ),
+        "data: "
+        + json.dumps(
+            {
+                "id": "stream-1",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": selected_model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 1,
+                    "total_tokens": 6,
+                },
+            }
+        ),
+        "data: [DONE]",
+    ]
+
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.iter_lines = lambda: iter(sse_lines)
+
+    client = HTTPHandler()
+    with patch.object(client, "post", return_value=raw_response):
+        stream = litellm.completion(
+            model=f"fireworks_ai/{requested_route}",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            api_key="test-key",
+            client=client,
+        )
+        chunks = list(stream)
+
+    assert chunks
+    assert {chunk.model for chunk in chunks} == {requested_route}
+    assert {
+        chunk._hidden_params.get("provider_response_model") for chunk in chunks
+    } == {selected_model}
+
+    assembled = litellm.stream_chunk_builder(chunks=chunks)
+    assert assembled is not None
+    assert assembled.model == requested_route
+    assert assembled._hidden_params["provider_response_model"] == selected_model
+    selected_model_info = litellm.model_cost[f"fireworks_ai/{selected_model}"]
+    expected_cost = (
+        5 * selected_model_info["input_cost_per_token"]
+        + selected_model_info["output_cost_per_token"]
+    )
+    assert litellm.completion_cost(
+        completion_response=assembled,
+        custom_llm_provider="fireworks_ai",
+    ) == pytest.approx(expected_cost)

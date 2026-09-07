@@ -100,6 +100,13 @@ spec:
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
             {{- end }}
+            {{- if and .Values.db.useExisting .Values.db.readReplicaUrl .Values.db.secret.readReplicaEndpointKey (not .Values.db.secret.readReplicaUrlKey) }}
+            - name: DATABASE_READER_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.readReplicaEndpointKey }}
+            {{- end }}
             {{- if and .Values.db.useExisting .Values.db.secret.readReplicaUrlKey }}
             - name: DATABASE_URL_READ_REPLICA
               valueFrom:

@@ -1,7 +1,7 @@
 import React, { useRef, useState } from "react";
 import { Plus, Upload } from "lucide-react";
 import { validateBlockedWordsFile } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
@@ -119,7 +119,7 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
 
   const handleAddPrebuiltPattern = () => {
     if (!selectedPatternName) {
-      NotificationsManager.error("Please select a pattern");
+      toast.error("Please select a pattern");
       return;
     }
 
@@ -140,7 +140,7 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
 
   const handleAddCustomPattern = () => {
     if (!customPatternName || !customPatternRegex) {
-      NotificationsManager.error("Please provide pattern name and regex");
+      toast.error("Please provide pattern name and regex");
       return;
     }
 
@@ -160,7 +160,7 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
 
   const handleAddKeyword = () => {
     if (!newKeyword) {
-      NotificationsManager.error("Please enter a keyword");
+      toast.error("Please enter a keyword");
       return;
     }
 
@@ -188,14 +188,14 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
           if (onFileUpload) {
             onFileUpload(content);
           }
-          NotificationsManager.success(result.message || "File uploaded successfully");
+          toast.success(result.message || "File uploaded successfully");
         } else {
           const errorMessage = result.error || (result.errors && result.errors.join(", ")) || "Invalid file";
-          NotificationsManager.error(`Validation failed: ${errorMessage}`);
+          toast.error(`Validation failed: ${errorMessage}`);
         }
       }
     } catch (error) {
-      NotificationsManager.error(`Failed to upload file: ${error}`);
+      toast.error(`Failed to upload file: ${error}`);
     } finally {
       setUploadValidating(false);
     }

@@ -3,7 +3,7 @@ import contextvars
 import importlib
 from collections.abc import Coroutine
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast, overload
 
 if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
@@ -19,6 +19,7 @@ from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -150,7 +151,7 @@ def image_generation(
     *,
     aimg_generation: Literal[True],
     **kwargs,
-) -> Coroutine[Any, Any, ImageResponse]: 
+) -> Coroutine[object, object, ImageResponse]:
     ...
 
 
@@ -196,7 +197,7 @@ def image_generation(
     api_version: str | None = None,
     custom_llm_provider=None,
     **kwargs,
-) -> ImageResponse | Coroutine[Any, Any, ImageResponse]:
+) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
@@ -385,6 +386,8 @@ def image_generation(
             litellm.LlmProviders.VERTEX_AI,
             litellm.LlmProviders.OPENROUTER,
             litellm.LlmProviders.DASHSCOPE,
+            litellm.LlmProviders.QWENCLOUD,
+            litellm.LlmProviders.QWEN_AI_PLATFORM,
         ):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
@@ -422,24 +425,32 @@ def image_generation(
                 aimg_generation=aimg_generation,
             )
         elif custom_llm_provider == "azure_ai":
-            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+            from litellm.llms.azure_ai.common_utils import (
+                AzureFoundryModelInfo,
+                get_azure_ai_auth_headers,
+            )
 
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
             api_key = AzureFoundryModelInfo.get_api_key(api_key)
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
 
-            default_headers = {
+            caller_header_names = frozenset(name.lower() for name in headers)
+            caller_set_auth = "api-key" in caller_header_names or "authorization" in caller_header_names
+            auth_headers = (
+                headers
+                if caller_set_auth
+                else get_azure_ai_auth_headers(
+                    api_key=api_key,
+                    litellm_params=litellm_params_dict,
+                    api_key_header="api-key",
+                )
+            )
+            request_headers: Final = {
                 "Content-Type": "application/json",
+                **auth_headers,
+                **headers,
             }
-            # Only add api-key header if api_key is not None
-            # Azure AD authentication will use Authorization header instead
-            if api_key is not None:
-                default_headers["api-key"] = api_key
-
-            for k, v in default_headers.items():
-                if k not in headers:
-                    headers[k] = v
 
             model_response = azure_chat_completions.image_generation(
                 model=model,
@@ -455,7 +466,7 @@ def image_generation(
                 api_version=api_version,
                 aimg_generation=aimg_generation,
                 client=client,
-                headers=headers,
+                headers=request_headers,
                 litellm_params=litellm_params_dict,
             )
         elif (
@@ -714,14 +725,14 @@ def image_edit(
     user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> ImageResponse | Coroutine[Any, Any, ImageResponse]:
+) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
     Maps the image edit functionality, similar to OpenAI's images/edits endpoint.
     """
@@ -760,7 +771,7 @@ def image_edit(
         images: Final = image if isinstance(image, list) else ([image] if image is not None else [])
 
         headers_from_kwargs: Final = kwargs.get("headers")
-        merged_extra_headers: Final[dict[str, Any]] = {}
+        merged_extra_headers: Final[dict[str, object]] = {}
         if isinstance(headers_from_kwargs, dict):
             merged_extra_headers.update(headers_from_kwargs)
         if isinstance(extra_headers, dict):
@@ -845,6 +856,18 @@ def image_edit(
             drop_params=kwargs.get("drop_params"),
             additional_drop_params=kwargs.get("additional_drop_params"),
         )
+
+        if (
+            custom_llm_provider == "openai"
+            or custom_llm_provider == "azure"
+            or custom_llm_provider in litellm.openai_compatible_providers
+        ):
+            image_edit_request_params.update(
+                flatten_form_field_values(
+                    non_default_params,
+                    extra_body if isinstance(extra_body, dict) else None,
+                )
+            )
 
         # Pre Call logging
         litellm_logging_obj.update_from_kwargs(
@@ -953,9 +976,9 @@ async def aimage_edit(
     user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: dict[str, Any] | None = None,
-    extra_query: dict[str, Any] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_headers: dict[str, object] | None = None,
+    extra_query: dict[str, object] | None = None,
+    extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
@@ -995,6 +1018,9 @@ async def aimage_edit(
             response_format=response_format,
             size=size,
             user=user,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
             timeout=timeout,
             custom_llm_provider=custom_llm_provider,
             **kwargs,
@@ -1020,7 +1046,7 @@ async def aimage_edit(
         )
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> type["ImageEditRequestUtils"]:
     """Lazy import handler for images.main module"""
     if name == "ImageEditRequestUtils":
         # Lazy load ImageEditRequestUtils to avoid heavy import from images.utils at module load time

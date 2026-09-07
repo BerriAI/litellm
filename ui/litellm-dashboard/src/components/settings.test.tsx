@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FormProvider, useForm } from "react-hook-form";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,17 +12,6 @@ vi.mock("./networking", () => ({
   serviceHealthCheck: vi.fn(),
   deleteCallback: vi.fn(),
   alertingSettingsCall: vi.fn().mockResolvedValue([]),
-}));
-
-vi.mock("./molecules/notifications_manager", () => ({
-  __esModule: true,
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-    info: vi.fn(),
-    warning: vi.fn(),
-    clear: vi.fn(),
-  },
 }));
 
 vi.mock("./alerting/alerting_settings", () => ({
@@ -88,21 +77,21 @@ describe("Settings", () => {
   });
 
   it("should render the logging callbacks tab when access token is provided", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
   });
 
   it("should display additional settings tabs", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
-      expect(getByText("Alerting Types")).toBeInTheDocument();
-      expect(getByText("Alerting Settings")).toBeInTheDocument();
-      expect(getByText("Email Alerts")).toBeInTheDocument();
+      expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+      expect(screen.getByText("Alerting Types")).toBeInTheDocument();
+      expect(screen.getByText("Alerting Settings")).toBeInTheDocument();
+      expect(screen.getByText("Email Alerts")).toBeInTheDocument();
     });
   });
 
@@ -200,7 +189,7 @@ describe("Settings", () => {
     });
 
     await user.clear(screen.getByLabelText("Host"));
-    await user.type(screen.getByLabelText("Host"), "https://edited.langfuse.com");
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "https://edited.langfuse.com" } });
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -238,7 +227,7 @@ describe("Settings", () => {
 
     const webhookInput = document.querySelector('input[name="llm_exceptions"]') as HTMLInputElement;
     expect(webhookInput).not.toBeNull();
-    await user.type(webhookInput, "https://hooks.example.com/llm-exceptions");
+    fireEvent.change(webhookInput, { target: { value: "https://hooks.example.com/llm-exceptions" } });
 
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
@@ -290,13 +279,13 @@ describe("Settings", () => {
   });
 
   it("should display CloudZero Cost Tracking tab", async () => {
-    const { getByText } = render(<Settings {...defaultProps} />);
+    render(<Settings {...defaultProps} />);
 
     await waitFor(() => {
-      expect(getByText("Active Logging Callbacks")).toBeInTheDocument();
+      expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
     });
 
-    expect(getByText("CloudZero Cost Tracking")).toBeInTheDocument();
+    expect(screen.getByText("CloudZero Cost Tracking")).toBeInTheDocument();
   });
 });
 
@@ -345,7 +334,7 @@ describe("CallbackSelector logos", () => {
 
     expect(await screen.findByAltText("Langfuse logo")).toHaveAttribute("src", "/ui/assets/logos/langfuse.png");
     expect(screen.getByAltText("Hosted logo")).toHaveAttribute("src", "https://logos.example.com/hosted.png");
-    expect(screen.queryByAltText("NoLogo logo")).toBeNull();
+    expect(screen.queryByAltText("NoLogo logo")).not.toBeInTheDocument();
     expect(screen.getByText("N")).toBeInTheDocument();
   });
 });

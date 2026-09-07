@@ -199,7 +199,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           <SelectTrigger size="sm" className="w-full" aria-label="Action">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false}>
+          <SelectContent>
             {ACTION_ITEMS.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 <Badge variant={item.value === "BLOCK" ? "destructive" : "secondary"}>{item.value}</Badge>
@@ -224,7 +224,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           <SelectTrigger size="sm" className="w-full" aria-label="Severity Threshold">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false}>
+          <SelectContent>
             {SEVERITY_ITEMS.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}
