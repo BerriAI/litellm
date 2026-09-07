@@ -11,10 +11,10 @@ import time
 import uuid as uuid_module
 from collections.abc import Coroutine
 from functools import partial
-from types import MappingProxyType
 from typing import Any, Final, Literal, cast
 
 import httpx
+from openai import AsyncOpenAI, OpenAI
 
 # Type aliases for provider parameters
 FileCreateProvider = Literal[
@@ -24,16 +24,20 @@ FileCreateProvider = Literal[
     "vertex_ai",
     "bedrock",
     "hosted_vllm",
+    "litellm_proxy",
     "manus",
     "anthropic",
 ]
-FileRetrieveProvider = Literal["openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic"]
-FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic"]
-FileListProvider = Literal["openai", "azure", "manus", "anthropic"]
+FileRetrieveProvider = Literal[
+    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "litellm_proxy", "manus", "anthropic"
+]
+FileDeleteProvider = Literal["openai", "azure", "gemini", "litellm_proxy", "manus", "anthropic"]
+FileListProvider = Literal["openai", "azure", "litellm_proxy", "manus", "anthropic"]
 import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
 from litellm.files.types import FileContentProvider, FileContentStreamingResult
+from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.azure.common_utils import get_azure_credentials
@@ -83,14 +87,6 @@ azure_files_instance: Final = AzureOpenAIFilesAPI()
 vertex_ai_files_instance: Final = VertexAIFilesHandler()
 bedrock_files_instance: Final = BedrockFilesHandler()
 #################################################
-
-
-def _add_trusted_model_credentials_to_litellm_params(
-    litellm_params_dict: dict[str, Any], kwargs: dict[str, Any]
-) -> None:
-    trusted_model_credentials: Final = kwargs.get("_litellm_internal_model_credentials")
-    if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
-        litellm_params_dict["_litellm_internal_model_credentials"] = trusted_model_credentials
 
 
 @client
@@ -372,7 +368,7 @@ def file_retrieve(
             )
             if provider_config is not None:
                 litellm_params_dict: Final = get_litellm_params(**kwargs)
-                _add_trusted_model_credentials_to_litellm_params(
+                add_trusted_model_credentials_to_litellm_params(
                     litellm_params_dict=litellm_params_dict,
                     kwargs=kwargs,
                 )
@@ -436,7 +432,7 @@ async def afile_delete(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     **kwargs,
-) -> Coroutine[Any, Any, FileObject]:
+) -> Coroutine[object, object, FileObject]:
     """
     Async: Delete file
 
@@ -494,7 +490,7 @@ def file_delete(
             pass
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        _add_trusted_model_credentials_to_litellm_params(
+        add_trusted_model_credentials_to_litellm_params(
             litellm_params_dict=litellm_params_dict,
             kwargs=kwargs,
         )
@@ -834,7 +830,7 @@ def file_content(
     try:
         optional_params: Final = GenericLiteLLMParams(**kwargs)
         litellm_params_dict: Final = get_litellm_params(**kwargs)
-        _add_trusted_model_credentials_to_litellm_params(
+        add_trusted_model_credentials_to_litellm_params(
             litellm_params_dict=litellm_params_dict,
             kwargs=kwargs,
         )
@@ -1007,8 +1003,8 @@ def file_content_streaming(
     timeout: float | httpx.Timeout,
     logging_obj: LiteLLMLoggingObj | None,
     _is_async: bool,
-    client: Any | None,
-) -> FileContentStreamingResult | Coroutine[Any, Any, FileContentStreamingResult]:
+    client: OpenAI | AsyncOpenAI | None,
+) -> FileContentStreamingResult | Coroutine[object, object, FileContentStreamingResult]:
     if logging_obj is not None:
         logging_obj.model = model or ""
         logging_obj.model_call_details["model"] = model or ""
@@ -1033,8 +1029,8 @@ def file_content_streaming(
             headers=response.headers,
         )
 
-    response: FileContentStreamingResult | Coroutine[Any, Any, FileContentStreamingResult] = FileContentStreamingResult(
-        stream_iterator=iter(()), headers={}
+    response: FileContentStreamingResult | Coroutine[object, object, FileContentStreamingResult] = (
+        FileContentStreamingResult(stream_iterator=iter(()), headers={})
     )
     if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
         openai_creds: Final = get_openai_credentials(

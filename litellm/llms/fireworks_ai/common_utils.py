@@ -2,6 +2,7 @@ from typing import Final
 
 from httpx import Headers
 
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
@@ -13,20 +14,40 @@ class FireworksAIException(BaseLLMException):
 
 
 def get_fireworks_session_id(litellm_params: dict) -> str | None:
+    """
+    Session id to send as `x-session-affinity`, or None when the caller gave none.
+
+    Deliberately does not fall back to `litellm_trace_id`, and ignores session ids the
+    proxy generated for a request that had none: both are per request, so using them
+    pins every request to a different Fireworks node and prompt caching never hits.
+    """
     params: Final = litellm_params
+    metadata: Final = params.get("metadata")
+    if isinstance(metadata, dict) and metadata.get(SESSION_ID_GENERATED_METADATA_KEY):
+        return None
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
         if value:
             return str(value)
-    metadata: Final = params.get("metadata")
     if isinstance(metadata, dict):
         value = metadata.get("session_id")
         if value:
             return str(value)
-    value = params.get("litellm_trace_id")
-    if value:
-        return str(value)
     return None
+
+
+AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX: Final = "FW-"
+
+
+def resolve_fireworks_resource_name(model: str) -> str:
+    stripped: Final = model.removeprefix("fireworks_ai/")
+    if stripped.startswith(("accounts/", AZURE_FOUNDRY_FIREWORKS_MODEL_ID_PREFIX)) or "#" in stripped:
+        return stripped
+    if stripped.startswith(("routers/", "models/")):
+        return f"accounts/fireworks/{stripped}"
+    if stripped.endswith("-fast"):
+        return f"accounts/fireworks/routers/{stripped}"
+    return f"accounts/fireworks/models/{stripped}"
 
 
 class FireworksAIMixin:

@@ -13,12 +13,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+import litellm
 from litellm import Router
-from litellm.utils import _get_excluded_filtered_deployments
+from litellm.utils import get_excluded_filtered_deployments
 
 
 # ---------------------------------------------------------------------------
-# Unit tests for _get_excluded_filtered_deployments
+# Unit tests for get_excluded_filtered_deployments
 # ---------------------------------------------------------------------------
 
 
@@ -36,17 +37,17 @@ def _make_dep(dep_id: str, weight: Optional[int] = None) -> dict:
 class TestGetExcludedFilteredDeployments:
     def test_no_excluded_returns_all(self):
         deps = [_make_dep("a"), _make_dep("b")]
-        result = _get_excluded_filtered_deployments(deps, excluded_deployment_ids=None)
+        result = get_excluded_filtered_deployments(deps, excluded_deployment_ids=None)
         assert len(result) == 2
 
     def test_empty_excluded_returns_all(self):
         deps = [_make_dep("a"), _make_dep("b")]
-        result = _get_excluded_filtered_deployments(deps, excluded_deployment_ids=[])
+        result = get_excluded_filtered_deployments(deps, excluded_deployment_ids=[])
         assert len(result) == 2
 
     def test_drops_excluded(self):
         deps = [_make_dep("a"), _make_dep("b"), _make_dep("c")]
-        result = _get_excluded_filtered_deployments(deps, excluded_deployment_ids=["b"])
+        result = get_excluded_filtered_deployments(deps, excluded_deployment_ids=["b"])
         ids = sorted(d["model_info"]["id"] for d in result)
         assert ids == ["a", "c"]
 
@@ -56,12 +57,12 @@ class TestGetExcludedFilteredDeployments:
         # error. Returning the original list here would re-include the
         # just-failed deployment and let weighted failover re-pick it.
         deps = [_make_dep("a"), _make_dep("b")]
-        result = _get_excluded_filtered_deployments(deps, excluded_deployment_ids=["a", "b"])
+        result = get_excluded_filtered_deployments(deps, excluded_deployment_ids=["a", "b"])
         assert result == []
 
     def test_excluded_set_with_unknown_ids(self):
         deps = [_make_dep("a"), _make_dep("b")]
-        result = _get_excluded_filtered_deployments(deps, excluded_deployment_ids=["zzz"])
+        result = get_excluded_filtered_deployments(deps, excluded_deployment_ids=["zzz"])
         assert len(result) == 2
 
     def test_handles_missing_model_info(self):
@@ -69,7 +70,7 @@ class TestGetExcludedFilteredDeployments:
             {"model_name": "x", "litellm_params": {"model": "gpt-4o"}},  # no model_info
             _make_dep("b"),
         ]
-        result = _get_excluded_filtered_deployments(deps, excluded_deployment_ids=["b"])
+        result = get_excluded_filtered_deployments(deps, excluded_deployment_ids=["b"])
         assert len(result) == 1
 
 
@@ -222,6 +223,37 @@ async def test_acompletion_stamps_dynamic_id_for_clientside_credentials():
     assert failed_deployment_id != "dep-a"
 
 
+@pytest.mark.asyncio
+async def test_acompletion_stamps_dynamic_id_for_clientside_credentials_on_timeout():
+    """Same bug as the RuntimeError case above, but for the separate `except litellm.Timeout`
+    branch in `_acompletion`: it has its own call to the stamping helper, so a fix that only
+    covers the generic `except Exception` branch would leave a caller-supplied timeout
+    (`litellm.Timeout` is what `x-litellm-timeout` maps to) stamping the shared static id."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key"},
+                "model_info": {"id": "dep-a"},
+            }
+        ],
+    )
+
+    timeout_exc = litellm.Timeout(message="boom", model="test-model", llm_provider="openai")
+    with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=timeout_exc):
+        with pytest.raises(litellm.Timeout) as exc_info:
+            await router._acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="tenant-supplied-key",
+                metadata={"model_group": "test-model"},
+            )
+
+    failed_deployment_id = getattr(exc_info.value, "failed_deployment_id", None)
+    assert failed_deployment_id is not None
+    assert failed_deployment_id != "dep-a"
+
+
 def test_completion_stamps_dynamic_id_for_clientside_credentials():
     """Sync counterpart: _completion's exception handler must stamp the dynamic
     client-side-credential deployment id, not the shared static deployment's id."""
@@ -359,7 +391,7 @@ async def test_no_failover_when_flag_off():
         # enable_weighted_failover defaults to False
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         await router.acompletion(
             model="test-model",
             messages=[{"role": "user", "content": "hi"}],
@@ -483,7 +515,7 @@ async def test_failover_exhausted_raises_original_error_class():
         enable_weighted_failover=True,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         await router.acompletion(
             model="test-model",
             messages=[{"role": "user", "content": "hi"}],
@@ -616,7 +648,7 @@ async def test_failover_skipped_for_non_simple_shuffle():
         enable_weighted_failover=True,
     )
 
-    with pytest.raises(Exception):
+    with pytest.raises(litellm.InternalServerError):
         await router.acompletion(
             model="test-model",
             messages=[{"role": "user", "content": "hi"}],

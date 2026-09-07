@@ -227,7 +227,7 @@ class TestCustomGuardrailSensitiveDataRouting:
 
         request_data = {"model": "gpt-4"}
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Cannot route sensitive data without a session_id\\. Ensure') as exc_info:
             guardrail.raise_sensitive_data_route_exception(
                 route_to_model="on-premise-model",
                 request_data=request_data,

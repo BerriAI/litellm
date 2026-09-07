@@ -6,8 +6,8 @@ import { VectorStore } from "@/components/vector_store_management/types";
 
 import VectorStoreTable from "./VectorStoreTable";
 
-vi.mock("@/components/provider_info_helpers", () => ({
-  getProviderLogoAndName: (provider: string) => {
+vi.mock("@/components/vector_store_providers", () => ({
+  getVectorStoreProviderLogoAndName: (provider: string) => {
     const providerMap: Record<string, { displayName: string; logo: string }> = {
       openai: { displayName: "OpenAI", logo: "/openai-logo.png" },
       azure: { displayName: "Azure", logo: "/azure-logo.png" },

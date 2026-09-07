@@ -259,7 +259,7 @@ def _should_run_cooldown_logic(
     litellm_router_instance: LitellmRouter,
     deployment: str | None,
     exception_status: str | int,
-    original_exception: Any,
+    original_exception: Exception,
     time_to_cooldown: float | None = None,
 ) -> bool:
     """
@@ -318,7 +318,8 @@ def _should_cooldown_deployment(
     litellm_router_instance: LitellmRouter,
     deployment: str,
     exception_status: str | int,
-    original_exception: Any,
+    original_exception: Exception,
+    requested_model_group: str | None = None,
 ) -> bool:
     """
     Helper that decides if a deployment should be put in cooldown
@@ -341,7 +342,9 @@ def _should_cooldown_deployment(
     model_group: Final = litellm_router_instance.get_model_group(id=deployment)
     is_single_deployment_model_group = False
     if model_group is not None and len(model_group) == 1:
-        is_single_deployment_model_group = True
+        is_single_deployment_model_group = not litellm_router_instance.routing_group_has_alternatives(
+            requested_model_group
+        )
 
     ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
     dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
@@ -409,10 +412,11 @@ def _should_cooldown_deployment(
 
 def _set_cooldown_deployments(
     litellm_router_instance: LitellmRouter,
-    original_exception: Any,
+    original_exception: Exception,
     exception_status: str | int,
     deployment: str | None = None,
     time_to_cooldown: float | None = None,
+    requested_model_group: str | None = None,
 ) -> bool:
     """
     Add a model to the list of models being cooled down for that minute, if it exceeds the allowed fails / minute
@@ -449,6 +453,7 @@ def _set_cooldown_deployments(
         deployment=deployment,
         exception_status=exception_status,
         original_exception=original_exception,
+        requested_model_group=requested_model_group,
     ):
         litellm_router_instance.cooldown_cache.add_deployment_to_cooldown(
             model_id=deployment,
@@ -542,7 +547,7 @@ def _get_cooldown_deployments(litellm_router_instance: LitellmRouter, parent_ote
 def should_cooldown_based_on_allowed_fails_policy(
     litellm_router_instance: LitellmRouter,
     deployment: str,
-    original_exception: Any,
+    original_exception: Exception,
     allowed_fails_override: int | None = None,
     cooldown_time_override: float | None = None,
     cache_key_suffix: str | None = None,

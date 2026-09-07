@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, cast
 
 from httpx import Response
@@ -93,6 +94,9 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             endpoint_url,
         )
 
+    def get_bedrock_bearer_token(self, litellm_params: Mapping[str, object]) -> str | None:
+        return None
+
     def sign_request(
         self,
         headers: dict,
@@ -109,6 +113,7 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             request_data=request_data or {},
             api_base=api_base,
             model=model,
+            api_key=self.get_bedrock_bearer_token(optional_params),
         )
 
     def logging_non_streaming_response(

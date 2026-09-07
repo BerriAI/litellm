@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import random
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -154,18 +155,6 @@ class GetModelCostMap:
 
         return True
 
-    @staticmethod
-    def fetch_remote_model_cost_map(url: str, timeout: int = 5) -> dict:
-        """
-        Fetch the model cost map from a remote URL.
-
-        Returns the parsed JSON dict. Raises on network/parse errors
-        (caller is expected to handle).
-        """
-        response: Final = httpx.get(url, timeout=timeout)
-        response.raise_for_status()
-        return response.json()
-
 
 RETRYABLE_FETCH_STATUS_CODES: Final = frozenset({429, 500, 502, 503, 504})
 MODEL_COST_MAP_FETCH_MAX_ATTEMPTS: Final = 3
@@ -212,6 +201,13 @@ class _AsyncGetClient(Protocol):
     def get(self, url: str, *, timeout: float | None = None) -> Awaitable[httpx.Response]: ...
 
 
+class _SyncGetClient(Protocol):
+    def get(self, url: str, *, timeout: float | None = None) -> httpx.Response: ...
+
+
+_FetchAttemptOutcome = ModelCostMapReloaded | ModelCostMapReloadUnavailable | _FetchAttemptRetryable
+
+
 def _default_reload_client() -> _AsyncGetClient:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -219,13 +215,30 @@ def _default_reload_client() -> _AsyncGetClient:
     return get_async_httpx_client(llm_provider=httpxSpecialProvider.ModelCostMap)
 
 
-async def _attempt_fetch(
-    client: _AsyncGetClient, url: str, timeout: int
-) -> ModelCostMapReloaded | ModelCostMapReloadUnavailable | _FetchAttemptRetryable:
+def _classify_fetch_error(error: httpx.HTTPError | httpx.InvalidURL, url: str) -> _FetchAttemptOutcome:
+    reason: Final = f"{type(error).__name__} fetching {url}: {error}"
+    if isinstance(error, (httpx.InvalidURL, httpx.UnsupportedProtocol)):
+        return ModelCostMapReloadUnavailable(reason=reason)
+    return _FetchAttemptRetryable(reason=reason, retry_after_seconds=None)
+
+
+async def _attempt_fetch(client: _AsyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
     try:
         response: Final = await client.get(url, timeout=timeout)
-    except httpx.HTTPError as e:
-        return _FetchAttemptRetryable(reason=f"{type(e).__name__} fetching {url}: {e}", retry_after_seconds=None)
+    except (httpx.HTTPError, httpx.InvalidURL) as e:
+        return _classify_fetch_error(e, url)
+    return _classify_fetch_response(response, url)
+
+
+def _attempt_fetch_sync(client: _SyncGetClient, url: str, timeout: int) -> _FetchAttemptOutcome:
+    try:
+        response: Final = client.get(url, timeout=timeout)
+    except (httpx.HTTPError, httpx.InvalidURL) as e:
+        return _classify_fetch_error(e, url)
+    return _classify_fetch_response(response, url)
+
+
+def _classify_fetch_response(response: httpx.Response, url: str) -> _FetchAttemptOutcome:
     if response.status_code in RETRYABLE_FETCH_STATUS_CODES:
         return _FetchAttemptRetryable(
             reason=f"HTTP {response.status_code} from {url}",
@@ -242,6 +255,22 @@ async def _attempt_fetch(
     return ModelCostMapReloaded(model_cost_map=parsed)
 
 
+def _next_retry_wait(
+    outcome: _FetchAttemptRetryable, attempt: int, max_attempts: int, rng: random.Random
+) -> float | ModelCostMapReloadUnavailable:
+    if attempt == max_attempts:
+        return ModelCostMapReloadUnavailable(reason=f"{outcome.reason} (after {max_attempts} attempts)")
+    wait_seconds: Final = _retry_wait_seconds(outcome=outcome, attempt=attempt, rng=rng)
+    verbose_logger.warning(
+        "LiteLLM: model cost map fetch attempt %d/%d failed (%s); retrying in %.1fs",
+        attempt,
+        max_attempts,
+        outcome.reason,
+        wait_seconds,
+    )
+    return wait_seconds
+
+
 async def _fetch_remote_model_cost_map_with_retry(
     url: str,
     timeout: int,
@@ -254,17 +283,29 @@ async def _fetch_remote_model_cost_map_with_retry(
         outcome = await _attempt_fetch(client=client, url=url, timeout=timeout)
         if not isinstance(outcome, _FetchAttemptRetryable):
             return outcome
-        if attempt == max_attempts:
-            return ModelCostMapReloadUnavailable(reason=f"{outcome.reason} (after {max_attempts} attempts)")
-        wait_seconds = _retry_wait_seconds(outcome=outcome, attempt=attempt, rng=rng)
-        verbose_logger.warning(
-            "LiteLLM: model cost map fetch attempt %d/%d failed (%s); retrying in %.1fs",
-            attempt,
-            max_attempts,
-            outcome.reason,
-            wait_seconds,
-        )
+        wait_seconds = _next_retry_wait(outcome=outcome, attempt=attempt, max_attempts=max_attempts, rng=rng)
+        if isinstance(wait_seconds, ModelCostMapReloadUnavailable):
+            return wait_seconds
         await sleep(wait_seconds)
+    return ModelCostMapReloadUnavailable(reason="model cost map fetch failed")
+
+
+def _fetch_remote_model_cost_map_with_retry_sync(
+    url: str,
+    timeout: int,
+    max_attempts: int,
+    sleep: Callable[[float], None],
+    rng: random.Random,
+    client: _SyncGetClient,
+) -> ModelCostMapReloadResult:
+    for attempt in range(1, max_attempts + 1):
+        outcome = _attempt_fetch_sync(client=client, url=url, timeout=timeout)
+        if not isinstance(outcome, _FetchAttemptRetryable):
+            return outcome
+        wait_seconds = _next_retry_wait(outcome=outcome, attempt=attempt, max_attempts=max_attempts, rng=rng)
+        if isinstance(wait_seconds, ModelCostMapReloadUnavailable):
+            return wait_seconds
+        sleep(wait_seconds)
     return ModelCostMapReloadUnavailable(reason="model cost map fetch failed")
 
 
@@ -423,13 +464,21 @@ def _finalize_model_cost_map(model_cost: dict) -> dict:
     return _expand_model_aliases(model_cost)
 
 
-def get_model_cost_map(url: str) -> dict:
+def get_model_cost_map(
+    url: str,
+    timeout: int = 5,
+    max_attempts: int = MODEL_COST_MAP_FETCH_MAX_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+    rng: random.Random | None = None,
+    client: "_SyncGetClient | None" = None,
+) -> dict:
     """
     Public entry point — returns the model cost map dict.
 
     1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set, uses the local backup only.
-    2. Otherwise fetches from ``url``, validates integrity, and falls back
-       to the local backup on any failure.
+    2. Otherwise fetches from ``url``, retrying transient HTTP errors
+       (429/5xx/transport) with Retry-After-aware backoff, validates
+       integrity, and falls back to the local backup on any failure.
 
     Only the backup model count is cached (a single int) for validation.
     The full backup dict is only parsed when it must be *returned* as a
@@ -448,17 +497,24 @@ def get_model_cost_map(url: str) -> dict:
     _cost_map_source_info.url = url
     _cost_map_source_info.is_env_forced = False
 
-    try:
-        content: Final = GetModelCostMap.fetch_remote_model_cost_map(url)
-    except Exception as e:
+    result: Final = _fetch_remote_model_cost_map_with_retry_sync(
+        url=url,
+        timeout=timeout,
+        max_attempts=max_attempts,
+        sleep=sleep,
+        rng=rng if rng is not None else random.Random(),
+        client=client if client is not None else httpx,
+    )
+    if isinstance(result, ModelCostMapReloadUnavailable):
         verbose_logger.warning(
             "LiteLLM: Failed to fetch remote model cost map from %s: %s. Falling back to local backup.",
             url,
-            str(e),
+            result.reason,
         )
         _cost_map_source_info.source = "local"
-        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {e}"
+        _cost_map_source_info.fallback_reason = f"Remote fetch failed: {result.reason}"
         return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
+    content: Final = result.model_cost_map
 
     # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(

@@ -6,9 +6,9 @@ import { useFieldArray, type Control } from "react-hook-form";
 
 import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { ModelSelect, MODEL_SENTINEL_OPTIONS } from "@/components/ModelSelect/ModelSelect";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
@@ -235,15 +235,13 @@ const SettingsForm = ({ initialValues, roleOptions, updateSettings, onCancel, on
   const mutation = useMutation({
     mutationFn: (values: DefaultUserSettingsFormValues) => updateSettings(buildBody(values)),
     onSuccess: (_result, values) => {
-      NotificationsManager.success("Default user settings updated successfully");
+      toast.success("Default user settings updated successfully");
       queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEY });
       form.reset(values);
       onSaved();
     },
     onError: (error: unknown) =>
-      NotificationsManager.fromBackend(
-        error instanceof Error ? error.message : "Failed to update default user settings",
-      ),
+      toast.fromError(error instanceof Error ? error.message : "Failed to update default user settings"),
   });
 
   const onSubmit = form.handleSubmit((values) => mutation.mutate(values));

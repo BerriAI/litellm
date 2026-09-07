@@ -13,7 +13,6 @@ import re
 import dotenv
 from collections import Counter
 from dotenv import load_dotenv
-import pytest
 
 load_dotenv()
 

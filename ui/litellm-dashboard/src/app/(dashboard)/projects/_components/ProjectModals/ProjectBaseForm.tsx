@@ -1,52 +1,64 @@
+"use client";
+
 import { useEffect, useState } from "react";
-import {
-  Alert,
-  Col,
-  Collapse,
-  Divider,
-  Flex,
-  Form,
-  Input,
-  InputNumber,
-  Row,
-  Select,
-  Space,
-  Switch,
-  Typography,
-  Button,
-} from "antd";
-import type { FormInstance } from "antd";
-import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
+import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
+import { ChevronDown, CircleAlert, Minus, Plus } from "lucide-react";
+
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { ALL_TEAM_MODELS, type ProjectFormValues } from "./projectFormSchema";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { fetchTeamModels } from "@/components/organisms/create_key_button";
 import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { getGuardrailsList } from "@/components/networking";
+import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
+import { Alert, AlertTitle } from "@/components/shared/Alert";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { FieldGroup } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "@/components/ui/input-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 
-export interface ProjectFormValues {
-  project_alias: string;
-  team_id: string;
-  description?: string;
-  models: string[];
-  max_budget?: number;
-  isBlocked: boolean;
-  guardrails?: string[];
-  modelLimits?: { model: string; tpm?: number; rpm?: number }[];
-  metadata?: { key: string; value: string }[];
-}
+const toOptionalNumber = (raw: string): number | undefined => {
+  if (raw.trim() === "") return undefined;
+  const parsed = Number(raw);
+  return Number.isNaN(parsed) ? undefined : parsed;
+};
 
 interface ProjectBaseFormProps {
-  form: FormInstance<ProjectFormValues>;
+  form: UseFormReturn<ProjectFormValues>;
+  advancedOpen: boolean;
+  onAdvancedOpenChange: (open: boolean) => void;
 }
 
-export function ProjectBaseForm({ form }: ProjectBaseFormProps) {
+export type { ProjectFormValues } from "./projectFormSchema";
+
+export function ProjectBaseForm({ form, advancedOpen, onAdvancedOpenChange }: ProjectBaseFormProps) {
   const { accessToken, userId, userRole } = useAuthorized();
   const { data: teams } = useTeams();
 
   const [selectedTeam, setSelectedTeam] = useState<Team | null>(null);
   const [modelsToPick, setModelsToPick] = useState<string[]>([]);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+
+  const modelLimits = useFieldArray({ control: form.control, name: "modelLimits" });
+  const metadata = useFieldArray({ control: form.control, name: "metadata" });
+  const emptyModelLimit: NonNullable<ProjectFormValues["modelLimits"]>[number] = {
+    model: "",
+    tpm: undefined,
+    rpm: undefined,
+    itpm: undefined,
+    otpm: undefined,
+  };
+
+  const teamIdValue = useWatch({ control: form.control, name: "team_id" });
+  const isBlocked = useWatch({ control: form.control, name: "isBlocked" });
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -62,8 +74,6 @@ export function ProjectBaseForm({ form }: ProjectBaseFormProps) {
     fetchGuardrails();
   }, [accessToken]);
 
-  // Sync selectedTeam from form value (needed for edit mode pre-fill)
-  const teamIdValue = Form.useWatch("team_id", form);
   useEffect(() => {
     if (teamIdValue && teams) {
       const team = teams.find((t) => t.team_id === teamIdValue) ?? null;
@@ -73,7 +83,6 @@ export function ProjectBaseForm({ form }: ProjectBaseFormProps) {
     }
   }, [teamIdValue, teams, selectedTeam?.team_id]);
 
-  // Fetch team-scoped models when team selection changes
   useEffect(() => {
     if (userId && userRole && accessToken && selectedTeam) {
       fetchTeamModels(userId, userRole, accessToken, selectedTeam.team_id).then((models) => {
@@ -88,274 +97,299 @@ export function ProjectBaseForm({ form }: ProjectBaseFormProps) {
   const handleTeamChange = (teamId: string) => {
     const team = teams?.find((t) => t.team_id === teamId) ?? null;
     setSelectedTeam(team);
-    form.setFieldValue("models", []);
+    form.setValue("models", []);
   };
 
+  const teamOptions = (teams ?? []).map((team) => ({
+    value: team.team_id,
+    label: team.team_alias || team.team_id,
+    sublabel: team.team_id,
+  }));
+
+  const modelOptions = [
+    { value: ALL_TEAM_MODELS, label: "All Team Models" },
+    ...modelsToPick.map((model) => ({ value: model, label: getModelDisplayName(model) })),
+  ];
+  const modelsPlaceholder = selectedTeam ? "Select models" : "Select a team first";
+
   return (
-    <Form
-      form={form}
-      layout="vertical"
-      name="project_form"
-      initialValues={{ isBlocked: false }}
-      style={{ marginTop: 24 }}
-    >
-      {/* Basic Info */}
-      <Typography.Text
-        strong
-        style={{
-          fontSize: 13,
-          color: "#374151",
-          textTransform: "uppercase",
-          letterSpacing: "0.05em",
-        }}
-      >
-        Basic Information
-      </Typography.Text>
-      <Divider style={{ marginTop: 8, marginBottom: 16 }} />
+    <div className="mt-6">
+      <p className="text-xs font-semibold tracking-[0.05em] text-foreground uppercase">Basic Information</p>
+      <Separator className="mt-2 mb-4" />
 
-      <Row gutter={24}>
-        <Col span={12}>
-          <Form.Item
-            name="project_alias"
-            label="Project Name"
-            rules={[{ required: true, message: "Please enter a project name" }]}
-          >
-            <Input placeholder="e.g. Customer Support Bot" />
-          </Form.Item>
-        </Col>
-        <Col span={12}>
-          <Form.Item name="team_id" label="Team" rules={[{ required: true, message: "Please select a team" }]}>
+      <FieldGroup>
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+          <FormField control={form.control} name="project_alias" label="Project Name">
+            {({ ref, ...field }) => (
+              <Input {...field} value={field.value ?? ""} ref={ref} placeholder="e.g. Customer Support Bot" />
+            )}
+          </FormField>
+
+          <FormField control={form.control} name="team_id" label="Team">
+            {({ id, value, onChange, ref: _ref, ...field }) => (
+              <SearchSelect
+                {...field}
+                inputId={id}
+                options={teamOptions}
+                value={value}
+                onValueChange={(next) => {
+                  onChange(next);
+                  handleTeamChange(next);
+                }}
+                placeholder="Search or select a team"
+                allowClear
+              />
+            )}
+          </FormField>
+        </div>
+
+        <FormField control={form.control} name="description" label="Description">
+          {({ ref, ...field }) => (
+            <Textarea
+              {...field}
+              value={field.value ?? ""}
+              ref={ref}
+              rows={3}
+              placeholder="Describe the purpose of this project"
+            />
+          )}
+        </FormField>
+
+        <FormField
+          control={form.control}
+          name="models"
+          label="Allowed Models (scoped to selected team's models)"
+          description={!selectedTeam ? "Select a team first to see available models" : undefined}
+        >
+          {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
             <Select
-              showSearch
-              placeholder="Search or select a team"
-              onChange={handleTeamChange}
-              allowClear
-              optionLabelProp="label"
-              filterOption={(input, option) => {
-                const team = teams?.find((t) => t.team_id === option?.value);
-                if (!team) return false;
-                const search = input.toLowerCase().trim();
-                return (
-                  (team.team_alias || "").toLowerCase().includes(search) || team.team_id.toLowerCase().includes(search)
-                );
-              }}
-            >
-              {teams?.map((team) => (
-                <Select.Option key={team.team_id} value={team.team_id} label={team.team_alias || team.team_id}>
-                  <span style={{ fontWeight: 500 }}>{team.team_alias}</span>{" "}
-                  <span style={{ color: "#9ca3af" }}>({team.team_id})</span>
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-        </Col>
-      </Row>
-
-      <Row>
-        <Col span={24}>
-          <Form.Item name="description" label="Description">
-            <Input.TextArea placeholder="Describe the purpose of this project" rows={3} />
-          </Form.Item>
-        </Col>
-      </Row>
-
-      <Row>
-        <Col span={24}>
-          <Form.Item
-            name="models"
-            label="Allowed Models (scoped to selected team's models)"
-            help={!selectedTeam ? "Select a team first to see available models" : undefined}
-          >
-            <Select
-              mode="multiple"
-              placeholder={selectedTeam ? "Select models" : "Select a team first"}
+              multiple
+              items={modelOptions}
+              value={value}
+              onValueChange={(next: string[]) => onChange(next.includes(ALL_TEAM_MODELS) ? [ALL_TEAM_MODELS] : next)}
               disabled={!selectedTeam}
-              allowClear
-              maxTagCount="responsive"
-              onChange={(values) => {
-                if (values.includes("all-team-models")) {
-                  form.setFieldsValue({ models: ["all-team-models"] });
-                }
-              }}
             >
-              <Select.Option key="all-team-models" value="all-team-models">
-                All Team Models
-              </Select.Option>
-              {modelsToPick.map((model) => (
-                <Select.Option key={model} value={model}>
-                  {getModelDisplayName(model)}
-                </Select.Option>
-              ))}
+              <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy} className="w-full">
+                <SelectValue placeholder={modelsPlaceholder}>
+                  {(selected: string[]) =>
+                    selected.length === 0
+                      ? modelsPlaceholder
+                      : modelOptions
+                          .filter((option) => selected.includes(option.value))
+                          .map((option) => option.label)
+                          .join(", ")
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {modelOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value} title={option.label}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
             </Select>
-          </Form.Item>
-        </Col>
-      </Row>
+          )}
+        </FormField>
 
-      <Row gutter={24}>
-        <Col span={12}>
-          <Form.Item name="max_budget" label="Max Budget (USD)">
-            <InputNumber prefix="$" style={{ width: "100%" }} placeholder="0.00" min={0} precision={2} />
-          </Form.Item>
-        </Col>
-      </Row>
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+          <FormField control={form.control} name="max_budget" label="Max Budget (USD)">
+            {({ ref, value, onChange, ...field }) => (
+              <InputGroup>
+                <InputGroupAddon>
+                  <InputGroupText>$</InputGroupText>
+                </InputGroupAddon>
+                <InputGroupInput
+                  {...field}
+                  ref={ref}
+                  type="number"
+                  min={0}
+                  placeholder="0.00"
+                  value={value ?? ""}
+                  onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                />
+              </InputGroup>
+            )}
+          </FormField>
+        </div>
+      </FieldGroup>
 
-      {/* Advanced Settings */}
-      <Row>
-        <Col span={24}>
-          <Collapse
-            ghost
-            style={{
-              background: "#f9fafb",
-              borderRadius: 8,
-              border: "1px solid #e5e7eb",
-            }}
-            items={[
-              {
-                key: "1",
-                label: (
-                  <Typography.Text strong style={{ color: "#374151" }}>
-                    Advanced Settings
-                  </Typography.Text>
-                ),
-                children: (
-                  <>
-                    <Flex align="center" gap={12}>
-                      <Typography.Text strong>Block Project</Typography.Text>
-                      <Form.Item name="isBlocked" valuePropName="checked" noStyle>
-                        <Switch />
-                      </Form.Item>
-                    </Flex>
-                    <Form.Item noStyle shouldUpdate={(prev, cur) => prev.isBlocked !== cur.isBlocked}>
-                      {({ getFieldValue }) =>
-                        getFieldValue("isBlocked") ? (
-                          <Alert
-                            banner
-                            type="warning"
-                            showIcon
-                            message="All API requests using keys under this project will be rejected."
-                            style={{ marginTop: 12 }}
-                          />
-                        ) : null
-                      }
-                    </Form.Item>
+      <Collapsible
+        open={advancedOpen}
+        onOpenChange={onAdvancedOpenChange}
+        className="mt-6 rounded-lg border border-border bg-muted"
+      >
+        <CollapsibleTrigger
+          render={
+            <button type="button" className="flex w-full items-center gap-2 px-4 py-3 text-left">
+              <ChevronDown
+                className={`size-4 text-muted-foreground transition-transform ${advancedOpen ? "" : "-rotate-90"}`}
+              />
+              <span className="text-sm font-semibold text-foreground">Advanced Settings</span>
+            </button>
+          }
+        />
+        <CollapsibleContent className="px-4 pb-4">
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-semibold text-foreground">Block Project</span>
+            <FormField control={form.control} name="isBlocked" className="w-auto">
+              {({ id, value, onChange, ref: _ref, ...field }) => (
+                <Switch {...field} id={id} checked={value} onCheckedChange={onChange} />
+              )}
+            </FormField>
+          </div>
 
-                    <Divider />
+          {isBlocked ? (
+            <Alert variant="warning" className="mt-3">
+              <CircleAlert />
+              <AlertTitle>All API requests using keys under this project will be rejected.</AlertTitle>
+            </Alert>
+          ) : null}
 
-                    <Form.Item label="Guardrails" name="guardrails" help="Select existing guardrails or enter new ones">
-                      <Select
-                        mode="tags"
-                        style={{ width: "100%" }}
-                        placeholder="Select or enter guardrails"
-                        options={guardrailsList.map((name) => ({
-                          value: name,
-                          label: name,
-                        }))}
-                      />
-                    </Form.Item>
+          <Separator className="my-4" />
 
-                    <Divider />
+          <FormField
+            control={form.control}
+            name="guardrails"
+            label="Guardrails"
+            description="Select existing guardrails or enter new ones"
+          >
+            {({ id, value, onChange }) => (
+              <TagsInput
+                id={id}
+                value={value ?? []}
+                onValueChange={onChange}
+                options={guardrailsList.map((name) => ({ label: name, value: name }))}
+                placeholder="Select or enter guardrails"
+              />
+            )}
+          </FormField>
 
-                    <Typography.Text strong style={{ display: "block", marginBottom: 12 }}>
-                      Model-Specific Limits
-                    </Typography.Text>
-                    <Form.List name="modelLimits">
-                      {(fields, { add, remove }) => (
-                        <>
-                          {fields.map(({ key, name, ...restField }) => (
-                            <Space key={key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
-                              <Form.Item
-                                {...restField}
-                                name={[name, "model"]}
-                                rules={[
-                                  { required: true, message: "Missing model" },
-                                  {
-                                    validator: (_, value) => {
-                                      if (!value) return Promise.resolve();
-                                      const all = form.getFieldValue("modelLimits") ?? [];
-                                      const dupes = all.filter((entry: { model?: string }) => entry?.model === value);
-                                      if (dupes.length > 1) {
-                                        return Promise.reject(new Error("Duplicate model"));
-                                      }
-                                      return Promise.resolve();
-                                    },
-                                  },
-                                ]}
-                              >
-                                <Input placeholder="Model name (e.g. gpt-4)" />
-                              </Form.Item>
-                              <Form.Item {...restField} name={[name, "tpm"]}>
-                                <InputNumber placeholder="TPM Limit" min={0} />
-                              </Form.Item>
-                              <Form.Item {...restField} name={[name, "rpm"]}>
-                                <InputNumber placeholder="RPM Limit" min={0} />
-                              </Form.Item>
-                              <MinusCircleOutlined onClick={() => remove(name)} style={{ color: "#ef4444" }} />
-                            </Space>
-                          ))}
-                          <Form.Item>
-                            <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
-                              Add Model Limit
-                            </Button>
-                          </Form.Item>
-                        </>
-                      )}
-                    </Form.List>
+          <Separator className="my-4" />
 
-                    <Divider />
+          <p className="mb-3 text-sm font-semibold text-foreground">Model-Specific Limits</p>
+          {modelLimits.fields.map((field, index) => (
+            <div
+              key={field.id}
+              className="mb-2 grid grid-cols-1 items-start gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))_auto]"
+            >
+              <FormField control={form.control} name={`modelLimits.${index}.model`} label="Model">
+                {({ ref, ...control }) => (
+                  <Input {...control} value={control.value ?? ""} ref={ref} placeholder="Model name (e.g. gpt-4)" />
+                )}
+              </FormField>
+              <FormField control={form.control} name={`modelLimits.${index}.tpm`} label="TPM Limit">
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    placeholder="TPM Limit"
+                    value={value ?? ""}
+                    onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  />
+                )}
+              </FormField>
+              <FormField control={form.control} name={`modelLimits.${index}.rpm`} label="RPM Limit">
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    placeholder="RPM Limit"
+                    value={value ?? ""}
+                    onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  />
+                )}
+              </FormField>
+              <FormField control={form.control} name={`modelLimits.${index}.itpm`} label="Input TPM Limit">
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    placeholder="Input TPM Limit"
+                    value={value ?? ""}
+                    onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  />
+                )}
+              </FormField>
+              <FormField control={form.control} name={`modelLimits.${index}.otpm`} label="Output TPM Limit">
+                {({ ref, value, onChange, ...control }) => (
+                  <Input
+                    {...control}
+                    ref={ref}
+                    type="number"
+                    min={0}
+                    placeholder="Output TPM Limit"
+                    value={value ?? ""}
+                    onChange={(event) => onChange(toOptionalNumber(event.target.value))}
+                  />
+                )}
+              </FormField>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="mt-1 text-destructive"
+                onClick={() => modelLimits.remove(index)}
+                aria-label={`Remove model limit ${index + 1}`}
+              >
+                <Minus />
+              </Button>
+            </div>
+          ))}
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full border-dashed"
+            onClick={() => modelLimits.append(emptyModelLimit)}
+          >
+            <Plus />
+            Add Model Limit
+          </Button>
 
-                    <Typography.Text strong style={{ display: "block", marginBottom: 12 }}>
-                      Metadata
-                    </Typography.Text>
-                    <Form.List name="metadata">
-                      {(fields, { add, remove }) => (
-                        <>
-                          {fields.map(({ key, name, ...restField }) => (
-                            <Space key={key} style={{ display: "flex", marginBottom: 8 }} align="baseline">
-                              <Form.Item
-                                {...restField}
-                                name={[name, "key"]}
-                                rules={[
-                                  { required: true, message: "Missing key" },
-                                  {
-                                    validator: (_, value) => {
-                                      if (!value) return Promise.resolve();
-                                      const all = form.getFieldValue("metadata") ?? [];
-                                      const dupes = all.filter((entry: { key?: string }) => entry?.key === value);
-                                      if (dupes.length > 1) {
-                                        return Promise.reject(new Error("Duplicate key"));
-                                      }
-                                      return Promise.resolve();
-                                    },
-                                  },
-                                ]}
-                              >
-                                <Input placeholder="Key" />
-                              </Form.Item>
-                              <Form.Item
-                                {...restField}
-                                name={[name, "value"]}
-                                rules={[{ required: true, message: "Missing value" }]}
-                              >
-                                <Input placeholder="Value" />
-                              </Form.Item>
-                              <MinusCircleOutlined onClick={() => remove(name)} style={{ color: "#ef4444" }} />
-                            </Space>
-                          ))}
-                          <Form.Item>
-                            <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />}>
-                              Add Key-Value Pair
-                            </Button>
-                          </Form.Item>
-                        </>
-                      )}
-                    </Form.List>
-                  </>
-                ),
-              },
-            ]}
-          />
-        </Col>
-      </Row>
-    </Form>
+          <Separator className="my-4" />
+
+          <p className="mb-3 text-sm font-semibold text-foreground">Metadata</p>
+          {metadata.fields.map((field, index) => (
+            <div key={field.id} className="mb-2 flex items-start gap-2">
+              <FormField control={form.control} name={`metadata.${index}.key`}>
+                {({ ref, ...control }) => (
+                  <Input {...control} value={control.value ?? ""} ref={ref} placeholder="Key" />
+                )}
+              </FormField>
+              <FormField control={form.control} name={`metadata.${index}.value`}>
+                {({ ref, ...control }) => (
+                  <Input {...control} value={control.value ?? ""} ref={ref} placeholder="Value" />
+                )}
+              </FormField>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="mt-1 text-destructive"
+                onClick={() => metadata.remove(index)}
+                aria-label={`Remove metadata pair ${index + 1}`}
+              >
+                <Minus />
+              </Button>
+            </div>
+          ))}
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full border-dashed"
+            onClick={() => metadata.append({ key: "", value: "" })}
+          >
+            <Plus />
+            Add Key-Value Pair
+          </Button>
+        </CollapsibleContent>
+      </Collapsible>
+    </div>
   );
 }
