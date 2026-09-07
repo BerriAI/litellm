@@ -3133,6 +3133,24 @@ def test_ProxyConfig__update_config_fields_merges_dict():
     assert out == {"general_settings": {"a": 1, "b": 3, "c": 4, "d": 5}}
 
 
+@pytest.mark.parametrize(
+    ("db_value", "expected"),
+    ((True, True), (False, False), ("true", True), ("false", False), ("invalid", False)),
+)
+def test_update_config_fields_normalizes_input_sequence_length_flag(
+    monkeypatch: pytest.MonkeyPatch, db_value: object, expected: bool
+):
+    monkeypatch.setattr(litellm, "prometheus_emit_input_sequence_length_label", False)
+
+    ProxyConfig()._update_config_fields(
+        current_config={},
+        param_name="litellm_settings",
+        db_param_value={"prometheus_emit_input_sequence_length_label": db_value},
+    )
+
+    assert litellm.prometheus_emit_input_sequence_length_label is expected
+
+
 def test_ProxyConfig__update_config_fields_invalid_param_raises():
     pc = ProxyConfig()
     with pytest.raises(TypeError):

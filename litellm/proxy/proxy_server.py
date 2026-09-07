@@ -6964,8 +6964,7 @@ class ProxyConfig:
             return current_config
         elif param_name == "litellm_settings" and isinstance(db_param_value, dict):
             for key, value in db_param_value.items():
-                if key in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:  # params that are safe to override with db values
-                    setattr(litellm, key, value)
+                self._apply_safe_litellm_setting_override(key, value)
 
         # If param doesn't exist in config, add it
         if param_name not in current_config:
@@ -7261,15 +7260,19 @@ class ProxyConfig:
         if not isinstance(litellm_settings, dict):
             return
         for key, value in litellm_settings.items():
-            if key not in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
-                continue
-            if key == "prometheus_emit_input_sequence_length_label":
-                if isinstance(value, bool):
-                    setattr(litellm, key, value)
-                elif isinstance(value, str) and (normalized_value := str_to_bool(value)) is not None:
-                    setattr(litellm, key, normalized_value)
-                continue
-            setattr(litellm, key, value)
+            self._apply_safe_litellm_setting_override(key, value)
+
+    @staticmethod
+    def _apply_safe_litellm_setting_override(key: str, value: object) -> None:
+        if key not in LITELLM_SETTINGS_SAFE_DB_OVERRIDES:
+            return
+        if key == "prometheus_emit_input_sequence_length_label":
+            if isinstance(value, bool):
+                setattr(litellm, key, value)
+            elif isinstance(value, str) and (normalized_value := str_to_bool(value)) is not None:
+                setattr(litellm, key, normalized_value)
+            return
+        setattr(litellm, key, value)
 
     async def _init_semantic_filter_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -9022,7 +9025,7 @@ class ProxyStartupEvent:
 
     @staticmethod
     async def resolve_store_model_in_db(prisma_client: PrismaClient | None, configured: bool) -> bool:
-        if get_secret_bool("STORE_MODEL_IN_DB", configured) or configured:
+        if (get_secret_bool("STORE_MODEL_IN_DB", configured) or configured) is True:
             return True
         if prisma_client is None:
             return False

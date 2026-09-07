@@ -775,6 +775,51 @@ async def test_resolve_store_model_in_db_uses_config_or_db(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured", "environment", "db_value", "expected"),
+    (
+        ("false", None, False, False),
+        ("true", None, False, False),
+        ("false", "false", False, False),
+        ("false", "true", False, True),
+        (True, "false", False, True),
+        (False, "false", True, True),
+        ("false", None, True, True),
+    ),
+)
+async def test_resolve_store_model_in_db_preserves_legacy_config_and_env_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: bool | str,
+    environment: str | None,
+    db_value: bool,
+    expected: bool,
+):
+    monkeypatch.setattr(ps, "store_model_in_db", configured)
+    if environment is None:
+        monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    else:
+        monkeypatch.setenv("STORE_MODEL_IN_DB", environment)
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=MagicMock(param_value={"store_model_in_db": db_value})
+    )
+
+    assert await ProxyStartupEvent.resolve_store_model_in_db(prisma_client, ps.store_model_in_db) is expected
+    assert prisma_client.db.litellm_config.find_first.await_count == (
+        0 if configured is True or environment == "true" else 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_store_model_in_db_continues_after_database_failure(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_config.find_first = AsyncMock(side_effect=RuntimeError("database unavailable"))
+
+    assert await ProxyStartupEvent.resolve_store_model_in_db(prisma_client, configured=False) is False
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("param_value", ("legacy", ["store_model_in_db"], 7))
 async def test_resolve_store_model_in_db_ignores_non_mapping_row(monkeypatch: pytest.MonkeyPatch, param_value: object):
     monkeypatch.setattr(ps, "get_secret_bool", lambda name, default: default)
