@@ -51,6 +51,7 @@ class CallbackObservation(BaseModel):
     call_type: str | None
     litellm_call_id: str | None
     metadata: JsonValue
+    kwargs: JsonValue
     payload: JsonValue
     error: SDKError | None
 

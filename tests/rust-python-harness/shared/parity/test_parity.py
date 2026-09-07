@@ -85,12 +85,34 @@ def test_parity_rejects_callback_payload_difference() -> None:
         call_type="ocr",
         litellm_call_id="test-call",
         metadata={"profile": "success"},
+        kwargs={"model": "test-model"},
         payload={"model": "test-model", "pages": []},
         error=None,
     )
     python: Final = _execution(user_agent=SENTINEL).model_copy(update={"callbacks": (observation,)})
     rust: Final = _execution(user_agent="litellm-rust").model_copy(
         update={"callbacks": (observation.model_copy(update={"payload": {"model": "changed", "pages": []}}),)}
+    )
+
+    with pytest.raises(AssertionError, match=r"\$\.callbacks"):
+        assert_parity(python, rust, SENTINEL)
+
+
+def test_parity_rejects_callback_kwargs_difference() -> None:
+    observation: Final = CallbackObservation(
+        hook="log_success_event",
+        phase="success",
+        model="test-model",
+        call_type="ocr",
+        litellm_call_id="test-call",
+        metadata={"profile": "success"},
+        kwargs={"model": "test-model"},
+        payload={"model": "test-model", "pages": []},
+        error=None,
+    )
+    python: Final = _execution(user_agent=SENTINEL).model_copy(update={"callbacks": (observation,)})
+    rust: Final = _execution(user_agent="litellm-rust").model_copy(
+        update={"callbacks": (observation.model_copy(update={"kwargs": {"model": "changed"}}),)}
     )
 
     with pytest.raises(AssertionError, match=r"\$\.callbacks"):

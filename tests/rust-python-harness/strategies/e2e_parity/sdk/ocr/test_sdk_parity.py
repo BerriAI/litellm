@@ -13,6 +13,7 @@ from enum import Enum
 from functools import partial
 from pathlib import Path
 from typing import Annotated, Final, Literal, cast
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
@@ -106,6 +107,31 @@ class RecordingCallback(CustomLogger):
         self.turn_off_message_logging: Final = False
         self._observations: Final[queue.SimpleQueue[CallbackObservation]] = queue.SimpleQueue()
 
+    def _normalized_kwargs(self, value: object, key: str | None = None) -> JsonValue:
+        if value is None or isinstance(value, (bool, int, float)):
+            return value
+        if isinstance(value, str):
+            if key != "api_base":
+                return value
+            parsed: Final = urlsplit(value)
+            return urlunsplit(("", "", parsed.path, parsed.query, parsed.fragment))
+        if isinstance(value, datetime.datetime):
+            return "datetime"
+        if isinstance(value, Exception):
+            return sdk_error_report(value).model_dump(mode="json")
+        if isinstance(value, BaseModel):
+            return self._normalized_kwargs(value.model_dump(mode="json"), key)
+        if isinstance(value, Mapping):
+            if any(not isinstance(map_key, str) for map_key in value):
+                raise TypeError("callback kwarg mappings must use string keys")
+            return {
+                map_key: self._normalized_kwargs(map_value, map_key)
+                for map_key, map_value in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [self._normalized_kwargs(item) for item in value]
+        raise TypeError(f"unsupported callback kwarg type: {type(value)}")
+
     def _record(
         self,
         hook: Literal[
@@ -131,6 +157,7 @@ class RecordingCallback(CustomLogger):
         )
         raw_error: Final = kwargs.get("exception")
         error: Final = sdk_error_report(raw_error) if isinstance(raw_error, Exception) else None
+        normalized_kwargs: Final = self._normalized_kwargs(kwargs)
         payload_source: Final = (
             response_obj.model_dump(mode="json") if isinstance(response_obj, BaseModel) else response_obj
         )
@@ -146,6 +173,7 @@ class RecordingCallback(CustomLogger):
                 call_type=str(raw_call_type) if raw_call_type is not None else None,
                 litellm_call_id=raw_call_id if isinstance(raw_call_id, str) else None,
                 metadata=metadata,
+                kwargs=normalized_kwargs,
                 payload=payload,
                 error=error,
             )
@@ -385,6 +413,7 @@ def _execute_callback_sdk_case(
         **_call_kwargs(case.litellm_input, mock_url, route),
         "callbacks": [callback],
         "litellm_call_id": _callback_call_id(route, terminal),
+        "litellm_trace_id": _callback_call_id(route, terminal),
         "metadata": _callback_metadata(route, terminal),
     }
     report: Final = _execute_sdk_call(call_kwargs, route, event_loop)
