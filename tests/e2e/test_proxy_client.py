@@ -3,9 +3,10 @@
 No proxy needed and no ``e2e`` marker: this pins that a model registered through
 the control plane only counts as servable once every configured replica lists it
 on /v1/models, and that a management write only counts as read back once every
-replica that serves the route reflects it, which is what keeps a multi-replica
-stack from handing a test a replica the write has not reached yet. The fakes are
-plain pollers and an injected clock, so nothing here monkeypatches anything.
+replica's read satisfies the caller's predicate, which is what keeps a two-gateway
+stack from handing a test a model or a key that one gateway has not caught up on
+yet. The fakes are plain pollers standing in for each replica's transport plus an
+injected clock, so nothing here monkeypatches anything.
 """
 
 from __future__ import annotations
@@ -13,23 +14,31 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from itertools import chain, repeat
+from types import MappingProxyType
 from typing import Final, cast
 
 import pytest
 from e2e_config import parse_replica_urls
-from e2e_http import Success
-from models import ModelListEntry, ModelsListResponse
+from e2e_http import Result, Success
+from models import KeyInfo, KeyInfoResponse, ModelListEntry, ModelsListResponse
 from proxy_client import (
+    ConvergeOutcome,
     Converged,
+    EverywhereConverged,
     ModelsPoller,
     NeverConvergedOn,
+    NotConverged,
     NotServableOn,
+    Poller,
     ProxyClient,
     ReplicaRead,
     Servable,
+    await_converged_everywhere,
     await_everywhere,
     await_servable_everywhere,
     build_proxy_client,
+    converge_timeout_message,
+    first_lagging_replica,
 )
 from transport import Transport
 
@@ -37,6 +46,8 @@ MODEL: Final = "gpt-under-test"
 _NO_TRANSPORTS: Final = cast(Transport, None)
 TIMEOUT: Final = 10.0
 INTERVAL: Final = 2.0
+RPM_BEFORE_UPDATE: Final = 100
+RPM_AFTER_UPDATE: Final = 200
 
 
 @dataclass
@@ -91,6 +102,91 @@ class TestAwaitServableEverywhere:
         assert _await(pollers) == Servable()
 
 
+def _key_info(rpm_limit: int) -> Success[KeyInfoResponse]:
+    return Success(status_code=200, data=KeyInfoResponse(info=KeyInfo(rpm_limit=rpm_limit)))
+
+
+def _reads(results: Iterable[Result[KeyInfoResponse]]) -> Poller[Result[KeyInfoResponse]]:
+    it: Final = iter(results)
+    return lambda: next(it)
+
+
+def _updated(result: Result[KeyInfoResponse]) -> bool:
+    return isinstance(result, Success) and result.data.info.rpm_limit == RPM_AFTER_UPDATE
+
+
+def _converge(
+    pollers: Mapping[str, Poller[Result[KeyInfoResponse]]], clock: FakeClock
+) -> Mapping[str, ConvergeOutcome[Result[KeyInfoResponse]]]:
+    return await_converged_everywhere(
+        pollers,
+        converged=_updated,
+        timeout=TIMEOUT,
+        interval=INTERVAL,
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+
+class TestAwaitConvergedEverywhere:
+    def test_waits_for_the_replica_that_lags_behind_the_write(self) -> None:
+        clock: Final = FakeClock()
+        pollers: Final = MappingProxyType(
+            {
+                "gateway-1": _reads(repeat(_key_info(RPM_AFTER_UPDATE))),
+                "gateway-2": _reads(
+                    chain(repeat(_key_info(RPM_BEFORE_UPDATE), 2), repeat(_key_info(RPM_AFTER_UPDATE)))
+                ),
+            }
+        )
+        outcomes: Final = _converge(pollers, clock)
+        assert outcomes == {
+            "gateway-1": Converged(result=_key_info(RPM_AFTER_UPDATE)),
+            "gateway-2": Converged(result=_key_info(RPM_AFTER_UPDATE)),
+        }
+        assert first_lagging_replica(outcomes) is None
+        assert clock.elapsed == 2 * INTERVAL
+
+    def test_names_the_replica_that_never_converges_with_its_last_read(self) -> None:
+        clock: Final = FakeClock()
+        pollers: Final = MappingProxyType(
+            {
+                "gateway-1": _reads(repeat(_key_info(RPM_AFTER_UPDATE))),
+                "gateway-2": _reads(repeat(_key_info(RPM_BEFORE_UPDATE))),
+            }
+        )
+        outcomes: Final = _converge(pollers, clock)
+        assert first_lagging_replica(outcomes) == (
+            "gateway-2",
+            NotConverged(last_result=_key_info(RPM_BEFORE_UPDATE)),
+        )
+        assert clock.elapsed == TIMEOUT
+        message: Final = converge_timeout_message(
+            what="GET /key/info",
+            replica="gateway-2",
+            timeout=TIMEOUT,
+            last_result=_key_info(RPM_BEFORE_UPDATE),
+        )
+        assert "gateway-2" in message and "/key/info" in message and str(RPM_BEFORE_UPDATE) in message
+
+    def test_each_replica_gets_its_own_full_budget(self) -> None:
+        """A replica that converges late must not eat into the next replica's budget: both
+        need most of the timeout here, so one shared deadline would starve the second."""
+        clock: Final = FakeClock()
+        slow: Final = chain(repeat(_key_info(RPM_BEFORE_UPDATE), 3), repeat(_key_info(RPM_AFTER_UPDATE)))
+        pollers: Final = MappingProxyType(
+            {
+                "gateway-1": _reads(slow),
+                "gateway-2": _reads(
+                    chain(repeat(_key_info(RPM_BEFORE_UPDATE), 3), repeat(_key_info(RPM_AFTER_UPDATE)))
+                ),
+            }
+        )
+        outcomes: Final = _converge(pollers, clock)
+        assert first_lagging_replica(outcomes) is None
+        assert clock.elapsed == 2 * 3 * INTERVAL
+
+
 class TestParseReplicaUrls:
     def test_splits_and_trims_the_gateway_addresses(self) -> None:
         raw: Final = " http://127.0.0.1:4010/, http://127.0.0.1:4011 "
@@ -105,7 +201,7 @@ def _answers(answers: Iterable[str]) -> ReplicaRead[str]:
     return lambda _timeout: next(it)
 
 
-def _await_everywhere(reads: Mapping[str, ReplicaRead[str]]) -> Converged[str] | NeverConvergedOn[str]:
+def _await_everywhere(reads: Mapping[str, ReplicaRead[str]]) -> EverywhereConverged[str] | NeverConvergedOn[str]:
     clock: Final = FakeClock()
     return await_everywhere(
         reads,
@@ -125,7 +221,7 @@ class TestAwaitEverywhere:
             "gateway-2": _answers(chain(repeat("stale", 2), repeat("renamed"))),
         }
         outcome: Final = _await_everywhere(reads)
-        assert isinstance(outcome, Converged)
+        assert isinstance(outcome, EverywhereConverged)
         assert dict(outcome.answers) == {"gateway-1": "renamed", "gateway-2": "renamed"}
 
     def test_names_the_replica_that_never_converges_with_what_it_last_served(self) -> None:
@@ -138,7 +234,7 @@ class TestAwaitEverywhere:
     def test_polls_until_the_deadline_before_giving_up(self) -> None:
         lagging: Final = chain(repeat("stale", int(TIMEOUT / INTERVAL)), repeat("renamed"))
         outcome: Final = _await_everywhere({"gateway-1": _answers(lagging)})
-        assert isinstance(outcome, Converged), outcome
+        assert isinstance(outcome, EverywhereConverged), outcome
 
 
 class TestReplicasFor:

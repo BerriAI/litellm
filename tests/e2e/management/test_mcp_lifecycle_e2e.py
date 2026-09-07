@@ -74,11 +74,11 @@ def _assert_server_matches(row: McpServerRow, written: McpServerCreateBody, *, w
 def _server_everywhere(
     client: ManagementClient, server_id: str, *, settled: Callable[[McpServerRow], bool]
 ) -> Mapping[str, McpServerRow]:
-    return client.proxy.read_back_everywhere(f"/v1/mcp/server/{server_id}", McpServerRow, settled=settled)
+    return client.proxy.read_body_back_everywhere(f"/v1/mcp/server/{server_id}", McpServerRow, settled=settled)
 
 
 def _listed_server_everywhere(client: ManagementClient, server_id: str) -> Mapping[str, McpServerRow]:
-    listings: Final = client.proxy.read_back_everywhere(
+    listings: Final = client.proxy.read_body_back_everywhere(
         "/v1/mcp/server",
         McpServerListResponse,
         settled=lambda rows: any(row.server_id == server_id for row in rows.root),
@@ -158,7 +158,7 @@ class TestMcpServerLifecycle:
 
         gone: Final = client.proxy.gone_everywhere(f"/v1/mcp/server/{server_id}")
         assert set(gone.values()) == {404}, f"a deleted server must 404 on every replica; got {dict(gone)}"
-        listings: Final = client.proxy.read_back_everywhere(
+        listings: Final = client.proxy.read_body_back_everywhere(
             "/v1/mcp/server",
             McpServerListResponse,
             settled=lambda rows: all(row.server_id != server_id for row in rows.root),
@@ -194,7 +194,7 @@ def _assert_toolset_matches(row: ToolsetRow, written: ToolsetCreateBody, *, wher
 def _toolset_everywhere(
     client: ManagementClient, toolset_id: str, *, settled: Callable[[ToolsetRow], bool]
 ) -> Mapping[str, ToolsetRow]:
-    return client.proxy.read_back_everywhere(f"/v1/mcp/toolset/{toolset_id}", ToolsetRow, settled=settled)
+    return client.proxy.read_body_back_everywhere(f"/v1/mcp/toolset/{toolset_id}", ToolsetRow, settled=settled)
 
 
 class TestMcpToolsetLifecycle:
@@ -208,7 +208,7 @@ class TestMcpToolsetLifecycle:
         by_id: Final = _toolset_everywhere(client, toolset_id, settled=lambda row: row.toolset_id == toolset_id)
         for replica, row in by_id.items():
             _assert_toolset_matches(row, body, where=f"GET /v1/mcp/toolset/{toolset_id} on {replica}")
-        listings: Final = client.proxy.read_back_everywhere(
+        listings: Final = client.proxy.read_body_back_everywhere(
             "/v1/mcp/toolset",
             ToolsetListResponse,
             settled=lambda rows: any(row.toolset_id == toolset_id for row in rows.root),
@@ -283,7 +283,7 @@ class TestMcpToolsetLifecycle:
 
         gone: Final = client.proxy.gone_everywhere(f"/v1/mcp/toolset/{toolset_id}")
         assert set(gone.values()) == {404}, f"a deleted toolset must 404 on every replica; got {dict(gone)}"
-        listings: Final = client.proxy.read_back_everywhere(
+        listings: Final = client.proxy.read_body_back_everywhere(
             "/v1/mcp/toolset",
             ToolsetListResponse,
             settled=lambda rows: all(row.toolset_id != toolset_id for row in rows.root),
