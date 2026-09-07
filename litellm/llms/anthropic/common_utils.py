@@ -1244,12 +1244,30 @@ def _sanitize_tool_use_id_content_block(block: object) -> object:
 _ANTHROPIC_TOOL_ID_CHARSET_HOSTNAME: Final = "api.anthropic.com"
 
 
+def _llm_provider_for_tool_id_sanitize(
+    *,
+    custom_llm_provider: str | None,
+    model: str | None,
+) -> str | None:
+    if custom_llm_provider is not None and custom_llm_provider.strip():
+        return custom_llm_provider.casefold()
+    if model is None or "/" not in model:
+        return None
+    prefix: Final = model.split("/", 1)[0].casefold()
+    return prefix or None
+
+
 def _should_sanitize_anthropic_tool_use_ids(
     *,
     api_base: str | None,
     custom_llm_provider: str | None,
+    model: str | None,
 ) -> bool:
-    if custom_llm_provider is not None and custom_llm_provider.casefold() != "anthropic":
+    provider: Final = _llm_provider_for_tool_id_sanitize(
+        custom_llm_provider=custom_llm_provider,
+        model=model,
+    )
+    if provider is not None and provider != "anthropic":
         return True
     if api_base is None or not api_base.strip():
         return True
@@ -1264,18 +1282,20 @@ def sanitize_tool_use_ids_in_anthropic_messages(
     *,
     api_base: str | None = None,
     custom_llm_provider: str | None = None,
+    model: str | None = None,
 ) -> list[Any]:
     """
     Rewrite ``tool_use`` / ``server_tool_use`` ``id`` and ``tool_result``
     ``tool_use_id`` values to Anthropic's ``^[a-zA-Z0-9_-]+$`` pattern.
 
-    No-op when ``custom_llm_provider`` is ``anthropic`` and ``api_base`` is a
+    No-op when the resolved provider is ``anthropic`` and ``api_base`` is a
     non-Anthropic host. vLLM/Kimi echo the original ids; rewriting them breaks
     the next tool_result turn. See #32214.
     """
     if not _should_sanitize_anthropic_tool_use_ids(
         api_base=api_base,
         custom_llm_provider=custom_llm_provider,
+        model=model,
     ):
         return messages
     out: Final[list[Any]] = []

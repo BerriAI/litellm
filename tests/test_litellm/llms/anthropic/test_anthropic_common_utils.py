@@ -1874,18 +1874,23 @@ class TestAnthropicThinkingSignatureSelfHeal:
             }
         ]
         still_sanitize = (
-            ("anthropic", ""),
-            ("anthropic", "https://api.anthropic.com"),
-            ("azure_ai", "https://myres.services.ai.azure.com/anthropic"),
-            ("github_copilot", "https://api.githubcopilot.com"),
-            ("bedrock", "https://bedrock-runtime.us-east-1.amazonaws.com"),
-            ("vertex_ai", "https://us-east5-aiplatform.googleapis.com"),
+            ("anthropic", "", None),
+            ("anthropic", "https://api.anthropic.com", None),
+            ("azure_ai", "https://myres.services.ai.azure.com/anthropic", None),
+            ("github_copilot", "https://api.githubcopilot.com", None),
+            ("bedrock", "https://bedrock-runtime.us-east-1.amazonaws.com", None),
+            ("vertex_ai", "https://us-east5-aiplatform.googleapis.com", None),
+            (None, "https://myres.services.ai.azure.com/anthropic", "azure_ai/claude-sonnet-4-5"),
+            (None, "https://api.githubcopilot.com", "github_copilot/claude-sonnet-4-5"),
         )
-        for custom_llm_provider, api_base in still_sanitize:
+        for custom_llm_provider, api_base, model in still_sanitize:
             out = sanitize_tool_use_ids_in_anthropic_messages(
-                msgs, api_base=api_base, custom_llm_provider=custom_llm_provider
+                msgs,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                model=model,
             )
-            assert out[0]["content"][0]["id"] == "functions_Bash_0", (custom_llm_provider, api_base)
+            assert out[0]["content"][0]["id"] == "functions_Bash_0", (custom_llm_provider, api_base, model)
             assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
 
     def test_normalize_anthropic_tool_use_id_strips_thought_signature(self):

@@ -263,6 +263,48 @@ async def test_anthropic_messages_keeps_tool_use_ids_for_non_anthropic_api_base(
     assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_sanitizes_azure_ai_model_prefix_without_provider():
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    msgs = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "functions.Bash:0",
+                    "name": "Bash",
+                    "input": {},
+                }
+            ],
+        }
+    ]
+    captured = {}
+
+    def fake_handler(*args, **kwargs):
+        captured["messages"] = kwargs.get("messages")
+        return "stub"
+
+    fake_loop = MagicMock()
+    fake_loop.run_in_executor = lambda _e, func: _async_return(func())
+
+    with (
+        patch.object(handler, "anthropic_messages_handler", side_effect=fake_handler),
+        patch("asyncio.get_event_loop", return_value=fake_loop),
+    ):
+        await handler.anthropic_messages(
+            max_tokens=100,
+            messages=msgs,
+            model="azure_ai/claude-sonnet-4-5",
+            api_key="k",
+            api_base="https://myres.services.ai.azure.com/anthropic",
+        )
+
+    assert captured["messages"][0]["content"][0]["id"] == "functions_Bash_0"
+    assert msgs[0]["content"][0]["id"] == "functions.Bash:0"
+
+
 async def _async_return(value):
     return value
 
