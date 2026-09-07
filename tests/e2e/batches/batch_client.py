@@ -13,8 +13,9 @@ co-located here because only this suite uses them.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from proxy_client import ProxyClient
 from e2e_http import (
@@ -27,6 +28,18 @@ from e2e_http import (
 from models import LiteLLMParamsBody
 
 UPLOAD_FILENAME = "batch_input.jsonl"
+AZURE_FILE_EXPIRY_SECONDS: Final = 14 * 24 * 60 * 60
+
+
+class ExpiringFileUploadForm(FileUploadForm):
+    expires_after_anchor: Literal["created_at"] = Field(default="created_at", alias="expires_after[anchor]")
+    expires_after_seconds: int = Field(default=AZURE_FILE_EXPIRY_SECONDS, alias="expires_after[seconds]")
+
+
+def batch_upload_form(provider: str, *, target_model_names: str | None = None) -> FileUploadForm:
+    if provider == "azure":
+        return ExpiringFileUploadForm(target_model_names=target_model_names)
+    return FileUploadForm(target_model_names=target_model_names)
 
 
 class FileObject(BaseModel):
@@ -37,6 +50,7 @@ class FileObject(BaseModel):
     bytes: int | None = None
     status: str | None = None
     created_at: int | None = None
+    expires_at: int | None = None
 
 
 class FileList(BaseModel):

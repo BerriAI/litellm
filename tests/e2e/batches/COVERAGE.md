@@ -120,6 +120,24 @@ create traverse gateway -> gateway -> OpenAI (LIT-5347, PR #36240). The pin:
 nested managed ids round-trip retrieve. This self-chaining only needs the proxy to
 reach its own `PROXY_BASE_URL`, which holds both locally and on the e2e stage.
 
+## Cleanup
+
+Batch teardown cancels active batches before deleting their input files and keys.
+Raw file IDs from both `model_param` and `provider_fallback` uploads use the upload
+provider when deleted. Model-encoded and managed file IDs route themselves
+
+File deletion and batch cancellation check their responses and retry transient
+failures up to three times. Teardown attempts every registered cleanup before
+reporting failures as test errors. Already deleted files and batches that are
+terminal are safe to clean up again. Cancellation polls for up to ten minutes
+before input deletion, because accepting cancellation does not finish it
+
+Azure input uploads request `expires_after` anchored to `created_at` with
+`seconds=1209600`, and the lifecycle tests check the returned expiry. This is a
+fallback for interrupted runs: immediate deletion remains the normal cleanup.
+Azure's minimum supported native expiry is 14 days, so a three-day expiry cannot
+be requested through its Files API
+
 ## Terminal state + cost write-back (cross-run marker baton)
 
 The 24h completion window rules out submit-and-wait inside one run, so
