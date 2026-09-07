@@ -20,6 +20,10 @@ litellm-config.workspace = true
 # reqwest (rustls + json) is used by io/ocr and ships realtime logs to the
 # Python proxy callbacks API.
 reqwest.workspace = true
+# rustls and its root store are direct dependencies so `io::tls` can build the
+# one TLS config the outbound dials use; see that module for why it has to.
+rustls.workspace = true
+rustls-native-certs.workspace = true
 # `sync` powers the bounded mpsc channel the realtime logger drains.
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 tokio-tungstenite.workspace = true
