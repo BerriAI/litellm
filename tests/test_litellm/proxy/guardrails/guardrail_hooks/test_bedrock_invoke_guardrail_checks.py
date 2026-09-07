@@ -13,6 +13,7 @@ from fastapi import HTTPException
 
 
 from litellm.exceptions import ModifyResponseException
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH,
     BedrockGuardrail,
@@ -861,3 +862,21 @@ async def test_checks_bearer_token_never_runs_the_sigv4_credential_chain(monkeyp
         {"check": "contentFilter", "category": "VIOLENCE", "severityScore": 0.8}
     ]
     assert post.call_args.kwargs["headers"]["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+def test_invoke_checks_tracing_detail_serializes_categories_as_a_json_array():
+    """The categories are built immutably, and every sink for this record goes through
+    ``safe_dumps``, so the wire shape must stay a JSON array rather than a stringified tuple."""
+    detail = BedrockGuardrail._build_invoke_checks_tracing_detail(
+        [{"category": "PII"}, {"type": "PROMPT_ATTACK"}, {"category": None, "type": None}]
+    )
+
+    assert detail["guardrail_action"] == "GUARDRAIL_INTERVENED"
+    assert tuple(detail["violation_categories"]) == ("PII", "PROMPT_ATTACK")
+    assert json.loads(safe_dumps(detail))["violation_categories"] == ["PII", "PROMPT_ATTACK"]
+
+
+def test_invoke_checks_tracing_detail_without_violations_carries_no_categories():
+    """A clean check reports the action alone: an empty categories list would read as a
+    violation with no name on every span and spend row."""
+    assert BedrockGuardrail._build_invoke_checks_tracing_detail([]) == {"guardrail_action": "NONE"}

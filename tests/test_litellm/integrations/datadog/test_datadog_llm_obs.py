@@ -980,3 +980,36 @@ def test_reasoning_content_survives_the_mapping(logger: DataDogLLMObsLogger) -> 
     )
 
     assert payload["meta"]["output"]["messages"][0]["reasoning_content"] == "thinking"
+
+
+def test_redaction_keeps_the_provider_verdict_audit_fields(logger: DataDogLLMObsLogger) -> None:
+    """LIT-4877: the verdict itself rides in guardrail_response, which redaction replaces, so a
+    flagged record must still name the provider, the action and the transaction id."""
+    span = _span_json(
+        _redacting_logger(turn_off_message_logging=True),
+        _payload_with_guardrail_record(
+            [
+                {
+                    **_AUDIT_RECORD,
+                    "guardrail_provider": "zscaler_ai_guard",
+                    "guardrail_status": "guardrail_flagged",
+                    "guardrail_action": "DETECT",
+                    "guardrail_transaction_id": "tx-detect-1",
+                    "guardrail_response": {
+                        "action": "DETECT",
+                        "transaction_id": "tx-detect-1",
+                        "flagged": True,
+                        "matched_text": "alice@acme.com",
+                    },
+                }
+            ]
+        ),
+    )
+    record = span["meta"]["metadata"]["guardrail_information"][0]
+
+    assert record["guardrail_response"] == "REDACTED_BY_LITELM"
+    assert record["guardrail_provider"] == "zscaler_ai_guard"
+    assert record["guardrail_status"] == "guardrail_flagged"
+    assert record["guardrail_action"] == "DETECT"
+    assert record["guardrail_transaction_id"] == "tx-detect-1"
+    assert "alice@acme.com" not in safe_dumps(span["meta"]["metadata"])

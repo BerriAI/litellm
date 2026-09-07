@@ -4370,3 +4370,40 @@ def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_recei
         )
         == "resp_01Lit6806Bridged"
     )
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs")
+def test_sanitize_guardrail_information_keeps_the_provider_verdict_audit_fields(
+    mock_should_store,
+):
+    """LIT-4877: a provider verdict rides in guardrail_response, which redaction replaces
+    wholesale, so the provider, action, transaction id and categories an operator searches by
+    have to survive on their own fields."""
+    mock_should_store.return_value = False
+    guardrail_info = [
+        {
+            "guardrail_name": "zg",
+            "guardrail_provider": "zscaler_ai_guard",
+            "guardrail_status": "guardrail_flagged",
+            "guardrail_action": "DETECT",
+            "guardrail_transaction_id": "tx-detect-1",
+            "violation_categories": ["pii"],
+            "guardrail_response": {
+                "action": "DETECT",
+                "transaction_id": "tx-detect-1",
+                "violation_categories": ["pii"],
+                "flagged": True,
+            },
+        }
+    ]
+
+    result = _sanitize_guardrail_information_for_spend_logs(guardrail_info)
+
+    assert result is not None
+    entry = result[0]
+    assert entry["guardrail_response"] == REDACTED_BY_LITELM_STRING
+    assert entry["guardrail_provider"] == "zscaler_ai_guard"
+    assert entry["guardrail_status"] == "guardrail_flagged"
+    assert entry["guardrail_action"] == "DETECT"
+    assert entry["guardrail_transaction_id"] == "tx-detect-1"
+    assert entry["violation_categories"] == ["pii"]

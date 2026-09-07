@@ -609,3 +609,51 @@ def test_build_verdict_ignores_a_malformed_detector_map():
     assert verdict["action"] == "DETECT"
     assert verdict["flagged"] is True
     assert verdict["violation_categories"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_detection_on_the_model_response_is_logged():
+    """The answer is scanned in the OUT direction, and a detection there is as invisible in the
+    request payload as one on the way in, so it needs the same verdict record."""
+    guardrail = ZscalerAIGuard(api_key="test_key", api_base="http://example.com", policy_id=1)
+    request_data = {"metadata": {}}
+
+    with patch.object(guardrail, "_send_request", new_callable=AsyncMock) as send:
+        send.return_value = _ai_guard_response("DETECT", "tx-out-1", {"pii": {"action": "DETECT"}})
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["my ssn is 123-45-6789"]},
+            request_data=request_data,
+            input_type="response",
+        )
+
+    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+    assert send.await_args.args[2]["direction"] == "OUT"
+    assert entry["guardrail_status"] == "guardrail_flagged"
+    assert entry["guardrail_action"] == "DETECT"
+    assert entry["guardrail_transaction_id"] == "tx-out-1"
+    assert entry["violation_categories"] == ("pii",)
+
+
+@pytest.mark.asyncio
+async def test_a_vendor_failure_records_no_verdict_fields():
+    """AI Guard never answered, so there is no verdict to report: the record keeps the error and
+    stays free of the provider, action and transaction id that only a real verdict may claim."""
+    guardrail = ZscalerAIGuard(api_key="test_key", api_base="http://example.com", policy_id=1)
+    request_data = {"metadata": {}}
+
+    with patch.object(guardrail, "_send_request", new_callable=AsyncMock) as send:
+        send.side_effect = RuntimeError("ai guard unreachable")
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["my ssn is 123-45-6789"]},
+                request_data=request_data,
+                input_type="request",
+            )
+
+    assert exc_info.value.status_code == 500
+    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_status"] == "guardrail_failed_to_respond"
+    assert "ai guard unreachable" in str(entry["guardrail_response"])
+    assert entry["guardrail_provider"] is None
+    assert entry.get("guardrail_transaction_id") is None
+    assert entry.get("guardrail_action") is None

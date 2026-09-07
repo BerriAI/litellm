@@ -1554,3 +1554,43 @@ def test_langfuse_deployment_environment_fallback_never_raises(monkeypatch, env_
         langfuse_host="https://test.langfuse.com",
     )
     assert logger.langfuse_environment == expected
+
+
+def test_guardrail_span_output_carries_the_provider_verdict(monkeypatch):
+    """LIT-4877: the guardrail span reports ``guardrail_response`` as its output, and a provider
+    verdict is a mapping, so the span has to carry the verdict's fields rather than a bare
+    "allow" that reads the same for a detection and a clean pass."""
+    monkeypatch.setenv("LANGFUSE_MOCK", "true")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    logger: Final = LangFuseLogger(
+        langfuse_public_key="pk-env",
+        langfuse_secret="sk-env",
+        langfuse_host="https://test.langfuse.com",
+    )
+    trace: Final = MagicMock()
+    verdict: Final = {
+        "action": "DETECT",
+        "transaction_id": "tx-detect-1",
+        "violation_categories": ["pii"],
+        "flagged": True,
+    }
+
+    logger._log_guardrail_information_as_span(
+        trace,
+        {
+            "guardrail_information": [
+                {
+                    "guardrail_name": "zg",
+                    "guardrail_mode": "pre_call",
+                    "guardrail_status": "guardrail_flagged",
+                    "guardrail_response": verdict,
+                    "start_time": 1_700_000_000.0,
+                    "end_time": 1_700_000_000.5,
+                }
+            ]
+        },
+    )
+
+    assert trace.span.call_args.kwargs["output"] == verdict
+    assert trace.span.call_args.kwargs["metadata"]["guardrail_name"] == "zg"
+    trace.span.return_value.end.assert_called_once()

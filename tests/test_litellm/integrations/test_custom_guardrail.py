@@ -8,6 +8,7 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
+    _guardrail_verdict,
     log_guardrail_information,
 )
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
@@ -2838,3 +2839,111 @@ class TestApplyGuardrailProviderVerdict:
         assert entry["violation_categories"] == ("prompt_injection",)
         assert entry["guardrail_provider"] == "acme_scanner"
         assert "Content blocked" in str(entry["guardrail_response"])
+
+
+class _SyncVerdictGuardrail(CustomGuardrail):
+    """A guardrail whose apply_guardrail never went async, wrapped by ``__init_subclass__``."""
+
+    guardrail_provider = "acme_scanner"
+
+    def __init__(
+        self,
+        verdict: GuardrailProviderVerdict,
+        guardrail_name: str,
+        error: Exception | None = None,
+    ) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.verdict = verdict
+        self.error = error
+
+    def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.record_guardrail_verdict(self.verdict)
+        if self.error is not None:
+            raise self.error
+        return inputs
+
+
+class _SyncNoopGuardrail(CustomGuardrail):
+    """A sync apply_guardrail that returns the inputs untouched and records nothing."""
+
+    def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+def _run_sync(guardrail: CustomGuardrail, request_data: dict) -> None:
+    guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=["my ssn is 123-45-6789"]),
+        request_data=request_data,
+        input_type="request",
+    )
+
+
+class TestSyncApplyGuardrailProviderVerdict:
+    """The decorator has a sync branch for guardrails that define a plain ``def apply_guardrail``,
+    and it reads the same request-local verdict the async branch does."""
+
+    def test_a_sync_guardrail_logs_the_flagged_verdict(self):
+        request_data: dict = {"model": "gpt-4o"}
+
+        _run_sync(_SyncVerdictGuardrail(DETECT_VERDICT, guardrail_name="zg"), request_data)
+
+        entry = _guardrail_entries(request_data)[0]
+        assert entry["guardrail_status"] == "guardrail_flagged"
+        assert entry["guardrail_action"] == "DETECT"
+        assert entry["guardrail_transaction_id"] == "tx-detect-1"
+        assert entry["violation_categories"] == ("pii_detector",)
+        assert entry["guardrail_provider"] == "acme_scanner"
+
+    def test_a_sync_failure_keeps_the_error_and_the_verdict(self):
+        request_data: dict = {"model": "gpt-4o"}
+        guardrail = _SyncVerdictGuardrail(ALLOW_VERDICT, guardrail_name="zg", error=RuntimeError("vendor exploded"))
+
+        with pytest.raises(RuntimeError, match="vendor exploded"):
+            _run_sync(guardrail, request_data)
+
+        entry = _guardrail_entries(request_data)[0]
+        assert entry["guardrail_status"] == "guardrail_failed_to_respond"
+        assert "vendor exploded" in str(entry["guardrail_response"])
+        assert entry["guardrail_transaction_id"] == "tx-allow-1"
+        assert entry["guardrail_provider"] == "acme_scanner"
+
+    def test_a_sync_guardrail_logs_two_calls_apart(self):
+        request_data: dict = {"model": "gpt-4o"}
+
+        _run_sync(_SyncVerdictGuardrail(DETECT_VERDICT, guardrail_name="zg"), request_data)
+        _run_sync(_SyncNoopGuardrail(guardrail_name="plain"), request_data)
+
+        flagged, plain = _guardrail_entries(request_data)
+        assert flagged["guardrail_status"] == "guardrail_flagged"
+        assert plain["guardrail_status"] == "success"
+        assert plain["guardrail_response"] == "allow"
+        assert plain["guardrail_provider"] is None
+        assert plain.get("guardrail_transaction_id") is None
+
+    def test_a_verdict_recorded_outside_the_decorator_is_not_claimed(self):
+        """The wrapper starts each call with no verdict, so a verdict left in the context by a
+        caller that reached a guardrail directly cannot be attributed to the next one."""
+        request_data: dict = {"model": "gpt-4o"}
+        token = _guardrail_verdict.set(None)
+        try:
+            CustomGuardrail.record_guardrail_verdict(DETECT_VERDICT)
+            _run_sync(_SyncNoopGuardrail(guardrail_name="plain"), request_data)
+        finally:
+            _guardrail_verdict.reset(token)
+
+        entry = _guardrail_entries(request_data)[0]
+        assert entry["guardrail_status"] == "success"
+        assert entry["guardrail_response"] == "allow"
+        assert entry["guardrail_provider"] is None
