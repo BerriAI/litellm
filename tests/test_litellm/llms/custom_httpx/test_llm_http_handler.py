@@ -10,9 +10,10 @@ import pytest
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.code_interpreter_interception.handler import (
-    CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
+    CodeInterpreterInterceptionLogger,
 )
+from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -24,9 +25,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
     _collect_ws_project_quota_callbacks,
     _google_genai_streaming_hidden_params,
     _has_pre_call_deployment_hook,
-    _rust_responses_websocket_enabled,
 )
-from litellm.llms.azure.videos.transformation import AzureVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
@@ -151,7 +150,7 @@ def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
     )
     logging_obj = Mock()
 
-    monkeypatch.setattr(handler, "_has_agentic_completion_hook", Mock(return_value=True))
+    monkeypatch.setattr(handler, "has_agentic_completion_hook", Mock(return_value=True))
     hook_mock = AsyncMock(return_value=final_response)
     monkeypatch.setattr(handler, "_call_agentic_completion_hooks", hook_mock)
 
@@ -370,7 +369,7 @@ def test_get_agentic_loop_settings_defaults_and_overrides():
     assert fingerprints == ["fp-1", "fp-2"]
 
 
-def test_has_agentic_completion_hook_detection(monkeypatch):
+def testhas_agentic_completion_hook_detection(monkeypatch):
     """The streaming path skips the agentic wrapper only when no callback
     overrides async_should_run_agentic_loop. Verify both directions."""
     from litellm.integrations.custom_logger import CustomLogger
@@ -381,7 +380,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
 
     # No callbacks at all -> no agentic hook.
     monkeypatch.setattr(litellm, "callbacks", [])
-    assert handler._has_agentic_completion_hook(logging_obj) is False
+    assert handler.has_agentic_completion_hook(logging_obj) is False
 
     # A plain CustomLogger that does NOT override the gate -> still no hook
     # (so the wrapper is safely skipped).
@@ -389,7 +388,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
         pass
 
     monkeypatch.setattr(litellm, "callbacks", [_PlainLogger()])
-    assert handler._has_agentic_completion_hook(logging_obj) is False
+    assert handler.has_agentic_completion_hook(logging_obj) is False
 
     # A logger that overrides the gate (directly) -> hook present.
     class _AgenticLogger(CustomLogger):
@@ -399,7 +398,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
             return True, {}
 
     monkeypatch.setattr(litellm, "callbacks", [_AgenticLogger()])
-    assert handler._has_agentic_completion_hook(logging_obj) is True
+    assert handler.has_agentic_completion_hook(logging_obj) is True
 
     # Override inherited through an intermediate class is still detected
     # (function-identity check, not a leaf __dict__ check).
@@ -407,12 +406,12 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
         pass
 
     monkeypatch.setattr(litellm, "callbacks", [_DerivedAgenticLogger()])
-    assert handler._has_agentic_completion_hook(logging_obj) is True
+    assert handler.has_agentic_completion_hook(logging_obj) is True
 
     # Hook supplied via logging_obj.dynamic_success_callbacks is detected too.
     monkeypatch.setattr(litellm, "callbacks", [])
     logging_obj.dynamic_success_callbacks = [_AgenticLogger()]
-    assert handler._has_agentic_completion_hook(logging_obj) is True
+    assert handler.has_agentic_completion_hook(logging_obj) is True
 
     # String-named callback entry (e.g. "datadog") must be resolved to its
     # CustomLogger instance via get_custom_logger_compatible_class -- the same
@@ -426,7 +425,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
         "litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class",
         lambda name: agentic_via_string if name == "fake_string_callback" else None,
     )
-    assert handler._has_agentic_completion_hook(logging_obj) is True
+    assert handler.has_agentic_completion_hook(logging_obj) is True
 
     # Unresolvable string (returns None) is skipped, no false positive.
     monkeypatch.setattr(litellm, "callbacks", ["unknown_callback"])
@@ -434,7 +433,7 @@ def test_has_agentic_completion_hook_detection(monkeypatch):
         "litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class",
         lambda name: None,
     )
-    assert handler._has_agentic_completion_hook(logging_obj) is False
+    assert handler.has_agentic_completion_hook(logging_obj) is False
 
 
 def test_fingerprint_agentic_tools_is_deterministic():
@@ -1181,7 +1180,7 @@ def test_sync_delete_responses_sets_json_content_type():
         ({}, True, None, None),
     ],
 )
-def test_resolve_anthropic_messages_timeout(
+def testresolve_anthropic_messages_timeout(
     monkeypatch, litellm_params_kwargs, stream, global_timeout, expected
 ):
     from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
@@ -1203,7 +1202,7 @@ def test_resolve_anthropic_messages_timeout(
             "litellm.request_timeout_explicitly_set", True, raising=False
         )
 
-    resolved = BaseLLMHTTPHandler._resolve_anthropic_messages_timeout(
+    resolved = BaseLLMHTTPHandler.resolve_anthropic_messages_timeout(
         litellm_params=GenericLiteLLMParams(**litellm_params_kwargs),
         stream=stream,
         custom_llm_provider="anthropic",
@@ -1467,6 +1466,7 @@ def _make_responses_handler_call(signed_body):
     signing provider (e.g. Bedrock Mantle).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
@@ -1522,6 +1522,7 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     We snapshot request_data at sign time and assert "stream" is already gone.
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import ResponsesAPIResponse
@@ -1585,6 +1586,7 @@ def _make_compact_handler_call(signed_body, is_async):
     signing provider (e.g. Bedrock Mantle SigV4 / bearer).
     """
     from unittest.mock import MagicMock
+
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.router import GenericLiteLLMParams
@@ -2686,21 +2688,6 @@ async def test_generic_http_handler_async_streaming_forwards_provider_response_h
 
     collected = [chunk async for chunk in response]
     assert "".join([chunk.choices[0].delta.content or "" for chunk in collected]) == "hi"
-
-
-@pytest.mark.parametrize(
-    "custom_llm_provider, enabled, expected",
-    [("openai", True, True), ("openai", False, False), ("azure", True, False),
-     ("hosted_vllm", True, False), (None, True, False)],
-)
-def test_the_rust_responses_websocket_needs_openai_and_process_enablement(
-    custom_llm_provider, enabled, expected, monkeypatch
-):
-    from litellm.rust_bridge import configuration
-
-    configuration.reset_rust_configuration()
-    monkeypatch.setenv("LITELLM_RUST", "1" if enabled else "0")
-    assert _rust_responses_websocket_enabled(custom_llm_provider) is expected
 
 
 def test_a_plain_callback_does_not_advertise_a_pre_call_deployment_hook(monkeypatch):

@@ -44,12 +44,14 @@ impl From<NativeBedrockOptions> for litellm_core::request_options::BedrockOption
 #[derive(FromPyObject)]
 struct NativeAnthropicOptions {
     user_id: Option<String>,
+    has_user_id: bool,
 }
 
 impl From<NativeAnthropicOptions> for litellm_core::request_options::AnthropicOptions {
     fn from(input: NativeAnthropicOptions) -> Self {
         Self {
             user_id: input.user_id,
+            has_user_id: input.has_user_id,
         }
     }
 }
@@ -82,6 +84,12 @@ pub(crate) struct NativeRequestOptions {
     bedrock: Option<NativeBedrockOptions>,
     anthropic: Option<NativeAnthropicOptions>,
     vertex: Option<NativeVertexOptions>,
+}
+
+impl NativeRequestOptions {
+    pub(crate) fn provider(&self, default: &'static str) -> &str {
+        self.custom_llm_provider.as_deref().unwrap_or(default)
+    }
 }
 
 impl From<NativeRequestOptions> for litellm_core::request_options::RequestOptions {

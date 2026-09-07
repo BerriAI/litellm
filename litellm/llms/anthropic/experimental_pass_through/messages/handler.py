@@ -559,27 +559,54 @@ def anthropic_messages_handler(
                 **kwargs,
             )
 
-    anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None = None
+    def python_fallback():
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None = None
 
-    if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
-        anthropic_messages_provider_config = ProviderConfigManager.get_provider_anthropic_messages_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
-        )
-    if anthropic_messages_provider_config is None and _deployment_passes_through_anthropic_messages(
-        kwargs.get("model_info")
-    ):
-        from litellm.llms.openai_like.messages.transformation import (
-            OpenAILikeAnthropicMessagesConfig,
-        )
+        if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
+            anthropic_messages_provider_config = ProviderConfigManager.get_provider_anthropic_messages_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        if anthropic_messages_provider_config is None and _deployment_passes_through_anthropic_messages(
+            kwargs.get("model_info")
+        ):
+            from litellm.llms.openai_like.messages.transformation import (
+                OpenAILikeAnthropicMessagesConfig,
+            )
 
-        anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig(
-            cache_control_ttl=_deployment_supports_cache_control_ttl(kwargs.get("model_info")),
-        )
-    if anthropic_messages_provider_config is None:
-        # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        if _should_route_to_responses_api(custom_llm_provider, original_model, model):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+            anthropic_messages_provider_config = OpenAILikeAnthropicMessagesConfig(
+                cache_control_ttl=_deployment_supports_cache_control_ttl(kwargs.get("model_info")),
+            )
+        if anthropic_messages_provider_config is None:
+            # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
+            if _should_route_to_responses_api(custom_llm_provider, original_model, model):
+                return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+                    max_tokens=max_tokens,
+                    messages=messages,
+                    model=original_model,
+                    metadata=metadata,
+                    stop_sequences=stop_sequences,
+                    stream=stream,
+                    system=system,
+                    temperature=temperature,
+                    thinking=thinking,
+                    tool_choice=tool_choice,
+                    tools=tools,
+                    top_k=top_k,
+                    top_p=top_p,
+                    _is_async=is_async,
+                    api_key=api_key,
+                    api_base=api_base,
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
+
+            # The in-gateway context_management polyfill runs inside
+            # ``async_anthropic_messages_handler`` so it can ``await`` the
+            # summarization model for ``compact_20260112``. ``context_management``
+            # is passed through as a regular kwarg.
+            return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
                 model=original_model,
@@ -601,66 +628,89 @@ def anthropic_messages_handler(
                 **kwargs,
             )
 
-        # The in-gateway context_management polyfill runs inside
-        # ``async_anthropic_messages_handler`` so it can ``await`` the
-        # summarization model for ``compact_20260112``. ``context_management``
-        # is passed through as a regular kwarg.
-        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-            max_tokens=max_tokens,
-            messages=messages,
-            model=original_model,
-            metadata=metadata,
-            stop_sequences=stop_sequences,
-            stream=stream,
-            system=system,
-            temperature=temperature,
-            thinking=thinking,
-            tool_choice=tool_choice,
-            tools=tools,
-            top_k=top_k,
-            top_p=top_p,
+        if custom_llm_provider is None:
+            raise ValueError(
+                f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
+            )
+
+        local_vars.update(kwargs)
+        anthropic_messages_optional_request_params: Final = (
+            AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+                params=local_vars,
+                model=model,
+                drop_params=litellm_params.get("drop_params") is True,
+                custom_llm_provider=custom_llm_provider,
+            )
+        )
+        if is_reasoning_auto_summary_enabled():
+            thinking_param: Final = anthropic_messages_optional_request_params.get("thinking")
+            if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
+                anthropic_messages_optional_request_params["thinking"] = {
+                    **thinking_param,
+                    "display": "summarized",
+                }
+
+        return base_llm_http_handler.anthropic_messages_handler(
+            model=model,
+            messages=strip_provider_specific_fields_from_anthropic_messages(messages),
+            anthropic_messages_provider_config=anthropic_messages_provider_config,
+            anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
             _is_async=is_async,
-            api_key=api_key,
-            api_base=api_base,
             client=client,
             custom_llm_provider=custom_llm_provider,
-            **kwargs,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            stream=stream,
+            kwargs=kwargs,
         )
 
-    if custom_llm_provider is None:
-        raise ValueError(
-            f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
-        )
+    from pydantic import TypeAdapter
 
-    local_vars.update(kwargs)
-    anthropic_messages_optional_request_params: Final = (
-        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params=local_vars,
+    from litellm.rust_bridge.messages import dispatch_messages
+
+    return dispatch_messages(
+        model=model,
+        provider=custom_llm_provider,
+        messages=TypeAdapter(list[dict[str, object]]).validate_python(
+            strip_provider_specific_fields_from_anthropic_messages(messages)
+        ),
+        body=lambda: _native_messages_body(
+            params={**local_vars, **kwargs},
             model=model,
             drop_params=litellm_params.get("drop_params") is True,
-            custom_llm_provider=custom_llm_provider,
+            provider=custom_llm_provider,
+        ),
+        params=litellm_params,
+        logging=litellm_logging_obj,
+        api_key=api_key or dynamic_api_key,
+        api_base=api_base or dynamic_api_base,
+        stream=bool(stream),
+        asynchronous=bool(is_async),
+        has_custom_client=client is not None,
+        fallback=python_fallback,
+    )
+
+
+def _native_messages_body(  # mutable-ok: provider mapping consumes and returns an owned request body
+    params: dict[str, object], model: str, drop_params: bool, provider: str
+) -> dict[str, object]:
+    from pydantic import TypeAdapter
+
+    requested: Final = TypeAdapter(dict[str, object]).validate_python(
+        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
+            params=params,
+            model=model,
+            drop_params=drop_params,
+            custom_llm_provider=provider,
         )
     )
-    if is_reasoning_auto_summary_enabled():
-        thinking_param: Final = anthropic_messages_optional_request_params.get("thinking")
-        if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
-            anthropic_messages_optional_request_params["thinking"] = {
-                **thinking_param,
-                "display": "summarized",
-            }
-
-    return base_llm_http_handler.anthropic_messages_handler(
-        model=model,
-        messages=strip_provider_specific_fields_from_anthropic_messages(messages),
-        anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
-        _is_async=is_async,
-        client=client,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        logging_obj=litellm_logging_obj,
-        api_key=api_key,
-        api_base=api_base,
-        stream=stream,
-        kwargs=kwargs,
-    )
+    thinking_param: Final = requested.get("thinking")
+    if (
+        is_reasoning_auto_summary_enabled()
+        and isinstance(thinking_param, dict)
+        and thinking_param.get("type") != "disabled"
+    ):
+        return {**requested, "thinking": {**thinking_param, "display": "summarized"}}
+    return requested
