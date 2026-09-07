@@ -8017,6 +8017,11 @@ export interface paths {
          * Update Key Fn
          * @description Update an existing API key's parameters.
          *
+         *     The body is a merge patch: a field left out keeps its stored value, and on the key's own columns
+         *     an explicit null clears it. The metadata-backed fields below are the exception, merging into the
+         *     stored metadata instead: passing one as null leaves it unchanged, while `metadata` itself
+         *     replaces the stored metadata wholesale.
+         *
          *     Parameters:
          *     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
          *     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
@@ -19867,6 +19872,12 @@ export interface paths {
          *     curl "http://localhost:4000/v1/skills?beta=true&limit=10"       -H "Authorization: Bearer your-key"       -H "x-litellm-model: claude-account-1"
          *     ```
          *
+         *     Pass `?custom_llm_provider=litellm_proxy&query=<task>` to rank the LiteLLM-hosted skills you can
+         *     access by semantic similarity instead of paging through the whole registry:
+         *     ```bash
+         *     curl "http://localhost:4000/v1/skills?custom_llm_provider=litellm_proxy&query=summarize+a+pdf&top_k=5"       -H "Authorization: Bearer your-key"
+         *     ```
+         *
          *     Returns: ListSkillsResponse with list of skills
          */
         get: operations["list_skills_v1_skills_get"];
@@ -29562,8 +29573,6 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
-            /** Rust */
-            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -36047,12 +36056,16 @@ export interface components {
         Skill: {
             /** Created At */
             created_at: string;
+            /** Description */
+            description?: string | null;
             /** Display Title */
             display_title?: string | null;
             /** Id */
             id: string;
             /** Latest Version */
             latest_version?: string | null;
+            /** Search Score */
+            search_score?: number | null;
             /** Source */
             source: string;
             /**
@@ -39729,8 +39742,6 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
-            /** Rust */
-            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -41392,6 +41403,8 @@ export interface operations {
                 start_date?: string | null;
                 /** @description YYYY-MM-DD UTC, inclusive (defaults to today) */
                 end_date?: string | null;
+                /** @description Filter to one virtual key token hash */
+                api_key?: string | null;
             };
             header?: never;
             path?: never;
@@ -64553,6 +64566,10 @@ export interface operations {
                 after_id?: string | null;
                 before_id?: string | null;
                 custom_llm_provider?: string | null;
+                /** @description Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model. */
+                query?: string | null;
+                /** @description With query: the maximum number of ranked skills to return. */
+                top_k?: number;
             };
             header?: never;
             path?: never;

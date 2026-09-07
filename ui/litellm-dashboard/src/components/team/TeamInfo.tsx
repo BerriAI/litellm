@@ -1039,7 +1039,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       delete values.agents_and_groups;
 
       // Handle vector stores permissions
-      if (values.vector_stores && values.vector_stores.length > 0) {
+      if (values.vector_stores) {
         updateData.object_permission.vector_stores = values.vector_stores;
       }
 
