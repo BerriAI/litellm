@@ -103,7 +103,7 @@ def _message_role_mapping(role: str) -> type[ChatMessage]:  # returns the SAP me
     }.get(role, SAPMessage)
 
 
-def _messages_to_sap_template(messages: list[dict[str, str]]) -> list:
+def _messages_to_sap_template(messages: list[dict[str, object]]) -> list:
     template: Final = []
     for message in messages:
         folded_message = _fold_message_cache_control(message)
