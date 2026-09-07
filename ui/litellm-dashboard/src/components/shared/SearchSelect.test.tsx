@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { SearchSelect } from "./SearchSelect";
+import { chooseSelectOption } from "../../../tests/test-utils";
 
 const OPTIONS = [
   { label: "Acme Prod", value: "team-1" },
@@ -14,6 +15,13 @@ describe("SearchSelect", () => {
   it("renders the placeholder when nothing is selected", () => {
     render(<SearchSelect options={OPTIONS} onValueChange={vi.fn()} placeholder="Select Team…" />);
     expect(screen.getByPlaceholderText("Select Team…")).toBeInTheDocument();
+  });
+
+  it("names the field from aria-label so callers can label it independently of the placeholder", () => {
+    render(
+      <SearchSelect options={OPTIONS} onValueChange={vi.fn()} placeholder="Select Team…" aria-label="Default model" />,
+    );
+    expect(screen.getByRole("combobox", { name: "Default model" })).toBeInTheDocument();
   });
 
   it("shows the selected option's label in the field", () => {
@@ -40,7 +48,7 @@ describe("SearchSelect", () => {
     render(<SearchSelect options={OPTIONS} onValueChange={vi.fn()} />);
     const input = screen.getByRole("combobox");
     await user.click(input);
-    await user.type(input, "grow");
+    fireEvent.change(input, { target: { value: "grow" } });
     expect(await screen.findByText("Growth")).toBeInTheDocument();
     expect(screen.queryByText("Acme Prod")).not.toBeInTheDocument();
   });
@@ -56,7 +64,7 @@ describe("SearchSelect", () => {
     const input = screen.getByRole("combobox");
     await user.click(input);
     expect(await screen.findByText("team-abc-123")).toBeInTheDocument();
-    await user.type(input, "abc-123");
+    fireEvent.change(input, { target: { value: "abc-123" } });
     expect(await screen.findByText("Acme Prod")).toBeInTheDocument();
   });
 
@@ -64,8 +72,23 @@ describe("SearchSelect", () => {
     const onValueChange = vi.fn();
     const user = userEvent.setup();
     render(<SearchSelect options={OPTIONS} onValueChange={onValueChange} />);
-    await user.click(screen.getByRole("combobox"));
-    await user.click(await screen.findByText("Growth"));
+    await chooseSelectOption(user, screen.getByRole("combobox"), "Growth");
     expect(onValueChange).toHaveBeenCalledWith("team-2");
+  });
+
+  it("makes the field non-interactive when disabled", async () => {
+    const onValueChange = vi.fn();
+    const user = userEvent.setup();
+    render(<SearchSelect options={OPTIONS} value="team-1" onValueChange={onValueChange} disabled />);
+
+    const input = screen.getByRole("combobox");
+    expect(input).toBeDisabled();
+
+    await user.click(input);
+    await user.keyboard("Growth");
+
+    expect(input).toHaveValue("Acme Prod");
+    expect(screen.queryByText("Growth")).not.toBeInTheDocument();
+    expect(onValueChange).not.toHaveBeenCalled();
   });
 });

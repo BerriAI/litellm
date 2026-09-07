@@ -1,4 +1,4 @@
-import { renderWithProviders, screen } from "../../../tests/test-utils";
+import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import ClassifierPromptEditor from "./ClassifierPromptEditor";
@@ -83,11 +83,19 @@ describe("ClassifierPromptEditor", () => {
     expect(screen.getByText(/entire system role/)).toBeInTheDocument();
   });
 
+  it("warns that this mode freezes the tier definitions into the operator's text", async () => {
+    // The whole point of the derived prompt is that a tier rename reaches the classifier. An
+    // operator staying on this editor has to be told their text will not follow one.
+    await openEditor({ systemPrompt: "Grade data sensitivity" });
+    expect(screen.getByText(/legacy whole-prompt mode/)).toBeInTheDocument();
+    expect(screen.getByText(/renaming a tier or changing the rubric will not update it/)).toBeInTheDocument();
+  });
+
   it("saves an edited prompt as an override", async () => {
     const onChange = await openEditor();
     const textarea = screen.getByLabelText("Classifier system prompt");
     await userEvent.clear(textarea);
-    await userEvent.type(textarea, "Grade data sensitivity");
+    fireEvent.change(textarea, { target: { value: "Grade data sensitivity" } });
     await userEvent.click(screen.getByRole("button", { name: "Save prompt" }));
     expect(onChange).toHaveBeenCalledWith("Grade data sensitivity");
   });

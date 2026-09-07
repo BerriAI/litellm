@@ -39,6 +39,7 @@ class ExporterOwner(str, Enum):
     WEAVE_OTEL = "weave_otel"
     LEVO = "levo"
     AGENTOPS = "agentops"
+    NEWRELIC = "newrelic"
 
 
 class _OTelV2Flag(BaseSettings):
@@ -95,6 +96,15 @@ class ExporterSpec(BaseModel):
         description=(
             "Force SimpleSpanProcessor regardless of exporter kind. Default: "
             "auto (Simple for console/in_memory, Batch otherwise)."
+        ),
+    )
+    requires_headers: bool = Field(
+        default=False,
+        description=(
+            "Skip this exporter when no headers are resolved. For destinations "
+            "that reject unauthenticated exports (e.g. New Relic), a spec kept "
+            "only as the per-request credential-stamping target would otherwise "
+            "export keyless traffic and produce a 4xx for every span batch."
         ),
     )
 

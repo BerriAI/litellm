@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,14 +48,6 @@ vi.mock("./default-user-settings/DefaultUserSettingsForm", () => ({
         </label>
       </section>
     );
-  },
-}));
-
-// Mock NotificationsManager
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
   },
 }));
 
@@ -136,7 +128,7 @@ describe("ViewUserDashboard", () => {
     expect(settingsTab).toHaveAttribute("aria-selected", "true");
     expect(usersTab).toHaveAttribute("aria-selected", "false");
     expect(screen.getByRole("region", { name: "Default user settings panel" })).toBeInTheDocument();
-    await user.type(screen.getByRole("textbox", { name: "Default setting" }), "unsaved change");
+    fireEvent.change(screen.getByRole("textbox", { name: "Default setting" }), { target: { value: "unsaved change" } });
 
     await user.click(usersTab);
 
@@ -330,6 +322,27 @@ describe("ViewUserDashboard", () => {
         expect(latest[9]).toBe("asc");
         expect(latest[2]).toBe(1);
       });
+    });
+
+    it("sends the toolbar search as the combined search param instead of user_email", async () => {
+      const user = userEvent.setup();
+      renderDashboard();
+
+      await waitFor(() => {
+        expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      });
+
+      const searchedUserId = "a6f5c02b-0163-45ce-815f-f88d10e95686";
+      await user.type(screen.getByPlaceholderText("Search by email or ID…"), searchedUserId);
+
+      await waitFor(() => {
+        const latest = userListCall.mock.calls[userListCall.mock.calls.length - 1];
+        expect(latest[11]).toBe(searchedUserId);
+      });
+      const latest = userListCall.mock.calls[userListCall.mock.calls.length - 1];
+      expect(latest[1]).toBeNull();
+      expect(latest[4]).toBeNull();
+      expect(latest[2]).toBe(1);
     });
   });
 });

@@ -25,6 +25,7 @@ from .base import BaseLLM
 
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class CustomLLMError(Exception):  # use this for all your exceptions
@@ -134,7 +135,7 @@ class CustomLLM(BaseLLM):
         api_base: str | None,
         model_response: ImageResponse,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
     ) -> ImageResponse:
@@ -148,7 +149,7 @@ class CustomLLM(BaseLLM):
         api_key: str | None,  # dynamically set api_key - https://docs.litellm.ai/docs/set_keys#api_key
         api_base: str | None,  # dynamically set api_base - https://docs.litellm.ai/docs/set_keys#api_base
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:
@@ -160,7 +161,7 @@ class CustomLLM(BaseLLM):
         input: list,
         model_response: EmbeddingResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -175,7 +176,7 @@ class CustomLLM(BaseLLM):
         input: list,
         model_response: EmbeddingResponse,
         print_verbose: Callable,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -193,7 +194,7 @@ class CustomLLM(BaseLLM):
         api_key: str | None,
         api_base: str | None,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
     ) -> ImageResponse:
@@ -208,7 +209,7 @@ class CustomLLM(BaseLLM):
         api_key: str | None,
         api_base: str | None,
         optional_params: dict,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> ImageResponse:

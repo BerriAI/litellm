@@ -43,14 +43,6 @@ vi.mock("../../model_filters", () => ({
   ),
 }));
 
-// Mock NotificationsManager
-vi.mock("../../molecules/notifications_manager", () => ({
-  default: {
-    fromBackend: vi.fn(),
-    success: vi.fn(),
-  },
-}));
-
 describe("MakeModelPublicForm", () => {
   const mockProps = {
     visible: true,

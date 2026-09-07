@@ -4,18 +4,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import AddPluginForm from "./add_plugin_form";
 import { registerClaudeCodePlugin } from "@/components/networking";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 
 vi.mock("@/components/networking", () => ({
   registerClaudeCodePlugin: vi.fn().mockResolvedValue({ status: "success" }),
 }));
 
-vi.mock("@/components/molecules/message_manager", () => ({
-  default: { error: vi.fn(), success: vi.fn() },
-}));
-
 const mockRegister = vi.mocked(registerClaudeCodePlugin);
-const mockMessageError = vi.mocked(MessageManager.error);
+const mockMessageError = vi.mocked(toast.error);
 
 const DEFAULT_PROPS = {
   visible: true,

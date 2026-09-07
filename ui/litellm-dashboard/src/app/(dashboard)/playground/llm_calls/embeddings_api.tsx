@@ -1,4 +1,4 @@
-import NotificationManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 
 export async function makeOpenAIEmbeddingsRequest(
@@ -57,9 +57,7 @@ export async function makeOpenAIEmbeddingsRequest(
 
     updateEmbeddingsUI(JSON.stringify(embedding), responseData?.model ?? selectedModel);
   } catch (error: unknown) {
-    NotificationManager.fromBackend(
-      `Error occurred while making embeddings request. Please try again. Error: ${error}`,
-    );
+    toast.fromError(`Error occurred while making embeddings request. Please try again. Error: ${error}`);
 
     throw error; // Re-throw to allow the caller to handle the error
   }

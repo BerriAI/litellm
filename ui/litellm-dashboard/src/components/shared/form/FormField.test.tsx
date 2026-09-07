@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as React from "react";
 import { useForm } from "react-hook-form";
@@ -73,7 +73,7 @@ describe("FormField", () => {
     render(<TestForm onSubmit={onSubmit} />);
 
     await user.clear(screen.getByLabelText("Team Name"));
-    await user.type(screen.getByLabelText("Team Name"), "team-b");
+    fireEvent.change(screen.getByLabelText("Team Name"), { target: { value: "team-b" } });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
@@ -118,7 +118,7 @@ describe("FormField", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("Team Name"), "team-c");
+    fireEvent.change(screen.getByLabelText("Team Name"), { target: { value: "team-c" } });
 
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });

@@ -2,9 +2,10 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
+from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Dict, Final, List, Optional, Tuple
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -14,6 +15,8 @@ from litellm.constants import (
 )
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import LiteLLM_ManagedObjectTable
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -84,7 +87,7 @@ class CheckBatchCost:
             return
         self.batch_processed_support_confirmed = True
 
-    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> Dict[str, Any]:
+    async def _get_user_info(self, batch_id: str, user_id: Optional[str]) -> dict[str, str | None]:
         """
         Look up user email and key alias by user_id for enriching the S3 callback metadata.
         Returns a dict with user_api_key_user_email and user_api_key_alias (both may be None).
@@ -94,8 +97,10 @@ class CheckBatchCost:
         if not user_id:
             return {}
         try:
-            user_row = await self.prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_id}
+            user_row: prisma_models.LiteLLM_UserTable | None = (
+                await self.prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_id": user_id}
+                )
             )
             if user_row is None:
                 return {}
@@ -112,8 +117,10 @@ class CheckBatchCost:
         if not api_key:
             return None
         try:
-            key_row = await self.prisma_client.db.litellm_verificationtoken.find_unique(
-                where={"token": api_key}
+            key_row: prisma_models.LiteLLM_VerificationToken | None = (
+                await self.prisma_client.db.litellm_verificationtoken.find_unique(
+                    where={"token": api_key}
+                )
             )
             return getattr(key_row, "key_alias", None) if key_row is not None else None
         except Exception as e:
@@ -125,8 +132,10 @@ class CheckBatchCost:
         if not team_id:
             return None
         try:
-            team_row = await self.prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
+            team_row: prisma_models.LiteLLM_TeamTable | None = (
+                await self.prisma_client.db.litellm_teamtable.find_unique(
+                    where={"team_id": team_id}
+                )
             )
             return getattr(team_row, "team_alias", None) if team_row is not None else None
         except Exception as e:
@@ -135,7 +144,7 @@ class CheckBatchCost:
 
     async def _build_creator_attribution_metadata(
         self, job: "LiteLLM_ManagedObjectTable", batch_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Rebuild the spend-tracking metadata for the key, team, and tags that created the
         batch so the batch-cost spend log is attributed the same way a non-batch request
@@ -149,9 +158,10 @@ class CheckBatchCost:
         team_id = getattr(job, "team_id", None)
         request_tags = getattr(job, "request_tags", None)
 
-        metadata: Dict[str, Any] = {
+        metadata: dict[str, object] = {
             "user_api_key_user_id": job.created_by,
             "user_api_key": api_key,
+            "user_api_key_hash": api_key,
             "user_api_key_team_id": team_id,
             **(await self._get_user_info(batch_id, job.created_by)),
         }
@@ -255,6 +265,52 @@ class CheckBatchCost:
             "so it will no longer be polled"
         )
 
+    async def _claim_job_for_costing(self, job: "LiteLLM_ManagedObjectTable") -> bool:
+        """
+        Atomically flip batch_processed from false to true, returning whether this pod won
+        the row. Every pod and uvicorn worker schedules its own poller against the shared
+        table, so without this compare-and-swap two of them can select the same completed
+        batch in one window and both emit an aretrieve_batch spend log for it. Schemas
+        without the column can't be claimed, so they keep the pre-existing behavior.
+
+        Called immediately before the spend log is written rather than before the results
+        fetch, because batch_processed is also what holds off deletion of the files that
+        fetch reads and what keeps an unbilled row selectable by the next poll cycle.
+        """
+        if not self._has_batch_processed_column:
+            return True
+        try:
+            claimed: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                where={"id": job.id, "batch_processed": False},
+                data={"batch_processed": True},
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: failed to claim job {job.id} for cost tracking: {db_err}"
+            )
+            return False
+        return claimed > 0
+
+    async def _release_job_claim(self, job: "LiteLLM_ManagedObjectTable") -> None:
+        """Give a claimed row back once billing it failed, so a later poll cycle retries it.
+
+        Safe to match on batch_processed=True: while this poller is active the retrieve
+        path leaves the column alone (batch_cost_poller_is_active), so a true value here
+        is always this pod's own claim.
+        """
+        if not self._has_batch_processed_column:
+            return
+        try:
+            await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                where={"id": job.id, "batch_processed": True},
+                data={"batch_processed": False},
+            )
+        except Exception as db_err:
+            verbose_proxy_logger.error(
+                f"CheckBatchCost: failed to release the claim on job {job.id}, "
+                f"so its cost will not be retried: {db_err}"
+            )
+
     @staticmethod
     def _has_unified_id_without_model(job: "LiteLLM_ManagedObjectTable") -> bool:
         """A unified id that decodes but carries no model_id can never be routed."""
@@ -305,7 +361,7 @@ class CheckBatchCost:
         return isinstance(error, (NotFoundError, openai.NotFoundError)) and output_file_id in str(error)
 
     async def _finalize_unbilled_terminal_job(
-        self, job: "LiteLLM_ManagedObjectTable", response: "LiteLLMBatch"
+        self, job: "prisma_models.LiteLLM_ManagedObjectTable", response: "LiteLLMBatch"
     ) -> None:
         """Persist a terminal batch that has nothing billable, converting any raw
         provider file ids to managed ids, and take it out of the poll page."""
@@ -572,11 +628,13 @@ class CheckBatchCost:
         """
         Fetch a completed batch's results, compute cost/usage, and emit the
         aretrieve_batch spend log. Returns (model_name, llm_provider) on
-        success, None when the job can't be routed to a deployment. Raises on
-        results-fetch or cost-computation failures so the caller can leave the
-        job unprocessed and retry it on a later poll.
+        success, None when the job can't be routed to a deployment or when
+        another pod claimed it. Raises on results-fetch or cost-computation
+        failures so the caller can leave the job unprocessed and retry it on a
+        later poll.
         """
         from litellm.batches.batch_utils import (
+            count_error_file_failed_requests,
             _get_file_content_as_dictionary,
             calculate_batch_cost_and_usage,
         )
@@ -712,16 +770,33 @@ class CheckBatchCost:
             model_id=model_id,
             deployment_model=litellm_model_name,
         )
-        batch_cost, batch_usage, batch_models = (
-            await calculate_batch_cost_and_usage(
-                file_content_dictionary=file_content_as_dict,
-                custom_llm_provider=llm_provider,  # type: ignore
-                model_name=model_name,
-                model_info=deployment_model_info,
+        batch_file_provider: Final = cast(
+            Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic"], llm_provider
+        )
+        output_file_result: Final = await calculate_batch_cost_and_usage(
+            file_content_dictionary=file_content_as_dict,
+            custom_llm_provider=batch_file_provider,
+            model_name=model_name,
+            model_info=deployment_model_info,
+        )
+        error_file_failed_requests: Final = await count_error_file_failed_requests(
+            response,
+            custom_llm_provider=batch_file_provider,
+            litellm_params={
+                **credentials,
+                "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
+            },
+        )
+        batch_result: Final = (
+            output_file_result
+            if not error_file_failed_requests
+            else dataclasses_replace(
+                output_file_result,
+                failed_requests=output_file_result.failed_requests + error_file_failed_requests,
             )
         )
         logging_obj = LiteLLMLogging(
-            model=batch_models[0],
+            model=batch_result.models[0],
             messages=[{"role": "user", "content": "<retrieve_batch>"}],
             stream=False,
             call_type="aretrieve_batch",
@@ -743,12 +818,25 @@ class CheckBatchCost:
             optional_params={},
         )
 
-        await logging_obj.async_success_handler(
-            result=response,
-            batch_cost=batch_cost,
-            batch_usage=batch_usage,
-            batch_models=batch_models,
-        )
+        if not await self._claim_job_for_costing(job):
+            verbose_proxy_logger.info(
+                f"CheckBatchCost: batch {batch_id} (job {job.id}) was claimed by another pod "
+                "in this window, so its cost is already being tracked there"
+            )
+            return None
+
+        try:
+            await logging_obj.async_success_handler(
+                result=response,
+                batch_cost=batch_result.cost,
+                batch_usage=batch_result.usage,
+                batch_models=batch_result.models,
+                batch_successful_requests=batch_result.successful_requests,
+                batch_failed_requests=batch_result.failed_requests,
+            )
+        except Exception:
+            await self._release_job_claim(job)
+            raise
 
         # Record batch duration (completed_at - created_at)
         if prom_logger and response.completed_at and response.created_at:
@@ -908,6 +996,16 @@ class CheckBatchCost:
                     )
 
             elif response.status in PROVIDER_TERMINAL_BATCH_STATUSES:
+                from litellm.proxy.openai_files_endpoints.common_utils import (
+                    _completed_batch_safe_to_retire,
+                )
+
+                if response.status in ("completed", "complete") and not _completed_batch_safe_to_retire(response):
+                    verbose_proxy_logger.info(
+                        f"CheckBatchCost: batch {batch_id} is completed but its output file id "
+                        f"has not appeared yet; leaving job {job.id} for the next poll cycle"
+                    )
+                    continue
                 await self._finalize_unbilled_terminal_job(job, response)
 
         # Record polling run metrics (always, even if nothing was processed)

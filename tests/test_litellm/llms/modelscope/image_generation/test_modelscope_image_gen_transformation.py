@@ -5,15 +5,10 @@ These tests validate the ModelScopeImageGenerationConfig class which handles
 transformation between OpenAI-compatible format and ModelScope API format.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.modelscope.image_generation.transformation import (
     ModelScopeImageGenerationConfig,
@@ -154,7 +149,7 @@ class TestModelScopeImageGenerationTransformation:
         mock_get_secret.return_value = None
         headers = {}
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='MODELSCOPE_API_KEY is not set\\. Please set it via') as exc_info:
             self.config.validate_environment(
                 headers=headers,
                 model=self.model,
@@ -367,7 +362,7 @@ class TestModelScopeImageGenerationTransformation:
 
         model_response = ImageResponse(data=[])
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='litellm\\.BadRequestError: ModelScope error: Invalid prompt') as exc_info:
             self.config.transform_image_generation_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -393,7 +388,7 @@ class TestModelScopeImageGenerationTransformation:
 
         model_response = ImageResponse(data=[])
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='litellm\\.InternalServerError: Error parsing ModelScope') as exc_info:
             self.config.transform_image_generation_response(
                 model=self.model,
                 raw_response=mock_response,

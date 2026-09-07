@@ -1,16 +1,10 @@
-import os
-import sys
 from copy import deepcopy
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
-
-from unittest.mock import MagicMock
-
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure.responses.o_series_transformation import (
     AzureOpenAIOSeriesResponsesAPIConfig,
 )
@@ -542,3 +536,115 @@ class TestAzureResponsesAPIConfig:
         """
         supported = self.config.get_supported_openai_params(self.model)
         assert "context_management" not in supported
+
+    def _anyof_tool(self):
+        return {
+            "type": "function",
+            "name": "automation_update",
+            "description": "Update an automation",
+            "parameters": {
+                "type": "object",
+                "anyOf": [
+                    {
+                        "properties": {"id": {"type": "string"}, "enabled": {"type": "boolean"}},
+                        "required": ["id", "enabled"],
+                    },
+                    {
+                        "properties": {"id": {"type": "string"}, "schedule": {"type": "string"}},
+                        "required": ["id", "schedule"],
+                    },
+                ],
+                "properties": {"id": {"type": "string"}},
+                "required": ["id"],
+            },
+        }
+
+    def test_azure_flattens_top_level_anyof_for_gpt4_family_deployment_name(self):
+        result = self.config.transform_responses_api_request(
+            model="gpt-4o",
+            input="hi",
+            response_api_optional_request_params={"tools": [self._anyof_tool()]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        parameters = result["tools"][0]["parameters"]
+        assert "anyOf" not in parameters
+        assert parameters["type"] == "object"
+        assert set(parameters["properties"]) == {"id", "enabled", "schedule"}
+        assert parameters["required"] == ["id"]
+
+    def test_azure_flattens_via_base_model_for_arbitrary_deployment_name(self):
+        result = self.config.transform_responses_api_request(
+            model="my-eastus-deployment",
+            input="hi",
+            response_api_optional_request_params={"tools": [self._anyof_tool()]},
+            litellm_params=GenericLiteLLMParams(model_info={"base_model": "azure/gpt-4o"}),
+            headers={},
+        )
+
+        assert "anyOf" not in result["tools"][0]["parameters"]
+
+    def test_azure_keeps_combinators_for_gpt5_base_model(self):
+        tool = self._anyof_tool()
+
+        result = self.config.transform_responses_api_request(
+            model="my-eastus-deployment",
+            input="hi",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(model_info={"base_model": "azure/gpt-5.4-mini"}),
+            headers={},
+        )
+
+        assert result["tools"][0] is tool
+        assert "anyOf" in result["tools"][0]["parameters"]
+
+    def test_azure_keeps_combinators_for_unrecognized_deployment_without_base_model(self):
+        tool = self._anyof_tool()
+
+        result = self.config.transform_responses_api_request(
+            model="my-eastus-deployment",
+            input="hi",
+            response_api_optional_request_params={"tools": [tool]},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert result["tools"][0] is tool
+        assert "anyOf" in result["tools"][0]["parameters"]
+
+
+@pytest.fixture()
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the bundled cost map: the published map lags a key added in this repo."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
+
+
+def test_azure_responses_gpt6_astra_reasoning_effort_none_unlocks_temperature(local_model_cost_map: None):
+    """Foundry's gpt-6-astra accepts reasoning.effort='none' with a non-default temperature
+    while OpenAI's gpt-6-astra does not, so the gate must read the azure/ cost-map entry
+    for the bare deployment name rather than OpenAI's."""
+    params = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.2,
+            reasoning={"effort": "none"},
+        ),
+        model="gpt-6-astra",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.2
+    assert params["reasoning"] == {"effort": "none"}
+
+
+def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_model_cost_map: None):
+    with pytest.raises(litellm.UnsupportedParamsError):
+        AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                temperature=0.2,
+                reasoning={"effort": "low"},
+            ),
+            model="gpt-6-astra",
+            drop_params=False,
+        )

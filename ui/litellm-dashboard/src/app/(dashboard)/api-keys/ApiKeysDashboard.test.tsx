@@ -1,59 +1,90 @@
-import { render } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { userDashboardSpy } = vi.hoisted(() => ({
-  userDashboardSpy: vi.fn((_props: Record<string, unknown>) => null),
+const { teamListCall, authorizedSession } = vi.hoisted(() => ({
+  teamListCall: vi.fn(() => new Promise(() => {})),
+  authorizedSession: vi.fn(),
 }));
 
-vi.mock("@/components/user_dashboard", () => ({
-  default: (props: Record<string, unknown>) => userDashboardSpy(props),
-}));
+const session = (overrides: { userRole?: string; isViewOnly?: boolean } = {}) => ({
+  isLoading: false,
+  isAuthorized: true,
+  token: "jwt",
+  accessToken: "sk-access",
+  userId: "u-123",
+  userEmail: "admin@example.com",
+  userRole: "Admin",
+  isViewOnly: false,
+  premiumUser: false,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: false,
+  ...overrides,
+});
 
-// AuthContext is still hydrating: userID has not been populated yet (the regression).
-vi.mock("@/contexts/AuthContext", () => ({
-  useAuth: () => ({
-    userID: null,
-    userRole: "",
-    userEmail: null,
-    accessToken: null,
-    premiumUser: false,
-    setUserRole: vi.fn(),
-    setUserEmail: vi.fn(),
-  }),
-}));
-
-// useAuthorized decodes the cookie synchronously, so identity is already available.
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => ({
-    isLoading: false,
-    isAuthorized: true,
-    token: "jwt",
-    accessToken: "sk-access",
-    userId: "u-123",
-    userEmail: "admin@example.com",
-    userRole: "Admin",
-    premiumUser: false,
-    disabledPersonalKeyCreation: false,
-    showSSOBanner: false,
-  }),
+  default: () => authorizedSession(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
-  teamListCall: vi.fn(() => new Promise(() => {})),
+  teamListCall,
 }));
 
 vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(""),
 }));
 
+vi.mock("@/components/VirtualKeysPage/VirtualKeysTable", () => ({
+  VirtualKeysTable: ({ headerActions }: { headerActions?: React.ReactNode }) => (
+    <div>
+      {headerActions}
+      <table aria-label="Virtual Keys" />
+    </div>
+  ),
+}));
+
+vi.mock("@/components/organisms/create_key_button", () => ({
+  default: () => <button type="button">Create Key</button>,
+}));
+
 import ApiKeysDashboard from "./ApiKeysDashboard";
 
-describe("ApiKeysDashboard identity source", () => {
-  it("passes the useAuthorized userID through even while AuthContext.userID is still null", () => {
+describe("ApiKeysDashboard", () => {
+  beforeEach(() => {
+    teamListCall.mockClear();
+    authorizedSession.mockReturnValue(session());
+    sessionStorage.clear();
+  });
+
+  it("scopes the team list to the signed-in user for non-admin roles", () => {
+    authorizedSession.mockReturnValue(session({ userRole: "Internal User" }));
     render(<ApiKeysDashboard />);
 
-    expect(userDashboardSpy).toHaveBeenCalled();
-    const props = userDashboardSpy.mock.calls[0][0];
-    expect(props.userID).toBe("u-123");
+    expect(teamListCall).toHaveBeenCalledWith("sk-access", 1, 100, { userID: "u-123" });
+  });
+
+  it("renders the keys table with a Create Key action for roles that can write", () => {
+    render(<ApiKeysDashboard />);
+
+    expect(screen.getByRole("table", { name: "Virtual Keys" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create Key" })).toBeInTheDocument();
+  });
+
+  it("hides Create Key for view-only roles", () => {
+    authorizedSession.mockReturnValue(session({ isViewOnly: true }));
+    render(<ApiKeysDashboard />);
+
+    expect(screen.getByRole("table", { name: "Virtual Keys" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create Key" })).not.toBeInTheDocument();
+  });
+
+  it("leaves other pages' session state intact when the tab reloads", () => {
+    sessionStorage.setItem("chatHistory", '[{"role":"user","content":"hi"}]');
+    sessionStorage.setItem("selectedModel", "gpt-5.5");
+    render(<ApiKeysDashboard />);
+
+    window.dispatchEvent(new Event("beforeunload"));
+
+    expect(sessionStorage.getItem("chatHistory")).toBe('[{"role":"user","content":"hi"}]');
+    expect(sessionStorage.getItem("selectedModel")).toBe("gpt-5.5");
   });
 });

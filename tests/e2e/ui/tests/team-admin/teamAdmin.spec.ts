@@ -1,6 +1,7 @@
 import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
 import {
   E2E_INTERNAL_USER_KEY_ALIAS,
+  E2E_TEAM_ADMIN_USER_ID,
   E2E_TEAM_CRUD_ALIAS,
   E2E_TEAM_CRUD_ID,
   TEAM_ADMIN_STORAGE_PATH,
@@ -8,6 +9,8 @@ import {
 import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup, clickTeamId } from "../../helpers/navigation";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+import { CHAT_MODEL_A, masterKey } from "../../helpers/traffic";
+import { keySourceSelect, modelSelect, onlyVisible, openPlayground } from "../../helpers/playground";
 
 /**
  * Every identifier a roster is addressable by. Which of user_id / user_email is populated depends on
@@ -32,7 +35,44 @@ async function findKeyByAlias(page: PlaywrightPage, alias: string): Promise<Reco
   return body.keys.find((row) => row.key_alias === alias);
 }
 
+/** A member this test adds itself, so removing it costs the suite nothing on a retry or a re-run. */
+async function addRemovableMember(page: PlaywrightPage, registerForCleanup: string[]): Promise<string> {
+  const userId = `e2e-removable-${Date.now()}`;
+  // Claimed before the call: /user/new can persist the user and still answer non-2xx, and the id is
+  // ours either way, so registering it up front is what no failure path can skip.
+  registerForCleanup.push(userId);
+  const created = await page.request.post("/user/new", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: { user_id: userId, user_role: "internal_user", auto_create_key: false },
+  });
+  expect(created.ok(), `POST /user/new failed (${created.status()}): ${await created.text()}`).toBe(true);
+
+  const added = await page.request.post("/team/member_add", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: { team_id: E2E_TEAM_CRUD_ID, member: { user_id: userId, role: "user" } },
+  });
+  expect(added.ok(), `POST /team/member_add failed (${added.status()}): ${await added.text()}`).toBe(true);
+  return userId;
+}
+
 test.describe("Team Admin", () => {
+  const createdMembers: string[] = [];
+
+  test.afterEach(async ({ page }) => {
+    // Runs on the failure path too, which a call at the end of the test body would not. Ids are
+    // claimed before the user is created, so the delete is attempted unconditionally and only its
+    // own 404 counts as never persisted; any other answer is a cleanup failure worth reporting
+    // rather than a reason to leave the user behind.
+    for (const userId of createdMembers.splice(0)) {
+      const deleted = await page.request.post("/user/delete", {
+        headers: { Authorization: `Bearer ${masterKey()}` },
+        data: { user_ids: [userId] },
+      });
+      const settled = deleted.ok() || deleted.status() === 404;
+      expect(settled, `POST /user/delete for ${userId} (${deleted.status()}): ${await deleted.text()}`).toBe(true);
+    }
+  });
+
   test.use({ storageState: TEAM_ADMIN_STORAGE_PATH });
 
   test("Team admin can see all team keys including internal user keys", async ({ page }) => {
@@ -61,12 +101,12 @@ test.describe("Team Admin", () => {
     await page.getByRole("tab", { name: "Members" }).click();
     await page.getByRole("button", { name: /Add Member/i }).click();
 
-    const modal = page.locator(".ant-modal:visible");
+    const modal = page.getByRole("dialog", { name: "Add Team Member" });
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
     // Use a dedicated invitee user so this doesn't race with the proxy-admin
     // "Invite a user" test that adds invitable@test.local to the same team.
-    await modal.locator(".ant-select").first().click();
+    await modal.getByRole("combobox").first().click();
     await page.keyboard.type("invitable-team@test.local");
 
     const emailOption = page.getByRole("option", { name: "invitable-team@test.local" }).first();
@@ -92,6 +132,10 @@ test.describe("Team Admin", () => {
   });
 
   test("Team admin can remove a member from their team", async ({ page }) => {
+    // Removing the seeded member leaves nothing for the next attempt, so the retries CI runs with
+    // are guaranteed to fail and the suite cannot run twice against one database. Bring our own.
+    const memberId = await addRemovableMember(page, createdMembers);
+
     await navigateToPage(page, Page.Teams);
     await dismissFeedbackPopup(page);
 
@@ -99,9 +143,9 @@ test.describe("Team Admin", () => {
 
     await page.getByRole("tab", { name: "Members" }).click();
 
-    // Seeded members appear in the roster by user_id (members_with_roles has no
-    // email), so match the row on the user_id rather than the email.
-    const row = page.locator("tr", { hasText: "e2e-removable-member" }).first();
+    // Members appear in the roster by user_id (members_with_roles has no email), so match
+    // the row on the user_id rather than the email.
+    const row = page.locator("tr", { hasText: memberId }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.getByTestId("delete-member").click();
 
@@ -114,7 +158,7 @@ test.describe("Team Admin", () => {
     // Removing the wrong member is exactly what a success toast hides, so pin both halves.
     expect(remove.team_id, "delete targets the team being viewed").toBe(E2E_TEAM_CRUD_ID);
     expect([remove.user_id, remove.user_email], "delete identifies the member whose row was clicked").toContain(
-      "e2e-removable-member",
+      memberId,
     );
 
     await expect(page.getByText("Team member removed successfully").first()).toBeVisible({ timeout: 10_000 });
@@ -125,7 +169,92 @@ test.describe("Team Admin", () => {
         message: "removed member is still on the team",
         timeout: 15_000,
       })
-      .not.toContain("e2e-removable-member");
+      .not.toContain(memberId);
+  });
+
+  test("Team admin sees all team models in the Playground model dropdown", async ({ page, request }) => {
+    const suffix = Date.now();
+    const teamModelName = `e2e-team-dropdown-model-${suffix}`;
+    const auth = { Authorization: `Bearer ${masterKey()}` };
+
+    const teamRes = await request.post("/team/new", {
+      headers: auth,
+      data: {
+        team_alias: `e2e-playground-team-${suffix}`,
+        models: [CHAT_MODEL_A],
+        members_with_roles: [{ role: "admin", user_id: E2E_TEAM_ADMIN_USER_ID }],
+      },
+    });
+    expect(teamRes.ok(), `team create failed (${teamRes.status()}): ${await teamRes.text()}`).toBe(true);
+    const teamId = (await teamRes.json()).team_id as string;
+
+    try {
+      const modelRes = await request.post("/model/new", {
+        headers: auth,
+        data: {
+          model_name: teamModelName,
+          litellm_params: {
+            model: "openai/fake-gpt-4",
+            api_base: `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`,
+            api_key: "fake-key",
+          },
+          model_info: { team_id: teamId },
+        },
+      });
+      expect(modelRes.ok(), `model create failed (${modelRes.status()}): ${await modelRes.text()}`).toBe(true);
+      const modelId = (await modelRes.json()).model_info?.id as string;
+
+      try {
+        const keyRes = await request.post("/key/generate", { headers: auth, data: { team_id: teamId } });
+        expect(keyRes.ok(), `key generate failed (${keyRes.status()}): ${await keyRes.text()}`).toBe(true);
+        const teamKey = (await keyRes.json()).key as string;
+
+        try {
+          await expect
+            .poll(
+              async () => {
+                const res = await request.get("/model_group/info", {
+                  headers: { Authorization: `Bearer ${teamKey}` },
+                });
+                if (!res.ok()) return false;
+                const body: { data?: { model_group?: string }[] } = await res.json();
+                return (body.data ?? []).some((group) => group.model_group === teamModelName);
+              },
+              {
+                message: `model group ${teamModelName} never became visible to the team key`,
+                timeout: 30_000,
+              },
+            )
+            .toBe(true);
+
+          await openPlayground(page);
+          await keySourceSelect(page).click();
+          await onlyVisible(page.getByRole("option", { name: "Virtual Key" })).click({ timeout: 15_000 });
+
+          const keyInput = onlyVisible(page.getByPlaceholder("Enter custom Virtual Key"));
+          await expect(keyInput).toBeVisible({ timeout: 10_000 });
+          await keyInput.fill(teamKey);
+
+          const select = modelSelect(page);
+          await select.click();
+          await select.fill(teamModelName);
+          await expect(onlyVisible(page.getByRole("option", { name: teamModelName }))).toBeVisible({
+            timeout: 15_000,
+          });
+
+          await select.fill(CHAT_MODEL_A);
+          await expect(onlyVisible(page.getByRole("option", { name: CHAT_MODEL_A }))).toBeVisible({
+            timeout: 15_000,
+          });
+        } finally {
+          await request.post("/key/delete", { headers: auth, data: { keys: [teamKey] } });
+        }
+      } finally {
+        await request.post("/model/delete", { headers: auth, data: { id: modelId } });
+      }
+    } finally {
+      await request.post("/team/delete", { headers: auth, data: { team_ids: [teamId] } });
+    }
   });
 
   test("Team admin can create a team key with All Team Models", async ({ page }) => {
@@ -136,17 +265,18 @@ test.describe("Team Admin", () => {
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
     const keyName = `e2e-team-admin-key-${Date.now()}`;
-    await page.getByTestId("base-input").fill(keyName);
+    await page.getByLabel(/Key Name/).fill(keyName);
 
     // Team selector — same locator pattern as the proxy-admin keys test.
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
     await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await page.locator('[data-slot="combobox-content"]:visible').getByText(E2E_TEAM_CRUD_ALIAS).first().click();
+    await page.getByRole("option", { name: E2E_TEAM_CRUD_ALIAS }).first().click();
 
-    // Models — pick "All Team Models"
-    await page.locator(".ant-select-selection-overflow").click();
-    await page.locator(".ant-select-dropdown:visible").getByText("All Team Models").click();
+    // Models — pick "All Team Models". The popup is portaled to the body, so
+    // scope the option lookup to the page.
+    await page.getByRole("combobox", { name: "Select models" }).click();
+    await page.getByRole("option", { name: "All Team Models", exact: true }).click();
     await page.keyboard.press("Escape");
 
     const generate = await captureRequestBody(page, { method: "POST", urlIncludes: "/key/generate" }, async () => {

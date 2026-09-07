@@ -23,13 +23,13 @@ class TestFileConsts:
     def test_get_file_extension_from_mime_type(self):
         assert get_file_extension_from_mime_type("audio/aac") == "aac"
         assert get_file_extension_from_mime_type("application/pdf") == "pdf"
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='Unknown extension for mime type: application'):
             get_file_extension_from_mime_type("application/unknown")
 
     def test_get_file_type_from_extension(self):
         assert get_file_type_from_extension("aac") == FileType.AAC
         assert get_file_type_from_extension("pdf") == FileType.PDF
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='Unknown file type for extension: unknown'):
             get_file_type_from_extension("unknown")
 
     def test_get_file_extension_for_file_type(self):

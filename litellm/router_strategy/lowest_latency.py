@@ -1,6 +1,7 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
 import random
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
@@ -14,7 +15,7 @@ from litellm.types.utils import LiteLLMPydanticObjectBase
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
@@ -23,6 +24,12 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: float = 1 * 60 * 60  # 1 hour
     lowest_latency_buffer: float = 0
     max_latency_list_size: int = 10
+
+
+def _average_latency(samples: Sequence[float]) -> float:
+    if not samples:
+        return 0.0
+    return sum(samples) / len(samples)
 
 
 class LowestLatencyLoggingHandler(CustomLogger):
@@ -431,23 +438,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
             # get average latency or average ttft (depending on streaming/non-streaming)
-            total: float = 0.0
             use_ttft = (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
             )
-            if use_ttft:
-                for _call_latency in item_ttft_latency:
-                    if isinstance(_call_latency, float):
-                        total += _call_latency
-                item_latency = total / len(item_ttft_latency)
-            else:
-                for _call_latency in item_latency:
-                    if isinstance(_call_latency, float):
-                        total += _call_latency
-                item_latency = total / len(item_latency)
+            average_latency = _average_latency(item_ttft_latency if use_ttft else item_latency)
 
             # -------------- #
             # Debugging Logic
@@ -456,7 +453,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             # this helps a user to debug why the router picked a specfic deployment      #
             _deployment_api_base = _deployment.get("litellm_params", {}).get("api_base", "")
             if _deployment_api_base is not None:
-                _latency_per_deployment[_deployment_api_base] = item_latency
+                _latency_per_deployment[_deployment_api_base] = average_latency
             # -------------- #
             # End of Debugging Logic
             # -------------- #
@@ -466,7 +463,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             ):  # if user passed in tpm / rpm in the model_list
                 continue
             else:
-                potential_deployments.append((_deployment, item_latency))
+                potential_deployments.append((_deployment, average_latency))
 
         if len(potential_deployments) == 0:
             return None

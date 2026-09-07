@@ -3,12 +3,9 @@ End-to-end tests for GDPR Art. 32 EU PII Protection policy template
 Tests the complete policy with various EU PII patterns
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../"))
 
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
