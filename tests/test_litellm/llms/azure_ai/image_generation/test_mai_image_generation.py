@@ -1,9 +1,7 @@
-import os
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
-
 
 import litellm
 from litellm.llms.azure.azure import AzureChatCompletion
@@ -30,9 +28,7 @@ from litellm.utils import get_optional_params_image_gen
 class TestAzureMAIImageGeneration:
     def test_is_mai_model(self):
         assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2.5")
-        assert AzureFoundryMAIImageGenerationConfig.is_mai_model(
-            "azure_ai/MAI-Image-2.5"
-        )
+        assert AzureFoundryMAIImageGenerationConfig.is_mai_model("azure_ai/MAI-Image-2.5")
         assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2.5-Flash")
         assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2e")
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("flux.2-pro")
@@ -62,16 +58,10 @@ class TestAzureMAIImageGeneration:
             api_base="https://my-resource.services.ai.azure.com",
             api_version="preview",
         )
-        assert (
-            url
-            == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
-        )
+        assert url == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
 
     def test_get_mai_image_generation_url_preserves_full_path(self):
-        api = (
-            "https://my-resource.services.ai.azure.com/mai/v1/images/generations"
-            "?api-version=preview"
-        )
+        api = "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
         url = AzureFoundryMAIImageGenerationConfig.get_mai_image_generation_url(
             api_base=api,
             api_version="preview",
@@ -83,10 +73,7 @@ class TestAzureMAIImageGeneration:
             api_base="https://my-resource.services.ai.azure.com/mai/v1",
             api_version="preview",
         )
-        assert (
-            url
-            == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
-        )
+        assert url == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
 
     def test_get_azure_ai_image_generation_config_returns_mai(self):
         config = get_azure_ai_image_generation_config("MAI-Image-2.5")
@@ -124,13 +111,13 @@ class TestAzureMAIImageGeneration:
         config = AzureFoundryMAIImageGenerationConfig()
         optional_params = get_optional_params_image_gen(
             model="MAI-Image-2.5",
-            size="1792x1024",
+            size="1024x1024",
             n=1,
             custom_llm_provider="azure_ai",
             provider_config=config,
             drop_params=True,
         )
-        assert optional_params["width"] == 1792
+        assert optional_params["width"] == 1024
         assert optional_params["height"] == 1024
         assert "size" not in optional_params
 
@@ -147,10 +134,7 @@ class TestAzureMAIImageGeneration:
         assert "api-version=preview" in url
 
     def test_mai_json_body_keeps_model(self):
-        api = (
-            "https://my-resource.services.ai.azure.com/mai/v1/images/generations"
-            "?api-version=preview"
-        )
+        api = "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
         data = {
             "model": "MAI-Image-2.5",
             "prompt": "A photograph of a red fox",
@@ -213,6 +197,74 @@ class TestAzureMAIImageGeneration:
                 model="MAI-Image-2.5",
                 drop_params=True,
             )
+
+    @pytest.mark.parametrize("size", ["512x512", "256x256", "700x1400"])
+    def test_map_openai_params_size_below_minimum_dimension_raises(self, size):
+        """MAI requires >= 768px per side; the OpenAI size table offered smaller ones."""
+        config = AzureFoundryMAIImageGenerationConfig()
+        with pytest.raises(ValueError, match="at least 768 pixels"):
+            config.map_openai_params(
+                non_default_params={"size": size},
+                optional_params={},
+                model="MAI-Image-2.5",
+                drop_params=True,
+            )
+
+    @pytest.mark.parametrize("size", ["1792x1024", "1024x1792"])
+    def test_map_openai_params_size_over_total_pixel_budget_raises(self, size):
+        """MAI caps total pixels at 1024*1024, so both landscape/portrait sizes 400 upstream."""
+        config = AzureFoundryMAIImageGenerationConfig()
+        with pytest.raises(ValueError, match="at most 1048576 total pixels"):
+            config.map_openai_params(
+                non_default_params={"size": size},
+                optional_params={},
+                model="MAI-Image-2.5",
+                drop_params=True,
+            )
+
+    def test_map_openai_params_explicit_width_height_not_range_checked(self):
+        """width/height pass through unmapped, so a future model's bounds stay reachable."""
+        config = AzureFoundryMAIImageGenerationConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"width": 1792, "height": 1024},
+            optional_params={},
+            model="MAI-Image-2.5",
+            drop_params=True,
+        )
+        assert optional_params["width"] == 1792
+        assert optional_params["height"] == 1024
+
+    @pytest.mark.parametrize("n", [2, 4])
+    def test_map_openai_params_multi_image_n_raises(self, n):
+        """The MAI endpoint returns one image and ignores any count, so n>1 must not pass silently."""
+        config = AzureFoundryMAIImageGenerationConfig()
+        with pytest.raises(ValueError, match="returns exactly 1 image per request"):
+            config.map_openai_params(
+                non_default_params={"n": n},
+                optional_params={},
+                model="MAI-Image-2.5",
+                drop_params=False,
+            )
+
+    def test_map_openai_params_multi_image_n_dropped_with_drop_params(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"n": 4},
+            optional_params={},
+            model="MAI-Image-2.5",
+            drop_params=True,
+        )
+        assert "n" not in optional_params
+
+    def test_map_openai_params_single_image_n_still_passes_through(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"n": 1},
+            optional_params={},
+            model="MAI-Image-2.5",
+            drop_params=False,
+        )
+        assert optional_params["n"] == 1
 
     def test_map_openai_params_unsupported_param_raises(self):
         config = AzureFoundryMAIImageGenerationConfig()
@@ -363,16 +415,12 @@ class TestAzureMAIImageGeneration:
         litellm.model_cost = litellm.get_model_cost_map(url="")
         model = "azure_ai/MAI-Image-2.5"
         model_info = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
-        image_response = ImageResponse(
-            data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")]
-        )
+        image_response = ImageResponse(data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")])
 
         cost = azure_ai_image_cost_calculator(
             model=model,
             image_response=image_response,
         )
 
-        assert (
-            cost == len(image_response.data or []) * model_info["output_cost_per_image"]
-        )
+        assert cost == len(image_response.data or []) * model_info["output_cost_per_image"]
         assert cost > 0

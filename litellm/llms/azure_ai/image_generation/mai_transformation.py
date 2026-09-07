@@ -21,6 +21,19 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
     DEFAULT_WIDTH = 1024
     DEFAULT_HEIGHT = 1024
 
+    # The MAI endpoint produces exactly one image per request. Its documented
+    # body is model/prompt/width/height (plus `image` for edits) — there is no
+    # count field, and `n` (or the native `sampleCount`) is accepted and
+    # ignored, so a request for more silently comes back with one.
+    MAX_IMAGES_PER_REQUEST: Final = 1
+
+    # Provider-side bounds on the generated image. Both are enforced by the
+    # MAI endpoint, which 400s with "'width' must be at least 768 pixels."
+    # Only `size` is checked against them: `width`/`height` pass through
+    # unmapped, which keeps a future model with different bounds reachable.
+    MIN_DIMENSION_PX: Final = 768
+    MAX_TOTAL_PX: Final = 1024 * 1024
+
     @staticmethod
     def get_mai_image_generation_url(
         api_base: str | None,
@@ -146,6 +159,15 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
             if k in supported_params:
                 if k == "size" and v:
                     self._map_size_param(v, optional_params)
+                elif k == "n" and v is not None and v > self.MAX_IMAGES_PER_REQUEST:
+                    if not drop_params:
+                        raise ValueError(
+                            f"n={v} is not supported for model {model}. The Azure AI MAI image "
+                            f"endpoint returns exactly {self.MAX_IMAGES_PER_REQUEST} image per "
+                            "request and ignores any count, so a larger value would silently "
+                            "return fewer images than requested. Send one request per image, or "
+                            "set drop_params=True to drop n."
+                        )
                 else:
                     optional_params[k] = v
             elif k in ("width", "height"):
@@ -176,19 +198,38 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
         if size in size_mapping:
             width, height = size_mapping[size]
-            optional_params["width"] = width
-            optional_params["height"] = height
         elif "x" in size:
             try:
                 width, height = map(int, size.lower().split("x"))
-                optional_params["width"] = width
-                optional_params["height"] = height
             except ValueError:
                 raise ValueError(f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024').")
         else:
             raise ValueError(
                 f"Unsupported size value: '{size}'. "
                 f"Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string."
+            )
+
+        self._validate_dimensions(size=size, width=width, height=height)
+        optional_params["width"] = width
+        optional_params["height"] = height
+
+    def _validate_dimensions(self, size: str, width: int, height: int) -> None:
+        """Reject a `size` the MAI endpoint would 400 on.
+
+        Several OpenAI-standard sizes are outside MAI's bounds: 512x512 and
+        256x256 fall under the per-side minimum, and 1792x1024 / 1024x1792
+        exceed the total pixel budget. Checking here turns an opaque provider
+        400 into an error that names the constraint.
+        """
+        if width < self.MIN_DIMENSION_PX or height < self.MIN_DIMENSION_PX:
+            raise ValueError(
+                f"Unsupported size value: '{size}'. Azure AI MAI image models require width and "
+                f"height of at least {self.MIN_DIMENSION_PX} pixels."
+            )
+        if width * height > self.MAX_TOTAL_PX:
+            raise ValueError(
+                f"Unsupported size value: '{size}'. Azure AI MAI image models accept at most "
+                f"{self.MAX_TOTAL_PX} total pixels ({width}x{height} is {width * height})."
             )
 
     def transform_image_generation_response(
