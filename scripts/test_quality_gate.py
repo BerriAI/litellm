@@ -29,13 +29,14 @@ import argparse
 import json
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from types import MappingProxyType
+from types import FrameType, MappingProxyType
 from typing import Final, NamedTuple
 
 REPO_ROOT: Final = Path(__file__).resolve().parent.parent
@@ -43,6 +44,7 @@ CHECKER: Final = REPO_ROOT / "scripts" / "check_test_quality.py"
 BUDGET_PATH: Final = REPO_ROOT / "test-quality-budget.json"
 TARGET: Final = "tests"
 DEFAULT_BASE: Final = "origin/litellm_internal_staging"
+TERMINATION_SIGNALS: Final = (signal.SIGTERM, signal.SIGHUP)
 
 _HUNK: Final = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 _FILE_HEADER: Final = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
@@ -111,22 +113,33 @@ def count_by_rule(violations: Sequence[Violation]) -> Mapping[str, int]:
     return MappingProxyType(dict(Counter(v.code for v in violations)))
 
 
-def base_counts(ref: str) -> Mapping[str, int]:
+def _exit_on_termination(signum: int, _frame: FrameType | None) -> None:
+    raise SystemExit(128 + signum)
+
+
+def _install_termination_handlers() -> None:
+    for termination in TERMINATION_SIGNALS:
+        if signal.getsignal(termination) == signal.SIG_DFL:
+            signal.signal(termination, _exit_on_termination)
+
+
+def base_counts(ref: str, repo_root: Path = REPO_ROOT, checker: Path = CHECKER) -> Mapping[str, int]:
     """Rule counts at `ref`, measured with the *current* rule logic rather than
     whatever the checker looked like at that commit."""
+    _install_termination_handlers()
     parent: Final = Path(tempfile.mkdtemp(prefix="tq_base_"))
     worktree: Final = parent / "wt"
     try:
-        _run(["git", "worktree", "add", "--detach", str(worktree), ref])
+        _run(["git", "worktree", "add", "--detach", str(worktree), ref], cwd=repo_root)
         (worktree / "scripts").mkdir(parents=True, exist_ok=True)
-        checker: Final = worktree / "scripts" / "check_test_quality.py"
-        shutil.copy(CHECKER, checker)
-        return count_by_rule(_check(worktree, checker))
+        base_checker: Final = worktree / "scripts" / "check_test_quality.py"
+        shutil.copy(checker, base_checker)
+        return count_by_rule(_check(worktree, base_checker))
     finally:
         # Teardown must never raise, or it masks the real error when the body failed.
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(worktree)],
-            cwd=REPO_ROOT, capture_output=True, text=True,
+            cwd=repo_root, capture_output=True, text=True,
         )
         shutil.rmtree(parent, ignore_errors=True)
 
