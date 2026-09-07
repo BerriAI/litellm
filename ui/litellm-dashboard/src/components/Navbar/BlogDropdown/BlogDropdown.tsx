@@ -1,3 +1,4 @@
+import { useTranslation } from "@/i18n/useTranslation";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useBlogPosts, type BlogPost } from "@/app/(dashboard)/hooks/blogPosts/useBlogPosts";
 import { NAV_PRODUCT_LINK_CLASS } from "@/components/Navbar/navProductLinkClass";
@@ -22,6 +23,7 @@ function formatDate(dateStr: string): string {
 }
 
 export const BlogDropdown: React.FC = () => {
+  const { t } = useTranslation();
   const disableBlogPosts = useDisableBlogPosts();
 
   const { data, isLoading, isError, refetch } = useBlogPosts();
@@ -34,7 +36,7 @@ export const BlogDropdown: React.FC = () => {
     if (isLoading) {
       return (
         <div className="flex items-center px-2 py-1.5 text-sm">
-          <LoaderCircle role="img" aria-label="loading" className="size-4 animate-spin" />
+          <LoaderCircle role="img" aria-label={t("loading")} className="size-4 animate-spin" />
         </div>
       );
     }
@@ -42,7 +44,7 @@ export const BlogDropdown: React.FC = () => {
     if (isError) {
       return (
         <div className="flex items-center gap-2 px-2 py-1.5 text-sm">
-          <span className="text-destructive">Failed to load posts</span>
+          <span className="text-destructive">{t("Failed to load posts")}</span>
           <Button variant="outline" size="sm" onClick={() => refetch()}>
             Retry
           </Button>
@@ -51,7 +53,7 @@ export const BlogDropdown: React.FC = () => {
     }
 
     if (!data || data.posts.length === 0) {
-      return <div className="px-2 py-1.5 text-sm text-muted-foreground">No posts available</div>;
+      return <div className="px-2 py-1.5 text-sm text-muted-foreground">{t("No posts available")}</div>;
     }
 
     return (
@@ -72,7 +74,7 @@ export const BlogDropdown: React.FC = () => {
         <DropdownMenuSeparator />
         <DropdownMenuItem>
           <a href="https://docs.litellm.ai/blog" target="_blank" rel="noopener noreferrer">
-            View all posts
+            {t("View all posts")}
           </a>
         </DropdownMenuItem>
       </>
@@ -87,8 +89,7 @@ export const BlogDropdown: React.FC = () => {
         closeDelay={100}
         render={<Button variant="ghost" className={`${NAV_PRODUCT_LINK_CLASS} border-0!`} />}
       >
-        Blog
-        <ChevronDown className="size-2.5 text-muted-foreground" aria-hidden />
+        {t("Blog")} <ChevronDown className="size-2.5 text-muted-foreground" aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" side="bottom" className="w-auto">
         {renderMenuContent()}

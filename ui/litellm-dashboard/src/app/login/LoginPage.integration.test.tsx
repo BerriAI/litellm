@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LoginPage from "./LoginPage";
+import LanguageProvider from "@/i18n/LanguageProvider";
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
@@ -60,7 +61,9 @@ const renderLoginPage = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <LoginPage />
+      <LanguageProvider>
+        <LoginPage />
+      </LanguageProvider>
     </QueryClientProvider>,
   );
 };
@@ -77,6 +80,7 @@ const originalLocation = window.location;
 describe("LoginPage submit payload", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.removeItem("litellm_ui_language");
     WORKERS = [];
     setSearch("");
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -91,6 +95,7 @@ describe("LoginPage submit payload", () => {
   });
 
   afterEach(() => {
+    window.localStorage.removeItem("litellm_ui_language");
     Object.defineProperty(window, "location", { value: originalLocation, writable: true });
   });
 
@@ -188,5 +193,38 @@ describe("LoginPage submit payload", () => {
     await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
     expect(mockMutate.mock.calls[0][0]).toStrictEqual({ username: "admin", password: "sk-1234", useV3: true });
     expect(switchToWorkerUrl).toHaveBeenCalledWith("http://worker-a:4000");
+  });
+});
+
+describe("localized login", () => {
+  afterEach(() => {
+    window.localStorage.removeItem("litellm_ui_language");
+  });
+
+  it("updates existing validation errors when switching language and keeps the submitted payload unchanged", async () => {
+    vi.clearAllMocks();
+    WORKERS = [];
+    setSearch("");
+    window.localStorage.removeItem("litellm_ui_language");
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({ data: { sso_configured: false }, isLoading: false });
+    const user = userEvent.setup();
+    renderLoginPage();
+    await user.click(await screen.findByRole("button", { name: "Login", exact: true }));
+    expect(await screen.findByText("Please enter your username")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Language" }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "简体中文" }));
+    expect(await screen.findByText("请输入用户名")).toBeInTheDocument();
+    expect(screen.getByText("请输入密码")).toBeInTheDocument();
+    expect(mockMutate).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "opaque-password" } });
+    await user.click(screen.getByRole("button", { name: "登录", exact: true }));
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(mockMutate.mock.calls[0][0]).toStrictEqual({ username: "admin", password: "opaque-password", useV3: false });
+    expect(screen.getByText("MASTER_KEY")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看文档" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/ui",
+    );
   });
 });
