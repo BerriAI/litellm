@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Final
 
 import pytest
 
@@ -58,6 +59,7 @@ class TestTuningFingerprint:
             "reasoning_override_min_score": 0.05,
             "token_thresholds": {"simple": 20, "complex": 500},
             "dimension_weights": {"codePresence": 0.9},
+            "custom_dimensions": [{"name": "internalFrameworks", "weight": 0.7, "keywords": ["orbitmesh"]}],
             "code_keywords": ["orionflow"],
             "reasoning_keywords": ["deduce"],
             "technical_keywords": ["ledgerkit"],
@@ -215,6 +217,28 @@ class TestQuota:
             tuning_quota_violation(candidate=edited_b, others=[legacy_a, edited_b], baselines=baselines, limit=1)
             is None
         )
+
+    def test_custom_dimension_add_edit_and_revert_share_one_quota_slot(self) -> None:
+        baselines: Final = snapshot_tuning_baselines(())
+        original: Final = _router("a", {})
+        config: Final = {
+            "custom_dimensions": [{"name": "internalFrameworks", "weight": 0.7, "keywords": ["orbitmesh"]}]
+        }
+        edited_config: Final = {
+            "custom_dimensions": [{"name": "internalFrameworks", "weight": 0.9, "keywords": ["orbitmesh"]}]
+        }
+        added: Final = _router("a", config)
+        edited: Final = _router("a", edited_config)
+        second: Final = _router("b", config)
+
+        assert tuning_fingerprint(config) != tuning_fingerprint(edited_config)
+        assert mutable_tuned_identities((added,), baselines) == {router_identity(original)}
+        assert tuning_quota_violation(candidate=added, others=(original,), baselines=baselines, limit=1) is None
+        assert tuning_quota_violation(candidate=edited, others=(added,), baselines=baselines, limit=1) is None
+        assert tuning_quota_violation(candidate=second, others=(edited,), baselines=baselines, limit=1) is not None
+        assert tuning_quota_violation(candidate=original, others=(edited,), baselines=baselines, limit=1) is None
+        assert mutable_tuned_identities((original,), baselines) == frozenset()
+        assert tuning_quota_violation(candidate=second, others=(original,), baselines=baselines, limit=1) is None
 
     def test_violation_message_names_the_limit_and_remedy(self) -> None:
         message = tuning_limit_violation(held=2, limit=1)
