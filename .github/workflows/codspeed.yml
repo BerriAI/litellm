@@ -37,7 +37,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -45,6 +44,9 @@ concurrency:
 
 jobs:
   benchmarks:
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -103,6 +105,9 @@ jobs:
 
   boundary-cpu:
     name: Python boundary (simulation)
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -129,6 +134,9 @@ jobs:
   boundary-latency:
     name: Python boundary (walltime)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    permissions:
+      contents: read
+      id-token: write
     runs-on: codspeed-macro
     timeout-minutes: 30
     env:
