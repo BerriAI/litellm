@@ -44,7 +44,7 @@ from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
 )
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
-from litellm.llms.base_llm.chat.transformation import BaseConfig
+from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.llms.base_llm.evals.transformation import BaseEvalsAPIConfig
@@ -309,6 +309,24 @@ def _collect_ws_project_quota_callbacks() -> tuple[ProjectQuotaCallback, ...]:
         for callback in callbacks
         if callable(getattr(callback, "enforce_project_io_token_quota_for_frame", None))
     )
+
+
+def _find_base_llm_exception(error: BaseException, depth: int = 0) -> BaseLLMException | None:
+    if depth >= 10:
+        return None
+    if isinstance(error, BaseLLMException):
+        return error
+
+    cause: Final = error.__cause__
+    if cause is not None:
+        provider_exception: Final = _find_base_llm_exception(cause, depth + 1)
+        if provider_exception is not None:
+            return provider_exception
+
+    context: Final = error.__context__
+    if context is not None:
+        return _find_base_llm_exception(context, depth + 1)
+    return None
 
 
 class BaseLLMHTTPHandler:
@@ -5980,6 +5998,10 @@ class BaseLLMHTTPHandler:
             BaseEvalsAPIConfig,
         ],
     ):
+        provider_exception: Final = _find_base_llm_exception(e)
+        if provider_exception is not None:
+            raise provider_exception
+
         received_status_code: Final = (
             e.response.status_code if isinstance(e, httpx.HTTPStatusError) else getattr(e, "status_code", None)
         )
@@ -6000,8 +6022,6 @@ class BaseLLMHTTPHandler:
             error_headers = {}
 
         if provider_config is None:
-            from litellm.llms.base_llm.chat.transformation import BaseLLMException
-
             raise BaseLLMException(
                 status_code=status_code,
                 message=error_text,
