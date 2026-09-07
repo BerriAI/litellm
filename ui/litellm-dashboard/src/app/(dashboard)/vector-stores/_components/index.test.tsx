@@ -69,6 +69,36 @@ describe("VectorStoreManagement loading state", () => {
   });
 });
 
+describe("VectorStoreManagement create flow visibility", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockVectorStoreListCall.mockResolvedValue({ data: [] });
+    mockCredentialListCall.mockResolvedValue({ credentials: [] });
+  });
+
+  it.each(["Internal User", "Internal Viewer", "Admin Viewer", "Org Admin"])(
+    "should hide the Create Vector Store tab and button and skip /credentials for role %s",
+    async (userRole) => {
+      render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole={userRole} />);
+      await waitFor(() => expect(mockVectorStoreListCall).toHaveBeenCalledWith("sk-test"));
+      expect(screen.queryByRole("tab", { name: "Create Vector Store" })).not.toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Manage Vector Stores" })).toHaveAttribute("aria-selected", "true");
+      expect(await screen.findByText("table-loaded")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "+ Add Vector Store" })).not.toBeInTheDocument();
+      expect(mockCredentialListCall).not.toHaveBeenCalled();
+    },
+  );
+
+  it("should keep the Create Vector Store tab and button and fetch /credentials for a proxy admin", async () => {
+    const user = userEvent.setup();
+    render(<VectorStoreManagement accessToken="sk-test" userID="user-1" userRole="Admin" />);
+    await waitFor(() => expect(mockCredentialListCall).toHaveBeenCalledWith("sk-test"));
+    expect(screen.getByRole("tab", { name: "Create Vector Store" })).toHaveAttribute("aria-selected", "true");
+    await openManageTab(user);
+    expect(screen.getByRole("button", { name: "+ Add Vector Store" })).toBeInTheDocument();
+  });
+});
+
 describe("VectorStoreManagement Indexes tab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
