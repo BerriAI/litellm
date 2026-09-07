@@ -40,9 +40,11 @@ def test_api_route_credentials_from_environment(monkeypatch):
 def test_api_route_uses_default_base_url(monkeypatch):
     monkeypatch.delenv("API_ROUTE_BASE_URL", raising=False)
 
-    api_base, api_key = APIRouteChatConfig()._get_openai_compatible_provider_info(
-        api_base=None,
+    _, _, api_key, api_base = get_llm_provider(
+        model="api_route/model-name",
+        custom_llm_provider=None,
         api_key="test-key",
+        api_base=None,
     )
 
     assert api_base == "https://global.api-route.com/v1"
@@ -52,9 +54,11 @@ def test_api_route_uses_default_base_url(monkeypatch):
 def test_api_route_explicit_api_base_overrides_default(monkeypatch):
     monkeypatch.delenv("API_ROUTE_BASE_URL", raising=False)
 
-    api_base, _ = APIRouteChatConfig()._get_openai_compatible_provider_info(
-        api_base="https://custom.example.com/v1",
+    _, _, _, api_base = get_llm_provider(
+        model="api_route/model-name",
+        custom_llm_provider=None,
         api_key="test-key",
+        api_base="https://custom.example.com/v1",
     )
 
     assert api_base == "https://custom.example.com/v1"
