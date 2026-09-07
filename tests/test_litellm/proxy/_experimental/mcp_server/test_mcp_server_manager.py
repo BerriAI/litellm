@@ -4494,6 +4494,88 @@ class TestMCPServerManager:
         assert "OAuth discovery unavailable" in (result.health_check_error or "")
 
     @pytest.mark.asyncio
+    async def test_health_check_server_openapi_spec_is_probed_instead_of_mcp_session(self):
+        """An OpenAPI server is healthy when its spec loads, and is never asked to speak MCP.
+
+        Regression for #40079: these servers store the REST base url in ``url`` and only look like
+        http transport, so opening an MCP session against them always failed with "Session
+        terminated" even though every tool had loaded from the spec.
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            url="http://rest.example.com",
+            spec_path="http://rest.example.com/openapi.json",
+        )
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+        manager._create_mcp_client = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.load_openapi_spec_async",
+            new=AsyncMock(return_value={"openapi": "3.0.0", "paths": {}}),
+        ) as mock_load:
+            result = await manager.health_check_server("openapi-server")
+
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+        mock_load.assert_awaited_once_with("http://rest.example.com/openapi.json")
+        manager._create_mcp_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_health_check_server_openapi_spec_failure_is_unhealthy(self):
+        """A spec that stopped loading is unhealthy, and the upstream error is what gets reported."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            url="http://rest.example.com",
+            spec_path="http://rest.example.com/openapi.json",
+        )
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+        manager._create_mcp_client = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.load_openapi_spec_async",
+            new=AsyncMock(side_effect=httpx.ConnectError("Cannot connect to host rest.example.com")),
+        ):
+            result = await manager.health_check_server("openapi-server")
+
+        assert result.status == "unhealthy"
+        assert result.health_check_error == "Cannot connect to host rest.example.com"
+        manager._create_mcp_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_health_check_server_openapi_spec_keeps_per_user_auth_skip(self):
+        """Per-user auth still wins: fetching the spec userless could 401 and report a false failure."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.bearer_token,
+            url="http://rest.example.com",
+            spec_path="http://rest.example.com/openapi.json",
+        )
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+        manager._create_mcp_client = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.load_openapi_spec_async",
+            new=AsyncMock(return_value={"openapi": "3.0.0", "paths": {}}),
+        ) as mock_load:
+            result = await manager.health_check_server("openapi-server")
+
+        assert result.status == "unknown"
+        assert result.health_check_error is None
+        mock_load.assert_not_called()
+        manager._create_mcp_client.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_health_check_server_not_found(self):
         """Test health check for a server that doesn't exist"""
         manager = MCPServerManager()
