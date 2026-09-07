@@ -890,7 +890,7 @@ class HeadroomGuardrail(CustomGuardrail):
         if not has_headroom_retrieve_tool(effective.get("tools")):
             return base_result
         return {  # mutable-ok: the hook contract is a plain dict the router merges into the request kwargs
-            **effective,
+            **{key: value for key, value in effective.items() if key != "stream_options"},  # mutable-ok: removes stream-only options
             "stream": False,
             HEADROOM_CONVERTED_STREAM_KEY: True,
         }
