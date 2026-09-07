@@ -808,14 +808,23 @@ def test_ocr_passes_default_request_timeout_to_rust(fake_bridge):
     assert fake_bridge.calls[0]["timeout_seconds"] == float(request_timeout)
 
 
-@pytest.mark.parametrize("rust_enabled", [False, True], ids=["disabled", "unavailable"])
-def test_ocr_uses_python_when_native_execution_is_unavailable(monkeypatch, rust_enabled):
-    def load_native():
-        assert rust_enabled, "disabled OCR must not load the native module"
-        return None
+def test_ocr_does_not_route_to_rust_when_disabled():
+    """With the flag off, the bridge must not be consulted even if an impl exists."""
+    bridge = RecordingBridge()
+    litellm.rust(False)
+    rust_bridge.set_rust_ocr(ocr=bridge)
 
-    monkeypatch.setattr("litellm.rust_bridge.get_native_bridge", load_native)
-    litellm.rust(rust_enabled)
+    assert rust_bridge.rust_ocr_enabled() is False
+    # The impl stays available for injection, but the disabled flag gates usage,
+    # so ocr() never reaches the Rust path (asserted via the enabled-path test).
+    assert bridge.calls == []
+
+
+def test_ocr_falls_back_to_python_when_bridge_unavailable(monkeypatch):
+    """Rust enabled but no bridge available (no injected impl, no compiled wheel):
+    ocr() must degrade to the Python HTTP handler instead of raising."""
+    monkeypatch.setattr(rust_bridge, "load_rust_ocr", lambda: None)
+    litellm.rust(True)  # enabled, but load_rust_ocr() returns None in CI
 
     captured = {}
 

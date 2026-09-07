@@ -2,7 +2,9 @@ import asyncio
 import contextvars
 import copy
 import gc
+import inspect
 import json
+import sys
 import threading
 import weakref
 from unittest import TestCase
@@ -16,6 +18,65 @@ async def checkpoint():
 
 class Value:
     pass
+
+
+def cold_awaited_adapter_reentry(factory):
+    events = []
+    compilations = []
+
+    def invoke_failure():
+        error = LookupError("cold-cache callback error")
+
+        async def failing():
+            raise error
+
+        owner = factory.prepare(failing, (), awaited=True)
+        pending = owner.invoke()
+        try:
+            assert inspect.getcoroutinestate(pending) == inspect.CORO_CREATED
+            with TestCase().assertRaises(LookupError) as caught:
+                pending.send(None)
+            assert caught.exception is error
+        finally:
+            pending.close()
+            owner.close()
+            error.__traceback__ = None
+
+    def audit(event, args):
+        if event != "compile" or args[1] != "retained_callback.py":
+            return
+        compilations.append(args[1])
+        if len(compilations) == 1:
+            events.append("entered")
+            invoke_failure()
+            events.append("nested completed")
+
+    sys.addaudithook(audit)
+    invoke_failure()
+    events.append("outer completed")
+    assert events == ["entered", "nested completed", "outer completed"]
+    assert len(compilations) == 2
+    assert factory.live == 0
+
+    result = object()
+    direct = factory.prepare(lambda value: value, (result,))
+    try:
+        assert direct.invoke() is result
+    finally:
+        direct.close()
+
+    async def successful(value, *, alias):
+        assert value is alias
+        await checkpoint()
+        return value
+
+    owner = factory.prepare(successful, (result,), {"alias": result}, awaited=True)
+    try:
+        assert asyncio.run(owner.invoke()) is result
+    finally:
+        owner.close()
+    assert len(compilations) == 2
+    assert factory.live == 0
 
 
 class ReferenceFactory:

@@ -293,11 +293,11 @@ test-rust-python: install-rust-python-test-deps
 	PYTHONPATH="$(CURDIR):$$site_packages$${PYTHONPATH:+:$$PYTHONPATH}" \
 	LITELLM_LOCAL_MODEL_COST_MAP=True \
 	cargo test --manifest-path litellm-rust/Cargo.toml \
-		-p litellm-python-interop -p litellm-python-bridge --tests --locked -- --include-ignored
+		-p litellm-python-interop --tests --locked -- --include-ignored
 
 lint-rust-python-fixtures:
-	$(UV) tool run --from ruff==0.15.3 ruff check --config ruff-tests.toml litellm-rust/crates/python-interop/tests litellm-rust/crates/python-bridge/tests
-	$(UV) tool run --from ruff==0.15.3 ruff format --check --config ruff-tests.toml litellm-rust/crates/python-interop/tests litellm-rust/crates/python-bridge/tests
+	$(UV) tool run --from ruff==0.15.3 ruff check --config ruff-tests.toml litellm-rust/crates/python-interop/tests
+	$(UV) tool run --from ruff==0.15.3 ruff format --check --config ruff-tests.toml litellm-rust/crates/python-interop/tests
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/

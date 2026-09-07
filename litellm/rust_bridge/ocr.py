@@ -67,10 +67,6 @@ def set_rust_ocr(
         _rust_aocr_impl = aocr
 
 
-def has_rust_ocr_override(*, asynchronous: bool = False) -> bool:
-    return _rust_aocr_impl is not None if asynchronous else _rust_ocr_impl is not None
-
-
 def load_rust_ocr() -> RustOcr | None:
     if _rust_ocr_impl is not None:
         return _rust_ocr_impl

@@ -29,7 +29,6 @@ from litellm.llms.base_llm.ocr.transformation import (
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.rust_bridge import ocr as rust_ocr_bridge
-from litellm.rust_bridge import ocr_retained as rust_ocr_retained_bridge
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ProviderConfigManager, client
 
@@ -287,42 +286,10 @@ def _prepare_rust_ocr_call(
     )
 
 
-def _retained_ocr_boundary(prepared: _PreparedOCRRequest) -> rust_ocr_retained_bridge.OCRRetainedBoundary:
-    return rust_ocr_retained_bridge.OCRRetainedBoundary(
-        handler=base_llm_http_handler,
-        model=prepared.model,
-        document=prepared.document,
-        optional_params=prepared.optional_params,
-        logging_obj=prepared.litellm_logging_obj,
-        api_key=prepared.api_key,
-        api_base=prepared.api_base,
-        headers=prepared.extra_headers,
-        provider_config=prepared.provider_config,
-        litellm_params=prepared.litellm_params,
-        custom_llm_provider=prepared.custom_llm_provider,
-        timeout=prepared.effective_timeout,
-    )
-
-
 def _run_rust_ocr(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
-    *,
-    load_retained: Callable[[], rust_ocr_retained_bridge.RustOCRRetained | None] = (
-        rust_ocr_retained_bridge.load_rust_ocr_retained
-    ),
 ) -> OCRResponse | None:
-    if prepared_request.custom_llm_provider == "mistral" and not rust_ocr_bridge.has_rust_ocr_override():
-        retained: Final = load_retained()
-        if (
-            retained is None
-            or rust_ocr_retained_bridge.retained_timeout_seconds(prepared_request.effective_timeout) is None
-        ):
-            return None
-        retained_response: Final = retained(_retained_ocr_boundary(prepared_request))
-        if retained_response is None:
-            raise ValueError("Retained OCR returned no response after preparation")
-        return retained_response
     if rust_ocr_bridge.load_rust_ocr() is None:
         return None
     prepared: Final = _prepare_rust_ocr_call(
@@ -347,24 +314,7 @@ def _run_rust_ocr(
 async def _run_rust_aocr(
     prepared_request: _PreparedOCRRequest,
     resolve_api_key: Callable[[str], str | None],
-    *,
-    load_retained: Callable[[], rust_ocr_retained_bridge.RustAOCRRetained | None] = (
-        rust_ocr_retained_bridge.load_rust_aocr_retained
-    ),
 ) -> OCRResponse | None:
-    if prepared_request.custom_llm_provider == "mistral" and not rust_ocr_bridge.has_rust_ocr_override(
-        asynchronous=True
-    ):
-        retained: Final = load_retained()
-        if (
-            retained is None
-            or rust_ocr_retained_bridge.retained_timeout_seconds(prepared_request.effective_timeout) is None
-        ):
-            return None
-        retained_response: Final = await retained(_retained_ocr_boundary(prepared_request))
-        if retained_response is None:
-            raise ValueError("Retained OCR returned no response after preparation")
-        return retained_response
     if rust_ocr_bridge.load_rust_aocr() is None:
         return None
     prepared: Final = _prepare_rust_ocr_call(

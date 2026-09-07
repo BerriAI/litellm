@@ -4,13 +4,13 @@ on:
   push:
     paths:
       - "litellm-rust/**"
-      - "tests/test_litellm/**"
       - ".cargo/**"
       - "pyproject.toml"
       - "uv.lock"
       - "rust-toolchain.toml"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -20,13 +20,13 @@ on:
       - "litellm_**"
     paths:
       - "litellm-rust/**"
-      - "tests/test_litellm/**"
       - ".cargo/**"
       - "pyproject.toml"
       - "uv.lock"
       - "rust-toolchain.toml"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -80,10 +80,7 @@ jobs:
         run: cargo clippy -p litellm-ai-gateway --all-targets --all-features --locked -- -D warnings
 
       - name: Run Rust tests
-        # The Python bridge and interop test suites need the repository's Python
-        # environment and LiteLLM on PYTHONPATH, which the make test-rust-python
-        # lane provides.
-        run: cargo test --workspace --locked --exclude litellm-python-interop --exclude litellm-python-bridge
+        run: cargo test --workspace --locked
 
       - name: Run core tests with Bedrock auth
         run: cargo test -p litellm-core --features bedrock-auth --locked
@@ -142,5 +139,5 @@ jobs:
       - name: Check Python fixtures for Cargo tests
         run: make lint-rust-python-fixtures
 
-      - name: Test retained callbacks and OCR with repo Python
+      - name: Test retained callbacks with repo Python
         run: make test-rust-python
