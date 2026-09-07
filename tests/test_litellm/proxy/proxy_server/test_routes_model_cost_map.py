@@ -11,6 +11,7 @@ Routes covered:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -19,6 +20,13 @@ from .conftest import VOLATILE_KEYS, normalize
 # Some response bodies include a "timestamp" — extend the volatile set so
 # dict-equality assertions remain stable.
 _VOLATILE = VOLATILE_KEYS | frozenset({"timestamp"})
+
+_PROVENANCE = {
+    "generated_at": "2026-09-07T00:00:00Z",
+    "source_revision": "0123456789abcdef0123456789abcdef01234567",
+    "etag": 'W/"cost-map-etag"',
+}
+_ROOT_COST_MAP = Path(__file__).resolve().parents[4] / "model_prices_and_context_window.json"
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +50,14 @@ def _attach_litellm_config(mock_prisma):
     return table
 
 
+def _pin_provenance(monkeypatch):
+    """Fix what this process reports as its cost map revision, independent of the map loaded at import."""
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map_provenance",
+        lambda: dict(_PROVENANCE),
+    )
+
+
 # ---------------------------------------------------------------------------
 # POST /reload/model_cost_map
 # ---------------------------------------------------------------------------
@@ -55,6 +71,7 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 
     table = _attach_litellm_config(mock_prisma)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _pin_provenance(monkeypatch)
 
     fake_cost_map = {"gpt-4": {"input_cost": 0.03}, "gpt-3.5": {"input_cost": 0.002}}
     monkeypatch.setattr(
@@ -83,11 +100,63 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
         "status": "success",
         "models_count": 2,
         "timestamp": "<VOLATILE>",
+        **_PROVENANCE,
     }
     assert table.upsert.await_count == 1
     update_payload = table.upsert.await_args.kwargs["data"]["update"]
     assert set(update_payload) == {"last_run_at", "reload_revision"}
     assert update_payload["reload_revision"] == {"increment": 1}
+
+
+def test_reload_model_cost_map_surfaces_provenance_and_keeps_metadata_out_of_the_model_list(
+    client, auth_as, monkeypatch, mock_prisma
+):
+    """A real refetch through the reload route reports the file's stamp and the fetch ETag on every
+    status surface, while the ``_metadata`` block never shows up as a model anywhere."""
+    import httpx
+
+    import litellm
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _attach_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    stamped = {**json.loads(_ROOT_COST_MAP.read_text()), "_metadata": {k: v for k, v in _PROVENANCE.items() if k != "etag"}}
+    served = httpx.Response(200, headers={"ETag": _PROVENANCE["etag"]}, content=json.dumps(stamped).encode())
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.get_model_cost_map._default_reload_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: served)),
+    )
+    monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
+    monkeypatch.setattr("litellm.model_cost", {}, raising=False)
+
+    async def _fake_invalidate(name):
+        return None
+
+    monkeypatch.setattr(ps, "invalidate_config_param", _fake_invalidate)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        reload_response = client.post("/reload/model_cost_map")
+        source_response = client.get("/model/cost_map/source")
+        status_response = client.get("/schedule/model_cost_map_reload/status")
+    public_response = client.get("/public/litellm_model_cost_map")
+
+    assert reload_response.status_code == 200
+    reload_body = reload_response.json()
+    assert {key: reload_body[key] for key in _PROVENANCE} == _PROVENANCE
+    assert source_response.status_code == 200
+    source_body = source_response.json()
+    assert {key: source_body[key] for key in _PROVENANCE} == _PROVENANCE
+    assert source_body["source"] == "remote"
+    assert status_response.status_code == 200
+    assert {key: status_response.json()[key] for key in _PROVENANCE} == _PROVENANCE
+    assert public_response.status_code == 200
+    public_body = public_response.json()
+    assert "_metadata" not in public_body
+    assert "_metadata" not in litellm.model_cost
+    assert "gpt-4o" in public_body
+    assert reload_body["models_count"] == len(litellm.model_cost)
 
 
 def test_reload_model_cost_map_fetch_failure_502_keeps_map(
@@ -270,11 +339,12 @@ def test_cancel_model_cost_map_reload_no_db_500(client, auth_as, monkeypatch):
 def test_get_model_cost_map_reload_status_no_db_not_scheduled(
     client, auth_as, monkeypatch
 ):
-    """No prisma client → returns the not-scheduled shape (4 keys, all-null)."""
+    """No prisma client → returns the not-scheduled shape (all-null) plus the cost map provenance."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
     monkeypatch.setattr(ps, "prisma_client", None)
+    _pin_provenance(monkeypatch)
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")
     assert response.status_code == 200
@@ -283,6 +353,7 @@ def test_get_model_cost_map_reload_status_no_db_not_scheduled(
         "interval_hours": None,
         "last_run": None,
         "next_run": None,
+        **_PROVENANCE,
     }
 
 
@@ -300,6 +371,7 @@ def test_get_model_cost_map_reload_status_scheduled(
     config_row.last_run_at = None
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _pin_provenance(monkeypatch)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")
@@ -309,6 +381,7 @@ def test_get_model_cost_map_reload_status_scheduled(
         "interval_hours": 12,
         "last_run": None,
         "next_run": None,
+        **_PROVENANCE,
     }
 
 
@@ -328,6 +401,7 @@ def test_get_model_cost_map_reload_status_reports_persisted_last_run(
     config_row.last_run_at = datetime(2024, 1, 1, 6, 0, 0, tzinfo=timezone.utc)
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _pin_provenance(monkeypatch)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")
@@ -337,6 +411,7 @@ def test_get_model_cost_map_reload_status_reports_persisted_last_run(
         "interval_hours": 6,
         "last_run": "2024-01-01T06:00:00+00:00",
         "next_run": "2024-01-01T12:00:00+00:00",
+        **_PROVENANCE,
     }
 
 
@@ -356,6 +431,7 @@ def test_get_model_cost_map_reload_status_no_config_not_scheduled(
     config_row.last_run_at = None
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _pin_provenance(monkeypatch)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")
@@ -365,6 +441,7 @@ def test_get_model_cost_map_reload_status_no_config_not_scheduled(
         "interval_hours": None,
         "last_run": None,
         "next_run": None,
+        **_PROVENANCE,
     }
 
 
@@ -391,6 +468,8 @@ def test_get_model_cost_map_source_happy(client, auth_as, monkeypatch):
         "url": "https://example.invalid/cost_map.json",
         "is_env_forced": False,
         "fallback_reason": None,
+        "loaded_at": "2026-09-07T01:02:03+00:00",
+        **_PROVENANCE,
     }
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map_source_info",
@@ -406,6 +485,8 @@ def test_get_model_cost_map_source_happy(client, auth_as, monkeypatch):
         "url": "https://example.invalid/cost_map.json",
         "is_env_forced": False,
         "fallback_reason": None,
+        "loaded_at": "2026-09-07T01:02:03+00:00",
+        **_PROVENANCE,
         "model_count": 3,
     }
 

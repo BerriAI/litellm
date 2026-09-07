@@ -20,6 +20,8 @@ from importlib.resources import files
 from typing import Final, Protocol
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
 from litellm.constants import (
@@ -31,10 +33,11 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
+METADATA_KEY: Final = "_metadata"
 
 # Reserved top-level keys that are not model entries. They must be excluded
 # from the model-count integrity check so a real upstream shrink can't be masked.
-RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
+RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY, METADATA_KEY})
 
 
 def _count_model_entries(model_cost: dict) -> int:
@@ -166,6 +169,7 @@ MODEL_COST_MAP_FETCH_MAX_WAIT_SECONDS: Final = 30.0
 @dataclass(frozen=True, slots=True)
 class ModelCostMapReloaded:
     model_cost_map: dict  # mutable-ok: adopted as litellm.model_cost, whose consumer contract is a plain mutable dict
+    etag: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +258,7 @@ def _classify_fetch_response(response: httpx.Response, url: str) -> _FetchAttemp
         return ModelCostMapReloadUnavailable(reason=f"invalid JSON from {url}: {e}")
     if not isinstance(parsed, dict):
         return ModelCostMapReloadUnavailable(reason=f"expected a JSON object from {url}, got {type(parsed).__name__}")
-    return ModelCostMapReloaded(model_cost_map=parsed)
+    return ModelCostMapReloaded(model_cost_map=parsed, etag=response.headers.get("etag"))
 
 
 def _next_retry_wait(
@@ -328,10 +332,12 @@ async def refetch_model_cost_map(
     map they already have.
     """
     if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true":
+        _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
         _cost_map_source_info.source = "local"
         _cost_map_source_info.url = None
         _cost_map_source_info.is_env_forced = True
         _cost_map_source_info.fallback_reason = None
+        _cost_map_source_info.etag = None
         return ModelCostMapReloaded(
             model_cost_map=_finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
         )
@@ -355,11 +361,13 @@ async def refetch_model_cost_map(
         backup_model_count=GetModelCostMap._get_backup_model_count(),
     ):
         return ModelCostMapReloadUnavailable(reason=f"model cost map from {url} failed integrity validation")
+    _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
     _cost_map_source_info.source = "remote"
     _cost_map_source_info.url = url
     _cost_map_source_info.is_env_forced = False
     _cost_map_source_info.fallback_reason = None
-    return ModelCostMapReloaded(model_cost_map=_finalize_model_cost_map(result.model_cost_map))
+    _cost_map_source_info.etag = result.etag
+    return ModelCostMapReloaded(model_cost_map=_finalize_model_cost_map(result.model_cost_map), etag=result.etag)
 
 
 class ModelCostMapSourceInfo:
@@ -370,13 +378,60 @@ class ModelCostMapSourceInfo:
     is_env_forced: bool = False
     fallback_reason: str | None = None
     loaded_at: "datetime | None" = None
+    generated_at: str | None = None
+    source_revision: str | None = None
+    etag: str | None = None
 
 
 # Module-level singleton tracking the source of the current cost map
 _cost_map_source_info: Final = ModelCostMapSourceInfo()
 
 
-def get_model_cost_map_source_info() -> dict:
+class CostMapMetadata(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    generated_at: str | None = None
+    source_revision: str | None = None
+
+
+_EMPTY_METADATA: Final = CostMapMetadata()
+
+
+def _parse_metadata(raw: object) -> CostMapMetadata:
+    if raw is None:
+        return _EMPTY_METADATA
+    try:
+        return CostMapMetadata.model_validate(raw)
+    except ValidationError as error:
+        verbose_logger.warning("LiteLLM: ignoring a malformed %s block in the model cost map: %s", METADATA_KEY, error)
+        return _EMPTY_METADATA
+
+
+class CostMapProvenance(TypedDict):
+    generated_at: ReadOnly[str | None]
+    source_revision: ReadOnly[str | None]
+    etag: ReadOnly[str | None]
+
+
+class CostMapSourceInfo(CostMapProvenance):
+    source: ReadOnly[str]
+    url: ReadOnly[str | None]
+    is_env_forced: ReadOnly[bool]
+    fallback_reason: ReadOnly[str | None]
+    loaded_at: ReadOnly[str | None]
+
+
+def get_model_cost_map_provenance() -> CostMapProvenance:
+    """Which revision of the cost map this process serves: the ``_metadata`` stamp the file
+    carries plus the ETag the remote fetch returned (None for the bundled backup)"""
+    return {
+        "generated_at": _cost_map_source_info.generated_at,
+        "source_revision": _cost_map_source_info.source_revision,
+        "etag": _cost_map_source_info.etag,
+    }
+
+
+def get_model_cost_map_source_info() -> CostMapSourceInfo:
     """
     Return metadata about where the current model cost map was loaded from.
 
@@ -385,12 +440,20 @@ def get_model_cost_map_source_info() -> dict:
     - url: the remote URL attempted (or None for local-only)
     - is_env_forced: True if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
     - fallback_reason: human-readable reason if remote failed and local was used
+    - loaded_at: ISO 8601 time this process last loaded the map
+    - generated_at, source_revision: the ``_metadata`` stamp inside the loaded file
+    - etag: the ETag of the remote fetch (None for the bundled backup)
     """
+    loaded_at: Final = _cost_map_source_info.loaded_at
     return {
         "source": _cost_map_source_info.source,
         "url": _cost_map_source_info.url,
         "is_env_forced": _cost_map_source_info.is_env_forced,
         "fallback_reason": _cost_map_source_info.fallback_reason,
+        "loaded_at": loaded_at.isoformat() if loaded_at is not None else None,
+        "generated_at": _cost_map_source_info.generated_at,
+        "source_revision": _cost_map_source_info.source_revision,
+        "etag": _cost_map_source_info.etag,
     }
 
 
@@ -455,14 +518,18 @@ def _expand_model_aliases(model_cost: dict) -> dict:
 
 
 def _finalize_model_cost_map(model_cost: dict) -> dict:
-    """Extract fallback generalizations out of the raw map, then expand aliases.
+    """Extract fallback generalizations and the provenance stamp out of the raw map, then expand aliases.
 
     The ``fallback_generalizations`` block is installed into the generalizations
-    module and removed from the map so it is never treated as a model entry.
+    module and the ``_metadata`` block into the source info; both are removed from
+    the map so neither is ever treated as a model entry.
     """
     raw: Final = model_cost.pop(FALLBACK_GENERALIZATIONS_KEY, None)
     rules: Final = raw.get("rules") if isinstance(raw, dict) else None
     set_fallback_generalizations(rules)
+    metadata: Final = _parse_metadata(model_cost.pop(METADATA_KEY, None))
+    _cost_map_source_info.generated_at = metadata.generated_at
+    _cost_map_source_info.source_revision = metadata.source_revision
     return _expand_model_aliases(model_cost)
 
 
@@ -494,10 +561,12 @@ def get_model_cost_map(
         _cost_map_source_info.url = None
         _cost_map_source_info.is_env_forced = True
         _cost_map_source_info.fallback_reason = None
+        _cost_map_source_info.etag = None
         return _finalize_model_cost_map(GetModelCostMap.load_local_model_cost_map())
 
     _cost_map_source_info.url = url
     _cost_map_source_info.is_env_forced = False
+    _cost_map_source_info.etag = None
 
     result: Final = _fetch_remote_model_cost_map_with_retry_sync(
         url=url,
@@ -533,4 +602,5 @@ def get_model_cost_map(
 
     _cost_map_source_info.source = "remote"
     _cost_map_source_info.fallback_reason = None
+    _cost_map_source_info.etag = result.etag
     return _finalize_model_cost_map(content)

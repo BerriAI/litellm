@@ -98,6 +98,25 @@ def test_schema_rejects_malformed_entries(committed_schema: dict, entry: dict):
     assert not validator.is_valid({"some-model": entry})
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        "2026-09-07T00:00:00Z",
+        {"generated_at": "2026-09-07T00:00:00Z"},
+        {"source_revision": "0123456789abcdef"},
+        {"generated_at": "2026-09-07T00:00:00Z", "source_revision": "0123456789abcdef", "author": "bot"},
+    ],
+    ids=["not_an_object", "missing_revision", "missing_generated_at", "unknown_field"],
+)
+def test_schema_rejects_a_malformed_metadata_block(committed_schema: dict, metadata: object):
+    assert not build_validator(committed_schema).is_valid({"_metadata": metadata})
+
+
+def test_schema_accepts_the_provenance_stamp_as_a_non_model_root_key(committed_schema: dict):
+    stamp = {"generated_at": "2026-09-07T00:00:00Z", "source_revision": "0123456789abcdef0123456789abcdef01234567"}
+    assert build_validator(committed_schema).is_valid({"_metadata": stamp})
+
+
 def test_schema_accepts_minimal_and_unknown_optional_fields(committed_schema: dict):
     validator = build_validator(committed_schema)
     assert validator.is_valid({"some-model": {"litellm_provider": "openai"}})

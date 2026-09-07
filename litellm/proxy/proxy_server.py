@@ -17749,6 +17749,7 @@ async def reload_model_cost_map(
         # Immediately reload the model cost map in the current pod
         from litellm.litellm_core_utils.get_model_cost_map import (
             ModelCostMapReloadUnavailable,
+            get_model_cost_map_provenance,
             refetch_model_cost_map,
         )
 
@@ -17762,6 +17763,7 @@ async def reload_model_cost_map(
         models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
         current_time = utc_now()
         proxy_config.model_cost_map_loaded_at = current_time
+        provenance: Final = get_model_cost_map_provenance()
 
         # Publish a new revision so every other pod reloads on its next poll; this pod has
         # already served it, so adopt it here rather than reloading again a tick later
@@ -17776,6 +17778,7 @@ async def reload_model_cost_map(
             "status": "success",
             "models_count": models_count,
             "timestamp": current_time.isoformat(),
+            **provenance,
         }
     except HTTPException:
         raise
@@ -17896,12 +17899,17 @@ async def get_model_cost_map_reload_status(
 
     try:
         global prisma_client
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            get_model_cost_map_provenance,
+        )
 
+        provenance: Final = get_model_cost_map_provenance()
         if prisma_client is None:
             verbose_proxy_logger.info("No database connection, returning not scheduled")
-            return reload_schedule_status(None)
+            return {**reload_schedule_status(None), **provenance}
 
-        return reload_schedule_status(await read_reload_schedule(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME))
+        schedule: Final = await read_reload_schedule(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME)
+        return {**reload_schedule_status(schedule), **provenance}
     except Exception as e:
         verbose_proxy_logger.exception("Failed to get model cost map reload status: %s", e)
         raise HTTPException(
@@ -17929,6 +17937,9 @@ async def get_model_cost_map_source(
     - url: the remote URL that was attempted (null when env-forced local)
     - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
     - fallback_reason: human-readable reason why remote failed (null on success)
+    - loaded_at: when this pod last loaded the map
+    - generated_at, source_revision: the _metadata stamp inside the loaded file
+    - etag: the ETag of the remote fetch (null for the bundled backup)
     - model_count: number of models in the currently loaded cost map
     """
     # Read-only source info — admin viewers can read.

@@ -1,9 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "LiteLLM model_prices_and_context_window.json",
-  "description": "Schema for LiteLLM's model price and context window registry (https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). Every top-level key except 'sample_spec' and 'fallback_generalizations' is a model id, optionally prefixed with its provider (e.g. 'azure/gpt-5.4'), mapping to a model entry. All costs are USD per unit. New optional fields are added regularly, so consumers should ignore unknown fields rather than reject them.",
+  "description": "Schema for LiteLLM's model price and context window registry (https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). Every top-level key except '_metadata', 'sample_spec', and 'fallback_generalizations' is a model id, optionally prefixed with its provider (e.g. 'azure/gpt-5.4'), mapping to a model entry. All costs are USD per unit. New optional fields are added regularly, so consumers should ignore unknown fields rather than reject them.",
   "type": "object",
   "properties": {
+    "_metadata": {
+      "type": "object",
+      "description": "Provenance of this file: when an automated sync last regenerated it and the commit it ran against. Human edits leave it untouched; not a model entry.",
+      "properties": {
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "generated_at",
+        "source_revision"
+      ],
+      "additionalProperties": false
+    },
     "sample_spec": {
       "type": "object",
       "description": "Documentation placeholder illustrating the entry shape; not a real model and not schema-conformant (several values are prose)."

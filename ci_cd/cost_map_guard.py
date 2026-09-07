@@ -2,7 +2,8 @@
 
 Every pull request gets the file checks: the three cost map files parse, the backup copy matches the root file,
 and the JSON schema is in sync and validates the map. Pull requests from the cost map sync bot (branches named
-litellm_cost_map_sync_*) additionally may only touch those three files and may only add or update models.
+litellm_cost_map_sync_*) additionally may only touch those three files and may only add or update models, plus
+restamp the _metadata provenance block.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from generate_model_prices_schema import SPECIAL_ROOT_KEYS, build_schema, render, validation_errors
+from generate_model_prices_schema import BOT_LOCKED_ROOT_KEYS, build_schema, render, validation_errors
 
 COST_MAP_PATH: Final = "model_prices_and_context_window.json"
 BACKUP_PATH: Final = "litellm/model_prices_and_context_window_backup.json"
@@ -102,7 +103,7 @@ def _bot_failures(base: Snapshot, head_map: CostMap, changed_files: Sequence[str
         *(f"bot PRs may not remove fields: {ref}" for ref in removed_fields),
         *(
             f"bot PRs may not change {key}"
-            for key in sorted(SPECIAL_ROOT_KEYS)
+            for key in sorted(BOT_LOCKED_ROOT_KEYS)
             if base_map.get(key) != head_map.get(key)
         ),
     )

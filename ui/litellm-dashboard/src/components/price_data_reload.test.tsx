@@ -32,7 +32,17 @@ const remoteSource = {
   url: "https://pricing.example.test/model_prices.json",
   is_env_forced: false,
   fallback_reason: null,
+  loaded_at: null,
+  generated_at: null,
+  source_revision: null,
+  etag: null,
   model_count: 1234,
+};
+const provenance = {
+  loaded_at: "2026-09-07T10:00:00Z",
+  generated_at: "2026-09-06T23:38:47Z",
+  source_revision: "cd681a573fd9f5b6f15a1355f46178e4e9d374d2",
+  etag: 'W/"eb8e9a53f4cc284b"',
 };
 
 describe("PriceDataReload", () => {
@@ -49,6 +59,30 @@ describe("PriceDataReload", () => {
     expect(screen.getByText("Remote")).toBeInTheDocument();
     expect(screen.getByText("1,234")).toBeInTheDocument();
     expect(screen.getByText("No periodic reload scheduled")).toBeInTheDocument();
+  });
+
+  it("shows which revision of the cost map is loaded when the source reports one", async () => {
+    vi.mocked(getModelCostMapSource).mockResolvedValue({ ...remoteSource, ...provenance } as never);
+    render(<PriceDataReload accessToken="sk-test" />);
+
+    expect(await screen.findByText("Source revision:")).toBeInTheDocument();
+    expect(screen.getByText("cd681a573fd9")).toBeInTheDocument();
+    expect(screen.getByText("ETag:")).toBeInTheDocument();
+    expect(screen.getByText('W/"eb8e9a53f4cc284b"')).toBeInTheDocument();
+    expect(screen.getByText("Generated at:")).toBeInTheDocument();
+    expect(screen.getByText(new Date(provenance.generated_at).toLocaleString())).toBeInTheDocument();
+    expect(screen.getByText("Loaded at:")).toBeInTheDocument();
+    expect(screen.getByText(new Date(provenance.loaded_at).toLocaleString())).toBeInTheDocument();
+  });
+
+  it("hides the provenance rows when the loaded map carries no stamp", async () => {
+    render(<PriceDataReload accessToken="sk-test" />);
+
+    expect(await screen.findByText("Pricing Data Source")).toBeInTheDocument();
+    expect(screen.queryByText("Generated at:")).not.toBeInTheDocument();
+    expect(screen.queryByText("Source revision:")).not.toBeInTheDocument();
+    expect(screen.queryByText("ETag:")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loaded at:")).not.toBeInTheDocument();
   });
 
   it("confirms an immediate reload and refreshes dependent data", async () => {

@@ -19,9 +19,11 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -33,6 +35,7 @@ MODELS_URL: Final = "https://api.together.ai/v1/models?serverless"
 DEPRECATIONS_URL: Final = "https://docs.together.ai/docs/deprecations.md"
 PROVIDER: Final = "together_ai"
 PREFIX: Final = "together_ai/"
+METADATA_KEY: Final = "_metadata"
 SOURCE_URL: Final = "https://docs.together.ai/docs/serverless-models"
 COST_MAP_RELPATHS: Final = (
     "model_prices_and_context_window.json",
@@ -495,6 +498,23 @@ def _serialize(cost_map: CostMap) -> str:
     return json.dumps(cost_map, indent=4, ensure_ascii=False) + "\n"
 
 
+def stamp_metadata(cost_map: CostMap, generated_at: str, source_revision: str) -> CostMap:
+    return {**cost_map, METADATA_KEY: {"generated_at": generated_at, "source_revision": source_revision}}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _source_revision(repo_root: Path) -> str:
+    from_env: Final = os.environ.get("GITHUB_SHA")
+    if from_env:
+        return from_env
+    return subprocess.run(
+        ("git", "rev-parse", "HEAD"), cwd=repo_root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 def main(argv: Sequence[str]) -> int:
     parser: Final = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="apply the sync to the cost map files (default: dry run)")
@@ -527,8 +547,9 @@ def main(argv: Sequence[str]) -> int:
     if args.pr_body_file is not None:
         args.pr_body_file.write_text(body)
     if args.write and outcome.has_changes:
+        stamped: Final = _serialize(stamp_metadata(outcome.cost_map, _utc_now_iso(), _source_revision(args.repo_root)))
         for relpath in COST_MAP_RELPATHS:
-            (args.repo_root / relpath).write_text(_serialize(outcome.cost_map))
+            (args.repo_root / relpath).write_text(stamped)
     print(render_summary(outcome))
     print()
     print(body)

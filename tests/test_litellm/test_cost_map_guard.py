@@ -141,6 +141,26 @@ def test_bot_may_not_change_special_root_keys() -> None:
     assert _failures(head) == ("bot PRs may not change fallback_generalizations",)
 
 
+STAMP: Final = {"generated_at": "2026-09-07T00:00:00Z", "source_revision": "0123456789abcdef0123456789abcdef01234567"}
+
+
+def test_bot_may_stamp_and_restamp_metadata() -> None:
+    stamped = _snapshot({**BASE_MAP, "_metadata": STAMP})
+    assert _failures(stamped) == ()
+    assert _failures(stamped, bot=False) == ()
+
+    restamped = _snapshot(
+        {
+            **BASE_MAP,
+            "_metadata": {**STAMP, "generated_at": "2026-09-14T00:00:00Z"},
+            "fallback_generalizations": {"rules": []},
+        }
+    )
+    assert guard.guard_failures(stamped, restamped, MAP_FILES, True) == (
+        "bot PRs may not change fallback_generalizations",
+    )
+
+
 def _commit(repo: Path, cost_map: dict[str, object], message: str) -> str:
     text = _serialize(cost_map)
     (repo / guard.COST_MAP_PATH).write_text(text)

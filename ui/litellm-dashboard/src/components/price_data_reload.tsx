@@ -49,8 +49,16 @@ interface CostMapSourceInfo {
   url: string | null;
   is_env_forced: boolean;
   fallback_reason: string | null;
+  loaded_at: string | null;
+  generated_at: string | null;
+  source_revision: string | null;
+  etag: string | null;
   model_count: number;
 }
+
+const SHORT_REVISION_LENGTH = 12;
+
+const shortRevision = (revision: string) => revision.slice(0, SHORT_REVISION_LENGTH);
 
 const EMPTY_RELOAD_STATUS: ReloadStatus = {
   scheduled: false,
@@ -88,6 +96,55 @@ const isValidReloadInterval = (value: number) => {
   if (!Number.isInteger(value)) return false;
   return value >= 1 && value <= 168;
 };
+
+const formatDateTime = (dateTimeString: string | null) => {
+  if (!dateTimeString) return "Never";
+  try {
+    return new Date(dateTimeString).toLocaleString();
+  } catch {
+    return dateTimeString;
+  }
+};
+
+const CostMapProvenanceRows: React.FC<{ sourceInfo: CostMapSourceInfo }> = ({ sourceInfo }) => (
+  <>
+    {sourceInfo.generated_at && (
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">Generated at:</span>
+        <span className="font-medium">{formatDateTime(sourceInfo.generated_at)}</span>
+      </div>
+    )}
+
+    {sourceInfo.source_revision && (
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="text-muted-foreground">Source revision:</span>
+        <Tooltip>
+          <TooltipTrigger render={<code className="font-mono" />}>
+            {shortRevision(sourceInfo.source_revision)}
+          </TooltipTrigger>
+          <TooltipContent>{sourceInfo.source_revision}</TooltipContent>
+        </Tooltip>
+      </div>
+    )}
+
+    {sourceInfo.etag && (
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="text-muted-foreground">ETag:</span>
+        <Tooltip>
+          <TooltipTrigger render={<code className="max-w-60 truncate font-mono" />}>{sourceInfo.etag}</TooltipTrigger>
+          <TooltipContent>{sourceInfo.etag}</TooltipContent>
+        </Tooltip>
+      </div>
+    )}
+
+    {sourceInfo.loaded_at && (
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">Loaded at:</span>
+        <span className="font-medium">{formatDateTime(sourceInfo.loaded_at)}</span>
+      </div>
+    )}
+  </>
+);
 
 const PriceDataReload: React.FC<PriceDataReloadProps> = ({
   accessToken,
@@ -227,15 +284,6 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
     }
   };
 
-  const formatDateTime = (dateTimeString: string | null) => {
-    if (!dateTimeString) return "Never";
-    try {
-      return new Date(dateTimeString).toLocaleString();
-    } catch {
-      return dateTimeString;
-    }
-  };
-
   const getStatusText = () => {
     if (!reloadStatus?.scheduled) return "Not scheduled";
     if (!reloadStatus.last_run) return "Ready";
@@ -333,6 +381,8 @@ const PriceDataReload: React.FC<PriceDataReloadProps> = ({
                   </Tooltip>
                 </div>
               )}
+
+              <CostMapProvenanceRows sourceInfo={sourceInfo} />
 
               {sourceInfo.is_env_forced && (
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">

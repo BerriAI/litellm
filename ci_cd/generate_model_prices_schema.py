@@ -11,7 +11,9 @@ REPO_ROOT = Path(__file__).parent.parent
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 SCHEMA_PATH = REPO_ROOT / "model_prices_and_context_window.schema.json"
 
-SPECIAL_ROOT_KEYS = frozenset({"sample_spec", "fallback_generalizations"})
+METADATA_KEY = "_metadata"
+SPECIAL_ROOT_KEYS = frozenset({"sample_spec", "fallback_generalizations", METADATA_KEY})
+BOT_LOCKED_ROOT_KEYS = SPECIAL_ROOT_KEYS - {METADATA_KEY}
 
 JsonSchema = dict
 
@@ -271,13 +273,26 @@ def build_schema(prices: dict) -> JsonSchema:
         "description": (
             "Schema for LiteLLM's model price and context window registry "
             "(https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json). "
-            "Every top-level key except 'sample_spec' and 'fallback_generalizations' is a model id, "
+            "Every top-level key except '_metadata', 'sample_spec', and 'fallback_generalizations' is a model id, "
             "optionally prefixed with its provider (e.g. 'azure/gpt-5.4'), mapping to a model entry. "
             "All costs are USD per unit. New optional fields are added regularly, so consumers should "
             "ignore unknown fields rather than reject them."
         ),
         "type": "object",
         "properties": {
+            METADATA_KEY: {
+                "type": "object",
+                "description": (
+                    "Provenance of this file: when an automated sync last regenerated it and the commit it "
+                    "ran against. Human edits leave it untouched; not a model entry."
+                ),
+                "properties": {
+                    "generated_at": {"type": "string", "format": "date-time"},
+                    "source_revision": STRING,
+                },
+                "required": ["generated_at", "source_revision"],
+                "additionalProperties": False,
+            },
             "sample_spec": {
                 "type": "object",
                 "description": (
