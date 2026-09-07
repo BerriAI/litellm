@@ -1981,7 +1981,26 @@ def get_model_from_request(
         if vertex_match:
             model = vertex_match.group(1)
 
+    if route.lower().startswith("/bedrock"):
+        bedrock_model: Final = _model_from_bedrock_route(route)
+        return model if bedrock_model is None else bedrock_model
+
     return model
+
+
+def _model_from_bedrock_route(route: str) -> str | None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _extract_model_from_bedrock_endpoint,
+        is_bedrock_count_tokens_endpoint,
+    )
+
+    bedrock_endpoint: Final = re.sub(r"^/bedrock/", "", route, flags=re.IGNORECASE)
+    if is_bedrock_count_tokens_endpoint(bedrock_endpoint):
+        return None
+    try:
+        return _extract_model_from_bedrock_endpoint(bedrock_endpoint)
+    except ValueError:
+        return None
 
 
 def abbreviate_api_key(api_key: str) -> str:

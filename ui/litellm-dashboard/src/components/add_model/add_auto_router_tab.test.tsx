@@ -1,4 +1,12 @@
-import { renderWithProviders, screen, waitFor, within, fireEvent, testQueryClient } from "../../../tests/test-utils";
+import {
+  renderWithProviders,
+  screen,
+  waitFor,
+  within,
+  fireEvent,
+  testQueryClient,
+  chooseSelectOption,
+} from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
@@ -51,6 +59,20 @@ const optionByLabel = (label: string): HTMLElement | undefined =>
   visibleOptions().find((el) => el.textContent?.startsWith(label));
 
 const isOptionDisabled = (option: HTMLElement): boolean => option.getAttribute("aria-disabled") === "true";
+
+const tierChips = (tier: string): HTMLElement => {
+  const placeholder = `Select model(s) for ${tier.toLowerCase()} queries`;
+  const chips = screen
+    .getAllByRole("toolbar")
+    .find((candidate) => within(candidate).queryByLabelText(placeholder) !== null);
+  if (!chips) throw new Error(`No tier row found for "${tier}"`);
+  return chips;
+};
+
+const expectTierModel = (tier: string, model: string): void => {
+  const chips = within(tierChips(tier)).getAllByLabelText(/.+/, { selector: '[data-slot="combobox-chip"]' });
+  expect(chips.map((chip) => chip.getAttribute("aria-label"))).toEqual([model]);
+};
 
 const selectTemplate = async (label: string): Promise<void> => {
   await userEvent.click(optionByLabel(label)!);
@@ -180,11 +202,10 @@ describe("AddAutoRouterTab", () => {
     const button = await screen.findByTestId("configure-automatically-button");
     await userEvent.click(button);
 
-    expect(
-      screen.getByText(
-        /Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: claude-opus-5.*Reasoning: claude-opus-5/,
-      ),
-    ).toBeInTheDocument();
+    expectTierModel("Simple", "gpt-5.6-luna");
+    expectTierModel("Medium", "claude-sonnet-5");
+    expectTierModel("Complex", "claude-opus-5");
+    expectTierModel("Reasoning", "claude-opus-5");
     expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining("Configured with"));
   });
 
@@ -201,9 +222,23 @@ describe("AddAutoRouterTab", () => {
     const button = await screen.findByTestId("configure-automatically-button");
     await userEvent.click(button);
 
-    expect(
-      screen.getByText(/Simple: gpt-5.6-luna.*Medium: claude-sonnet-5.*Complex: gpt-5.6-sol.*Reasoning: gpt-5.6-sol/),
-    ).toBeInTheDocument();
+    expectTierModel("Simple", "gpt-5.6-luna");
+    expectTierModel("Medium", "claude-sonnet-5");
+    expectTierModel("Complex", "gpt-5.6-sol");
+    expectTierModel("Reasoning", "gpt-5.6-sol");
+  });
+
+  it("opens Detailed Configuration on the tiers automatic setup just filled in", async () => {
+    const simpleModel = "gpt-5.6-luna";
+    mockFetchAvailableModels.mockResolvedValue([...ALL_FAMILY_MODELS, { model_group: simpleModel, mode: "chat" }]);
+    renderWithProviders(<Harness />);
+
+    expect(screen.queryByText("Complexity Tier Configuration")).not.toBeInTheDocument();
+
+    await userEvent.click(await screen.findByTestId("configure-automatically-button"));
+
+    expect(screen.getByText("Complexity Tier Configuration")).toBeInTheDocument();
+    expectTierModel("Simple", simpleModel);
   });
 
   // Nothing is filled in, so there is nothing to submit. The button reports that itself instead of
@@ -520,6 +555,71 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
       "context_window_escalation_buffer",
     );
+  });
+
+  describe("prompt compression", () => {
+    it("leaves both compression keys out of the create payload when the section is untouched", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+      renderWithProviders(<Harness />);
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "no-compression-router");
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      const submitted = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0];
+      expect(submitted).not.toHaveProperty("auto_router_routing_compression");
+      expect(submitted).not.toHaveProperty("auto_router_model_compression");
+    });
+
+    it("mirrors an explicit no-compression routing choice onto the model call by default", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+      renderWithProviders(<Harness />);
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "no-compression-explicit-router");
+      expandDetailedConfiguration();
+      await user.click(screen.getByText("Advanced: Compression"));
+      await chooseSelectOption(
+        user,
+        screen.getByRole("combobox", { name: "Routing decision compression" }),
+        "None (no compression)",
+      );
+
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      const submitted = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0];
+      expect(submitted?.auto_router_routing_compression).toBe("none");
+      expect(submitted?.auto_router_model_compression).toBe("none");
+    });
+
+    it("defaults the model call to none when different is chosen but nothing is picked there", async () => {
+      const user = userEvent.setup();
+      vi.mocked(getMissingTiersError).mockReturnValue(null);
+
+      renderWithProviders(<Harness />);
+
+      await user.type(screen.getByPlaceholderText(/smart_router/i), "different-compression-router");
+      expandDetailedConfiguration();
+      await user.click(screen.getByText("Advanced: Compression"));
+      await chooseSelectOption(
+        user,
+        screen.getByRole("combobox", { name: "Routing decision compression" }),
+        "None (no compression)",
+      );
+      await user.click(screen.getByText("Use a different compression"));
+      expect(screen.getByRole("combobox", { name: "Model call compression" })).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /add auto router/i }));
+
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalled());
+      const submitted = vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0];
+      expect(submitted?.auto_router_routing_compression).toBe("none");
+      expect(submitted?.auto_router_model_compression).toBe("none");
+    });
   });
 
   // The scalar floor is the one scorer knob with no group dict behind it, so its wiring into the create

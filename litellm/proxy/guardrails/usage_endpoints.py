@@ -17,6 +17,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.guardrails.usage_tracking import guardrail_status_to_action
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 
 _EMPTY_UNITS: Final[Mapping[str, int]] = MappingProxyType({})
+_ACTION_SEVERITY: Final[Mapping[str, int]] = MappingProxyType({"passed": 0, "flagged": 1, "blocked": 2})
 
 _T = TypeVar("_T")
 
@@ -154,6 +156,14 @@ async def _find_daily_guardrail_usage_units(
 
 def _counter_name(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
     return row.usage_unit
+
+
+def _team_of(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
+    return row.team_id
+
+
+def _key_of(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> str:
+    return row.api_key
 
 
 def _row_untracked_units(row: "prisma_models.LiteLLM_DailyGuardrailUsageUnits") -> int:
@@ -308,6 +318,8 @@ class UsageDetailResponse(BaseModel):
     cost_by_team: Mapping[str, float | None]
     cost_by_key: Mapping[str, float | None]
     untracked_usage_units: Mapping[str, int]
+    untracked_usage_units_by_team: Mapping[str, Mapping[str, int]]
+    untracked_usage_units_by_key: Mapping[str, Mapping[str, int]]
 
 
 class UsageLogEntry(BaseModel):
@@ -710,13 +722,15 @@ async def guardrails_usage_detail(
         time_series=time_series,
         usage_units=_sum_counter_units(units_rows),
         usage_units_daily=units_daily,
-        usage_units_by_team=_by(units_rows, lambda r: r.team_id, _sum_counter_units),
-        usage_units_by_key=_by(units_rows, lambda r: r.api_key, _sum_counter_units),
+        usage_units_by_team=_by(units_rows, _team_of, _sum_counter_units),
+        usage_units_by_key=_by(units_rows, _key_of, _sum_counter_units),
         cost=_sum_tracked_cost(units_rows),
         cost_by_unit=_by(units_rows, _counter_name, _sum_tracked_cost),
-        cost_by_team=_by(units_rows, lambda r: r.team_id, _sum_tracked_cost),
-        cost_by_key=_by(units_rows, lambda r: r.api_key, _sum_tracked_cost),
+        cost_by_team=_by(units_rows, _team_of, _sum_tracked_cost),
+        cost_by_key=_by(units_rows, _key_of, _sum_tracked_cost),
         untracked_usage_units=_sum_untracked_units(units_rows),
+        untracked_usage_units_by_team=_by(units_rows, _team_of, _sum_untracked_units),
+        untracked_usage_units_by_key=_by(units_rows, _key_of, _sum_untracked_units),
     )
 
 
@@ -759,21 +773,17 @@ def _usage_log_entry_from_row(
         except Exception:
             meta = {}
     guardrail_info_list: Final[Sequence[_GuardrailRunInfo]] = (meta or {}).get("guardrail_information") or []
-    entry_for_guardrail: _GuardrailRunInfo | None = None
-    for gi in guardrail_info_list:
-        if (gi.get("guardrail_id") or gi.get("guardrail_name")) == r.guardrail_id:
-            entry_for_guardrail = gi
-            break
+    entry_for_guardrail: Final[_GuardrailRunInfo | None] = max(
+        (gi for gi in guardrail_info_list if (gi.get("guardrail_id") or gi.get("guardrail_name")) == r.guardrail_id),
+        key=lambda gi: _ACTION_SEVERITY[guardrail_status_to_action(gi.get("guardrail_status"))],
+        default=None,
+    )
     action_val = "passed"
     score_val = None
     latency_val = None
     reason_val = None
     if entry_for_guardrail:
-        st: Final = (entry_for_guardrail.get("guardrail_status") or "").lower()
-        if "intervened" in st or "block" in st:
-            action_val = "blocked"
-        elif "fail" in st or "error" in st:
-            action_val = "flagged"
+        action_val = guardrail_status_to_action(entry_for_guardrail.get("guardrail_status"))
         duration: Final = entry_for_guardrail.get("duration")
         if duration is not None:
             latency_val = round(float(duration) * 1000, 0)

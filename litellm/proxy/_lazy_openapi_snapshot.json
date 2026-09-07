@@ -4687,6 +4687,17 @@
               "title": "Created At",
               "type": "string"
             },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
             "display_title": {
               "anyOf": [
                 {
@@ -4712,6 +4723,17 @@
                 }
               ],
               "title": "Latest Version"
+            },
+            "search_score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search Score"
             },
             "source": {
               "title": "Source",
@@ -4781,7 +4803,7 @@
     "paths": {
       "/v1/skills": {
         "get": {
-          "description": "List skills on Anthropic.\n\nRequires `?beta=true` query parameter.\n\nModel-based routing (for multi-account support):\n- Pass model via header: `x-litellm-model: claude-account-1`\n- Pass model via query: `?model=claude-account-1`\n- Pass model via body: `{\"model\": \"claude-account-1\"}`\n\nExample usage:\n```bash\n# Basic usage\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"\n\n# With model-based routing\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"       -H \"x-litellm-model: claude-account-1\"\n```\n\nReturns: ListSkillsResponse with list of skills",
+          "description": "List skills on Anthropic.\n\nRequires `?beta=true` query parameter.\n\nModel-based routing (for multi-account support):\n- Pass model via header: `x-litellm-model: claude-account-1`\n- Pass model via query: `?model=claude-account-1`\n- Pass model via body: `{\"model\": \"claude-account-1\"}`\n\nExample usage:\n```bash\n# Basic usage\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"\n\n# With model-based routing\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"       -H \"x-litellm-model: claude-account-1\"\n```\n\nPass `?custom_llm_provider=litellm_proxy&query=<task>` to rank the LiteLLM-hosted skills you can\naccess by semantic similarity instead of paging through the whole registry:\n```bash\ncurl \"http://localhost:4000/v1/skills?custom_llm_provider=litellm_proxy&query=summarize+a+pdf&top_k=5\"       -H \"Authorization: Bearer your-key\"\n```\n\nReturns: ListSkillsResponse with list of skills",
           "operationId": "list_skills_v1_skills_get",
           "parameters": [
             {
@@ -4848,6 +4870,39 @@
                 ],
                 "default": "anthropic",
                 "title": "Custom Llm Provider"
+              }
+            },
+            {
+              "description": "Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model.",
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model.",
+                "title": "Query"
+              }
+            },
+            {
+              "description": "With query: the maximum number of ranked skills to return.",
+              "in": "query",
+              "name": "top_k",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "description": "With query: the maximum number of ranked skills to return.",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Top K",
+                "type": "integer"
               }
             }
           ],
@@ -9504,6 +9559,18 @@
               "description": "Name of the guardrail in guardrails.ai",
               "title": "Guard Name"
             },
+            "inspect_embeddings": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.",
+              "title": "Inspect Embeddings"
+            },
             "keyword_redaction_tag": {
               "anyOf": [
                 {
@@ -9585,7 +9652,9 @@
                 {
                   "enum": [
                     "warn",
-                    "end_session"
+                    "end_session",
+                    "block",
+                    "alert"
                   ],
                   "type": "string"
                 },
@@ -9593,7 +9662,7 @@
                   "type": "null"
                 }
               ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
               "title": "On Violation"
             },
             "only_scan_new_messages": {
@@ -11261,6 +11330,12 @@
               ],
               "description": "Threshold configuration for Lakera guardrail categories"
             },
+            "ccr_retrieval": {
+              "default": true,
+              "description": "Inject the Headroom retrieval tool for hashes declared by the compression service.",
+              "title": "Ccr Retrieval",
+              "type": "boolean"
+            },
             "checks": {
               "anyOf": [
                 {
@@ -11656,6 +11731,18 @@
               "description": "Include scanner category summaries in responses (sets `plr_scanners` header).",
               "title": "Include Scanners"
             },
+            "inspect_embeddings": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.",
+              "title": "Inspect Embeddings"
+            },
             "is_detector_server": {
               "anyOf": [
                 {
@@ -11884,7 +11971,9 @@
                 {
                   "enum": [
                     "warn",
-                    "end_session"
+                    "end_session",
+                    "block",
+                    "alert"
                   ],
                   "type": "string"
                 },
@@ -11892,7 +11981,7 @@
                   "type": "null"
                 }
               ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
               "title": "On Violation"
             },
             "only_scan_new_messages": {
@@ -13218,6 +13307,26 @@
               "title": "Untracked Usage Units",
               "type": "object"
             },
+            "untracked_usage_units_by_key": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Key",
+              "type": "object"
+            },
+            "untracked_usage_units_by_team": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Team",
+              "type": "object"
+            },
             "usage_units": {
               "additionalProperties": {
                 "type": "integer"
@@ -13274,7 +13383,9 @@
             "cost_by_unit",
             "cost_by_team",
             "cost_by_key",
-            "untracked_usage_units"
+            "untracked_usage_units",
+            "untracked_usage_units_by_team",
+            "untracked_usage_units_by_key"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
@@ -16303,6 +16414,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -17926,6 +18042,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -18805,6 +18926,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -20816,6 +20942,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -22290,6 +22421,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -22808,6 +22944,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -25317,6 +25458,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {

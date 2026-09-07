@@ -12,6 +12,7 @@ on:
       - "litellm_**"
   push:
     branches:
+      - main
       - litellm_internal_staging
 
 concurrency:
