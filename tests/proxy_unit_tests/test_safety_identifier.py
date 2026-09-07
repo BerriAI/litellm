@@ -3,7 +3,6 @@ from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import Request
 
 import litellm
 from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
@@ -108,7 +107,7 @@ async def test_pre_call_hook_cannot_override_enforced_safety_identifier(
     monkeypatch: pytest.MonkeyPatch, route_type: Literal["acompletion", "aresponses"]
 ):
     monkeypatch.setenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER", "true")
-    request = MagicMock(spec=Request)
+    request = MagicMock()
     request.headers.get.return_value = "call-id"
     logging_obj = MagicMock()
     proxy_logging_obj = MagicMock()

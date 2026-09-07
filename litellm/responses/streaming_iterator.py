@@ -99,11 +99,13 @@ def _enforce_responses_ws_safety_identifier(
     msg_obj: _MutableJsonObject,
     user_api_key_dict: UserAPIKeyAuth | None,
 ) -> bool:
-    return enforce_safety_identifier(
-        data=msg_obj,
-        user_id=user_api_key_dict.user_id if user_api_key_dict is not None else None,
-        enabled=str_to_bool(os.getenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER")) is True,
-    )
+    user_id: Final[str | None] = user_api_key_dict.user_id if user_api_key_dict is not None else None
+    enabled: Final[bool] = str_to_bool(os.getenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER")) is True
+    modified = enforce_safety_identifier(data=msg_obj, user_id=user_id, enabled=enabled)
+    nested_candidate: Final = msg_obj.get("response")
+    if _is_json_object(nested_candidate):
+        modified = enforce_safety_identifier(data=nested_candidate, user_id=user_id, enabled=enabled) or modified
+    return modified
 
 
 class _MutableJsonObject(Protocol):
