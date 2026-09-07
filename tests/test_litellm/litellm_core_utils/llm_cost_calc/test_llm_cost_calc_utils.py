@@ -27,6 +27,7 @@ from litellm.types.utils import (
 )
 
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    BilledTokenRates,
     CostCalculatorUtils,
     PromptTokensDetailsResult,
     TokenRates,
@@ -38,6 +39,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     apply_off_peak_pricing,
     calculate_cache_writing_cost,
     generic_cost_per_token,
+    get_billed_token_rates,
     get_token_type_cost_breakdown,
 )
 from litellm.types.utils import CacheCreationTokenDetails, Usage
@@ -3936,6 +3938,53 @@ def test_token_type_cost_breakdown_reconciles_with_custom_pricing_totals():
 
     assert 100 * 1e-6 + breakdown.cache_read_cost + breakdown.cache_creation_cost == pytest.approx(prompt_cost)
     assert 300 * 2e-6 + breakdown.reasoning_cost == pytest.approx(completion_cost)
+
+
+def test_billed_token_rates_follow_the_token_tier_the_breakdown_bills_at(monkeypatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "tiered-cache-model",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "cache_read_input_token_cost": 3e-7,
+            "cache_creation_input_token_cost": 3.75e-6,
+            "input_cost_per_token_above_200k_tokens": 6e-6,
+            "output_cost_per_token_above_200k_tokens": 3e-5,
+            "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+            "cache_creation_input_token_cost_above_200k_tokens": 7.5e-6,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    usage = Usage(
+        prompt_tokens=250_000,
+        completion_tokens=1_000,
+        total_tokens=251_000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200_000, cache_creation_tokens=10_000),
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=200),
+    )
+
+    rates = get_billed_token_rates(model="tiered-cache-model", custom_llm_provider="openai", usage=usage)
+    breakdown = get_token_type_cost_breakdown(model="tiered-cache-model", custom_llm_provider="openai", usage=usage)
+
+    assert rates == BilledTokenRates(
+        input_cost_per_token=6e-6,
+        output_cost_per_token=3e-5,
+        cache_read_input_token_cost=6e-7,
+        cache_creation_input_token_cost=7.5e-6,
+        cache_creation_input_token_cost_above_1hr=0.0,
+        output_cost_per_reasoning_token=3e-5,
+    )
+    assert breakdown.cache_read_cost == pytest.approx(200_000 * rates.cache_read_input_token_cost)
+    assert breakdown.cache_creation_cost == pytest.approx(10_000 * rates.cache_creation_input_token_cost)
+    assert breakdown.reasoning_cost == pytest.approx(200 * rates.output_cost_per_reasoning_token)
+
+
+def test_billed_token_rates_are_none_for_an_unpriced_model():
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    assert get_billed_token_rates(model="no-such-model-anywhere", custom_llm_provider="openai", usage=usage) is None
 
 
 def test_token_type_cost_breakdown_zero_without_special_tokens(_local_model_cost_map):

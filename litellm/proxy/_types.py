@@ -5197,9 +5197,9 @@ class CostEstimateResponse(LiteLLMPydanticObjectBase):
         default=None, description="Cache-write share of monthly_input_cost"
     )
     monthly_reasoning_cost: float | None = Field(default=None, description="Reasoning share of monthly_output_cost")
-    # Pricing info
-    input_cost_per_token: float | None = None
-    output_cost_per_token: float | None = None
+    # Pricing info: the rates this request's usage bills at, after token tiers and regional multipliers
+    input_cost_per_token: float | None = Field(default=None, description="Rate billed per input token")
+    output_cost_per_token: float | None = Field(default=None, description="Rate billed per output token")
     cache_read_input_token_cost: float | None = Field(default=None, description="Rate billed per cache-read token")
     cache_creation_input_token_cost: float | None = Field(default=None, description="Rate billed per cache-write token")
     output_cost_per_reasoning_token: float | None = Field(default=None, description="Rate billed per reasoning token")

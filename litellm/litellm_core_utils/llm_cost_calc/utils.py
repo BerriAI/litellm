@@ -1329,16 +1329,118 @@ def _cache_token_counts(usage: Usage) -> tuple[int, int, CacheCreationTokenDetai
     )
 
 
-def _custom_pricing_token_type_breakdown(usage: Usage, custom_cost_per_token: CostPerToken) -> TokenTypeCostBreakdown:
+@dataclass(frozen=True, slots=True)
+class BilledTokenRates:
+    """Per-token rates one request's usage bills at, after token tiers, off-peak windows and the
+    regional multipliers the totals apply, so each cost line equals its token count times its rate."""
+
+    input_cost_per_token: float
+    output_cost_per_token: float
+    cache_read_input_token_cost: float
+    cache_creation_input_token_cost: float
+    cache_creation_input_token_cost_above_1hr: float
+    output_cost_per_reasoning_token: float
+
+    def scaled(self, multiplier: float) -> "BilledTokenRates":
+        if multiplier == 1.0:
+            return self
+        return BilledTokenRates(
+            input_cost_per_token=self.input_cost_per_token * multiplier,
+            output_cost_per_token=self.output_cost_per_token * multiplier,
+            cache_read_input_token_cost=self.cache_read_input_token_cost * multiplier,
+            cache_creation_input_token_cost=self.cache_creation_input_token_cost * multiplier,
+            cache_creation_input_token_cost_above_1hr=self.cache_creation_input_token_cost_above_1hr * multiplier,
+            output_cost_per_reasoning_token=self.output_cost_per_reasoning_token * multiplier,
+        )
+
+
+def _custom_pricing_rates(custom_cost_per_token: CostPerToken) -> BilledTokenRates:
     """Flat custom pricing has no tiers, uplifts or reasoning rate: cache tokens bill at the configured
     cache rates (else the input rate) and reasoning at the output rate, as _cost_per_token_custom_pricing_helper does."""
     input_rate: Final = custom_cost_per_token["input_cost_per_token"]
-    cache_read_tokens, cache_creation_tokens, _ = _cache_token_counts(usage)
-    return TokenTypeCostBreakdown(
-        reasoning_cost=float(_reasoning_token_count(usage)) * custom_cost_per_token["output_cost_per_token"],
-        cache_read_cost=float(cache_read_tokens) * custom_cost_per_token.get("cache_read_input_token_cost", input_rate),
-        cache_creation_cost=float(cache_creation_tokens)
-        * custom_cost_per_token.get("cache_creation_input_token_cost", input_rate),
+    output_rate: Final = custom_cost_per_token["output_cost_per_token"]
+    cache_creation_rate: Final = custom_cost_per_token.get("cache_creation_input_token_cost", input_rate)
+    return BilledTokenRates(
+        input_cost_per_token=input_rate,
+        output_cost_per_token=output_rate,
+        cache_read_input_token_cost=custom_cost_per_token.get("cache_read_input_token_cost", input_rate),
+        cache_creation_input_token_cost=cache_creation_rate,
+        cache_creation_input_token_cost_above_1hr=cache_creation_rate,
+        output_cost_per_reasoning_token=output_rate,
+    )
+
+
+def _cost_map_billed_rates(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+    current_time: datetime | None,
+) -> BilledTokenRates:
+    billing_time: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    (
+        prompt_base_cost,
+        completion_base_cost,
+        cache_creation_cost_rate,
+        cache_creation_cost_above_1hr_rate,
+        cache_read_cost_rate,
+    ) = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+        current_time=billing_time,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    )
+    reasoning_rate: Final = _resolve_billed_reasoning_rate(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+        completion_base_cost=completion_base_cost,
+        current_time=billing_time,
+    )
+    multiplier: Final = (
+        _get_regional_uplift_multiplier(model_info, data_residency)
+        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+        * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
+    )
+    return BilledTokenRates(
+        input_cost_per_token=prompt_base_cost,
+        output_cost_per_token=completion_base_cost,
+        cache_read_input_token_cost=cache_read_cost_rate,
+        cache_creation_input_token_cost=cache_creation_cost_rate,
+        cache_creation_input_token_cost_above_1hr=cache_creation_cost_above_1hr_rate,
+        output_cost_per_reasoning_token=reasoning_rate,
+    ).scaled(multiplier)
+
+
+def get_billed_token_rates(
+    model: str,
+    custom_llm_provider: str | None,
+    usage: Usage,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    current_time: datetime | None = None,
+    custom_cost_per_token: CostPerToken | None = None,
+) -> BilledTokenRates | None:
+    """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
+    breakdown resolve them. None when the model's pricing cannot be resolved."""
+    if custom_cost_per_token is not None:
+        return _custom_pricing_rates(custom_cost_per_token)
+    try:
+        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return None
+    return _cost_map_billed_rates(
+        model_info=model_info,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        current_time=current_time,
     )
 
 
@@ -1360,77 +1462,39 @@ def get_token_type_cost_breakdown(
     cost calculators bypass ``generic_cost_per_token``, because cache tokens always
     land on ``prompt_tokens_details`` (via the Usage constructor and provider
     transformations) and reasoning tokens on ``completion_tokens_details``. It reuses
-    the same rate-resolution primitives as the total-cost path so the breakdown can
-    never drift from the totals. A deployment billed by ``custom_cost_per_token`` is
-    priced from those flat rates instead of the cost map, for the same reason.
+    the same rate resolution as the total-cost path (``get_billed_token_rates``) so the
+    breakdown can never drift from the totals. A deployment billed by
+    ``custom_cost_per_token`` is priced from those flat rates instead of the cost map and,
+    like its totals, bills cache writes flat rather than by their 5m/1h split.
     Returns zeros (never raises) when the model or its pricing cannot be resolved.
     """
-    if custom_cost_per_token is not None:
-        return _custom_pricing_token_type_breakdown(usage=usage, custom_cost_per_token=custom_cost_per_token)
-
-    try:
-        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:
+    rates: Final = get_billed_token_rates(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        usage=usage,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        current_time=current_time,
+        custom_cost_per_token=custom_cost_per_token,
+    )
+    if rates is None:
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
 
-    billing_time: Final = current_time if current_time is not None else datetime.now(timezone.utc)
-    (
-        _prompt_base_cost,
-        completion_base_cost,
-        cache_creation_cost_rate,
-        cache_creation_cost_above_1hr_rate,
-        cache_read_cost_rate,
-    ) = _get_token_base_cost(
-        model_info=model_info,
-        usage=usage,
-        service_tier=service_tier,
-        current_time=billing_time,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
-    )
-
-    reasoning_rate: Final = _resolve_billed_reasoning_rate(
-        model_info=model_info,
-        usage=usage,
-        service_tier=service_tier,
-        completion_base_cost=completion_base_cost,
-        current_time=billing_time,
-    )
-    reasoning_cost = float(_reasoning_token_count(usage)) * reasoning_rate
-
     cache_read_tokens, cache_creation_tokens, cache_creation_token_details = _cache_token_counts(usage)
-    cache_read_cost = float(cache_read_tokens) * cache_read_cost_rate
-    cache_creation_cost = calculate_cache_writing_cost(
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_token_details=cache_creation_token_details,
-        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr_rate,
-        cache_creation_cost=cache_creation_cost_rate,
+    cache_creation_cost: Final = (
+        float(cache_creation_tokens) * rates.cache_creation_input_token_cost
+        if custom_cost_per_token is not None
+        else calculate_cache_writing_cost(
+            cache_creation_tokens=cache_creation_tokens,
+            cache_creation_token_details=cache_creation_token_details,
+            cache_creation_cost_above_1hr=rates.cache_creation_input_token_cost_above_1hr,
+            cache_creation_cost=rates.cache_creation_input_token_cost,
+        )
     )
-
-    # Apply the same flat regional-processing uplift the totals get, so per-type
-    # costs stay reconciled with input_cost/output_cost for regionalized OpenAI hosts.
-    uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency)
-    if uplift != 1.0:
-        reasoning_cost *= uplift
-        cache_read_cost *= uplift
-        cache_creation_cost *= uplift
-
-    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
-    if vertex_uplift != 1.0:
-        reasoning_cost *= vertex_uplift
-        cache_read_cost *= vertex_uplift
-        cache_creation_cost *= vertex_uplift
-
-    # Mirror the provider-specific geo uplift (e.g. Anthropic us: 1.1) the totals
-    # apply, so cache and reasoning line items stay reconciled with them.
-    geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
-    if geo_multiplier != 1.0:
-        reasoning_cost *= geo_multiplier
-        cache_read_cost *= geo_multiplier
-        cache_creation_cost *= geo_multiplier
-
     return TokenTypeCostBreakdown(
-        reasoning_cost=reasoning_cost,
-        cache_read_cost=cache_read_cost,
+        reasoning_cost=float(_reasoning_token_count(usage)) * rates.output_cost_per_reasoning_token,
+        cache_read_cost=float(cache_read_tokens) * rates.cache_read_input_token_cost,
         cache_creation_cost=cache_creation_cost,
     )
 

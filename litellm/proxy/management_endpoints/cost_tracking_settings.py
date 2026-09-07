@@ -20,6 +20,7 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.cost_calculator import completion_cost
+from litellm.litellm_core_utils.llm_cost_calc.utils import get_billed_token_rates
 from litellm.proxy._types import (
     CommonProxyErrors,
     CostEstimateRequest,
@@ -167,44 +168,6 @@ def _cost_lines(cost_per_request: float, cost_breakdown: CostBreakdown | None) -
         cache_read_cost=breakdown.get("cache_read_cost", 0.0),
         cache_creation_cost=breakdown.get("cache_creation_cost", 0.0),
         reasoning_cost=breakdown.get("reasoning_cost", 0.0),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class EffectiveTokenRates:
-    input_cost_per_token: float | None
-    output_cost_per_token: float | None
-    cache_read_input_token_cost: float | None
-    cache_creation_input_token_cost: float | None
-    output_cost_per_reasoning_token: float | None
-
-
-def _custom_token_rates(custom_cost_per_token: CostPerToken) -> EffectiveTokenRates:
-    input_rate: Final = custom_cost_per_token["input_cost_per_token"]
-    output_rate: Final = custom_cost_per_token["output_cost_per_token"]
-    return EffectiveTokenRates(
-        input_cost_per_token=input_rate,
-        output_cost_per_token=output_rate,
-        cache_read_input_token_cost=custom_cost_per_token.get("cache_read_input_token_cost", input_rate),
-        cache_creation_input_token_cost=custom_cost_per_token.get("cache_creation_input_token_cost", input_rate),
-        output_cost_per_reasoning_token=output_rate,
-    )
-
-
-def _cost_map_token_rates(model_info: ModelInfo | None) -> EffectiveTokenRates:
-    """Base rates the cost calculator bills flat usage at: a cost-map model without a cache price
-    bills cache tokens at zero, and one without a reasoning price bills reasoning at the output rate."""
-    if model_info is None:
-        return EffectiveTokenRates(None, None, None, None, None)
-    sources: Final = (model_info,)
-    output_rate: Final = _configured_price("output_cost_per_token", sources)
-    reasoning_rate: Final = _configured_price("output_cost_per_reasoning_token", sources)
-    return EffectiveTokenRates(
-        input_cost_per_token=_configured_price("input_cost_per_token", sources),
-        output_cost_per_token=output_rate,
-        cache_read_input_token_cost=_configured_price("cache_read_input_token_cost", sources) or 0.0,
-        cache_creation_input_token_cost=_configured_price("cache_creation_input_token_cost", sources) or 0.0,
-        output_cost_per_reasoning_token=output_rate if reasoning_rate is None else reasoning_rate,
     )
 
 
@@ -654,7 +617,8 @@ async def estimate_cost(
 
     verbose_proxy_logger.debug("Cost estimate: request.model='%s' resolved to '%s'", request.model, resolved_model)
 
-    mock_response: Final = ModelResponse(model=resolved_model, usage=_usage_for_estimate(request))
+    usage: Final = _usage_for_estimate(request)
+    mock_response: Final = ModelResponse(model=resolved_model, usage=usage)
 
     # Create a logging object to capture cost breakdown
     litellm_logging_obj: Final = LiteLLMLoggingObj(
@@ -688,12 +652,13 @@ async def estimate_cost(
     daily: Final = per_request.times(request.num_requests_per_day)
     monthly: Final = per_request.times(request.num_requests_per_month)
 
-    model_info: Final = _lookup_model_info(resolved_model)
-    rates: Final = (
-        _custom_token_rates(resolved.custom_cost_per_token)
-        if resolved.custom_cost_per_token is not None
-        else _cost_map_token_rates(model_info)
+    rates: Final = get_billed_token_rates(
+        model=resolved_model,
+        custom_llm_provider=resolved_provider,
+        usage=usage,
+        custom_cost_per_token=resolved.custom_cost_per_token,
     )
+    model_info: Final = _lookup_model_info(resolved_model)
     mapped_provider: Final = model_info.get("litellm_provider") if model_info is not None else None
     custom_llm_provider: Final = mapped_provider if mapped_provider is not None else resolved_provider
 
@@ -727,10 +692,10 @@ async def estimate_cost(
         monthly_cache_read_cost=monthly.cache_read_cost if monthly is not None else None,
         monthly_cache_creation_cost=monthly.cache_creation_cost if monthly is not None else None,
         monthly_reasoning_cost=monthly.reasoning_cost if monthly is not None else None,
-        input_cost_per_token=rates.input_cost_per_token,
-        output_cost_per_token=rates.output_cost_per_token,
-        cache_read_input_token_cost=rates.cache_read_input_token_cost,
-        cache_creation_input_token_cost=rates.cache_creation_input_token_cost,
-        output_cost_per_reasoning_token=rates.output_cost_per_reasoning_token,
+        input_cost_per_token=rates.input_cost_per_token if rates is not None else None,
+        output_cost_per_token=rates.output_cost_per_token if rates is not None else None,
+        cache_read_input_token_cost=rates.cache_read_input_token_cost if rates is not None else None,
+        cache_creation_input_token_cost=rates.cache_creation_input_token_cost if rates is not None else None,
+        output_cost_per_reasoning_token=rates.output_cost_per_reasoning_token if rates is not None else None,
         provider=custom_llm_provider,
     )
