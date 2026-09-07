@@ -1417,6 +1417,9 @@ class PrometheusLogger(CustomLogger):
             f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
         )
 
+        reported_usage: Final = (
+            response_obj.get("usage") if isinstance(response_obj, dict) else getattr(response_obj, "usage", None)
+        )
         enum_values: Final = UserAPIKeyLabelValues(
             end_user=end_user_id,
             hashed_api_key=user_api_key,
@@ -1445,7 +1448,13 @@ class PrometheusLogger(CustomLogger):
             stream=(str(standard_logging_payload.get("stream")) if litellm.prometheus_emit_stream_label else None),
             service_tier=get_service_tier_from_standard_logging_payload(standard_logging_payload),
             input_sequence_length=(
-                get_input_sequence_length_bucket(standard_logging_payload.get("prompt_tokens"))
+                get_input_sequence_length_bucket(
+                    standard_logging_payload.get("prompt_tokens")
+                    if standard_logging_payload.get("prompt_tokens")
+                    or reported_usage is not None
+                    or kwargs.get("combined_usage_object") is not None
+                    else None
+                )
                 if self._emit_input_sequence_length_label
                 else None
             ),

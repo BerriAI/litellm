@@ -25,7 +25,7 @@ FLAG: Final = "prometheus_emit_input_sequence_length_label"
 
 
 def _clear_prometheus_registry() -> None:
-    for collector in list(REGISTRY._collector_to_names):  # pyright: ignore[reportPrivateUsage]
+    for collector in tuple(REGISTRY._collector_to_names):  # pyright: ignore[reportPrivateUsage]  # test registry reset
         REGISTRY.unregister(collector)
 
 
@@ -162,6 +162,41 @@ async def test_logger_emits_bucket_from_its_startup_label_set(
     samples: Final = _latency_bucket_samples()
     assert samples
     assert all(sample.labels["input_sequence_length"] == "4k-16k" for sample in samples)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "combined_usage", "expected"),
+    (
+        ({"id": "moderation", "results": []}, None, "unknown"),
+        ({"usage": None}, None, "unknown"),
+        ({"usage": {"prompt_tokens": 0}}, None, "0-1k"),
+        (litellm.ModelResponse(usage=litellm.Usage(prompt_tokens=0)), None, "0-1k"),
+        (None, litellm.Usage(prompt_tokens=0), "0-1k"),
+    ),
+)
+async def test_logger_distinguishes_missing_usage_from_reported_zero(
+    monkeypatch: pytest.MonkeyPatch, response: object, combined_usage: object, expected: str
+):
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    now: Final = datetime.datetime.now()
+    monkeypatch.setattr(litellm, FLAG, True)
+    logger: Final = PrometheusLogger()
+    usage: Final = StandardLoggingPayloadSetup.get_usage_as_dict(
+        response_obj=response if isinstance(response, dict) else None
+    )
+
+    await logger.async_log_success_event(
+        {**_success_kwargs(now, prompt_tokens=usage["prompt_tokens"]), "combined_usage_object": combined_usage},
+        response,
+        now,
+        now,
+    )
+
+    samples: Final = _latency_bucket_samples()
+    assert samples
+    assert all(sample.labels["input_sequence_length"] == expected for sample in samples)
 
 
 @pytest.mark.asyncio

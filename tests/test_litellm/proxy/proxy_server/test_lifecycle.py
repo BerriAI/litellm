@@ -794,7 +794,6 @@ async def test_resolve_store_model_in_db_preserves_legacy_config_and_env_precede
     db_value: bool,
     expected: bool,
 ):
-    monkeypatch.setattr(ps, "store_model_in_db", configured)
     if environment is None:
         monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
     else:
@@ -804,7 +803,7 @@ async def test_resolve_store_model_in_db_preserves_legacy_config_and_env_precede
         return_value=MagicMock(param_value={"store_model_in_db": db_value})
     )
 
-    assert await ProxyStartupEvent.resolve_store_model_in_db(prisma_client, ps.store_model_in_db) is expected
+    assert await ProxyStartupEvent.resolve_store_model_in_db(prisma_client, configured) is expected
     assert prisma_client.db.litellm_config.find_first.await_count == (
         0 if configured is True or environment == "true" else 1
     )

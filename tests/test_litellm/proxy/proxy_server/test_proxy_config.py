@@ -12,7 +12,7 @@ import json
 import os
 import re
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -2914,17 +2914,21 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("db_value", "expected"),
-    ((True, True), (False, False), ("true", True), ("false", False), ("invalid", False)),
+    ("param_value", "expected"),
+    (
+        ({"prometheus_emit_input_sequence_length_label": "true"}, True),
+        ('{"prometheus_emit_input_sequence_length_label": "true"}', True),
+        ('{"prometheus_emit_input_sequence_length_label": false}', False),
+        (None, False),
+        ('["prometheus_emit_input_sequence_length_label"]', False),
+    ),
 )
-async def test_apply_safe_litellm_settings_overrides_normalizes_input_sequence_length_flag(
-    monkeypatch: pytest.MonkeyPatch, db_value: object, expected: bool
+async def test_apply_safe_litellm_settings_overrides_parses_input_sequence_length_record(
+    monkeypatch: pytest.MonkeyPatch, param_value: object, expected: bool
 ):
     from litellm.proxy import proxy_server
 
-    config_record = SimpleNamespace(
-        param_value={"prometheus_emit_input_sequence_length_label": db_value}
-    )
+    config_record: Final = None if param_value is None else SimpleNamespace(param_value=param_value)
     monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=config_record))
     monkeypatch.setattr(litellm, "prometheus_emit_input_sequence_length_label", False)
 

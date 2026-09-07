@@ -1189,15 +1189,15 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             general_settings=general_settings
         )
 
-    store_model_in_db = (  # rebind-ok: startup publishes the combined env, YAML and DB setting before callback construction
-        await ProxyStartupEvent.resolve_store_model_in_db(prisma_client=prisma_client, configured=store_model_in_db)
+    should_load_db_litellm_settings: Final = await ProxyStartupEvent.resolve_store_model_in_db(
+        prisma_client=prisma_client, configured=store_model_in_db
     )
     await ProxyStartupEvent._initialize_startup_logging(
         llm_router=llm_router,
         proxy_logging_obj=proxy_logging_obj,
         redis_usage_cache=transaction_buffer_redis_cache,
         prisma_client=prisma_client,
-        should_load_db_litellm_settings=store_model_in_db,
+        should_load_db_litellm_settings=should_load_db_litellm_settings,
         proxy_config_obj=proxy_config,
     )
 
@@ -9024,8 +9024,9 @@ class ProxyStartupEvent:
         )
 
     @staticmethod
-    async def resolve_store_model_in_db(prisma_client: PrismaClient | None, configured: bool) -> bool:
-        if (get_secret_bool("STORE_MODEL_IN_DB", configured) or configured) is True:
+    async def resolve_store_model_in_db(prisma_client: PrismaClient | None, configured: bool | str) -> bool:
+        default: Final = str_to_bool(configured) if isinstance(configured, str) else configured is True
+        if (get_secret_bool("STORE_MODEL_IN_DB", default) or configured) is True:
             return True
         if prisma_client is None:
             return False
@@ -9591,8 +9592,9 @@ class ProxyStartupEvent:
             prisma_client.spend_logs_queue_monitor_task = monitor_task  # rebind-ok: the client owns its monitor handle
 
         ### ADD NEW MODELS ###
-        store_model_in_db = await cls.resolve_store_model_in_db(
-            prisma_client=prisma_client, configured=store_model_in_db
+        store_model_in_db = (  # rebind-ok: preserve legacy YAML values unless env or DB explicitly enables storage
+            await cls.resolve_store_model_in_db(prisma_client=prisma_client, configured=store_model_in_db)
+            or store_model_in_db
         )
 
         config_reload_interval_seconds = proxy_config_reload_interval_seconds
@@ -17152,7 +17154,7 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
             "forgiving it. Applies to key, user, team, team member, org, tag and end-user budgets."
         ),
     },
-    "prometheus_emit_input_sequence_length_label": {  # mutable-ok: nested registry literal; LIT002 exempts only TypedDict-annotated top-level literals
+    "prometheus_emit_input_sequence_length_label": {  # mutable-ok: frozen with the registry below
         "type": "Boolean",
         "description": (
             "Break latency and time-to-first-token metrics into input token length buckets. "
