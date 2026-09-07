@@ -11,7 +11,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from prisma import Json
+from prisma import Json, models
 
 from litellm.proxy._experimental.mcp_server.db import (
     create_mcp_server,
@@ -28,8 +28,11 @@ def _credentials_cleared(value) -> bool:
 def _mock_prisma():
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_mcpservertable = AsyncMock()
-    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
-    mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=MagicMock())
+    row = models.LiteLLM_MCPServerTable.model_construct(
+        server_id="test-server", transport="http", env={}, env_vars=[]
+    )
+    mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_mcpservertable.create = AsyncMock(return_value=row)
     return mock_prisma
 
 
