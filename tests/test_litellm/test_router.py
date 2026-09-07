@@ -2524,12 +2524,7 @@ def test_adopt_fallback_response_headers_replaces_rather_than_merges():
 
 
 def test_adopt_fallback_response_headers_survives_a_collected_wrapper():
-    """LIT-6767: the fallback generator holds only a weak reference to its wrapper.
-
-    A client that disconnects mid-stream can drop the wrapper while the generator is
-    still draining, and the adoption call has to keep working with nothing to adopt into
-    so the deployment slot is still released.
-    """
+    """LIT-6767: adoption still returns the fallback's params once the wrapper is gone."""
     import weakref
     from unittest.mock import MagicMock
 
@@ -2557,7 +2552,6 @@ def test_adopt_fallback_response_headers_survives_a_collected_wrapper():
     dead_ref: Final = weakref.ref(wrapper)
     del wrapper
     assert dead_ref() is None
-    # no wrapper left to repoint, and the caller still needs the params for the chunks
     assert Router._adopt_fallback_response_headers(dead_ref, fallback) == prepared
 
 

@@ -1816,15 +1816,14 @@ class TestCommonRequestProcessingHelpers:
         headers are still uncommitted, so ``refresh_headers`` is consulted after
         the first chunk is buffered and its result wins.
         """
-        refreshed_at: Final[list[str]] = []
 
         async def mock_generator():
             yield 'data: {"content": "data"}\n\n'
             yield "data: [DONE]\n\n"
 
-        async def refresh_headers():
-            refreshed_at.append("called")
-            return {"x-litellm-model-id": "fallback-deployment", "llm_provider-x-request-id": "req-FALLBACK"}
+        refresh_headers: Final = AsyncMock(
+            return_value={"x-litellm-model-id": "fallback-deployment", "llm_provider-x-request-id": "req-FALLBACK"}
+        )
 
         response = await create_response(
             mock_generator(),
@@ -1833,7 +1832,7 @@ class TestCommonRequestProcessingHelpers:
             refresh_headers=refresh_headers,
         )
         assert isinstance(response, StreamingResponse)
-        assert refreshed_at == ["called"]
+        assert refresh_headers.await_count == 1
         assert response.headers["x-litellm-model-id"] == "fallback-deployment"
         assert response.headers["llm_provider-x-request-id"] == "req-FALLBACK"
         # the buffering headers are still applied on top of the refreshed set
@@ -1847,15 +1846,15 @@ class TestCommonRequestProcessingHelpers:
         being produced, so a refresh consulted any earlier still describes the attempt
         that failed and the headers go out wrong.
         """
-        produced = {"first_chunk": False}
+        first_chunk_produced: Final = asyncio.Event()
 
         async def mock_generator():
-            produced["first_chunk"] = True
+            first_chunk_produced.set()
             yield 'data: {"content": "data"}\n\n'
             yield "data: [DONE]\n\n"
 
         async def refresh_headers():
-            served = "fallback-deployment" if produced["first_chunk"] else "failed-deployment"
+            served = "fallback-deployment" if first_chunk_produced.is_set() else "failed-deployment"
             return {"x-litellm-model-id": served}
 
         response = await create_response(
