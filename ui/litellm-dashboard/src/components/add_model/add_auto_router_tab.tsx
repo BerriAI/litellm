@@ -37,6 +37,12 @@ import {
   buildAutoRouterCompressionParams,
   DEFAULT_AUTO_ROUTER_COMPRESSION,
 } from "./buildAutoRouterCompression";
+import {
+  type AutoRouterShuntState,
+  buildAutoRouterShuntParams,
+  DEFAULT_AUTO_ROUTER_SHUNT,
+  shuntStateFromPreset,
+} from "./buildAutoRouterShunt";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   BuildComplexityRouterConfigParams,
@@ -63,6 +69,8 @@ import {
   buildPresetPrefill,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
+  hasNoUsableModelsAtAll,
+  isPartialFitPreset,
   ModelAvailability,
   PresetPrefill,
   AutoRouterPreset,
@@ -202,6 +210,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [autoRouterCompression, setAutoRouterCompression] = useState<AutoRouterCompressionState>(
     DEFAULT_AUTO_ROUTER_COMPRESSION,
   );
+  const [autoRouterShunt, setAutoRouterShunt] = useState<AutoRouterShuntState>(DEFAULT_AUTO_ROUTER_SHUNT);
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
   const [editingTiers, setEditingTiers] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -290,10 +299,23 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   // have been applied: while loading we withhold selection rather than let a caller pick a preset
   // whose models we cannot yet verify, and a failed fetch leaves every preset unverifiable. This
   // makes the load-race (pick during loading, then discover a missing model) unrepresentable.
+  //
+  // A partial-fit preset (isPartialFitPreset) is gated differently: its interception settings
+  // apply regardless of tier models, so it greys out only when the caller has no usable chat
+  // model at all, never merely because none of its own named models match the caller's fleet.
+  // Selecting it then leaves whichever tiers didn't resolve empty for the caller to fill in
+  // (see handlePresetChange), rather than blocking selection the way every other preset does.
   const presetAvailability = React.useCallback(
     (preset: AutoRouterPreset): PresetAvailability => {
       if (modelsLoading) return { kind: "loading" };
       if (modelsUnverifiable) return { kind: "unverifiable" };
+      if (isPartialFitPreset(preset)) {
+        if (hasNoUsableModelsAtAll(availability)) return { kind: "missing_models", models: ["any chat model"] };
+        // Expand Detailed Configuration when at least one tier didn't resolve to any of the
+        // preset's own models, the same "needs your input" signal viaDeployments already means
+        // for a fully-resolving preset - here it can mean the caller has to fill a tier by hand.
+        return { kind: "available", viaDeployments: getMissingModelsInPreset(preset, availability).length > 0 };
+      }
       const missing = getMissingModelsInPreset(preset, availability);
       if (missing.length > 0) return { kind: "missing_models", models: missing };
       return {
@@ -320,7 +342,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     [sortedPresetOptions],
   );
 
-  const applyPrefill = (prefill: PresetPrefill) => {
+  // Every preset switch resets shunt state too (default: untouched), so switching away from
+  // Shunt to another preset can never leave its threshold/worker-model fields armed and stale.
+  const applyPrefill = (prefill: PresetPrefill, shunt: AutoRouterShuntState = DEFAULT_AUTO_ROUTER_SHUNT) => {
     setEditingTiers(false);
     setComplexityRouterConfig(prefill.complexityRouterConfig);
     setCustomTechnicalKeywords(prefill.customTechnicalKeywords);
@@ -329,6 +353,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setEmbeddingModel(prefill.embeddingModel);
     setMatchThreshold(prefill.matchThreshold);
     setEscalationKeywords(prefill.escalationKeywords);
+    setAutoRouterShunt(shunt);
   };
 
   const handleAutomaticSetup = () => {
@@ -355,7 +380,12 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (presetState.kind !== "available") return;
 
     setSelectedPreset(presetKey);
-    applyPrefill(buildPresetPrefill(preset.complexity_router_config, availability));
+    applyPrefill(
+      buildPresetPrefill(preset.complexity_router_config, availability, {
+        dropUnresolvedTierEntries: isPartialFitPreset(preset),
+      }),
+      shuntStateFromPreset(preset.auto_router_shunt_min_lines),
+    );
     setDetailsExpanded(presetState.viaDeployments);
   };
 
@@ -474,6 +504,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       complexity_router_config: complexityRouterConfigPayload,
       model_access_group: form.getValues("model_access_group"),
       ...buildAutoRouterCompressionParams(autoRouterCompression),
+      ...buildAutoRouterShuntParams(autoRouterShunt),
     };
 
     await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
@@ -681,6 +712,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       onEscalationKeywordsChange={setEscalationKeywords}
                       autoRouterCompression={autoRouterCompression}
                       onAutoRouterCompressionChange={setAutoRouterCompression}
+                      autoRouterShunt={autoRouterShunt}
+                      onAutoRouterShuntChange={setAutoRouterShunt}
                       showValidationErrors={showValidationErrors}
                     />
                   </div>

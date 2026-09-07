@@ -2,8 +2,9 @@ import { modelCreateCall } from "../networking";
 import { toast } from "@/lib/toast";
 import type { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
 import type { AutoRouterCompressionLitellmParams } from "./buildAutoRouterCompression";
+import type { AutoRouterShuntLitellmParams } from "./buildAutoRouterShunt";
 
-export interface AddAutoRouterValues extends AutoRouterCompressionLitellmParams {
+export interface AddAutoRouterValues extends AutoRouterCompressionLitellmParams, AutoRouterShuntLitellmParams {
   auto_router_name: string;
   auto_router_default_model: string | undefined;
   model_type: "complexity_router";
@@ -27,6 +28,9 @@ export const handleAddAutoRouterSubmit = async (
         complexity_router_default_model: values.auto_router_default_model,
         auto_router_routing_compression: values.auto_router_routing_compression,
         auto_router_model_compression: values.auto_router_model_compression,
+        auto_router_shunt_min_lines: values.auto_router_shunt_min_lines,
+        auto_router_shunt_bulk_read_model: values.auto_router_shunt_bulk_read_model,
+        auto_router_shunt_code_write_model: values.auto_router_shunt_code_write_model,
       },
       model_info: {
         ...(values.team_id ? { team_id: values.team_id } : {}),

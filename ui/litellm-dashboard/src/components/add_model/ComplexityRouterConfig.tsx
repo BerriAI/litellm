@@ -52,6 +52,9 @@ import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
 import CompressionControls from "./CompressionControls";
 import { type AutoRouterCompressionState, DEFAULT_AUTO_ROUTER_COMPRESSION } from "./buildAutoRouterCompression";
+import ShuntControls from "./ShuntControls";
+import { type AutoRouterShuntState, DEFAULT_AUTO_ROUTER_SHUNT } from "./buildAutoRouterShunt";
+import { TIER_DESCRIPTIONS, TIER_KEYS, effectiveTierLabel } from "./tier_descriptions";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export type { CustomTierSet, TierRow } from "./tier_rows";
@@ -487,39 +490,16 @@ interface ComplexityRouterConfigProps {
   // pre-routing strategy, not just the complexity router.
   autoRouterCompression?: AutoRouterCompressionState;
   onAutoRouterCompressionChange?: (state: AutoRouterCompressionState) => void;
+  // Optional: same reasoning as autoRouterCompression - shunt arms via flat litellm_params
+  // fields shared by every pre-routing strategy, not a complexity_router_config setting.
+  autoRouterShunt?: AutoRouterShuntState;
+  onAutoRouterShuntChange?: (state: AutoRouterShuntState) => void;
   showValidationErrors?: boolean;
 }
 
-export const TIER_DESCRIPTIONS: Record<
-  keyof ComplexityTiers,
-  { label: string; description: string; examples: string }
-> = {
-  SIMPLE: {
-    label: "Simple",
-    description: "Basic questions, greetings, simple factual queries",
-    examples: '"Hello!", "What is Python?", "Thanks!"',
-  },
-  MEDIUM: {
-    label: "Medium",
-    description: "Standard queries requiring some reasoning or explanation",
-    examples: '"Explain how REST APIs work", "Debug this error"',
-  },
-  COMPLEX: {
-    label: "Complex",
-    description: "Technical, multi-part requests requiring deep knowledge",
-    examples: '"Design a microservices architecture", "Implement a rate limiter"',
-  },
-  REASONING: {
-    label: "Reasoning",
-    description: "Chain-of-thought, analysis, explicit reasoning requests",
-    examples: '"Think step by step...", "Analyze the pros and cons..."',
-  },
-};
-
-export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>;
-
-export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
-  tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
+// Re-exported so the many existing importers of these from this module keep working; the data
+// itself lives in ./tier_descriptions to keep this component under the max-lines gate.
+export { TIER_DESCRIPTIONS, TIER_KEYS, effectiveTierLabel };
 
 export const DEFAULT_HEURISTIC_FIRST_MAX_TIER = "SIMPLE";
 
@@ -591,6 +571,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   onEscalationKeywordsChange,
   autoRouterCompression = DEFAULT_AUTO_ROUTER_COMPRESSION,
   onAutoRouterCompressionChange,
+  autoRouterShunt = DEFAULT_AUTO_ROUTER_SHUNT,
+  onAutoRouterShuntChange,
   showValidationErrors = false,
 }) => {
   const customTierSet = value.custom_tier_set;
@@ -871,6 +853,17 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                   label: <strong className="text-foreground font-semibold">Advanced: Compression</strong>,
                   children: (
                     <CompressionControls value={autoRouterCompression} onChange={onAutoRouterCompressionChange} />
+                  ),
+                },
+              ]
+            : []),
+          ...(onAutoRouterShuntChange
+            ? [
+                {
+                  key: "shunt",
+                  label: <strong className="text-foreground font-semibold">Advanced: Shunt</strong>,
+                  children: (
+                    <ShuntControls value={autoRouterShunt} onChange={onAutoRouterShuntChange} modelInfo={modelInfo} />
                   ),
                 },
               ]

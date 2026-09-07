@@ -364,6 +364,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # request's own compression guardrails apply to both, as they always have.
     auto_router_routing_compression: str | None = None
     auto_router_model_compression: str | None = None
+    # Shunt: bounds large file/shell reads and delegates bulk-read/code-write tool calls to a
+    # cheap worker model. Presence of auto_router_shunt_min_lines arms it for this marker.
+    auto_router_shunt_min_lines: int | None = None
+    auto_router_shunt_bulk_read_model: str | None = None
+    auto_router_shunt_code_write_model: str | None = None
 
     # complexity-router params
     complexity_router_config: dict | None = None

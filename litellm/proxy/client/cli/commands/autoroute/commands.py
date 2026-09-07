@@ -37,7 +37,7 @@ from .process import (
     terminate,
     write_pid_record,
 )
-from .settings import merge_claude_settings_static_token
+from .settings import merge_claude_settings_shunt_permissions, merge_claude_settings_static_token
 from .wizard import run_configure_wizard
 
 _GENERATED_CONFIG_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
@@ -156,10 +156,16 @@ def up(port: int) -> None:
             ClaudeBackupRecord(existed=original_existed, content=original_settings if original_existed else None),
             AUTOROUTE_BACKUP_PATH,
         )
-        merged: Final = merge_claude_settings_static_token(original_settings, base_url, master_key)
+        with_token: Final = merge_claude_settings_static_token(original_settings, base_url, master_key)
+        # Applied unconditionally: an unused allow rule matches no real command and has no
+        # runtime effect, so this stays correct whether or not the running config actually
+        # arms shunt (`configure` has no shunt option yet; this is ready for when it does).
+        merged: Final = merge_claude_settings_shunt_permissions(with_token)
         CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         with secure_create(CLAUDE_SETTINGS_PATH) as f:
-            json.dump(merged, f, indent=2)
+            # merged nests MappingProxyType at every level (see merge_claude_settings_shunt_
+            # permissions); default=dict is what the JSON encoder needs to serialize those.
+            json.dump(merged, f, indent=2, default=dict)
     except ClaudeSettingsError as e:
         terminate(process.pid)
         clear_pid_record()

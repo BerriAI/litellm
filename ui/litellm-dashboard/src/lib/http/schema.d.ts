@@ -1819,6 +1819,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bulk_read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Read
+         * @description Summarize or answer a question about one or more files via a cheap worker model.
+         *
+         *     The paths shunt's generated command uploads are read here as plain UTF-8 text and never
+         *     written to disk; only the text and the question reach the worker model.
+         */
+        post: operations["bulk_read_bulk_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/cache/delete": {
         parameters: {
             query?: never;
@@ -2453,6 +2476,30 @@ export interface paths {
          */
         put: operations["update_cloudzero_settings_cloudzero_settings_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/code_write": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Code Write
+         * @description Generate boilerplate code matching a reference file's patterns, via a cheap worker model.
+         *
+         *     Returns the generated code as plain text. shunt's own script writes straight to disk since
+         *     it runs on the file's own machine; this has no local filesystem, so the client writes the
+         *     returned text itself (the `Bash` rewrite this backs redirects the curl output to `target`).
+         */
+        post: operations["code_write_code_write_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17527,6 +17574,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/bulk_read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk Read
+         * @description Summarize or answer a question about one or more files via a cheap worker model.
+         *
+         *     The paths shunt's generated command uploads are read here as plain UTF-8 text and never
+         *     written to disk; only the text and the question reach the worker model.
+         */
+        post: operations["bulk_read_v1_bulk_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/chat/completions": {
         parameters: {
             query?: never;
@@ -17556,6 +17626,30 @@ export interface paths {
          *     ```
          */
         post: operations["chat_completion_v1_chat_completions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/code_write": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Code Write
+         * @description Generate boilerplate code matching a reference file's patterns, via a cheap worker model.
+         *
+         *     Returns the generated code as plain text. shunt's own script writes straight to disk since
+         *     it runs on the file's own machine; this has no local filesystem, so the client writes the
+         *     returned text itself (the `Bash` rewrite this backs redirects the curl output to `target`).
+         */
+        post: operations["code_write_v1_code_write_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24013,6 +24107,34 @@ export interface components {
             /** Team Id */
             team_id?: string | null;
         };
+        /** Body_bulk_read_bulk_read_post */
+        Body_bulk_read_bulk_read_post: {
+            /** Paths */
+            paths: string[];
+            /** Question */
+            question: string;
+        };
+        /** Body_bulk_read_v1_bulk_read_post */
+        Body_bulk_read_v1_bulk_read_post: {
+            /** Paths */
+            paths: string[];
+            /** Question */
+            question: string;
+        };
+        /** Body_code_write_code_write_post */
+        Body_code_write_code_write_post: {
+            /** Reference */
+            reference: string;
+            /** Spec */
+            spec: string;
+        };
+        /** Body_code_write_v1_code_write_post */
+        Body_code_write_v1_code_write_post: {
+            /** Reference */
+            reference: string;
+            /** Spec */
+            spec: string;
+        };
         /** Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post */
         Body_convert_prompt_file_to_json_utils_dotprompt_json_converter_post: {
             /** File */
@@ -29306,6 +29428,12 @@ export interface components {
             auto_router_model_compression?: string | null;
             /** Auto Router Routing Compression */
             auto_router_routing_compression?: string | null;
+            /** Auto Router Shunt Bulk Read Model */
+            auto_router_shunt_bulk_read_model?: string | null;
+            /** Auto Router Shunt Code Write Model */
+            auto_router_shunt_code_write_model?: string | null;
+            /** Auto Router Shunt Min Lines */
+            auto_router_shunt_min_lines?: number | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
@@ -39477,6 +39605,12 @@ export interface components {
             auto_router_model_compression?: string | null;
             /** Auto Router Routing Compression */
             auto_router_routing_compression?: string | null;
+            /** Auto Router Shunt Bulk Read Model */
+            auto_router_shunt_bulk_read_model?: string | null;
+            /** Auto Router Shunt Code Write Model */
+            auto_router_shunt_code_write_model?: string | null;
+            /** Auto Router Shunt Min Lines */
+            auto_router_shunt_min_lines?: number | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
@@ -42477,6 +42611,41 @@ export interface operations {
             };
         };
     };
+    bulk_read_bulk_read_post: {
+        parameters: {
+            query: {
+                router: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_bulk_read_bulk_read_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     cache_delete_cache_delete_post: {
         parameters: {
             query?: never;
@@ -43322,6 +43491,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CloudZeroInitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    code_write_code_write_post: {
+        parameters: {
+            query: {
+                router: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_code_write_code_write_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
                 };
             };
             /** @description Validation Error */
@@ -61313,6 +61517,41 @@ export interface operations {
             };
         };
     };
+    bulk_read_v1_bulk_read_post: {
+        parameters: {
+            query: {
+                router: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_bulk_read_v1_bulk_read_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     chat_completion_v1_chat_completions_post: {
         parameters: {
             query?: never;
@@ -61499,6 +61738,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    code_write_v1_code_write_post: {
+        parameters: {
+            query: {
+                router: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_code_write_v1_code_write_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
                 };
             };
             /** @description Validation Error */

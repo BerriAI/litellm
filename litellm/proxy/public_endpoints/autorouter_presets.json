@@ -112,5 +112,25 @@
       "modality_pin_override": false,
       "deployment_affinity": true
     }
+  },
+  "shunt": {
+    "label": "Shunt",
+    "description": "Bounds large file/shell reads and delegates bulk-read and boilerplate-codegen tool calls to a cheap model, based on the shunt technique for AI coding agents (https://engineering.atspotify.com/2026/9/portal-by-spotify-cut-my-claude-code-token-usage-by-90). Ported server-side: works with any client, no plugin install. classifier_type is heuristic so this never counts against the licensed heuristic_v2 limit.",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": ["claude-haiku-4-5", "gpt-5.6-luna", "gemini-2.5-flash-lite", "deepseek-v4-flash"],
+        "MEDIUM": ["claude-sonnet-5", "gpt-5.6-terra", "gemini-3.1-flash-lite"],
+        "COMPLEX": ["claude-opus-5", "gpt-5.6-sol", "gemini-3.7-flash"],
+        "REASONING": ["claude-opus-5", "gpt-5.6-sol", "gemini-3.1-pro-preview"]
+      },
+      "classifier_type": "heuristic",
+      "escalation_keywords": ["LITELLM ESCALATE"],
+      "classification_mode": "every_request",
+      "session_affinity": false,
+      "modality_routing": false,
+      "modality_pin_override": false,
+      "deployment_affinity": true
+    },
+    "auto_router_shunt_min_lines": 350
   }
 }

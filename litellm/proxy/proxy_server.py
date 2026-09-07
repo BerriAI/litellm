@@ -435,6 +435,7 @@ from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
+from litellm.proxy.guardrails.auto_router_shunt import ShuntGuardrail
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
     initialize_guardrails,
@@ -637,6 +638,7 @@ from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
+from litellm.proxy.shunt_endpoints.endpoints import router as shunt_router
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
@@ -2304,6 +2306,9 @@ spend_counter_cache: Final = DualCache(default_in_memory_ttl=UserAPIKeyCacheTTLE
 cli_sso_session_cache: Final = DualCache(default_in_memory_ttl=CLI_SSO_SESSION_TTL_SECONDS)
 model_max_budget_limiter: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=spend_counter_cache)
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
+# Always registered, no `guardrails:` config entry needed: arms per-request from an
+# auto-router marker's own litellm_params. See auto_router_shunt.py's module docstring.
+litellm.logging_callback_manager.add_litellm_callback(ShuntGuardrail())
 redis_usage_cache: RedisCache | None = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Literal["all"] | list[str] | bool = False
 native_background_mode: list[str] = []  # Models that should use native provider background mode instead of polling
@@ -18332,6 +18337,7 @@ app.include_router(rag_router)
 app.include_router(video_router)
 app.include_router(container_router)
 app.include_router(search_router)
+app.include_router(shunt_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
 app.include_router(credential_router)

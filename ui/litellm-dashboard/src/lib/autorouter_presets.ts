@@ -28,7 +28,21 @@ export interface AutoRouterPreset {
   label: string;
   description: string;
   complexity_router_config: ComplexityRouterConfigPayload;
+  // Present only on shunt-shaped presets: arms the shunt guardrail's bounded-read threshold.
+  // Lives at this top level, not inside complexity_router_config, because it maps to litellm_params
+  // fields (auto_router_shunt_*) rather than complexity_router_config settings.
+  auto_router_shunt_min_lines?: number;
 }
+
+// Presets whose tier models are suggestions rather than a hard requirement: shunt's value is the
+// I/O interception it arms regardless of which tier models resolve, so a preset carrying this key
+// should never grey out purely because none of ITS named tier models match the caller's fleet -
+// only when the caller has no usable chat model at all. Keyed by preset.key rather than a field on
+// the catalog JSON: this is a dashboard policy decision about how strictly to gate selection, not
+// something a preset publisher should be able to opt into by editing the catalog.
+const PARTIAL_FIT_PRESET_KEYS: ReadonlySet<string> = new Set(["shunt"]);
+
+export const isPartialFitPreset = (preset: AutoRouterPreset): boolean => PARTIAL_FIT_PRESET_KEYS.has(preset.key);
 
 export type AutoRouterPresetsResponse = Record<string, Omit<AutoRouterPreset, "key">>;
 
@@ -174,6 +188,11 @@ export const getRequiredModelsInPreset = (preset: AutoRouterPreset): Set<string>
 export const getMissingModelsInPreset = (preset: AutoRouterPreset, availability: ModelAvailability): string[] =>
   getMissingModels(preset.complexity_router_config, availability);
 
+// The gate a partial-fit preset (see isPartialFitPreset) is selectable under: the proxy has to
+// have registered SOME chat model, but not specifically one this preset names - unlike
+// getMissingModelsInPreset's all-or-nothing check, which is still what every other preset uses.
+export const hasNoUsableModelsAtAll = (availability: ModelAvailability): boolean => availability.modelGroups.size === 0;
+
 // Checks the config actually being built (whether it arrived via a preset prefill or was typed by
 // hand - the two are indistinguishable once the caller has started editing), not a preset's
 // original bundled model list. Only counts classifier_llm_config/embedding_model as referenced
@@ -191,15 +210,13 @@ export const getReferencedModelsError = (
   },
   availability: ModelAvailability,
 ): string | null => {
-  const missing = getMissingModels(
-    {
-      tiers: params.tiers,
-      default_model: params.defaultModel,
-      classifier_llm_config: usesLlmClassifier(params.classifierType) ? params.classifierLlmConfig : undefined,
-      embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
-    },
-    availability,
-  );
+  const referenced = {
+    tiers: params.tiers,
+    default_model: params.defaultModel,
+    classifier_llm_config: usesLlmClassifier(params.classifierType) ? params.classifierLlmConfig : undefined,
+    embedding_model: params.semanticMatchingEnabled ? params.embeddingModel : undefined,
+  };
+  const missing = getMissingModels(referenced, availability);
   return missing.length > 0 ? `Model(s) no longer available: ${missing.join(", ")}` : null;
 };
 
@@ -240,9 +257,22 @@ export const buildEmptyPrefill = (): PresetPrefill => ({
 export const buildPresetPrefill = (
   config: ComplexityRouterConfigPayload,
   availability: ModelAvailability,
+  // Partial-fit presets (see isPartialFitPreset) drop a tier entry that fails to resolve
+  // instead of keeping the preset's own unresolved string, so a caller who owns none of the
+  // preset's named models for a tier gets an empty picker to fill in rather than a config that
+  // silently names a model they don't have. Off by default: every other preset call site
+  // already guarantees full resolution before calling this (presetAvailability), so keeping the
+  // literal fallback there is unreachable, not a behavior change.
+  { dropUnresolvedTierEntries = false }: { dropUnresolvedTierEntries?: boolean } = {},
 ): PresetPrefill => {
   const resolve = (model: string): string => resolveAvailableModel(model, availability) ?? model;
-  const resolveTier = (models: string[]): string[] => models.map(resolve);
+  const resolveTier = (models: string[]): string[] =>
+    dropUnresolvedTierEntries
+      ? models.flatMap((model) => {
+          const resolved = resolveAvailableModel(model, availability);
+          return resolved ? [resolved] : [];
+        })
+      : models.map(resolve);
   // Params key on the model name the preset spells while every tier entry is rewritten to the
   // caller's registered spelling, so the keys have to be rewritten the same way. Otherwise
   // serializeTierModelConfigs drops them for naming a model the tier no longer holds.

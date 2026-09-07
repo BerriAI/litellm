@@ -489,6 +489,10 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
+        "/bulk_read",
+        "/v1/bulk_read",
+        "/code_write",
+        "/v1/code_write",
     ]
 
     anthropic_routes = [
