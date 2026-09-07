@@ -16,7 +16,14 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from fastapi import HTTPException
 
+from litellm.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+    UnifiedLLMGuardrails,
+)
 from litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import ZscalerAIGuard
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypes
 
 
 @pytest.mark.asyncio
@@ -657,3 +664,47 @@ async def test_a_vendor_failure_records_no_verdict_fields():
     assert entry["guardrail_provider"] is None
     assert entry.get("guardrail_transaction_id") is None
     assert entry.get("guardrail_action") is None
+
+
+def _recorded_guardrail_entries(data: dict) -> list:
+    return [
+        entry
+        for key in ("metadata", "litellm_metadata")
+        for entry in ((data.get(key) or {}).get("standard_logging_guardrail_information") or [])
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_detection_survives_the_request_path_into_the_logged_record():
+    """A chat request reaches the guardrail through the unified hook and the chat translation
+    handler, and that is the path whose record the spend log and the guardrail spans read."""
+    guardrail = ZscalerAIGuard(
+        api_key="test_key",
+        api_base="http://example.com",
+        policy_id=1,
+        guardrail_name="zg",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+    data = {
+        "guardrail_to_apply": guardrail,
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "my ssn is 123-45-6789"}],
+        "metadata": {},
+    }
+
+    with patch.object(guardrail, "_send_request", new_callable=AsyncMock) as send:
+        send.return_value = _ai_guard_response("DETECT", "tx-unified-1", {"pii": {"action": "DETECT"}})
+        await UnifiedLLMGuardrails().async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            cache=DualCache(),
+            data=data,
+            call_type=CallTypes.acompletion.value,
+        )
+
+    entry = _recorded_guardrail_entries(data)[0]
+    assert entry["guardrail_status"] == "guardrail_flagged"
+    assert entry["guardrail_action"] == "DETECT"
+    assert entry["guardrail_transaction_id"] == "tx-unified-1"
+    assert entry["violation_categories"] == ("pii",)
+    assert entry["guardrail_provider"] == "zscaler_ai_guard"
