@@ -1298,7 +1298,9 @@ class CustomGuardrail(CustomLogger):
                 and self._inputs_were_modified(original_inputs, response)
                 else "allow"
                 if original_inputs is not None and isinstance(response, dict)
-                else {} if response is None else response
+                else {}
+                if response is None
+                else response
             )
         )  # mutable-ok: the logging payload requires a mutable response mapping
 
