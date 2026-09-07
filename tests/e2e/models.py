@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal
+from typing import Final, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_serializer, model_validator
 
 # ---------- keys ----------
 
@@ -49,6 +49,7 @@ class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
     priority: str | None = None
     batch_enqueued_token_limit: int | None = None
+    tag: str | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -81,6 +82,14 @@ class KeyGenerateBody(BaseModel):
 
 class KeyGenerateResponse(BaseModel):
     key: str
+    key_alias: str | None = None
+    models: list[str] = []
+    max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    team_id: str | None = None
+    metadata: KeyMetadata | None = None
 
 
 class KeyRegenerateBody(BaseModel):
@@ -122,6 +131,7 @@ class KeyInfo(BaseModel):
     blocked: bool | None = None
     spend: float | None = None
     max_budget: float | None = None
+    budget_duration: str | None = None
     budget_reset_at: str | None = None
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
@@ -941,12 +951,34 @@ class CredentialCreateResponse(BaseModel):
 # ---------- key / team / user / organization management ----------
 
 
+class Cleared(BaseModel):
+    """An explicit JSON null in a merge-patch body. The transport drops `None` fields
+    before sending (`exclude_none`), so `None` means "leave the stored value alone"; a
+    field set to `CLEAR` reaches the wire as `null`, which tells the proxy to clear it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    @model_serializer
+    def _as_null(self) -> None:
+        return None
+
+
+CLEAR: Final = Cleared()
+
+
 class KeyUpdateBody(BaseModel):
+    """POST /key/update is a merge patch: a field left `None` is dropped from the body and
+    keeps its stored value, `CLEAR` sends an explicit null that clears it (`budget_duration`
+    clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
+
     key: str
     models: list[str] | None = None
     key_alias: str | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
+    max_budget: float | Cleared | None = None
+    budget_duration: str | Cleared | None = None
+    metadata: KeyMetadata | None = None
 
 
 class KeyBlockBody(BaseModel):

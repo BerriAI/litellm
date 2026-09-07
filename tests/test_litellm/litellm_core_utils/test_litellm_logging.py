@@ -1,7 +1,9 @@
+import asyncio
 import contextlib
+import datetime
 import os
 import sys
-import asyncio
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -4471,6 +4473,39 @@ def test_handle_anthropic_messages_response_logging_translates_bare_responses_ap
     assert result.usage.total_tokens == 18  # type: ignore[attr-defined]
 
 
+def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id():
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+    served_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="deployment-1", response_id="resp_upstream"
+    )
+    logging_obj = _anthropic_messages_logging_obj()
+    result = logging_obj._handle_anthropic_messages_response_logging(
+        result=ResponsesAPIResponse(
+            id=served_id,
+            created_at=1700000000,
+            output=[
+                ResponseOutputMessage(
+                    id="msg-1",
+                    type="message",
+                    role="assistant",
+                    status="completed",
+                    content=[ResponseOutputText(annotations=[], text="hi", type="output_text")],
+                )
+            ],
+            usage=ResponseAPIUsage(input_tokens=2, output_tokens=1, total_tokens=3),
+            service_tier="flex",
+        )
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == served_id, "the spend log row must keep the id the caller was served"
+    assert result.service_tier == "flex"
+
+
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
     """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
     logging_obj = _anthropic_messages_logging_obj()
@@ -6404,6 +6439,113 @@ def test_get_standard_logging_object_payload_survives_logging_obj_without_timing
 
     assert payload is not None
     assert payload["hidden_params"]["litellm_overhead_time_ms"] is None
+
+
+@pytest.mark.parametrize(
+    ("header_name", "header_source"),
+    (
+        ("x-amzn-RequestId", "response"),
+        ("x-request-id", "response"),
+        ("request-id", "response"),
+        ("x-ms-request-id", "response"),
+        ("apim-request-id", "response"),
+        ("x-goog-request-id", "response"),
+        ("cf-ray", "response"),
+        ("X-Request-Id", "litellm_response_headers"),
+        ("X-MS-Request-ID", "headers"),
+    ),
+)
+def test_failure_standard_logging_payload_captures_provider_request_id(
+    logging_obj: LitellmLogging,
+    header_name: str,
+    header_source: Literal["response", "litellm_response_headers", "headers"],
+):
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    request_id = "provider-request-123"
+    request = httpx.Request("POST", "https://provider.example/v1/chat/completions")
+    response = httpx.Response(429, headers={header_name: request_id}, request=request)
+    provider_error = httpx.HTTPStatusError("provider error", request=request, response=response)
+    if header_source == "litellm_response_headers":
+        response.headers.clear()
+        provider_error.litellm_response_headers = {header_name: request_id}
+    elif header_source == "headers":
+        response.headers.clear()
+        provider_error.headers = {header_name: request_id}
+    now = datetime.datetime.now()
+
+    payload = get_standard_logging_object_payload(
+        kwargs={"litellm_call_id": "call-1", "model": "test-model", "messages": []},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="failure",
+        original_exception=provider_error,
+    )
+
+    assert payload is not None
+    assert payload["error_information"] is not None
+    assert payload["error_information"]["error_provider_request_id"] == request_id
+
+
+def test_get_error_information_ignores_unsupported_headers() -> None:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    request = httpx.Request("POST", "https://provider.example/v1/chat/completions")
+    response = httpx.Response(429, headers={"retry-after": "3"}, request=request)
+    provider_error = httpx.HTTPStatusError("provider error", request=request, response=response)
+
+    error_information = StandardLoggingPayloadSetup.get_error_information(provider_error)
+
+    assert error_information["error_provider_request_id"] is None
+
+
+def test_get_error_information_uses_header_precedence_and_fallback() -> None:
+    from litellm.exceptions import RateLimitError
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    request = httpx.Request("POST", "https://provider.example/v1/chat/completions")
+    response = httpx.Response(
+        429,
+        headers={"x-request-id": "response-id", "x-amzn-requestid": "amazon-id"},
+        request=request,
+    )
+    provider_error = RateLimitError(
+        message="provider error",
+        llm_provider="test-provider",
+        model="test-model",
+        response=response,
+        headers={"retry-after": "3"},
+    )
+
+    error_information = StandardLoggingPayloadSetup.get_error_information(provider_error)
+
+    assert error_information["error_provider_request_id"] == "amazon-id"
+
+
+def test_get_error_information_ignores_malformed_headers() -> None:
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    provider_error = Exception("provider error")
+    provider_error.headers = [("x-request-id", "provider-request-123")]
+
+    error_information = StandardLoggingPayloadSetup.get_error_information(provider_error)
+
+    assert error_information["error_provider_request_id"] is None
+
+
+def test_get_provider_request_id_ignores_header_lookup_errors() -> None:
+    from litellm.litellm_core_utils.litellm_logging import _get_provider_request_id
+
+    class HeaderLookupError(Exception):
+        @property
+        def response(self) -> object:
+            raise RuntimeError("headers unavailable")
+
+    assert _get_provider_request_id(HeaderLookupError("provider error")) is None
 
 
 def test_get_standard_logging_object_payload_failure_status_keeps_overhead_none(logging_obj):
