@@ -187,7 +187,7 @@ class RealBoundaryTests(unittest.TestCase):
         task = asyncio.current_task()
         document = Graph(type="document_url", document_url="https://example.test/original.pdf")
         nested = Graph(values=[1])
-        optional = {"unknown_python_json": {7: ("tuple", 2)}, "nested": nested}
+        optional = {"unknown_python_json": {7: ("tuple", 2)}, "nested": nested, "nested_alias": nested["values"]}
         retained = {}
         events = []
 
@@ -202,6 +202,7 @@ class RealBoundaryTests(unittest.TestCase):
             body, headers = view["complete_input_dict"], view["headers"]
             self.assertIs(body["document"], document, "caller document identity was not retained")
             self.assertIs(body["nested"], nested)
+            self.assertIs(body["nested_alias"], nested["values"])
             self.assertIs(body["unknown_python_json"], optional["unknown_python_json"])
             retained.update(body=body, headers=headers, view=view)
             headers["X-Proof"] = "in-place"
@@ -218,6 +219,9 @@ class RealBoundaryTests(unittest.TestCase):
 
         def mutate_then_raise(view):
             phase("raise", "mutated")
+            self.assertIs(view, retained["view"])
+            self.assertEqual(view["complete_input_dict"], {"document": {"document_url": "must-not-send"}})
+            self.assertEqual(view["headers"], {"X-Proof": "must-not-send"})
             retained["body"]["before_error"] = True
             retained["headers"]["X-Before-Error"] = "yes"
             context.set("caught")
@@ -225,8 +229,15 @@ class RealBoundaryTests(unittest.TestCase):
 
         def closure_only(view):
             phase("later", "caught")
+            self.assertIs(view, retained["view"])
             self.assertIsNot(view["complete_input_dict"], retained["body"])
             self.assertIsNot(view["headers"], retained["headers"])
+            self.assertTrue(retained["body"]["before_error"])
+            self.assertEqual(retained["headers"]["X-Before-Error"], "yes")
+            self.assertIs(retained["body"]["nested_alias"], nested["values"])
+            self.assertEqual(retained["body"]["nested_alias"], [1, 2])
+            view["complete_input_dict"]["observed"] = True
+            view["headers"]["X-View-Only"] = "not-on-wire"
             document["document_url"] = "https://example.test/closure.pdf"
             context.set("later")
 
@@ -240,6 +251,7 @@ class RealBoundaryTests(unittest.TestCase):
                 optional=optional,
                 client=async_client if mode.endswith("async") else self.sync_client,
             )
+            logging_ref = weakref.ref(kwargs["logging_obj"])
             before = len(self.server.requests)
             pending = invoke(mode, kwargs, boundary_factory=boundary_factory)
             if mode.endswith("async"):
@@ -259,16 +271,28 @@ class RealBoundaryTests(unittest.TestCase):
             expected = (
                 b'{"model":"mistral-ocr-latest","document":{"type":"document_url",'
                 b'"document_url":"https://example.test/closure.pdf"},"unknown_python_json":{"7":["tuple",2]},'
-                b'"nested":{"values":[1,2]},"body_mutation":true,"before_error":true}'
+                b'"nested":{"values":[1,2]},"nested_alias":[1,2],"body_mutation":true,"before_error":true}'
             )
             self.assertEqual(wire[2], expected, "wire body must encode retained mutations after pre_call")
             self.assertIn(("x-proof", "in-place"), wire[1], "wire headers must use retained execution headers")
             self.assertIn(("x-before-error", "yes"), wire[1])
             self.assertIn(("authorization", "Bearer local-test-key"), wire[1])
+            self.assertFalse(any(name == "x-view-only" for name, _ in wire[1]))
+            self.assertEqual(
+                retained["view"]["complete_input_dict"],
+                {"document": {"document_url": "must-not-send"}, "observed": True},
+            )
+            self.assertEqual(retained["view"]["headers"], {"X-Proof": "must-not-send", "X-View-Only": "not-on-wire"})
+            del kwargs, pending
+            gc.collect()
+            self.assertIsNone(logging_ref(), "logging owner survived the completed call")
             self.assertIs(retained["body"]["document"], document)
             retained["body"]["nested"]["values"].append(3)
             retained["headers"]["X-After-Return"] = "usable"
             self.assertEqual(optional["nested"]["values"], [1, 2, 3])
+            self.assertIs(retained["body"]["nested_alias"], optional["nested"]["values"])
+            self.assertEqual(retained["body"]["nested_alias"], [1, 2, 3])
+            self.assertEqual(retained["headers"]["X-After-Return"], "usable")
             self.assertEqual(wire[2], expected)
             self.assertEqual(response.pages[0].markdown, "local OCR")
             return wire, response.model_dump()
@@ -373,6 +397,7 @@ class RealBoundaryTests(unittest.TestCase):
                 self.assertEqual(len(self.server.requests), before + 1)
                 received_path, received_headers, received_body = self.server.requests[-1]
                 self.assertEqual((received_path, tuple(received_headers), received_body), wire)
+                self.check_callbacks([callback])
                 return wire, logged_body, retained["headers"], response.model_dump()
             finally:
                 self.server.release.set()
@@ -487,6 +512,8 @@ class RealBoundaryTests(unittest.TestCase):
                 retained.extend((body, headers))
             view["complete_input_dict"] = {}
             view["headers"] = {}
+            if outcome == "pre-call-abort":
+                raise PreCallAbort("lifecycle pre_call abort")
 
         logger = Callback(callback)
         kwargs = inputs(
@@ -514,26 +541,29 @@ class RealBoundaryTests(unittest.TestCase):
                 self.assertIn(outcome, ("encoding", "http"))
                 self.assertEqual(error.status_code, 500 if outcome == "encoding" else 429)
                 signature = (type(error), error.status_code, str(error))
+            except PreCallAbort as error:
+                self.assertEqual(outcome, "pre-call-abort")
+                signature = (type(error), str(error))
             else:
                 self.assertEqual(outcome, "success")
                 self.assertEqual(response.pages[0].markdown, "local OCR")
                 signature = response.model_dump()
             self.check_callbacks([logger])
             self.assertEqual(len(refs), 5)
-            self.assertEqual(len(self.server.requests), before + (outcome != "encoding"))
+            self.assertEqual(len(self.server.requests), before + (outcome not in ("encoding", "pre-call-abort")))
             return refs, signature
         finally:
             await async_client.close()
 
-    def test_collection_after_success_encoding_failure_and_http_error(self):
+    def test_collection_after_success_and_failures(self):
         async def exercise():
-            for outcome in ("success", "encoding", "http"):
+            for outcome in ("success", "encoding", "http", "pre-call-abort"):
                 baseline = None
                 for mode in ("python-sync", "python-async", "native-sync", "native-async"):
                     with self.subTest(mode=mode, outcome=outcome):
                         refs, signature = await self.lifecycle(mode, outcome)
                         gc.collect()
-                        self.assertTrue(all(ref() is None for ref in refs), "request graph leaked after " + outcome)
+                        self.assertTrue(all(ref() is None for ref in refs), f"request graph leaked: {mode=} {outcome=}")
                         if baseline is None:
                             baseline = signature
                         self.assertEqual(signature, baseline)
@@ -542,21 +572,29 @@ class RealBoundaryTests(unittest.TestCase):
 
     def test_callback_retained_graph_remains_usable_then_collects(self):
         async def exercise():
-            for mode in ("native-sync", "native-async"):
-                with self.subTest(mode=mode):
-                    retained = []
-                    refs, _ = await self.lifecycle(mode, "success", retained)
-                    gc.collect()
-                    self.assertIsNone(refs[1]())
-                    self.assertTrue(all(refs[index]() is not None for index in (0, 2, 3, 4)))
-                    retained[0]["document"]["after_return"] = "usable"
-                    retained[0]["sentinel"]["alive"] = "still usable"
-                    retained[1]["X-After-Return"] = "usable"
-                    self.assertEqual(refs[0]()["after_return"], "usable")
-                    self.assertEqual(refs[3]()["alive"], "still usable")
-                    retained.clear()
-                    gc.collect()
-                    self.assertTrue(all(ref() is None for ref in refs))
+            for outcome in ("success", "encoding", "http", "pre-call-abort"):
+                for mode in ("python-sync", "python-async", "native-sync", "native-async"):
+                    with self.subTest(mode=mode, outcome=outcome):
+                        retained = []
+                        refs, _ = await self.lifecycle(mode, outcome, retained)
+                        gc.collect()
+                        self.assertIsNone(refs[1](), f"logging owner survived: {mode=} {outcome=}")
+                        self.assertTrue(all(refs[index]() is not None for index in (0, 2, 3, 4)))
+                        self.assertIs(retained[0]["document"], refs[0]())
+                        self.assertIs(retained[0]["nested"], refs[2]())
+                        self.assertIs(retained[0]["sentinel"], refs[3]())
+                        self.assertIs(retained[1]["X-Sentinel"], refs[4]())
+                        retained[0]["document"]["after_return"] = "usable"
+                        retained[0]["nested"]["alive"] = "nested still usable"
+                        retained[0]["sentinel"]["alive"] = "still usable"
+                        retained[1]["X-After-Return"] = "usable"
+                        self.assertEqual(refs[0]()["after_return"], "usable")
+                        self.assertEqual(refs[2]()["alive"], "nested still usable")
+                        self.assertEqual(refs[3]()["alive"], "still usable")
+                        self.assertEqual(retained[1]["X-After-Return"], "usable")
+                        retained.clear()
+                        gc.collect()
+                        self.assertTrue(all(ref() is None for ref in refs))
 
         asyncio.run(exercise())
 

@@ -1,26 +1,12 @@
-use pyo3::Python;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use serde_json::{Value, json};
 
 use litellm_python_interop::{from_py, release_count, release_gil, to_py};
 
-struct InitializedPython;
+#[path = "support/mod.rs"]
+mod support;
 
-impl InitializedPython {
-    fn attach<F, R>(&self, f: F) -> R
-    where
-        F: for<'py> FnOnce(Python<'py>) -> R,
-    {
-        Python::attach(f)
-    }
-}
-
-#[fixture]
-#[once]
-fn initialized_python() -> InitializedPython {
-    Python::initialize();
-    InitializedPython
-}
+use support::python::{InitializedPython, initialized_python};
 
 #[rstest]
 fn serde_values_round_trip_through_python(#[from(initialized_python)] python: &InitializedPython) {

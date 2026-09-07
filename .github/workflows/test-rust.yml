@@ -102,7 +102,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ github.job }}-
 
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked --exclude litellm-python-interop --exclude litellm-python-bridge
         working-directory: litellm-rust
 
       - run: cargo test -p litellm-core --features bedrock-auth --locked

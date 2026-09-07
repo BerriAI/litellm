@@ -30,10 +30,10 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 rstest = "0.26.1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
+serial_test = { version = "4.0.1", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 sha2 = "0.10"
-strum = { version = "0.26", features = ["derive"] }
 subtle = "2"
 thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }

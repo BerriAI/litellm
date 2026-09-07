@@ -1,19 +1,12 @@
-use std::ffi::CStr;
-
 use litellm_python_interop::{InvocationMode, InvocationOutcome, PreparedCall};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
-use rstest::{fixture, rstest};
+use rstest::rstest;
 
-fn scope<'py>(py: Python<'py>, source: &CStr) -> PyResult<Bound<'py, PyDict>> {
-    let globals = PyDict::new(py);
-    py.run(source, Some(&globals), None)?;
-    Ok(globals)
-}
+#[path = "support/mod.rs"]
+mod support;
 
-fn item<'py>(globals: &Bound<'py, PyDict>, name: &str) -> Bound<'py, PyAny> {
-    globals.get_item(name).unwrap().unwrap()
-}
+use support::python::{InitializedPython, initialized_python, item, scope};
 
 #[rstest]
 fn retains_aliases_mutations_and_original_result(
@@ -364,15 +357,6 @@ assert first.body['document']['value'] == 'after invocation'
             None,
         )
     })
-}
-
-struct InitializedPython;
-
-#[fixture]
-#[once]
-fn initialized_python() -> InitializedPython {
-    Python::initialize();
-    InitializedPython
 }
 
 fn invoke_direct(call: &PreparedCall, py: Python<'_>) -> PyResult<Py<PyAny>> {

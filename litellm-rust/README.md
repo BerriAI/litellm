@@ -57,47 +57,26 @@ runs for changes under `litellm-rust/`.
 
 ### Python-Integrated Tests
 
-From the repository root, use the same entrypoint as the Rust CI workflow to run
-the ignored Cargo tests that need the repository's Python dependencies:
+From the repository root, run the ignored Cargo tests that need the repository's
+Python dependencies and the pinned Ruff checks over both crates' `tests/`
+directories:
 
 ```bash
 make test-rust-python
-make test-rust-python TEST_FILTER=component_contract
-make test-rust-python TEST_FILTER=retained
 make lint-rust-python-fixtures
 ```
 
-The test target covers `litellm-python-interop` (including `component_contract`
-and `prepared_call`) and `litellm-python-bridge` (including `ocr_retained`).
-`TEST_FILTER` is an optional Rust test-name substring, not a Python fixture or
-Cargo test-binary name. An unmatched filter runs zero tests, so check the test
-counts. The underlying command is:
+`test-rust-python` installs the locked SDK dependencies with uv, points
+`PYO3_PYTHON` at the project interpreter, and runs
+`cargo test -p litellm-python-interop -p litellm-python-bridge --tests --locked`.
+`lint-rust-python-fixtures` runs pinless linting only, no sync.
 
-```bash
-cargo test --manifest-path litellm-rust/Cargo.toml \
-  -p litellm-python-interop -p litellm-python-bridge --tests --locked -- --ignored
-```
-
-Install uv and the repository's pinned Rust toolchain first. The
-`install-rust-python-test-deps` prerequisite runs
-`uv sync --inexact --frozen --no-default-groups --no-install-project` on each
-invocation. This installs the locked SDK dependencies without building or
-installing LiteLLM, pulling in the full dev groups, or pruning existing venv
-packages. No wheel is needed for these embedded-Python tests; the existing wheel
-lane checks the installed public interface separately
-
-The target gets the project interpreter from `uv run --no-sync python`, sets
-`PYO3_PYTHON` to that executable, and queries its `sysconfig` for both Python and
-platform-specific site-packages. It prepends the repository root and those paths
-to `PYTHONPATH`, preserving any existing entries, so embedded Python imports the
-checkout and its dependencies. Use uv's `UV_PYTHON` and `UV_PROJECT_ENVIRONMENT`
-settings to select a different interpreter or project venv. The target also sets
-`LITELLM_LOCAL_MODEL_COST_MAP=True` to use the checked-in model cost map
-
-Fixture checks are separate from the test target so filtered reruns stay focused.
-`make lint-rust-python-fixtures` runs pinned Ruff lint and format checks with
-`ruff-tests.toml` over both crates' `tests/` directories, including
-`crates/python-bridge/tests/fixtures/ocr_retained.py`, without syncing the project
-environment. CI runs both targets; its Python path trigger covers `litellm/**`
-so changes to OCR, bridge, logging, streaming, and their shared imports rerun the
-integrated tests
+The callback lifecycle and retained OCR scenarios use
+`#[serial(python_interpreter)]` to isolate CPython GC and interpreter-wide
+LiteLLM settings under `cargo test`. Compatible tests in the same binary use
+`#[parallel(python_interpreter)]`: they may overlap each other, but not an
+exclusive scenario. Unannotated tests do not participate in this isolation.
+Keep the attribute below `#[rstest]` so generated cases acquire it before
+fixture setup and Python attachment. Tasks and threads inside each scenario
+still run concurrently. Separate test processes have separate interpreters,
+so these attributes need no cross-process lock when using nextest
