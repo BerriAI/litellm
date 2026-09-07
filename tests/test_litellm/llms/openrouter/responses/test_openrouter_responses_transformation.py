@@ -186,6 +186,36 @@ class TestOpenRouterResponsesAPICostTracking:
             "additional_headers", {}
         )
 
+    def test_transform_streaming_response_extracts_completed_response_cost(self):
+        config = OpenRouterResponsesAPIConfig()
+
+        result = config.transform_streaming_response(
+            model="openai/gpt-5-mini",
+            parsed_chunk={
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_abc123",
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "openai/gpt-5-mini",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 50,
+                        "total_tokens": 150,
+                        "cost": 0.01234,
+                    },
+                },
+            },
+            logging_obj=Mock(),
+        )
+
+        assert (
+            result.response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"]
+            == 0.01234
+        )
+
 
 class TestOpenRouterResponsesAPIRegistration:
     """Test that OpenRouter is properly registered as a native Responses API provider."""

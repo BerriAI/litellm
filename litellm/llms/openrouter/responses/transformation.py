@@ -15,7 +15,12 @@ import httpx
 import litellm
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    ResponseCompletedEvent,
+    ResponseInputParam,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamingResponse,
+)
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
@@ -143,3 +148,27 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
             pass
 
         return response
+
+    def transform_streaming_response(
+        self,
+        model: str,
+        parsed_chunk: dict,
+        logging_obj: Any,
+    ) -> ResponsesAPIStreamingResponse:
+        response_event: Final = super().transform_streaming_response(
+            model=model,
+            parsed_chunk=parsed_chunk,
+            logging_obj=logging_obj,
+        )
+        if not isinstance(response_event, ResponseCompletedEvent):
+            return response_event
+
+        usage: Final = response_event.response.usage
+        if usage is None or usage.cost is None:
+            return response_event
+
+        response_event.response._hidden_params["additional_headers"] = {
+            **response_event.response._hidden_params.get("additional_headers", {}),
+            "llm_provider-x-litellm-response-cost": float(usage.cost),
+        }
+        return response_event
