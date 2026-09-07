@@ -6536,6 +6536,7 @@ async def update_spend_logs_job(
     prisma_client: PrismaClient,
     db_writer_client: AsyncHTTPHandler | None,
     proxy_logging_obj: ProxyLogging,
+    timeout: float | None = None,
 ):
     """
     Job to process spend_log_transactions queue.
@@ -6555,12 +6556,15 @@ async def update_spend_logs_job(
     logs_to_process: Final = await dequeue_spend_logs(prisma_client, MAX_LOGS_PER_INTERVAL)
 
     try:
-        await ProxyUpdateSpend.update_spend_logs(
-            n_retry_times=n_retry_times,
-            prisma_client=prisma_client,
-            proxy_logging_obj=proxy_logging_obj,
-            db_writer_client=db_writer_client,
-            logs_to_process=logs_to_process,
+        await asyncio.wait_for(
+            ProxyUpdateSpend.update_spend_logs(
+                n_retry_times=n_retry_times,
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                db_writer_client=db_writer_client,
+                logs_to_process=logs_to_process,
+            ),
+            timeout=timeout,
         )
     except asyncio.CancelledError:
         await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
@@ -6569,6 +6573,14 @@ async def update_spend_logs_job(
             len(logs_to_process),
         )
         raise
+    except asyncio.TimeoutError:
+        await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
+        verbose_proxy_logger.warning(
+            "Spend tracking - spend log write timed out after %.2f seconds; requeued %d rows",
+            timeout or 0.0,
+            len(logs_to_process),
+        )
+        return
 
     # Guardrail/policy usage tracking (same batch, outside spend-logs update)
     try:
@@ -6635,6 +6647,7 @@ async def update_spend_logs_job(
 
 
 MAX_SPEND_LOG_DRAIN_ITERATIONS: Final = 20
+MAX_SPEND_LOG_DRAIN_SECONDS: Final = 15.0
 
 
 async def drain_spend_logs_queue(
@@ -6649,13 +6662,18 @@ async def drain_spend_logs_queue(
             await monitor_task
         prisma_client.spend_logs_queue_monitor_task = None  # rebind-ok: the client owns its monitor handle
 
+    deadline: Final = time.monotonic() + MAX_SPEND_LOG_DRAIN_SECONDS
     for _ in range(MAX_SPEND_LOG_DRAIN_ITERATIONS):
         if await _total_queued_spend_transactions(prisma_client) == 0:
             return
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            break
         await update_spend_logs_job(
             prisma_client=prisma_client,
             db_writer_client=db_writer_client,
             proxy_logging_obj=proxy_logging_obj,
+            timeout=remaining_seconds,
         )
 
     remaining: Final = await _total_queued_spend_transactions(prisma_client)
