@@ -5,6 +5,7 @@ This module contains the core login logic that can be reused across different
 login endpoints (e.g., /login and /v2/login).
 """
 
+import asyncio
 import os
 import secrets
 from collections.abc import Mapping
@@ -16,8 +17,10 @@ import jwt
 from fastapi import HTTPException
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -27,6 +30,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_utils import is_sso_provider_fully_configured
+from litellm.proxy.auth.password_policy import is_breach_check_enabled, is_password_breached
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -43,6 +47,48 @@ from litellm.proxy.utils import (
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+BREACH_RECHECK_INTERVAL: Final = timedelta(hours=24)
+PASSWORD_RESET_ALLOWED_ROUTES: Final = ("/user/password/change",)
+
+
+def _breach_recheck_due(last_breach_check_at: datetime | None) -> bool:
+    if last_breach_check_at is None:
+        return True
+    last_checked_utc: Final = (
+        last_breach_check_at
+        if last_breach_check_at.tzinfo is not None
+        else last_breach_check_at.replace(tzinfo=timezone.utc)
+    )
+    return datetime.now(timezone.utc) - last_checked_utc >= BREACH_RECHECK_INTERVAL
+
+
+async def screen_login_password_for_breach(
+    user_id: str,
+    password: str,
+    last_breach_check_at: datetime | None,
+    general_settings: Mapping[str, object],
+    prisma_client: PrismaClient,
+    client: AsyncHTTPHandler | None = None,
+) -> None:
+    """Background task behind a successful password login: screens the password
+    against HIBP and stamps ``password_reset_required`` when breached, so the
+    NEXT login is restricted to the change-password flow. Never blocks or fails
+    the login it runs behind, and rechecks a given user at most once per
+    ``BREACH_RECHECK_INTERVAL``."""
+    if not is_breach_check_enabled(general_settings):
+        return
+    if not _breach_recheck_due(last_breach_check_at):
+        return
+    breached: Final = await is_password_breached(password, general_settings, client)
+    update_data: Final = {
+        "last_breach_check_at": datetime.now(timezone.utc),
+        **({"password_reset_required": True} if breached else {}),
+    }
+    try:
+        await UserRepository(prisma_client).table.update(where={"user_id": user_id}, data=update_data)
+    except Exception as e:  # noqa: BLE001  # fire-and-forget: a failed stamp must never surface into the login
+        verbose_proxy_logger.warning("Login-time breach screening could not update user %s: %s", user_id, e)
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
@@ -116,6 +162,7 @@ class LoginResult:
     user_email: str | None
     user_role: str
     login_method: Literal["sso", "username_password"]
+    password_reset_required: bool
 
     def __init__(
         self,
@@ -124,12 +171,14 @@ class LoginResult:
         user_email: str | None,
         user_role: str,
         login_method: Literal["sso", "username_password"] = "username_password",
+        password_reset_required: bool = False,
     ):
         self.user_id = user_id
         self.key = key
         self.user_email = user_email
         self.user_role = user_role
         self.login_method = login_method
+        self.password_reset_required = password_reset_required
 
 
 async def authenticate_user(
@@ -322,6 +371,17 @@ async def authenticate_user(
 
         if verify_password(password, _password):
             await _rehash_password_if_needed(_user_row.user_id, password, _password)
+            if prisma_client is not None:
+                asyncio.create_task(
+                    screen_login_password_for_breach(
+                        user_id=_user_row.user_id,
+                        password=password,
+                        last_breach_check_at=getattr(_user_row, "last_breach_check_at", None),
+                        general_settings=general_settings,
+                        prisma_client=prisma_client,
+                    )
+                )
+            password_reset_required: Final = getattr(_user_row, "password_reset_required", None) is True
             if os.getenv("DATABASE_URL") is not None:
                 response = await generate_key_helper_fn(
                     request_type="key",
@@ -335,6 +395,14 @@ async def authenticate_user(
                         "spend": 0,
                         "user_id": user_id,
                         "team_id": "litellm-dashboard",
+                        **(
+                            {
+                                "allowed_routes": list(PASSWORD_RESET_ALLOWED_ROUTES),
+                                "metadata": {"password_reset_required": True},
+                            }
+                            if password_reset_required
+                            else {}
+                        ),
                     },
                 )
             else:
@@ -353,6 +421,7 @@ async def authenticate_user(
                 user_email=user_email,
                 user_role=cast(str, user_role),
                 login_method="username_password",
+                password_reset_required=password_reset_required,
             )
         else:
             raise ProxyException(
@@ -426,4 +495,5 @@ def create_ui_token_object(
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        password_reset_required=login_result.password_reset_required,
     )

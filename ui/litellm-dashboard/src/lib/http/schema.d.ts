@@ -16837,7 +16837,8 @@ export interface paths {
          *     Requires the current password. The new password must satisfy the
          *     configured password policy (`general_settings.password_policy_*`: minimum
          *     length, character classes, and, when enabled, breached-password screening
-         *     via haveibeenpwned.com).
+         *     via haveibeenpwned.com). A successful change lifts any pending forced
+         *     password reset (`password_reset_required`) on the account.
          *
          *     Parameters:
          *     - current_password: str - The user's current password.
@@ -16897,7 +16898,7 @@ export interface paths {
          *     Parameters:
          *         - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
          *         - user_email: Optional[str] - Specify a user email.
-         *         - password: Optional[str] - Set the user's password (admin only). Must satisfy the configured password policy. Users change their own password with POST /user/password/change.
+         *         - password: Optional[str] - Set the user's password (admin only). Must satisfy the configured password policy. The user is required to change it at their next login. Users change their own password with POST /user/password/change.
          *         - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
          *         - teams: Optional[list] - specify a list of team id's a user belongs to.
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
@@ -30351,6 +30352,8 @@ export interface components {
             budget_reset_at?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Last Breach Check At */
+            last_breach_check_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -30385,6 +30388,8 @@ export interface components {
             organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /** Password Reset Required */
+            password_reset_required?: boolean | null;
             /**
              * Policies
              * @default []
@@ -30444,6 +30449,8 @@ export interface components {
              * @default 0
              */
             key_count: number;
+            /** Last Breach Check At */
+            last_breach_check_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -30478,6 +30485,8 @@ export interface components {
             organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /** Password Reset Required */
+            password_reset_required?: boolean | null;
             /**
              * Policies
              * @default []

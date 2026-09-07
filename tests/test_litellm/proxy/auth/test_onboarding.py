@@ -463,6 +463,10 @@ async def test_claim_token_sets_accepted_at_after_password_written():
     call_kwargs = prisma.db.litellm_usertable.update.call_args
     assert call_kwargs.kwargs["where"] == {"user_id": "user-123"}
     assert "password" in call_kwargs.kwargs["data"]
+    # A freshly claimed, policy-screened password lifts any pending forced
+    # reset and re-arms the login-time breach screen.
+    assert call_kwargs.kwargs["data"]["password_reset_required"] is False
+    assert call_kwargs.kwargs["data"]["last_breach_check_at"] is None
 
     # is_accepted was flipped to True on the invitation link
     prisma.db.litellm_invitationlink.update.assert_called_once()
