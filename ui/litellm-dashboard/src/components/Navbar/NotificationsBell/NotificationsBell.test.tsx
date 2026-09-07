@@ -1,5 +1,5 @@
 import { renderWithProviders, screen } from "../../../../tests/test-utils";
-import { NotificationsBell, AGENT_PLATFORM_URL } from "./NotificationsBell";
+import { NotificationsBell, AUTO_ROUTER_DOCS_URL } from "./NotificationsBell";
 import React from "react";
 import userEvent from "@testing-library/user-event";
 
@@ -8,15 +8,15 @@ describe("NotificationsBell", () => {
     localStorage.clear();
   });
 
-  it("should open notifications with Agent Platform details and GitHub link", async () => {
+  it("should open notifications with Auto Router details and docs link", async () => {
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBell />);
     await user.click(screen.getByRole("button", { name: /^notifications$/i }));
-    expect(screen.getByText(/LiteLLM Agent Platform/i)).toBeInTheDocument();
-    const githubBtn = screen.getByRole("link", { name: /^GitHub$/i });
-    expect(githubBtn).toHaveAttribute("href", AGENT_PLATFORM_URL);
-    expect(githubBtn).toHaveAttribute("target", "_blank");
-    expect(githubBtn).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByText(/^LiteLLM Auto Router$/i)).toBeInTheDocument();
+    const docsBtn = screen.getByRole("link", { name: /^read the docs$/i });
+    expect(docsBtn).toHaveAttribute("href", AUTO_ROUTER_DOCS_URL);
+    expect(docsBtn).toHaveAttribute("target", "_blank");
+    expect(docsBtn).toHaveAttribute("rel", "noopener noreferrer");
   });
 
   it("should offer mark as read when announcement is unread", async () => {
@@ -31,13 +31,13 @@ describe("NotificationsBell", () => {
     renderWithProviders(<NotificationsBell />);
     await user.click(screen.getByRole("button", { name: /^notifications$/i }));
     await user.click(screen.getByRole("button", { name: /^mark as read$/i }));
-    expect(localStorage.getItem("litellmHideAgentPlatformBanner")).toBe("true");
+    expect(localStorage.getItem("litellmHideAutoRouterAnnouncement")).toBe("true");
     await user.click(screen.getByRole("button", { name: /^notifications$/i }));
     expect(screen.queryByRole("button", { name: /^mark as read$/i })).not.toBeInTheDocument();
   });
 
   it("should not show mark as read when previously dismissed", async () => {
-    localStorage.setItem("litellmHideAgentPlatformBanner", "true");
+    localStorage.setItem("litellmHideAutoRouterAnnouncement", "true");
     const user = userEvent.setup();
     renderWithProviders(<NotificationsBell />);
     await user.click(screen.getByRole("button", { name: /^notifications$/i }));

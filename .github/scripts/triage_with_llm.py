@@ -582,7 +582,9 @@ def build_issue_prompt(*, title: str, body: str) -> str:
                   Commands whose external dependencies (LLM provider, DB,
                   network) are mocked or stubbed do NOT count.
               Prose-only "steps to reproduce" with no run output, video, or
-              screenshot do NOT satisfy (1).
+              screenshot do NOT satisfy (1). An unfilled template scaffold
+              (bare headings such as "Version or commit:" with nothing under
+              them, empty numbered lists) counts as absent, not as evidence.
           (2) Expected vs. actual behavior (`has_expected_vs_actual`).
 
         FAIL the bug report if either (1) or (2) is missing. Do not bias
@@ -595,6 +597,13 @@ def build_issue_prompt(*, title: str, body: str) -> str:
             that it does not today).
           - Motivation / use case with a concrete example (config, API call,
             UI flow, or scenario showing what's blocked today).
+          - END-TO-END EVIDENCE OF THE DEAD-END (set
+            `has_dead_end_evidence=true` only when this is present): a video,
+            a screenshot, or the exact command(s) actually run paired with
+            their real output, showing the point where the flow stops today.
+            Mocked or stubbed dependencies do NOT count, and an unfilled
+            template scaffold (bare headings, empty numbered lists) counts as
+            absent.
 
         For an issue that is neither a bug report nor a feature request (a
         question, support request, or discussion), PASS as long as it has a
@@ -608,6 +617,7 @@ def build_issue_prompt(*, title: str, body: str) -> str:
           "has_repro": boolean,
           "has_expected_vs_actual": boolean,
           "has_motivation_example": boolean,
+          "has_dead_end_evidence": boolean,
           "missing": ["plain-english strings naming what is missing"],
           "explanation": "1-2 sentence reasoning for the team to skim"
         }}
@@ -705,6 +715,10 @@ _ISSUE_BUG_LABELS: tuple[tuple[str, str], ...] = (
 )
 _ISSUE_FEATURE_LABELS: tuple[tuple[str, str], ...] = (
     ("has_motivation_example", "Motivation and concrete example"),
+    (
+        "has_dead_end_evidence",
+        "End-to-end evidence of the dead-end (video, screenshot, or command + real output)",
+    ),
 )
 
 
@@ -836,8 +850,11 @@ def format_issue_close_comment(verdict: dict) -> str:
         "video, a screenshot, or the exact commands you ran with their real output / "
         "traceback) plus expected vs. actual behavior. Written steps with no run output, "
         "video, or screenshot don't count, and mocked or stubbed runs don't count.\n"
-        "   - For **feature requests**: a concrete description of what should change, plus a "
-        "use case and example (config / API call / UI flow).\n"
+        "   - For **feature requests**: a concrete description of what should change, a "
+        "use case and example (config / API call / UI flow), plus end-to-end evidence of "
+        "the dead-end (a video, a screenshot, or the exact commands you ran with their "
+        "real output showing where the flow stops today). Mocked or stubbed runs don't "
+        "count.\n"
         "2. Comment `@agent-shin reconsider`. I'll re-run triage and reopen the issue if it "
         "now meets the bar. (GitHub doesn't let external authors reopen an issue a maintainer "
         "or bot closed, so the comment-based reconsider is the reliable path.)\n"
@@ -943,8 +960,10 @@ def format_grace_warning_issue_comment(verdict: dict) -> str:
         "screenshot, or the exact commands you ran with their real output / traceback) plus "
         "expected vs. actual behavior. Written steps with no run output don't count, and "
         "mocked or stubbed runs don't count.\n"
-        "- For **feature requests**: a concrete description of what should change, plus a use "
-        "case and example (config / API call / UI flow).\n"
+        "- For **feature requests**: a concrete description of what should change, a use "
+        "case and example (config / API call / UI flow), plus end-to-end evidence of the "
+        "dead-end (a video, a screenshot, or the exact commands you ran with their real "
+        "output showing where the flow stops today). Mocked or stubbed runs don't count.\n"
         "\n"
         "**If the issue does get auto-closed in 2 hours**, comment `@agent-shin reconsider` "
         "and I'll re-evaluate. If it now meets the bar, I'll reopen the issue.\n"

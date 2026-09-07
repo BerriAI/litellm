@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import { createApiClient, ApiError } from "./client";
+import {
+  createApiClient,
+  ApiError,
+  deriveErrorMessage,
+  extractProxyErrorMessage,
+  unwrapProxyErrorMessage,
+} from "./client";
 
 const okResponse = (data: unknown): Response =>
   ({ ok: true, status: 200, text: async () => JSON.stringify(data) }) as unknown as Response;
@@ -58,6 +64,18 @@ describe("createApiClient", () => {
     expect(onError).toHaveBeenCalledWith("no access");
   });
 
+  it("unwraps an object-shaped detail ({detail:{error}}) rather than dumping the JSON envelope (FastAPI HTTPException shape)", async () => {
+    const conflict = "A skill named 'gitlab' already exists. Update the existing skill instead of adding it again.";
+    const fetchImpl = vi.fn(async () => errorResponse(409, { detail: { error: conflict } }));
+    const onError = vi.fn();
+    const client = createApiClient({ getBaseUrl: () => "", onError, fetchImpl });
+
+    const promise = client.get("/claude-code/plugins", { accessToken: "sk" });
+
+    await expect(promise).rejects.toMatchObject({ message: conflict, status: 409 });
+    expect(onError).toHaveBeenCalledWith(conflict);
+  });
+
   it("falls back to the raw text body when a non-2xx response is not JSON (e.g. an HTML 502)", async () => {
     const fetchImpl = vi.fn(async () => rawErrorResponse(502, "<html>Bad Gateway</html>"));
     const onError = vi.fn();
@@ -99,5 +117,68 @@ describe("createApiClient", () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe("deriveErrorMessage", () => {
+  it("extracts error.message from a ProxyException body, the shape the proxy emits for a pre-call hook HTTPException", () => {
+    const actionable =
+      "MCP semantic tool filtering could not run: embedding model 'text-embedding-3-small' exceeded its context window while embedding the user query. The request was blocked instead of silently passing all tools through. Switch to an embedding model with a larger context window, or disable semantic tool filtering.";
+    const wireBody = {
+      error: { message: actionable, type: "None", param: "None", code: "400" },
+    };
+    expect(deriveErrorMessage(wireBody)).toBe(actionable);
+  });
+
+  it("returns error directly when it is a plain string", () => {
+    expect(deriveErrorMessage({ error: "flat error text" })).toBe("flat error text");
+  });
+
+  it("falls back to a string detail field", () => {
+    expect(deriveErrorMessage({ detail: "detail text" })).toBe("detail text");
+  });
+
+  it("unwraps the HTTPException detail.error shape management endpoints raise", () => {
+    expect(deriveErrorMessage({ detail: { error: "Team(s) not found: ghost-team" } })).toBe(
+      "Team(s) not found: ghost-team",
+    );
+  });
+});
+
+describe("unwrapProxyErrorMessage", () => {
+  it("should unwrap the proxy's stringified python dict message", () => {
+    expect(
+      unwrapProxyErrorMessage("{'error': 'Cost center CC-9999 is not recognized. Contact the FinOps team.'}"),
+    ).toBe("Cost center CC-9999 is not recognized. Contact the FinOps team.");
+  });
+
+  it("should unwrap the full JSON error envelope down to the inner message", () => {
+    const envelope = JSON.stringify({
+      error: {
+        message: "{'error': 'cost_center is required in team metadata. Contact the FinOps team.'}",
+        type: "internal_server_error",
+        param: "None",
+        code: "400",
+      },
+    });
+    expect(unwrapProxyErrorMessage(envelope)).toBe(
+      "cost_center is required in team metadata. Contact the FinOps team.",
+    );
+  });
+
+  it("should return plain messages and unparseable input unchanged", () => {
+    expect(unwrapProxyErrorMessage("Failed to fetch")).toBe("Failed to fetch");
+    expect(unwrapProxyErrorMessage("{}")).toBe("{}");
+  });
+});
+
+describe("extractProxyErrorMessage", () => {
+  it("should unwrap an Error's message without the error name prefix", () => {
+    const error = new ApiError("{'error': 'Cost center CC-9999 is not recognized.'}", 400, {});
+    expect(extractProxyErrorMessage(error)).toBe("Cost center CC-9999 is not recognized.");
+  });
+
+  it("should stringify non-Error inputs", () => {
+    expect(extractProxyErrorMessage("plain failure")).toBe("plain failure");
   });
 });

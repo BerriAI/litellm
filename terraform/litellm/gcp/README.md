@@ -204,6 +204,40 @@ Behavior matches the AWS stack 1:1; the only naming differences are
 `otel_headers_secret` (a Secret Manager resource ID) vs AWS's
 `otel_headers_secret_arn` (a Secrets Manager ARN).
 
+### Enterprise billing metrics
+
+License-gated request metering is opt-in and gated entirely on
+`billing_metrics_endpoint`. Empty (default) and no billing env is added to
+the container, so existing deployments are unchanged. Set it and both
+gateway and backend export billable-request counts over OTLP/HTTP,
+authenticating to the collector with the mTLS client certificate issued for
+your deployment.
+
+The proxy accepts the certificate, key, and CA bundle as either a file path
+or literal PEM content. This stack takes the PEM, writes each one to its own
+Secret Manager entry, grants the runtime service account
+`roles/secretmanager.secretAccessor` on them, and injects them as Cloud Run
+secret env vars `LITELLM_BILLING_METRICS_CLIENT_CERT` / `_CLIENT_KEY` (and
+`_CA_CERT` when set), so no volume mount is needed.
+
+```hcl
+billing_metrics_endpoint = "https://telemetry.litellm.ai/v1/metrics"
+```
+
+```bash
+export TF_VAR_billing_metrics_client_cert_pem="$(cat client.crt)"
+export TF_VAR_billing_metrics_client_key_pem="$(cat client.key)"
+```
+
+`billing_metrics_ca_cert_pem` is only for private or test collectors whose
+CA is not in the system trust store; leave it empty against
+`telemetry.litellm.ai`. Metering requires an enterprise license, so pair
+this with `litellm_license`. To tune the export cadence, set
+`LITELLM_BILLING_METRICS_EXPORT_INTERVAL_MS` through `gateway_extra_env` /
+`backend_extra_env`
+
+Behavior matches the AWS stack 1:1; the variable names are identical
+
 ## Tenant deployment
 
 Every resource the stack creates is named `${tenant}-litellm-${env}` (or
@@ -358,6 +392,63 @@ with its own provider config (one `examples/default`-style root per project),
 or fork the module to add `configuration_aliases` and pass per-instance
 `providers = { ... }`.
 
+## Dependencies only (run LiteLLM on GKE)
+
+Set `create_runtime = false` to provision Cloud SQL, Memorystore, GCS,
+Secret Manager, and the runtime service account without Cloud Run or the
+load balancer. For a Shared VPC, set the full host-project network ID and
+skip PSA creation after the host project has configured it:
+
+```hcl
+create_runtime        = false
+network_id            = "projects/<host>/global/networks/<vpc>"
+create_psa_connection = false
+```
+
+The host project must already have Private Services Access configured on
+that network and the Service Networking API enabled; the module cannot set
+PSA up from a service project. GKE nodes must sit on the same Shared VPC so
+the Cloud SQL and Memorystore private IPs are routable from the pods. Run
+the root with its provider pointed at the project that should own the
+dependencies. `create_runtime = true` with `network_id` set is also allowed,
+but the Serverless VPC Access connector has to live in the same project as
+the network, so that combination only works when the VPC is in the
+deployment project
+
+Map the outputs into the Helm values as follows:
+
+```yaml
+database:
+  writer:
+    host: <cloudsql_writer_ip>
+    dbname: <db_name>
+    passwordSecret:
+      name: <kubernetes-secret-with-db-credentials>
+  reader:
+    host: <cloudsql_reader_ip>
+    dbname: <db_name>
+    passwordSecret:
+      name: <kubernetes-secret-with-db-credentials>
+redis:
+  host: <redis_host>
+  port: <redis_port>
+masterKey:
+  secretName: <kubernetes-secret-with-master-key>
+```
+
+Create the database Secret with keys `username` (the `db_username` output)
+and `password` (read it with `gcloud secrets versions access latest
+--secret=<db_password_secret_id>`), and the master key Secret from
+`master_key_secret_id` the same way. Memorystore only accepts TLS by
+default, so store the `redis_server_ca_pem` output in a third Secret,
+mount it into the gateway and backend pods via `volumes` / `volumeMounts`,
+and add `REDIS_SSL=true` and `REDIS_SSL_CA_CERTS=<mount path>` to each
+component's `extraEnv`. Setting `redis_transit_encryption = false` removes
+the CA plumbing at the cost of plaintext Redis traffic inside the VPC
+
+The chart's pre-install/pre-upgrade migration hook runs the Prisma
+migration, so nothing replaces the Cloud Run migrations Job in this mode
+
 ## Storage and database retention
 
 Two opt-in tripwires guard against accidental data loss on
@@ -375,14 +466,15 @@ Flip `cloudsql_deletion_protection` to `false` or `gcs_force_destroy` to
 
 ## Redis encryption
 
-Memorystore runs with `transit_encryption_mode = "SERVER_AUTHENTICATION"`,
-so the proxy connects via `rediss://`. The instance's self-signed CA cert
-(`server_ca_certs[0].cert`) is shipped to gateway + backend as
-`REDIS_CA_PEM_B64`; their entrypoint shell decodes it to `/tmp/redis-ca.pem`
-before uvicorn starts and points `REDIS_SSL_CA_CERTS` at that path. No
-extra config needed — but if you ever swap Memorystore for an external
-Redis, override `REDIS_HOST`/`REDIS_PORT` and either drop these env vars
-or point them at your own CA.
+By default, Memorystore runs with
+`transit_encryption_mode = "SERVER_AUTHENTICATION"`, so Cloud Run connects
+via `rediss://`. The instance's self-signed CA cert
+(`server_ca_certs[0].cert`) is shipped to gateway and backend as
+`REDIS_CA_PEM_B64`; their entrypoint shell decodes it to
+`/tmp/redis-ca.pem` before uvicorn starts and points `REDIS_SSL_CA_CERTS` at
+that path. Set `redis_transit_encryption = false` to use plaintext Redis.
+For GKE, use `redis_server_ca_pem` as described in the dependencies-only
+section, or accept the security tradeoff of disabling transit encryption
 
 ## Files
 
@@ -400,4 +492,5 @@ or point them at your own CA.
 | `iam.tf`          | Runtime SA + Cloud SQL client + Secret Manager accessor              |
 | `cloudrun.tf`     | 3 Cloud Run services + Cloud Run Job for migrations                  |
 | `load_balancer.tf`| External HTTPS LB, serverless NEGs, URL map for path routing         |
-| `outputs.tf`      | LB IP, service URLs, secret IDs, migration `execute` command         |
+| `outputs.tf`      | LB IP, service URLs, dependency endpoints, secret IDs, migration command |
+| `tests/`          | Plan-only mock-provider coverage for deployment modes and Redis encryption |

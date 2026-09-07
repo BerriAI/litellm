@@ -292,6 +292,7 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 | [Clarifai (`clarifai`)](https://docs.litellm.ai/docs/providers/clarifai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Cloudflare AI Workers (`cloudflare`)](https://docs.litellm.ai/docs/providers/cloudflare_workers) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Codestral (`codestral`)](https://docs.litellm.ai/docs/providers/codestral) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [Cognition (`cognition`)](https://docs.litellm.ai/docs/providers/cognition) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Cohere (`cohere`)](https://docs.litellm.ai/docs/providers/cohere) | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  | ✅ |
 | [Cohere Chat (`cohere_chat`)](https://docs.litellm.ai/docs/providers/cohere) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [CometAPI (`cometapi`)](https://docs.litellm.ai/docs/providers/cometapi) | ✅ | ✅ | ✅ | ✅ |  |  |  |  |  |  |
@@ -353,6 +354,8 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 | [Petals (`petals`)](https://docs.litellm.ai/docs/providers/petals) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Pinstripes (`pinstripes`)](https://docs.litellm.ai/docs/providers/pinstripes) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Predibase (`predibase`)](https://docs.litellm.ai/docs/providers/predibase) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
+| [Qwen AI Platform (`qwen_ai_platform`)](https://docs.litellm.ai/docs/providers/qwencloud) | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  | ✅ |
+| [QwenCloud (`qwencloud`)](https://docs.litellm.ai/docs/providers/qwencloud) | ✅ | ✅ | ✅ | ✅ | ✅ |  |  |  |  | ✅ |
 | [Recraft (`recraft`)](https://docs.litellm.ai/docs/providers/recraft) |  |  |  |  | ✅ |  |  |  |  |  |
 | [Replicate (`replicate`)](https://docs.litellm.ai/docs/providers/replicate) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Sagemaker Chat (`sagemaker_chat`)](https://docs.litellm.ai/docs/providers/aws_sagemaker) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
@@ -552,17 +555,12 @@ The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws
 2. Run dependent services `docker-compose up db prometheus`
 
 #### Backend
-1. (In root) create virtual environment `python -m venv .venv`
-2. Activate virtual environment `source .venv/bin/activate`
-3. Install dependencies `uv sync --all-extras --group proxy-dev`
-4. `uv run prisma generate`
-5. `prisma generate`
-6. Start proxy backend `python litellm/proxy/proxy_cli.py`
+1. Run `make bootstrap`
+2. Start proxy backend: `uv run python litellm/proxy/proxy_cli.py`
 
 #### Frontend
-1. Navigate to `ui/litellm-dashboard`
-2. Install dependencies `npm install`
-3. Run `npm run dev` to start the dashboard
+1. Navigate to `ui/litellm-dashboard` (dependencies were already installed w/ `make bootstrap`)
+2. Start dashboard: `npm run dev`
 
 ### Verify Docker Image Signatures
 

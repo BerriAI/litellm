@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -26,6 +26,8 @@ const mockHandleMemberDelete = vi.fn();
 const mockSetSelectedEditMember = vi.fn();
 const mockSetIsEditMemberModalVisible = vi.fn();
 const mockSetIsAddMemberModalVisible = vi.fn();
+
+const budgetResetIso = new Date(2026, 6, 15, 12, 0, 0).toISOString();
 
 const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
   team_id: "team-123",
@@ -69,6 +71,7 @@ const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
       team_id: "team-123",
       budget_id: "budget1",
       spend: 100.5,
+      total_spend: 1538.2608,
       litellm_budget_table: {
         budget_id: "budget1",
         soft_budget: null,
@@ -78,6 +81,7 @@ const createMockTeamData = (overrides: Partial<TeamData> = {}): TeamData => ({
         rpm_limit: 100,
         model_max_budget: null,
         budget_duration: null,
+        budget_reset_at: budgetResetIso,
       },
     },
   ],
@@ -202,7 +206,7 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getAllByText("-").length).toBeGreaterThanOrEqual(1);
   });
 
   it("should display Default Proxy Admin tag for default_user_id", () => {
@@ -243,12 +247,13 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText(/\$100\.5/)).toBeInTheDocument();
+    expect(screen.getByText("$100.50")).toBeInTheDocument();
+    expect(screen.getByText("$1,538.26")).toBeInTheDocument();
     expect(screen.getByText(/100 RPM/)).toBeInTheDocument();
     expect(screen.getByText(/10000 TPM/)).toBeInTheDocument();
   });
 
-  it("should display No Limit for budget when member has no budget", () => {
+  it("should display the budget reset date for member with a budget reset", () => {
     renderWithProviders(
       <TeamMembersComponent
         teamData={createMockTeamData()}
@@ -260,7 +265,23 @@ describe("TeamMembersComponent", () => {
       />,
     );
 
-    expect(screen.getByText("No Limit")).toBeInTheDocument();
+    expect(screen.getByText("Jul 15, 2026")).toBeInTheDocument();
+  });
+
+  it("should display formatted budget and Unlimited for member with no budget", () => {
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    expect(screen.getByText("$1,000.00")).toBeInTheDocument();
+    expect(screen.getByText("Unlimited")).toBeInTheDocument();
   });
 
   it("should display No Limits for rate limits when member has no limits", () => {
@@ -299,6 +320,43 @@ describe("TeamMembersComponent", () => {
 
     expect(mockSetIsEditMemberModalVisible).toHaveBeenCalledWith(true);
     expect(mockSetSelectedEditMember).toHaveBeenCalled();
+  });
+
+  it("keeps a member's stored 0 limits as 0 in the table and in the edit payload, never unlimited", async () => {
+    const user = userEvent.setup();
+    vi.mocked(isProxyAdminRole).mockReturnValue(true);
+    const baseTeamData = createMockTeamData();
+    const teamData = {
+      ...baseTeamData,
+      team_memberships: baseTeamData.team_memberships.map((membership, index) =>
+        index === 0
+          ? {
+              ...membership,
+              litellm_budget_table: { ...membership.litellm_budget_table, max_budget: 0, tpm_limit: 0, rpm_limit: 0 },
+            }
+          : membership,
+      ),
+    };
+
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={teamData}
+        canEditTeam={true}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const memberRow = screen.getByRole("row", { name: /user1@test\.com/ });
+    expect(within(memberRow).getByText("0 RPM / 0 TPM")).toBeInTheDocument();
+    expect(within(memberRow).queryByText("No Limits")).not.toBeInTheDocument();
+
+    await user.click(within(memberRow).getByTestId("edit-member"));
+
+    const zeroLimitsMember = { user_id: "user1@test.com", max_budget_in_team: 0, tpm_limit: 0, rpm_limit: 0 };
+    expect(mockSetSelectedEditMember).toHaveBeenCalledWith(expect.objectContaining(zeroLimitsMember));
   });
 
   it("should call setIsAddMemberModalVisible when Add Member button is clicked", async () => {

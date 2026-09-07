@@ -1,8 +1,8 @@
 //! Health probes. Simple-route template: a `router()` plus its handlers, in one file.
 
+use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
-use axum::Router;
 
 use crate::state::AppState;
 

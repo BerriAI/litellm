@@ -54,11 +54,10 @@ else
 fi || { echo "nvm checksum verification failed"; exit 1; }
 bash "$NVM_SCRIPT"
 source ~/.nvm/nvm.sh
-nvm install v18.17.0
-nvm use v18.17.0
+NODE_VERSION="$(cat ui/litellm-dashboard/.nvmrc)"
+nvm install "v${NODE_VERSION}"
+nvm use "v${NODE_VERSION}"
 
-# copy _enterprise.json from this directory to /ui/litellm-dashboard, and rename it to ui_colors.json
-cp enterprise/enterprise_ui/enterprise_colors.json ui/litellm-dashboard/ui_colors.json
 
 # cd in to /ui/litellm-dashboard
 cd ui/litellm-dashboard

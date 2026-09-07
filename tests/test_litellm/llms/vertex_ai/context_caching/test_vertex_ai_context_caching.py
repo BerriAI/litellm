@@ -1,14 +1,9 @@
-import os
-import sys
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -1451,6 +1446,157 @@ class TestContextCachingEndpoints:
 
         # Restart the patcher so teardown_method can stop it cleanly
         self._token_check_patcher.start()
+
+    def _model_turn_final_messages(self, final_cached_role):
+        tool_call = {
+            "id": "call_abc123",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"location": "Boston"}'},
+        }
+        cached_tail = {
+            "assistant": [],
+            "tool": [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_abc123",
+                    "content": "72F and sunny",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            "system": [
+                {
+                    "role": "system",
+                    "content": "Tool results are authoritative.",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }[final_cached_role]
+        return [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Use the weather tool for every answer.",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [tool_call],
+                "cache_control": {"type": "ephemeral"},
+            },
+            *cached_tail,
+            {"role": "user", "content": "What is the weather in Boston?"},
+        ]
+
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
+    def test_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(
+        self, final_cached_role
+    ):
+        """The cachedContents API rejects contents ending on an assistant or tool turn
+        with HTTP 400 "Requests ending with a model turn are not supported", so the
+        request must proceed uncached instead of failing.
+        """
+        all_messages = self._model_turn_final_messages(final_cached_role)
+        optional_params = self.sample_optional_params.copy()
+
+        result = self.context_caching.check_and_create_cache(
+            messages=all_messages,
+            optional_params=optional_params,
+            api_key="test_key",
+            api_base=None,
+            model="gemini-3.6-flash",
+            client=self.mock_client,
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            cached_content=None,
+            custom_llm_provider="vertex_ai",
+            vertex_project="test_project",
+            vertex_location="us-central1",
+            vertex_auth_header="test_token",
+        )
+
+        messages, returned_params, returned_cache = result
+        assert messages == all_messages
+        assert returned_cache is None
+        assert "tools" in returned_params
+        self.mock_client.get.assert_not_called()
+        self.mock_client.post.assert_not_called()
+
+    @pytest.mark.parametrize("final_cached_role", ["assistant", "tool", "system"])
+    @pytest.mark.asyncio
+    async def test_async_check_and_create_cache_skips_when_cached_block_ends_on_model_turn(
+        self, final_cached_role
+    ):
+        """Async variant: an unsupported terminal turn skips caching instead of failing."""
+        all_messages = self._model_turn_final_messages(final_cached_role)
+        optional_params = self.sample_optional_params.copy()
+
+        result = await self.context_caching.async_check_and_create_cache(
+            messages=all_messages,
+            optional_params=optional_params,
+            api_key="test_key",
+            api_base=None,
+            model="gemini-3.6-flash",
+            client=self.mock_async_client,
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            cached_content=None,
+            custom_llm_provider="vertex_ai",
+            vertex_project="test_project",
+            vertex_location="us-central1",
+            vertex_auth_header="test_token",
+        )
+
+        messages, returned_params, returned_cache = result
+        assert messages == all_messages
+        assert returned_cache is None
+        assert "tools" in returned_params
+        self.mock_async_client.get.assert_not_called()
+        self.mock_async_client.post.assert_not_called()
+
+
+def test_cached_messages_end_on_supported_turn():
+    from litellm.llms.vertex_ai.context_caching.transformation import (
+        cached_messages_end_on_supported_turn,
+    )
+
+    assert (
+        cached_messages_end_on_supported_turn(
+            [{"role": "assistant", "content": "hi"}, {"role": "user", "content": "hello"}]
+        )
+        is True
+    )
+    assert cached_messages_end_on_supported_turn([{"role": "system", "content": "be brief"}]) is True
+    assert cached_messages_end_on_supported_turn([{"role": "assistant", "content": "hi"}]) is False
+    assert (
+        cached_messages_end_on_supported_turn(
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+                {"role": "system", "content": "be brief"},
+            ]
+        )
+        is False
+    )
+    assert (
+        cached_messages_end_on_supported_turn(
+            [{"role": "system", "content": "be brief"}, {"role": "user", "content": "hello"}]
+        )
+        is True
+    )
+    assert (
+        cached_messages_end_on_supported_turn([{"role": "tool", "tool_call_id": "x", "content": "y"}])
+        is False
+    )
+    assert (
+        cached_messages_end_on_supported_turn([{"role": "function", "name": "f", "content": "y"}])
+        is False
+    )
+    assert cached_messages_end_on_supported_turn([]) is False
 
 
 class TestCheckCachePagination:

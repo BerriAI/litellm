@@ -2,7 +2,8 @@
 Translates from OpenAI's `/v1/chat/completions` to ModelScope's `/v1/chat/completions`
 """
 
-from typing import Any, Coroutine, Literal, Optional, Tuple, Union, cast, overload
+from collections.abc import Coroutine
+from typing import Any, Final, Literal, cast, overload
 
 from typing_extensions import override
 
@@ -14,7 +15,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 def _has_non_text_content(message: AllMessageValues) -> bool:
     """Check if a message has non-text content items (e.g. image_url)."""
-    content = message.get("content")
+    content: Final = message.get("content")
     if not isinstance(content, list):
         return False
     return any(item.get("type") != "text" for item in content)
@@ -38,7 +39,7 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> Union[list[AllMessageValues], Coroutine[Any, Any, list[AllMessageValues]]]:
+    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
         """
         Flatten text-only content lists to strings for ModelScope.
 
@@ -59,21 +60,21 @@ class ModelScopeChatConfig(OpenAIGPTConfig):
             return super()._transform_messages(messages=messages, model=model, is_async=False)
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        api_base = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("MODELSCOPE_API_KEY")
+        self, api_base: str | None, api_key: str | None
+    ) -> tuple[str | None, str | None]:
+        api_base = api_base or get_secret_str("MODELSCOPE_API_BASE") or self.DEFAULT_BASE_URL
+        dynamic_api_key: Final = api_key or get_secret_str("MODELSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
     @override
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         If api_base is not provided, use the default ModelScope /chat/completions endpoint.

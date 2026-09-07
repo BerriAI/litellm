@@ -1,17 +1,44 @@
 # AGENTS.md
 
-litellm-rust has exactly THREE crates. A crate is a LAYER, not a route. Routes (ocr, realtime, chat) and providers (mistral, openai) are MODULES inside the layers.
+litellm-rust has five crates. A crate is a layer or shared foundation, not a route. Routes (ocr, realtime, chat) and providers (mistral, openai) are modules inside the layers.
 
 ## Crates
 
-| Crate | Role | Pure / I/O |
-|-------|------|------------|
-| litellm-core | Translation layer — types, route contracts (traits), provider transforms (modules under providers/), and the router. Builds requests/responses; no network. | Pure |
-| litellm-ai-gateway | Routes + host — the only crate that touches the network. HTTP/WebSocket I/O (modules under io/) plus the axum server binary (behind the `server` feature). | I/O |
-| litellm-python-bridge | PyO3 cdylib exposing Rust to the litellm Python SDK — a thin adapter over litellm-ai-gateway's I/O. | Binding |
+| Crate | Role |
+|-------|------|
+| litellm-core | The LiteLLM SDK in Rust. One public entrypoint per top-level call (`messages::messages()`), owning types, transforms, provider resolution, auth, and the provider HTTP call. Call it, get a typed response. |
+| litellm-config | Config-loading boundary. Returns resolved core deployment data and optionally delegates loading to Python. |
+| litellm-ai-gateway | The axum server (behind the `server` feature) plus the WebSocket hosts. Translates HTTP/WS to core entrypoints; owns no provider logic and no handlers. |
+| litellm-python-interop | Domain-neutral PyO3 foundation for GIL handling and typed Python/Serde conversion. |
+| litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. Owns API registration, domain wiring, and Python exception mapping. |
 
-Dependency direction (acyclic): litellm-core ← litellm-ai-gateway ← litellm-python-bridge.
+Dependency direction is acyclic: `litellm-config` depends on `litellm-core`, the gateway depends on both, and `litellm-python-bridge` depends on the domain layers and `litellm-python-interop`. The interop foundation depends on no LiteLLM domain crate.
 
-Adding a crate: default to a MODULE. New crate ONLY on a real trigger — separate artifact (binary/cdylib), proc-macro, shared foundation, or publishable standalone. A new provider or route is none of these.
+## Where a route lives
+
+A top-level LiteLLM call is a module under `crates/core/src/<route>/`, shaped like `messages`:
+
+```
+core/src/messages/
+  mod.rs             # pub async fn messages(..) -> CoreResult<..>  (+ messages_stream for SSE)
+  types.rs           # request/response types, MessagesRequest
+  transformation.rs  # the provider template trait
+  prepare.rs         # provider resolution, auth headers, URL
+  handler.rs         # the provider call
+  client.rs          # the shared reqwest client
+```
+
+Handlers never live in `ai-gateway`. `ocr`, `audio_transcription`, and `realtime` are still hosted there from before this rule; they move to `core` as they are touched.
+
+Adding a crate: default to a module. A new crate requires a real trigger: separate artifact (binary/cdylib), proc-macro, shared foundation, or publishable standalone. A new provider or route is none of these.
 
 Adding a crate fails crates/core/tests/workspace_crate_allowlist.rs until you update its allowlist and this file — intentional.
+
+## Style
+
+All Rust in `litellm-rust/` follows the official Rust Style Guide:
+https://doc.rust-lang.org/style-guide/
+
+`rustfmt` implements its formatting by default, so run `cargo fmt` before committing; CI gates every PR on `cargo fmt --check`. Do not hand-format against rustfmt or add a `rustfmt.toml` that diverges from the default style.
+
+Beyond formatting, follow the guide's naming and idiom conventions rustfmt cannot auto-apply: `snake_case` items/functions/modules, `UpperCamelCase` types/traits/variants, `SCREAMING_SNAKE_CASE` constants/statics (acronyms as one word, e.g. `HttpClient`), and the import grouping and item ordering it prescribes. See CLAUDE.md for the detailed version.

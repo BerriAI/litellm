@@ -10,6 +10,7 @@ resource "random_password" "master_key" {
 # user (see rds.tf header). Runtime services authenticate via IAM tokens
 # and never read this secret.
 resource "random_password" "db_master_password" {
+  count       = var.create_database ? 1 : 0
   length      = 32
   special     = false
   min_lower   = 4
@@ -74,7 +75,63 @@ resource "aws_secretsmanager_secret_version" "ui_password" {
   secret_string = var.ui_password
 }
 
+# Billing-metrics mTLS material — only created when metering is enabled
+# (billing_metrics_endpoint non-empty) and the operator supplied the PEM.
+# The task-execution role gets GetSecretValue via iam.tf, and gateway +
+# backend pick the env vars up through shared_secrets in ecs.tf.
+resource "aws_secretsmanager_secret" "billing_metrics_client_cert" {
+  count = local.billing_metrics_client_cert_enabled ? 1 : 0
+
+  name                    = "${local.name}-billing-metrics-client-cert"
+  description             = "LITELLM_BILLING_METRICS_CLIENT_CERT for gateway + backend."
+  recovery_window_in_days = 0
+
+  tags = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "billing_metrics_client_cert" {
+  count = local.billing_metrics_client_cert_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.billing_metrics_client_cert[0].id
+  secret_string = var.billing_metrics_client_cert_pem
+}
+
+resource "aws_secretsmanager_secret" "billing_metrics_client_key" {
+  count = local.billing_metrics_client_key_enabled ? 1 : 0
+
+  name                    = "${local.name}-billing-metrics-client-key"
+  description             = "LITELLM_BILLING_METRICS_CLIENT_KEY for gateway + backend."
+  recovery_window_in_days = 0
+
+  tags = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "billing_metrics_client_key" {
+  count = local.billing_metrics_client_key_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.billing_metrics_client_key[0].id
+  secret_string = var.billing_metrics_client_key_pem
+}
+
+resource "aws_secretsmanager_secret" "billing_metrics_ca_cert" {
+  count = local.billing_metrics_ca_cert_enabled ? 1 : 0
+
+  name                    = "${local.name}-billing-metrics-ca-cert"
+  description             = "LITELLM_BILLING_METRICS_CA_CERT for gateway + backend."
+  recovery_window_in_days = 0
+
+  tags = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "billing_metrics_ca_cert" {
+  count = local.billing_metrics_ca_cert_enabled ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.billing_metrics_ca_cert[0].id
+  secret_string = var.billing_metrics_ca_cert_pem
+}
+
 resource "aws_secretsmanager_secret" "db_master_password" {
+  count                   = var.create_database ? 1 : 0
   name                    = "${local.name}-db-master-password"
   description             = "Aurora master-user password - bootstrap only. Runtime auth is IAM-token."
   recovery_window_in_days = 0
@@ -83,12 +140,50 @@ resource "aws_secretsmanager_secret" "db_master_password" {
 }
 
 resource "aws_secretsmanager_secret_version" "db_master_password" {
-  secret_id = aws_secretsmanager_secret.db_master_password.id
+  count     = var.create_database ? 1 : 0
+  secret_id = aws_secretsmanager_secret.db_master_password[0].id
   secret_string = jsonencode({
     username = var.db_master_username
-    password = random_password.db_master_password.result
-    host     = aws_rds_cluster.this.endpoint
-    port     = aws_rds_cluster.this.port
+    password = random_password.db_master_password[0].result
+    host     = aws_rds_cluster.this[0].endpoint
+    port     = aws_rds_cluster.this[0].port
     dbname   = var.db_name
   })
+}
+
+# Bring-your-own connection strings. Both hold credentials, so they go to
+# Secrets Manager and reach the containers as ECS `secrets` rather than as
+# plain-text env in the task definition.
+resource "aws_secretsmanager_secret" "database_url" {
+  count = local.byo_database ? 1 : 0
+
+  name                    = "${local.name}-database-url"
+  description             = "DATABASE_URL for an existing Postgres, used when create_database = false."
+  recovery_window_in_days = 0
+
+  tags = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "database_url" {
+  count = local.byo_database ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.database_url[0].id
+  secret_string = var.database_url
+}
+
+resource "aws_secretsmanager_secret" "redis_url" {
+  count = local.byo_redis ? 1 : 0
+
+  name                    = "${local.name}-redis-url"
+  description             = "REDIS_URL for an existing Redis, used when create_redis = false."
+  recovery_window_in_days = 0
+
+  tags = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "redis_url" {
+  count = local.byo_redis ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.redis_url[0].id
+  secret_string = var.redis_url
 }

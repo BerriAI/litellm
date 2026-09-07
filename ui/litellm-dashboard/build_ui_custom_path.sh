@@ -33,11 +33,12 @@ if ! command -v nvm &> /dev/null; then
 fi
 
 # Use nvm to set the required Node.js version
-nvm use v18.17.0
+nvm install
+nvm use
 
 # Check if nvm use was successful
 if [ $? -ne 0 ]; then
-    echo "Error: Failed to switch to Node.js v18.17.0. Deployment aborted."
+    echo "Error: Failed to switch to the Node.js version in .nvmrc. Deployment aborted."
     exit 1
 fi
 
@@ -55,8 +56,7 @@ if [ $? -eq 0 ]; then
     # Specify the destination directory
     destination_dir="../../litellm/proxy/_experimental/out"
 
-    # Ensure the destination directory exists, then clear it
-    mkdir -p "$destination_dir"
+    # Remove existing files in the destination directory
     rm -rf "$destination_dir"/*
 
     # Copy the contents of the output directory to the specified destination

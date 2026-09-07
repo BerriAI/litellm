@@ -13,10 +13,3 @@ export function countBudgetViolations(report, budgets) {
       .map((rule) => [rule, counts[rule] || 0]),
   );
 }
-
-export function findDrift(committed, actual) {
-  const rules = [...new Set([...Object.keys(actual), ...Object.keys(committed)])].sort();
-  return rules
-    .filter((rule) => committed[rule] !== actual[rule])
-    .map((rule) => ({ rule, committed: committed[rule] ?? null, actual: actual[rule] ?? null }));
-}

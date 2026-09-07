@@ -2,13 +2,10 @@
 Unit tests for SensitiveDataMasker - List Preservation
 """
 
-import os
-import sys
 
 import pytest
 
 # Add the parent directory to the system path
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
@@ -197,3 +194,269 @@ def test_cost_per_token_fields_not_masked():
     # Actual secrets must still be masked
     assert "*" in masked["api_key"]
     assert "*" in masked["access_token"]
+
+
+def test_mask_sensitive_structure_passes_through_plain_topology_names():
+    """Fallback groups are usually lists of model-group name strings; those
+    carry no secrets and must survive verbatim so opt-in debug output stays useful."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+    assert mask_sensitive_structure(["gpt-4", "claude-3-haiku"]) == ["gpt-4", "claude-3-haiku"]
+    assert mask_sensitive_structure([{"gpt-3.5-turbo": ["claude-3-haiku"]}]) == [
+        {"gpt-3.5-turbo": ["claude-3-haiku"]}
+    ]
+    assert mask_sensitive_structure(None) is None
+
+
+def test_mask_sensitive_structure_masks_credentials_in_inline_fallback_dicts():
+    """An inline-dict fallback can carry provider credentials; those values must be
+    masked before the structure is embedded in a client-facing error message."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+    secret = "sk-INLINEFALLBACKSECRET1234567890"
+    aws_secret = "wJalrXUtnFEMIK7MDENGbPxRfiCYSECRETKEY"
+    masked = mask_sensitive_structure(
+        [{"model": "openai/gpt-4", "api_key": secret, "aws_secret_access_key": aws_secret}]
+    )
+
+    rendered = str(masked)
+    assert secret not in rendered
+    assert aws_secret not in rendered
+    # Non-secret keys stay visible so the fallback wiring remains debuggable
+    assert masked[0]["model"] == "openai/gpt-4"
+    assert "*" in masked[0]["api_key"]
+    assert "*" in masked[0]["aws_secret_access_key"]
+
+
+def test_mask_sensitive_structure_masks_credentials_nested_in_config_shape():
+    """Credentials nested inside the {group: [fallbacks]} config shape must also be masked."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
+
+    secret = "sk-NESTEDINLINESECRET0987654321"
+    masked = mask_sensitive_structure(
+        [{"primary-group": [{"model": "gpt-4o", "api_key": secret}]}]
+    )
+    assert secret not in str(masked)
+
+
+def test_mask_credentials_in_payload_preserves_none_and_scalars():
+    """The payload variant does not distort JSON-shaped values: None stays None,
+    ints/floats/bools stay themselves, lists stay lists. This is what makes it
+    safe for logging pipelines that persist the record verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    result = mask_credentials_in_payload(
+        {
+            "reason": None,
+            "confidence": 0.42,
+            "flagged": True,
+            "tokens_used": 17,
+            "categories": ["pii", "toxicity"],
+            "nested": {"end_user_id": None},
+        }
+    )
+    assert result == {
+        "reason": None,
+        "confidence": 0.42,
+        "flagged": True,
+        "tokens_used": 17,
+        "categories": ["pii", "toxicity"],
+        "nested": {"end_user_id": None},
+    }
+
+
+def test_mask_credentials_in_payload_masks_inside_pydantic_models():
+    """A Pydantic model reached during the walk gets dumped to a dict so its
+    sensitive-named string fields are masked. Without this the credentials
+    inside a nested ``UserAPIKeyAuth`` in a guardrail_response reach the
+    logging pipeline unmasked once JSON serialization flattens it."""
+    from pydantic import BaseModel
+
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    class Auth(BaseModel):
+        token: str = "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
+        team_alias: str = "acme"
+
+    result = mask_credentials_in_payload({"user_api_key_auth": Auth()})
+    auth_dict = result["user_api_key_auth"]
+    assert isinstance(auth_dict, dict)
+    assert auth_dict["team_alias"] == "acme"
+    assert (
+        auth_dict["token"]
+        != "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
+    )
+    assert "*" in auth_dict["token"]
+
+
+def test_mask_credentials_in_payload_masks_only_sensitive_string_leaves():
+    """Sensitive-named string leaves get masked; sibling non-string values
+    (including None) under the same key stay verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    plaintext = "lsv2_pt_abcdef1234567890"
+    result = mask_credentials_in_payload(
+        {
+            "model": "gpt-4o-mini",
+            "callback_vars": {
+                "langsmith_api_key": plaintext,
+                "langsmith_project": "proj",
+                "extra_token_count": 5,
+            },
+        }
+    )
+    assert result["model"] == "gpt-4o-mini"
+    assert result["callback_vars"]["langsmith_project"] == "proj"
+    assert result["callback_vars"]["extra_token_count"] == 5
+    masked = result["callback_vars"]["langsmith_api_key"]
+    assert masked != plaintext
+    assert masked.startswith(plaintext[:4])
+    assert masked.endswith(plaintext[-4:])
+
+
+def test_extra_sensitive_patterns_add_to_the_defaults():
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+    masker = SensitiveDataMasker(extra_sensitive_patterns={"connection"})
+
+    assert masker.is_sensitive_key("mongodb_connection_string") is True
+    assert masker.is_sensitive_key("api_key") is True
+    assert masker.is_sensitive_key("aws_secret_access_key") is True
+    assert masker.is_sensitive_key("mongodb_database") is False
+
+
+def test_extra_sensitive_patterns_do_not_leak_into_other_maskers():
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+    SensitiveDataMasker(extra_sensitive_patterns={"connection"})
+
+    assert SensitiveDataMasker().is_sensitive_key("mongodb_connection_string") is False
+
+
+def test_the_second_positional_argument_is_still_the_override_set():
+    """SensitiveDataMasker is public SDK surface, so adding a keyword must not shift what an
+    existing positional call means. Putting extra_sensitive_patterns second would silently turn
+    an override set into an extra sensitive set and start masking the caller's pricing fields."""
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+
+    masker = SensitiveDataMasker({"token"}, {"session"})
+
+    assert masker.is_sensitive_key("session_token") is False
+    assert masker.is_sensitive_key("auth_token") is True
+
+def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
+    """A payload rendered straight to stdout cannot afford the partial reveal
+    mask_credentials_in_payload leaves, so every credential-named value is replaced
+    whole, nested header dicts included, while ordinary params survive verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    fake_key = "sk-fake-lit6823-0000000000000000"
+    fake_token = "fake-azure-ad-token-0000"
+    result = redact_credentials_in_payload(
+        {
+            "api_key": fake_key,
+            "azure_ad_token": fake_token,
+            "aws_secret_access_key": "fake-aws-secret-0000",
+            "vertex_credentials": {"private_key": "fake-pem"},
+            "extra_headers": {"Authorization": "Bearer fake-bearer-0000", "x-request-id": "abc123"},
+            "model": "gpt-4o-mini",
+            "max_tokens": 17,
+            "temperature": 0.25,
+            "api_base": None,
+        }
+    )
+
+    assert fake_key not in str(result)
+    assert fake_token not in str(result)
+    assert "fake-aws-secret-0000" not in str(result)
+    assert "fake-pem" not in str(result)
+    assert "fake-bearer-0000" not in str(result)
+    assert result["api_key"] == "REDACTED"
+    assert result["extra_headers"]["Authorization"] == "REDACTED"
+    assert result["extra_headers"]["x-request-id"] == "abc123"
+    assert result["model"] == "gpt-4o-mini"
+    assert result["max_tokens"] == 17
+    assert result["temperature"] == 0.25
+    assert result["api_base"] is None
+
+
+def test_redact_credentials_in_payload_reaches_credentials_nested_in_sequences():
+    """Free-form kwargs like extra_body and metadata routinely carry lists of dicts, so a
+    credential hiding one level inside a list or tuple must be replaced too, while the
+    surrounding container keeps its type and every ordinary element stays verbatim."""
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    result = redact_credentials_in_payload(
+        {
+            "extra_body": {"providers": [{"name": "openai", "api_key": "sk-fake-lit6823-in-a-list"}]},
+            "metadata": {"upstreams": ({"aws_secret_access_key": "fake-aws-in-a-tuple"},)},
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    )
+
+    assert "sk-fake-lit6823-in-a-list" not in str(result)
+    assert "fake-aws-in-a-tuple" not in str(result)
+    assert result["extra_body"]["providers"][0]["api_key"] == "REDACTED"
+    assert result["extra_body"]["providers"][0]["name"] == "openai"
+    assert isinstance(result["extra_body"]["providers"], list)
+    assert result["metadata"]["upstreams"][0]["aws_secret_access_key"] == "REDACTED"
+    assert isinstance(result["metadata"]["upstreams"], tuple)
+    assert result["messages"] == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.parametrize("wrap", ["mapping", "sequence"])
+def test_redact_credentials_in_payload_hides_containers_at_the_recursion_limit(wrap):
+    """The recursion limit exists to bound the walk, not to grant an exemption, so a caller who
+    buries a credential deeper than the limit must get the container hidden rather than handed
+    back verbatim. Nesting through lists costs depth twice as fast as nesting through mappings,
+    so both shapes are pushed well past the limit here."""
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    fake_key = "sk-fake-lit6835-past-the-limit"
+    node = {"api_key": fake_key}
+    for _ in range(2 * DEFAULT_MAX_RECURSE_DEPTH + 1):
+        node = {"extra_body": node} if wrap == "mapping" else {"providers": [node]}
+
+    result = redact_credentials_in_payload({**node, "max_tokens": 17})
+
+    assert fake_key not in str(result)
+    assert "REDACTED" in str(result)
+    assert result["max_tokens"] == 17
+
+
+def test_redact_credentials_in_payload_leaves_a_realistic_tool_schema_intact():
+    """The bound must not eat ordinary payloads: a tool whose JSON schema nests an array of
+    objects inside a nested object is what agent traffic looks like, and the verbose line is
+    useless if those leaves come back as REDACTED."""
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "search_orders",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "items": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {"sku": {"type": "string"}, "qty": {"type": "integer"}},
+                                },
+                            }
+                        },
+                    }
+                },
+            },
+        },
+    }
+
+    result = redact_credentials_in_payload({"model": "gpt-4o-mini", "tools": [tool], "api_key": "sk-fake-lit6835"})
+
+    assert "REDACTED" not in str(result["tools"])
+    assert result["tools"][0] == tool
+    assert result["api_key"] == "REDACTED"

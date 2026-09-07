@@ -5,12 +5,7 @@ These tests validate the WandbInferenceConfig class which extends OpenAIGPTConfi
 Nebius AI Studio is an OpenAI-compatible provider with minor customizations.
 """
 
-import os
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 

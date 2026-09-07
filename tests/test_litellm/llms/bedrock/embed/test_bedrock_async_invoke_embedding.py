@@ -1,13 +1,8 @@
 import json
-import os
-import sys
 from unittest.mock import Mock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.base import HiddenParams
@@ -153,7 +148,6 @@ class TestBedrockAsyncInvokeEmbedding:
 
     def test_async_invoke_twelvelabs_embedding_with_mock(self):
         """Test async invoke embedding with mocked HTTP calls."""
-        litellm.set_verbose = True
         client = HTTPHandler()
         test_api_key = "test-bearer-token-12345"
         model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
@@ -193,7 +187,6 @@ class TestBedrockAsyncInvokeEmbedding:
     @pytest.mark.asyncio
     async def test_async_invoke_twelvelabs_embedding_async_with_mock(self):
         """Test async invoke embedding with async calls."""
-        litellm.set_verbose = True
         client = AsyncHTTPHandler()
         test_api_key = "test-bearer-token-12345"
         model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"

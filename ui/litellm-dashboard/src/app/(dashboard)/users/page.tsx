@@ -1,6 +1,6 @@
 "use client";
 
-import ViewUserDashboard from "@/components/view_users";
+import { ViewUserDashboard } from "./_components";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 

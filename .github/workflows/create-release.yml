@@ -122,10 +122,28 @@ jobs:
                 makeLatest = (!latestVersion || isAtLeast(newVersion, latestVersion)) ? "true" : "false";
               }
 
+              try {
+                await github.rest.git.createRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `refs/tags/${tag}`,
+                  sha: commitHash,
+                });
+              } catch (error) {
+                if (error.status !== 422) throw error;
+                const existing = await github.rest.git.getRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `tags/${tag}`,
+                });
+                if (existing.data.object.sha !== commitHash) {
+                  throw new Error(`Tag ${tag} already exists at ${existing.data.object.sha}, expected ${commitHash}`);
+                }
+              }
+
               const response = await github.rest.repos.createRelease({
                 draft: true,
                 generate_release_notes: true,
-                target_commitish: commitHash,
                 name: tag,
                 owner: context.repo.owner,
                 prerelease: isPrerelease,
@@ -138,10 +156,20 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: response.data.id,
+                tag_name: tag,
                 body: updatedBody,
                 draft: false,
-                make_latest: makeLatest,
               });
+
+              if (!isPrerelease) {
+                await github.rest.repos.updateRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: response.data.id,
+                  tag_name: tag,
+                  make_latest: makeLatest,
+                });
+              }
 
             } catch (error) {
               core.setFailed(error.message);
