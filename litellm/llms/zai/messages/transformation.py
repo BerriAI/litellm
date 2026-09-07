@@ -2,7 +2,7 @@
 Z.AI Anthropic-compatible messages transformation config.
 """
 
-from typing import Any, Final
+from typing import Final
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -32,21 +32,22 @@ class ZAIAnthropicMessagesConfig(AnthropicMessagesConfig):
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:
-        return api_base or get_secret_str("ZAI_ANTHROPIC_API_BASE") or "https://api.z.ai/api/anthropic"
+        return api_base or "https://api.z.ai/api/anthropic"
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
-        messages: list[Any],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: list[dict[str, object]],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
+    ) -> tuple[dict[str, str], str | None]:
         dynamic_api_key: Final = self.get_api_key(api_key=api_key)
+        header_names: Final = {header_name.lower() for header_name in headers}
 
-        if "x-api-key" not in headers and "authorization" not in headers and dynamic_api_key is not None:
+        if "x-api-key" not in header_names and "authorization" not in header_names and dynamic_api_key is not None:
             headers["x-api-key"] = dynamic_api_key
 
         if "anthropic-version" not in headers:
@@ -67,8 +68,8 @@ class ZAIAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         base_url = self.get_api_base(api_base=api_base).rstrip("/")

@@ -15,8 +15,7 @@ def test_zai_provider_uses_responses_api_config():
     assert config.custom_llm_provider == LlmProviders.ZAI
 
 
-def test_zai_responses_url_defaults_to_responses_endpoint(monkeypatch):
-    monkeypatch.delenv("ZAI_RESPONSES_API_BASE", raising=False)
+def test_zai_responses_url_defaults_to_responses_endpoint():
     config = ZAIResponsesAPIConfig()
 
     url_cases = {
@@ -30,8 +29,7 @@ def test_zai_responses_url_defaults_to_responses_endpoint(monkeypatch):
         assert config.get_complete_url(api_base=api_base, litellm_params={}) == expected_url
 
 
-def test_zai_responses_url_ignores_chat_completions_api_base(monkeypatch):
-    monkeypatch.delenv("ZAI_RESPONSES_API_BASE", raising=False)
+def test_zai_responses_url_ignores_chat_completions_api_base():
     config = ZAIResponsesAPIConfig()
 
     chat_bases = (
@@ -44,8 +42,7 @@ def test_zai_responses_url_ignores_chat_completions_api_base(monkeypatch):
         assert config.get_complete_url(api_base=chat_base, litellm_params={}) == "https://api.z.ai/api/v1/responses"
 
 
-def test_zai_responses_url_keeps_custom_api_base(monkeypatch):
-    monkeypatch.delenv("ZAI_RESPONSES_API_BASE", raising=False)
+def test_zai_responses_url_keeps_custom_api_base():
     config = ZAIResponsesAPIConfig()
 
     assert (
@@ -54,19 +51,6 @@ def test_zai_responses_url_keeps_custom_api_base(monkeypatch):
             litellm_params={},
         )
         == "https://gateway.example.com/openai/v1/responses"
-    )
-
-
-def test_zai_responses_url_env_overrides_chat_completions_api_base(monkeypatch):
-    monkeypatch.setenv("ZAI_RESPONSES_API_BASE", "https://gateway.example.com/responses-root")
-    config = ZAIResponsesAPIConfig()
-
-    assert (
-        config.get_complete_url(
-            api_base="https://api.z.ai/api/paas/v4",
-            litellm_params={},
-        )
-        == "https://gateway.example.com/responses-root/responses"
     )
 
 
@@ -93,5 +77,23 @@ def test_zai_responses_headers_fall_back_to_environment_key(monkeypatch):
         model="glm-5.3",
         litellm_params=GenericLiteLLMParams(),
     )
+
+    assert headers["Authorization"] == "Bearer sk-zai-env"
+
+
+def test_zai_responses_headers_prefer_zai_key_over_global_key(monkeypatch):
+    monkeypatch.setenv("ZAI_API_KEY", "sk-zai-env")
+    original_api_key = litellm.api_key
+    litellm.api_key = "sk-global-other-provider"
+    try:
+        config = ZAIResponsesAPIConfig()
+
+        headers = config.validate_environment(
+            headers={},
+            model="glm-5.3",
+            litellm_params=GenericLiteLLMParams(),
+        )
+    finally:
+        litellm.api_key = original_api_key
 
     assert headers["Authorization"] == "Bearer sk-zai-env"

@@ -26,8 +26,7 @@ def test_anthropic_provider_keeps_default_config_for_zai_named_model():
     assert not isinstance(config, ZAIAnthropicMessagesConfig)
 
 
-def test_zai_anthropic_messages_config_defaults(monkeypatch):
-    monkeypatch.delenv("ZAI_ANTHROPIC_API_BASE", raising=False)
+def test_zai_anthropic_messages_config_defaults():
     config = ZAIAnthropicMessagesConfig()
 
     assert config.custom_llm_provider == "zai"
@@ -75,3 +74,23 @@ def test_zai_anthropic_messages_headers_use_zai_key():
     assert headers["x-api-key"] == "sk-zai"
     assert headers["anthropic-version"] == "2023-06-01"
     assert headers["content-type"] == "application/json"
+
+
+def test_zai_anthropic_messages_respects_existing_case_insensitive_auth_headers():
+    config = ZAIAnthropicMessagesConfig()
+
+    headers, _ = config.validate_anthropic_messages_environment(
+        headers={"Authorization": "Bearer caller-token"},
+        model="glm-5.3",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="sk-zai",
+        api_base="https://api.z.ai/api/anthropic",
+    )
+
+    assert headers == {
+        "Authorization": "Bearer caller-token",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }

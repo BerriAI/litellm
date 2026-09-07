@@ -28,13 +28,13 @@ class ZAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         litellm_params = litellm_params or GenericLiteLLMParams()
 
-        api_key: Final = litellm_params.api_key or litellm.api_key or get_secret_str("ZAI_API_KEY")
+        api_key: Final = litellm_params.api_key or get_secret_str("ZAI_API_KEY") or litellm.api_key
 
         headers.setdefault("Content-Type", "application/json")
         if api_key is not None:
@@ -44,7 +44,7 @@ class ZAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         # ``litellm_params.api_base`` can carry the Z.AI chat-completions base
         # (``/api/paas/v4``) when the generic provider resolver pre-fills it from
@@ -52,11 +52,7 @@ class ZAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # the chat-only bases and use the Responses base instead.
         normalized_api_base = (api_base or "").rstrip("/")
         chat_base_passed_in: Final = normalized_api_base.endswith(self._ZAI_CHAT_API_BASE_SUFFIXES)
-        base_url = (
-            api_base
-            if api_base and not chat_base_passed_in
-            else get_secret_str("ZAI_RESPONSES_API_BASE") or "https://api.z.ai/api/v1"
-        )
+        base_url = api_base if api_base and not chat_base_passed_in else "https://api.z.ai/api/v1"
 
         base_url = base_url.rstrip("/")
         if base_url.endswith("/responses"):
