@@ -1104,6 +1104,7 @@ async def test_add_deployment_survives_a_non_llm_hydration_failure():
         def __init__(self):
             super().__init__()
             self.reconcile_ran = False
+            self.hydration_attempted = False
 
         async def _get_models_from_db(self, prisma_client):
             return []
@@ -1113,6 +1114,7 @@ async def test_add_deployment_survives_a_non_llm_hydration_failure():
             return frozenset()
 
         async def _init_non_llm_objects_in_db(self, prisma_client):
+            self.hydration_attempted = True
             raise RuntimeError("guardrail table unavailable")
 
     proxy_config = FailingHydrationProxyConfig()
@@ -1123,6 +1125,7 @@ async def test_add_deployment_survives_a_non_llm_hydration_failure():
     )
 
     assert proxy_config.reconcile_ran is True
+    assert proxy_config.hydration_attempted is True
     assert outcome.still_desired == frozenset()
 
 
