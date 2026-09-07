@@ -77,6 +77,34 @@ def process_azure_headers(headers: httpx.Headers | dict) -> dict:
     return {**llm_response_headers, **openai_headers}
 
 
+def _resolve_azure_bearer_token(
+    azure_ad_token_provider: Callable[[], object] | None,
+    azure_ad_token: str | None,
+) -> str | None:
+    """Return the keyless credential, preferring a live provider over an already-resolved token."""
+    if azure_ad_token_provider is not None:
+        provided: Final = azure_ad_token_provider()
+        if isinstance(provided, str) and provided:
+            return provided
+
+    return azure_ad_token or None
+
+
+def resolve_azure_image_auth_headers(
+    headers: Mapping[str, str],
+    api_key: str | None,
+    azure_ad_token_provider: Callable[[], object] | None,
+    azure_ad_token: str | None,
+) -> dict[str, str]:  # mutable-ok: httpx post() takes a concrete dict.
+    """Return the image-request headers, swapping a stale api-key for the resolved bearer token."""
+    token: Final = None if api_key else _resolve_azure_bearer_token(azure_ad_token_provider, azure_ad_token)
+    if token is None:
+        return dict(headers)  # mutable-ok: httpx post() takes a concrete dict.
+
+    keyless: Final = {k: v for k, v in headers.items() if k != "api-key"}  # mutable-ok: httpx post() takes a dict.
+    return {**keyless, "Authorization": f"Bearer {token}"}  # mutable-ok: httpx post() takes a concrete dict.
+
+
 @lru_cache(maxsize=128)
 def _cached_entra_id_token_provider(
     tenant_id: str,

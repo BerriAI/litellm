@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from typing import Final
 
 import httpx
@@ -47,6 +47,7 @@ from .common_utils import (
     BaseAzureLLM,
     get_azure_ad_token_from_oidc,
     process_azure_headers,
+    resolve_azure_image_auth_headers,
     select_azure_base_url_or_endpoint,
 )
 from .image_generation import (
@@ -1134,6 +1135,51 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
         return base_url_with_deployment
 
+    @staticmethod
+    def _extract_azure_ad_token_provider(
+        azure_client_params: Mapping[str, object],
+    ) -> Callable[[], object] | None:
+        candidate: Final = azure_client_params.get("azure_ad_token_provider")
+        return candidate if callable(candidate) else None
+
+    @staticmethod
+    def _extract_azure_ad_token(azure_client_params: Mapping[str, object]) -> str | None:
+        candidate: Final = azure_client_params.get("azure_ad_token")
+        return candidate if isinstance(candidate, str) else None
+
+    @staticmethod
+    def _resolve_image_auth_headers(
+        headers: Mapping[str, str],
+        api_key: str | None,
+        azure_client_params: Mapping[str, object],
+        azure_ad_token_provider: Callable[[], object] | None = None,
+        azure_ad_token: str | None = None,
+    ) -> dict[str, str]:  # mutable-ok: HTTP handlers require a concrete mutable header dictionary.
+        provider: Final = azure_ad_token_provider or AzureChatCompletion._extract_azure_ad_token_provider(
+            azure_client_params
+        )
+        token: Final = azure_ad_token or AzureChatCompletion._extract_azure_ad_token(azure_client_params)
+        return resolve_azure_image_auth_headers(
+            headers=headers,
+            api_key=api_key,
+            azure_ad_token_provider=provider,
+            azure_ad_token=token,
+        )
+
+    @staticmethod
+    async def _aresolve_image_auth_headers(
+        headers: Mapping[str, str], api_key: str | None, azure_client_params: Mapping[str, object]
+    ) -> dict[str, str]:  # mutable-ok: HTTP handlers require a concrete mutable header dictionary.
+        provider: Final = AzureChatCompletion._extract_azure_ad_token_provider(azure_client_params)
+        provider_token: Final = await asyncio.to_thread(provider) if not api_key and provider is not None else None
+        token: Final = AzureChatCompletion._extract_azure_ad_token(azure_client_params)
+        return resolve_azure_image_auth_headers(
+            headers=headers,
+            api_key=api_key,
+            azure_ad_token_provider=None,
+            azure_ad_token=provider_token if isinstance(provider_token, str) and provider_token else token,
+        )
+
     async def aimage_generation(
         self,
         data: dict,
@@ -1149,6 +1195,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ) -> ImageResponse:
         response: dict | None = None
         try:
+            resolved_headers: Final = await self._aresolve_image_auth_headers(
+                headers=headers, api_key=api_key, azure_client_params=azure_client_params
+            )
             # response = await azure_client.images.generate(**data, timeout=timeout)
             api_base: str = azure_client_params.get("api_base", "")  # "https://example-endpoint.openai.azure.com"
             if api_base.endswith("/"):
@@ -1177,7 +1226,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_version=api_version,
                 api_key=api_key,
                 data=data,
-                headers=headers,
+                headers=resolved_headers,
                 deployment_name=model,
             )
 
@@ -1261,12 +1310,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(status_code=422, message="max retries must be an int")
 
-            if api_key is None and azure_ad_token_provider is not None:
-                azure_ad_token = azure_ad_token_provider()
-                if azure_ad_token:
-                    headers.pop("api-key", None)
-                    headers["Authorization"] = f"Bearer {azure_ad_token}"
-
             # init AzureOpenAI Client
             azure_client_params: Final[dict[str, object]] = self.initialize_azure_sdk_client(
                 litellm_params=litellm_params or {},
@@ -1289,6 +1332,14 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     headers=headers,
                     model=model,
                 )
+
+            resolved_headers: Final = self._resolve_image_auth_headers(
+                headers=headers,
+                api_key=api_key,
+                azure_client_params=azure_client_params,
+                azure_ad_token_provider=azure_ad_token_provider,
+                azure_ad_token=azure_ad_token,
+            )
 
             img_gen_api_base: Final = self.create_azure_base_url(
                 azure_client_params=azure_client_params,
@@ -1313,7 +1364,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 api_version=api_version or "",
                 api_key=api_key or "",
                 data=data,
-                headers=headers,
+                headers=resolved_headers,
                 deployment_name=model,
             )
             provider_config: Final = get_azure_image_generation_config(data.get("model", "dall-e-2"))

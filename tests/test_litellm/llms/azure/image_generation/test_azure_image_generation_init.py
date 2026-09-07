@@ -10,14 +10,15 @@ import respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.azure.azure import AzureChatCompletion
-from litellm.llms.azure.image_generation.http_utils import (
-    azure_deployment_image_generation_json_body,
-)
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.azure.common_utils import resolve_azure_image_auth_headers
 from litellm.llms.azure.image_generation import (
     AzureDallE3ImageGenerationConfig,
     get_azure_image_generation_config,
 )
+from litellm.llms.azure.image_generation.http_utils import (
+    azure_deployment_image_generation_json_body,
+)
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.utils import get_optional_params_image_gen
 
 
@@ -436,6 +437,125 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
         wire_json = post_kwargs.get("json") or {}
         assert "model" not in wire_json
         assert data.get("model") == base_model
+
+
+def test_resolve_azure_image_auth_headers_uses_keyless_provider_without_mutating_input():
+    headers = {"api-key": "stale", "Content-Type": "application/json"}
+
+    resolved_headers = resolve_azure_image_auth_headers(
+        headers=headers,
+        api_key=None,
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+
+    assert dict(resolved_headers) == {
+        "Authorization": "Bearer ad-token",
+        "Content-Type": "application/json",
+    }
+    assert headers == {"api-key": "stale", "Content-Type": "application/json"}
+
+
+def test_resolve_azure_image_auth_headers_prefers_api_key():
+    resolved_headers = resolve_azure_image_auth_headers(
+        headers={"api-key": "sk-123"},
+        api_key="sk-123",
+        azure_ad_token_provider=lambda: "ad-token",
+        azure_ad_token=None,
+    )
+
+    assert dict(resolved_headers) == {"api-key": "sk-123"}
+
+
+def test_resolve_azure_image_auth_headers_falls_back_to_static_token():
+    """A caller with no provider still authenticates off a pre-resolved ``azure_ad_token``."""
+    resolved_headers = resolve_azure_image_auth_headers(
+        headers={"api-key": "stale"},
+        api_key=None,
+        azure_ad_token_provider=None,
+        azure_ad_token="static-token",
+    )
+
+    assert dict(resolved_headers) == {"Authorization": "Bearer static-token"}
+
+
+def test_resolve_azure_image_auth_headers_without_any_credential_is_unchanged():
+    """No credential at all must not invent an Authorization header."""
+    resolved_headers = resolve_azure_image_auth_headers(
+        headers={"Content-Type": "application/json"},
+        api_key=None,
+        azure_ad_token_provider=None,
+        azure_ad_token=None,
+    )
+
+    assert dict(resolved_headers) == {"Content-Type": "application/json"}
+
+
+@pytest.mark.asyncio
+async def test_azure_aimage_generation_sends_keyless_bearer_header(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    """Async image generation must authenticate off the Entra ID provider, not a stale api-key."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    api_base = "https://my-resource.openai.azure.com"
+    route = respx_mock.post(f"{api_base}/openai/v1/images/generations").mock(
+        return_value=httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+    )
+
+    await AzureChatCompletion().aimage_generation(
+        data={"model": "gpt-image-2", "prompt": "a cat", "n": 1},
+        model_response=None,
+        azure_client_params={
+            "azure_endpoint": api_base,
+            "api_version": "preview",
+            "azure_ad_token_provider": lambda: "wif-token",
+        },
+        api_key=None,
+        input=[],
+        logging_obj=MagicMock(),
+        headers={"api-key": "stale"},
+        model="gpt-image-2",
+        timeout=60.0,
+    )
+
+    sent_headers = route.calls.last.request.headers
+    assert sent_headers["Authorization"] == "Bearer wif-token"
+    assert "api-key" not in sent_headers
+
+
+def test_azure_image_generation_sends_keyless_bearer_header(respx_mock: respx.MockRouter):
+    """The sync path must use a credential resolved inside ``initialize_azure_sdk_client``.
+
+    The caller passes no ``azure_ad_token_provider`` argument, so the credential is only
+    reachable through ``litellm_params`` -- the Workload Identity/Entra ID shape that used
+    to go out with no Authorization header at all.
+    """
+    api_base = "https://my-resource.openai.azure.com"
+    route = respx_mock.post(f"{api_base}/openai/v1/images/generations").mock(
+        return_value=httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+    )
+
+    AzureChatCompletion().image_generation(
+        prompt="a cat",
+        timeout=60.0,
+        optional_params={"n": 1},
+        logging_obj=MagicMock(),
+        headers={"api-key": "stale"},
+        model="gpt-image-2",
+        api_key=None,
+        api_base=api_base,
+        api_version="v1",
+        litellm_params={
+            "api_base": api_base,
+            "api_version": "v1",
+            "azure_ad_token_provider": lambda: "wif-token",
+        },
+    )
+
+    sent_headers = route.calls.last.request.headers
+    assert sent_headers["Authorization"] == "Bearer wif-token"
+    assert "api-key" not in sent_headers
 
 
 @pytest.mark.parametrize("api_version", ["v1", "preview", "latest"])
