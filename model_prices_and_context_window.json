@@ -25882,7 +25882,6 @@
         "input_cost_per_image_token": 3e-06
     },
     "gemini-live-2.5-flash-preview-native-audio-09-2025": {
-        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "vertex_ai-language-models",
@@ -25911,7 +25910,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
-        "supports_prompt_caching": true,
+        "supports_prompt_caching": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -25927,7 +25926,6 @@
         "input_cost_per_image_token": 3e-06
     },
     "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": {
-        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_audio_token": 3e-06,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "gemini",
@@ -25957,7 +25955,7 @@
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
-        "supports_prompt_caching": true,
+        "supports_prompt_caching": false,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
