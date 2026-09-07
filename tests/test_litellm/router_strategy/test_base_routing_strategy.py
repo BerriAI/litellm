@@ -146,3 +146,20 @@ async def test_cache_keys_management(base_strategy):
     # Test resetting cache keys
     base_strategy.reset_in_memory_keys_to_update()
     assert len(base_strategy.get_in_memory_keys_to_update()) == 0
+
+
+@pytest.mark.asyncio
+async def test_increment_without_redis_queues_nothing(mock_dual_cache):
+    mock_dual_cache.redis_cache = None
+    strategy = BaseRoutingStrategy(
+        dual_cache=mock_dual_cache,
+        should_batch_redis_writes=False,
+        default_sync_interval=1,
+    )
+
+    for _ in range(3):
+        await strategy._increment_value_in_current_window("test_key", 1.0, 60)
+
+    assert mock_dual_cache.in_memory_cache.async_increment.call_count == 3
+    assert strategy.redis_increment_operation_queue == []
+    assert strategy.get_in_memory_keys_to_update() == set()

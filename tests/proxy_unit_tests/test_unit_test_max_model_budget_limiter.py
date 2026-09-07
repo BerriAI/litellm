@@ -1417,3 +1417,50 @@ async def test_spend_logged_on_one_replica_is_enforced_and_reported_on_another()
     replica_c = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache(redis_cache=shared_redis))
     with pytest.raises(litellm.BudgetExceededError):
         await replica_c.is_key_within_model_budget(user_api_key, "gpt-4")
+
+
+def _redis_that_holds_nothing():
+    redis_cache = AsyncMock(spec=RedisCache)
+    redis_cache.async_get_cache.return_value = None
+    return redis_cache
+
+
+@pytest.mark.asyncio
+async def test_no_redis_means_no_queued_redis_ops():
+    """Nothing drains the queue without Redis, so a request must not grow it while the counter still moves."""
+    dual_cache = DualCache()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    budget = {"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}}
+
+    for _ in range(3):
+        await limiter.async_log_success_event(
+            _success_kwargs(model_group="gpt-4", response_cost=0.5, key_hash="vk-hash", key_model_max_budget=budget),
+            response_obj=None,
+            start_time=None,
+            end_time=None,
+        )
+
+    assert limiter.redis_increment_operation_queue == []
+    usage = await build_model_max_budget_usage(Litellm_EntityType.KEY, "vk-hash", budget, dual_cache)
+    assert usage["gpt-4"]["current_spend"] == 1.5
+
+
+@pytest.mark.asyncio
+async def test_redis_attached_queues_every_increment():
+    dual_cache = DualCache()
+    dual_cache.redis_cache = _redis_that_holds_nothing()
+    limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=dual_cache)
+    budget = {"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}}
+
+    with patch.object(limiter, "_push_in_memory_increments_to_redis", new_callable=AsyncMock):
+        for _ in range(3):
+            await limiter.async_log_success_event(
+                _success_kwargs(
+                    model_group="gpt-4", response_cost=0.5, key_hash="vk-hash", key_model_max_budget=budget
+                ),
+                response_obj=None,
+                start_time=None,
+                end_time=None,
+            )
+
+    assert [op["increment_value"] for op in limiter.redis_increment_operation_queue] == [0.5, 0.5, 0.5]

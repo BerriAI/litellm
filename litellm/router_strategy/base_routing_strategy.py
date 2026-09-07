@@ -74,6 +74,8 @@ class BaseRoutingStrategy(ABC):
             value=value,
             ttl=ttl,
         )
+        if self.dual_cache.redis_cache is None:
+            return result
         increment_op: Final = RedisPipelineIncrementOperation(
             key=key,
             increment_value=value,

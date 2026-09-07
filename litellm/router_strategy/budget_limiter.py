@@ -389,6 +389,8 @@ class RouterBudgetLimiting(CustomLogger):
             value=response_cost,
             ttl=ttl,
         )
+        if self.dual_cache.redis_cache is None:
+            return
         increment_op: Final = RedisPipelineIncrementOperation(
             key=spend_key,
             increment_value=response_cost,
