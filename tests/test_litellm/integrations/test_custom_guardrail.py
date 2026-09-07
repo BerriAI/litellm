@@ -1865,6 +1865,26 @@ class TestGuardrailInterventionClassification:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_status"] == "guardrail_intervened"
 
+    @pytest.mark.asyncio
+    async def test_example_guardrail_output_block_is_intervened(self):
+        from litellm.exceptions import GuardrailRaisedException
+        from litellm.proxy.guardrails.guardrail_hooks.custom_guardrail import myCustomGuardrail
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail = myCustomGuardrail(guardrail_name="example-custom-post")
+        response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="coffee"))])
+
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            await guardrail.async_post_call_success_hook(
+                data={"metadata": {}},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        assert exc_info.value.blocked_content is True
+        assert str(exc_info.value) == "Guardrail failed Coffee Detected"
+
 
 class _ApplyStyleGuardrail(CustomGuardrail):
     """Overrides only apply_guardrail, like openai_moderation; async_pre_call_hook stays the CustomLogger no-op."""
