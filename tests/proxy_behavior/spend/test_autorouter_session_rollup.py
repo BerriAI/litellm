@@ -169,6 +169,7 @@ async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     matching = [row for row in rows if row["router_name"] == router]
     assert len(matching) == 1
@@ -181,6 +182,33 @@ async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
     assert grouped["session_seconds"] == pytest.approx(60.0)
 
 
+async def test_the_benchmarks_aggregate_can_filter_to_one_key(db):
+    router = f"r-{uuid.uuid4()}"
+    first_key = f"k-{uuid.uuid4()}"
+    second_key = f"k-{uuid.uuid4()}"
+    await _turn(db, first_key, "A", T0, session_id=f"s-{uuid.uuid4()}", router=router, saved=0.5)
+    await _turn(db, second_key, "A", T0, session_id=f"s-{uuid.uuid4()}", router=router, saved=9.0)
+
+    rows = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL,
+        (T0 - timedelta(days=1)).isoformat(),
+        (T0 + timedelta(days=1)).isoformat(),
+        first_key,
+    )
+    matching = [row for row in rows if row["router_name"] == router]
+    assert len(matching) == 1
+    assert matching[0]["sessions"] == 1
+    assert matching[0]["saved_spend"] == pytest.approx(0.5)
+
+    unknown_key_rows = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL,
+        (T0 - timedelta(days=1)).isoformat(),
+        (T0 + timedelta(days=1)).isoformat(),
+        f"k-{uuid.uuid4()}",
+    )
+    assert [row for row in unknown_key_rows if row["router_name"] == router] == []
+
+
 async def test_a_reconfigured_alias_reports_each_router_type_as_its_own_group(db):
     key = f"k-{uuid.uuid4()}"
     router = f"r-{uuid.uuid4()}"
@@ -191,6 +219,7 @@ async def test_a_reconfigured_alias_reports_each_router_type_as_its_own_group(db
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     matching = sorted(
         (row for row in rows if row["router_name"] == router),
@@ -253,6 +282,7 @@ async def test_the_benchmarks_aggregate_sums_tier_turns_across_sessions(db):
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     grouped = next(row for row in rows if row["router_name"] == router)
     assert grouped["tier_turns"] == {"simple": 2, "complex": 1}
@@ -280,6 +310,7 @@ async def test_tier_maps_stay_separate_per_router_type_on_a_reconfigured_alias(d
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     by_type = {row["router_type"]: row["tier_turns"] for row in rows if row["router_name"] == router}
     assert by_type == {"complexity": {"medium": 1}, "quality": {"2": 1}}
@@ -294,6 +325,7 @@ async def test_a_window_with_no_tiered_turns_aggregates_to_an_empty_map(db):
         AUTOROUTER_BENCHMARKS_SQL,
         (T0 - timedelta(days=1)).isoformat(),
         (T0 + timedelta(days=1)).isoformat(),
+        None,
     )
     grouped = next(row for row in rows if row["router_name"] == router)
     assert grouped["tier_turns"] == {}

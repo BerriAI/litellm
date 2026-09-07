@@ -41393,6 +41393,8 @@ export interface operations {
                 start_date?: string | null;
                 /** @description YYYY-MM-DD UTC, inclusive (defaults to today) */
                 end_date?: string | null;
+                /** @description Filter to one virtual key token hash */
+                api_key?: string | null;
             };
             header?: never;
             path?: never;
