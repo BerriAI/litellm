@@ -1512,9 +1512,7 @@ class AmazonConverseConfig(BaseConfig):
             if (
                 isinstance(output_config, dict)
                 and output_config.get("effort") is not None
-                and not AnthropicConfig._is_adaptive_thinking_model(
-                    model, "bedrock", base_model=configured_base_model
-                )
+                and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock", base_model=configured_base_model)
             ):
                 from litellm.types.llms.anthropic import (
                     ANTHROPIC_EFFORT_BETA_HEADER,
