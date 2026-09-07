@@ -318,15 +318,9 @@ def _find_base_llm_exception(error: BaseException, depth: int = 0) -> BaseLLMExc
         return error
 
     cause: Final = error.__cause__
-    if cause is not None:
-        provider_exception: Final = _find_base_llm_exception(cause, depth + 1)
-        if provider_exception is not None:
-            return provider_exception
-
-    context: Final = error.__context__
-    if context is not None:
-        return _find_base_llm_exception(context, depth + 1)
-    return None
+    if cause is None:
+        return None
+    return _find_base_llm_exception(cause, depth + 1)
 
 
 class BaseLLMHTTPHandler:
