@@ -878,20 +878,12 @@ def test_dated_search_preview_entries_carry_search_pricing(local_model_cost_map)
 def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
     web_search_options, local_model_cost_map
 ):
-    """
-    gpt-4o-mini-2024-07-18 is the dated snapshot of gpt-4o-mini and must bill web search
-    identically. It kept a search_context_cost_per_query from the March 2025 launch tiers that the
-    May 2025 cleanup missed, because that sweep selected on supports_web_search and the snapshot
-    never carried the flag. The result was $0.0275 per query on one name and nothing on the other
-    for the same underlying model. Neither entry declares web search support, so both resolve to $0
-    at every search context size.
-    """
+    """The snapshot and alias must bill web search identically. OpenAI lists web search preview on non-reasoning models at $25 per 1k calls."""
     alias_info = litellm.get_model_info("gpt-4o-mini")
     snapshot_info = litellm.get_model_info("gpt-4o-mini-2024-07-18")
 
-    assert not alias_info.get("supports_web_search")
-    assert not snapshot_info.get("supports_web_search")
-    assert not snapshot_info.get("search_context_cost_per_query")
+    assert snapshot_info["supports_web_search"] is True
+    assert alias_info["supports_web_search"] is True
 
     snapshot_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
         web_search_options=web_search_options, model_info=snapshot_info
@@ -900,34 +892,31 @@ def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
         web_search_options=web_search_options, model_info=alias_info
     )
 
-    assert snapshot_cost == alias_cost == 0.0, (
-        f"gpt-4o-mini-2024-07-18 must not carry a web search fee its alias does not: "
-        f"got ${snapshot_cost} vs ${alias_cost} on gpt-4o-mini"
-    )
+    assert snapshot_cost == alias_cost == 0.025
 
 
-def test_gpt_4o_mini_snapshot_web_search_price_absent_from_both_cost_maps():
-    """
-    The fixture above only sees the bundled backup, but the map served to running deployments is
-    the canonical file fetched from the repo, so the removal has to hold in both. They already
-    differ in a handful of unrelated entries, which is how one name kept a price its alias had lost.
-    """
+def test_gpt_4o_mini_web_search_price_matches_in_both_cost_maps():
+    """The bundled backup and canonical file are both served to deployments, so both must carry the price."""
     repo_root = Path(__file__).parents[4]
-    entries = tuple(
-        json.loads((repo_root / path).read_text(encoding="utf-8"))[
-            "gpt-4o-mini-2024-07-18"
-        ]
+    cost_maps = tuple(
+        json.loads((repo_root / path).read_text(encoding="utf-8"))
         for path in (
             "model_prices_and_context_window.json",
             "litellm/model_prices_and_context_window_backup.json",
         )
     )
-
-    canonical, backup = entries
-    assert "search_context_cost_per_query" not in canonical
-    assert (
-        canonical == backup
-    ), "gpt-4o-mini-2024-07-18 differs between the two cost maps"
+    canonical, backup = cost_maps
+    expected_search_price = {
+        "search_context_size_low": 0.025,
+        "search_context_size_medium": 0.025,
+        "search_context_size_high": 0.025,
+    }
+    for model_name in ("gpt-4o-mini", "gpt-4o-mini-2024-07-18"):
+        canonical_entry = canonical[model_name]
+        backup_entry = backup[model_name]
+        assert canonical_entry["search_context_cost_per_query"] == expected_search_price
+        assert backup_entry["search_context_cost_per_query"] == expected_search_price
+        assert canonical_entry == backup_entry
 
 
 # Note: File search integration test removed due to complex annotation detection logic

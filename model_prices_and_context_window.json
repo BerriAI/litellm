@@ -29083,6 +29083,11 @@
         "output_cost_per_token": 6e-07,
         "output_cost_per_token_batches": 3e-07,
         "output_cost_per_token_priority": 1e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.025,
+            "search_context_size_medium": 0.025,
+            "search_context_size_high": 0.025
+        },
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -29090,7 +29095,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "gpt-4o-mini-2024-07-18": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -29104,8 +29110,13 @@
         "max_tokens": 16384,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
-        "output_cost_per_token_priority": 1e-06,
         "output_cost_per_token_batches": 3e-07,
+        "output_cost_per_token_priority": 1e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.025,
+            "search_context_size_medium": 0.025,
+            "search_context_size_high": 0.025
+        },
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -29113,7 +29124,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "gpt-4o-mini-audio-preview": {
         "deprecation_date": "2026-05-07",
