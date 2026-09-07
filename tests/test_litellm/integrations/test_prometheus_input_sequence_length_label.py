@@ -128,11 +128,17 @@ def _standard_logging_payload(now: datetime.datetime, prompt_tokens: int) -> Sta
     )
 
 
-def _success_kwargs(now: datetime.datetime, prompt_tokens: int) -> Mapping[str, object]:
+def _success_kwargs(
+    now: datetime.datetime, prompt_tokens: int, requester_metadata: Mapping[str, str] | None = None
+) -> Mapping[str, object]:
+    payload: Final = _standard_logging_payload(now, prompt_tokens)
     return {
         "model": "gpt-4o-mini",
         "litellm_params": {"metadata": {}},
-        "standard_logging_object": _standard_logging_payload(now, prompt_tokens),
+        "standard_logging_object": {
+            **payload,
+            "metadata": {**payload["metadata"], "requester_metadata": requester_metadata},
+        },
         "stream": True,
         "start_time": now - datetime.timedelta(seconds=3),
         "api_call_start_time": now - datetime.timedelta(seconds=2),
@@ -169,3 +175,35 @@ async def test_logger_built_with_flag_off_emits_no_bucket_label(monkeypatch: pyt
     samples: Final = _latency_bucket_samples()
     assert samples
     assert all("input_sequence_length" not in sample.labels for sample in samples)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag_at_startup", (True, False))
+@pytest.mark.parametrize("with_metadata", (True, False))
+async def test_custom_input_length_label_preserves_values_when_flag_off(
+    monkeypatch: pytest.MonkeyPatch, flag_at_startup: bool, with_metadata: bool
+):
+    now: Final = datetime.datetime.now()
+    monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", ["input_sequence_length"])
+    monkeypatch.setattr(litellm, FLAG, flag_at_startup)
+    logger: Final = PrometheusLogger()
+    monkeypatch.setattr(litellm, FLAG, not flag_at_startup)
+
+    await logger.async_log_success_event(
+        dict(
+            _success_kwargs(
+                now,
+                prompt_tokens=4_000,
+                requester_metadata={"input_sequence_length": "from-metadata"} if with_metadata else None,
+            )
+        ),
+        None,
+        now,
+        now,
+    )
+
+    samples: Final = _latency_bucket_samples()
+    expected: Final = "from-metadata" if with_metadata else ("4k-16k" if flag_at_startup else "None")
+    assert samples
+    assert all(sample.labels["input_sequence_length"] == expected for sample in samples)
+    assert all(logger.get_labels_for_metric(metric).count("input_sequence_length") == 1 for metric in LATENCY_METRICS)

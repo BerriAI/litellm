@@ -246,6 +246,7 @@ class PrometheusLogger(CustomLogger):
             # logger so toggling these flags only takes effect after a
             # restart, keeping init-time and runtime label sets in sync.
             self._cached_metric_labels: dict[str, list[str]] = {}
+            self._emit_input_sequence_length_label = litellm.prometheus_emit_input_sequence_length_label is True
 
             _custom_buckets: Final = litellm.prometheus_latency_buckets
             self.latency_buckets = tuple(_custom_buckets) if _custom_buckets is not None else LATENCY_BUCKETS
@@ -1443,7 +1444,11 @@ class PrometheusLogger(CustomLogger):
             user_agent=standard_logging_payload["metadata"].get("user_agent"),
             stream=(str(standard_logging_payload.get("stream")) if litellm.prometheus_emit_stream_label else None),
             service_tier=get_service_tier_from_standard_logging_payload(standard_logging_payload),
-            input_sequence_length=get_input_sequence_length_bucket(standard_logging_payload.get("prompt_tokens")),
+            input_sequence_length=(
+                get_input_sequence_length_bucket(standard_logging_payload.get("prompt_tokens"))
+                if self._emit_input_sequence_length_label
+                else None
+            ),
         )
 
         if user_api_key is not None and isinstance(user_api_key, str) and user_api_key.startswith("sk-"):
