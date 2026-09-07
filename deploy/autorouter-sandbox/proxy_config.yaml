@@ -1,0 +1,39 @@
+model_list:
+  - model_name: "*"
+    litellm_params:
+      model: litellm_proxy/*
+      api_base: os.environ/UPSTREAM_LITELLM_BASE_URL
+      api_key: os.environ/UPSTREAM_LITELLM_API_KEY
+
+  - model_name: moe-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_default_model: anthropic/claude-sonnet-5
+      complexity_router_config:
+        classifier_type: llm
+        classifier_llm_config:
+          model: openai/gpt-4o-mini
+          timeout_ms: 3000
+          classification_rubric: agentic
+        classifier_context_window_size: 35
+        classifier_context_per_turn_chars: 500
+        deployment_affinity: true
+        session_affinity: false
+        escalation_keywords:
+          - LITELLM ESCALATE
+        tiers:
+          SIMPLE:
+            - anthropic/claude-haiku-4-5
+          MEDIUM:
+            - anthropic/claude-sonnet-5
+          COMPLEX:
+            - anthropic/claude-opus-5
+          REASONING:
+            - anthropic/claude-fable-5
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+  telemetry: false

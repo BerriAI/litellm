@@ -8,6 +8,6 @@ COPY enterprise/ /app/enterprise/
 COPY litellm-proxy-extras/litellm_proxy_extras/ ${SITE_PACKAGES}/litellm_proxy_extras/
 COPY litellm-proxy-extras/ /app/litellm-proxy-extras/
 COPY schema.prisma /app/schema.prisma
-COPY deploy/autorouter-sandbox/config.yaml /app/config.yaml
+COPY deploy/autorouter-sandbox/proxy_config.yaml /app/config.yaml
 
 CMD ["--config", "/app/config.yaml", "--port", "4000"]

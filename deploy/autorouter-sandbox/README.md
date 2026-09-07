@@ -2,7 +2,7 @@
 
 A LiteLLM deployment built from this branch that you can push to and redeploy in about a minute, for iterating on the auto router without touching the real sandbox or prod
 
-Every model that is not defined in `config.yaml` is forwarded to the upstream gateway (`UPSTREAM_LITELLM_BASE_URL`, i.e. gateway.litellm-sandbox.ai) through `litellm_proxy/*`, so this instance inherits all upstream models and provider credentials without copying any keys. Auto routers defined here (`moe-router`) pick between those upstream models and the router code running is whatever is on this branch
+Every model that is not defined in `proxy_config.yaml` is forwarded to the upstream gateway (`UPSTREAM_LITELLM_BASE_URL`, i.e. gateway.litellm-sandbox.ai) through `litellm_proxy/*`, so this instance inherits all upstream models and provider credentials without copying any keys. Auto routers defined here (`moe-router`) pick between those upstream models and the router code running is whatever is on this branch
 
 ## Image
 
@@ -18,7 +18,7 @@ curl localhost:4000/v1/chat/completions -H "Authorization: Bearer $LITELLM_MASTE
   -d '{"model":"moe-router","messages":[{"role":"user","content":"hi"}]}' -i | grep x-litellm-model-name
 ```
 
-Without Docker: `uv run --no-sync litellm --config deploy/autorouter-sandbox/config.yaml --port 4000`
+Without Docker: `uv run --no-sync litellm --config deploy/autorouter-sandbox/proxy_config.yaml --port 4000`
 
 ## Deploy
 
