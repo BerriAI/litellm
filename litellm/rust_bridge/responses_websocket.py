@@ -15,6 +15,15 @@ from litellm.rust_bridge.protocols import (
     RustResponsesWebSocket,
     RustResponsesWebSocketConnection,
 )
+from litellm.rust_bridge.request import (
+    NativeRequestCapabilities,
+    NativeRequestContext,
+    NativeRequestOptions,
+    NativeResponsesWebSocketRequest,
+    PreparedNativeCall,
+    call_native,
+    with_capabilities,
+)
 from litellm.rust_bridge.runtime import DispatchResult, aattempt, adapt_result
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
@@ -56,17 +65,27 @@ async def connect(
     url: str,
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
+    websocket_mode: str = "native",
+    requires_connection: bool = True,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[ConnectionAdapter]:
     return await aattempt(
         load=_RESPONSES_WEBSOCKET.load,
         enabled=rust_enabled(),
         eligible=True,
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda connection_type, timeout_seconds: connection_type.connect(
-            url=url,
-            headers=headers,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            request=NativeResponsesWebSocketRequest(url=url),
+            options=NativeRequestOptions(extra_headers=headers, timeout_seconds=timeout_to_seconds(timeout)),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="async",
+                    websocket_mode=websocket_mode,
+                    requires_connection=requires_connection,
+                ),
+            ),
         ),
+        call=lambda connection_type, prepared: call_native(connection_type.connect, prepared),
         adapt=ConnectionAdapter,
     )
 
@@ -84,6 +103,16 @@ async def managed_connect(
     url: str,
     headers: dict[str, str],
     timeout: float | httpx.Timeout | None,
+    websocket_mode: str = "managed",
+    requires_connection: bool = True,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[AbstractAsyncContextManager[ConnectionAdapter]]:
-    result: Final = await connect(url=url, headers=headers, timeout=timeout)
+    result: Final = await connect(
+        url=url,
+        headers=headers,
+        timeout=timeout,
+        websocket_mode=websocket_mode,
+        requires_connection=requires_connection,
+        context=context,
+    )
     return adapt_result(result, _connection_context)

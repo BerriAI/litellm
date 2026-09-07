@@ -1,12 +1,14 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use litellm_core::Error;
+use litellm_core::http_utils::string_headers;
 use litellm_core::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
-use litellm_core::responses::types::ResponsesWsEvent;
+use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
+use litellm_core::responses::types::{ResponsesWebSocketRequest, ResponsesWsEvent};
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
@@ -33,24 +35,27 @@ pub struct ResponsesWebSocketConnection {
 }
 
 impl ResponsesWebSocketConnection {
-    pub async fn connect_url(
-        url: &str,
-        headers: &HashMap<String, String>,
-        timeout: Option<Duration>,
+    pub async fn connect(
+        input: ResponsesWebSocketRequest,
+        options: &RequestOptions,
+        _context: &LiteLlmRequestContext,
     ) -> Result<Self, Error> {
-        let mut request = url
+        let headers = string_headers("Responses WebSocket", options.extra_headers.clone())?;
+        let mut request = input
+            .url
+            .as_str()
             .into_client_request()
             .map_err(|error| Error::Network(error.to_string()))?;
         for (name, value) in headers {
             let header_name = name
                 .parse::<HeaderName>()
                 .map_err(|error| Error::InvalidRequest(error.to_string()))?;
-            let header_value = HeaderValue::from_str(value)
+            let header_value = HeaderValue::from_str(&value)
                 .map_err(|error| Error::InvalidRequest(error.to_string()))?;
             request.headers_mut().insert(header_name, header_value);
         }
         let connect = connect_async(request);
-        let result = match timeout {
+        let result = match options.timeout {
             Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
                 Error::Network("Responses WebSocket connection timed out".to_string())
             })?,

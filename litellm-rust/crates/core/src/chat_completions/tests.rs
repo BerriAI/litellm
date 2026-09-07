@@ -1,3 +1,5 @@
+use crate::request_context::LiteLlmRequestContext;
+use crate::request_options::{BedrockOptions, RequestOptions};
 use serde_json::{Map, Value, json};
 
 use crate::error::Error;
@@ -6,10 +8,21 @@ use super::prepare::{prepare_provider_request, resolve_request};
 use super::transformation::ChatCompletionsAuth;
 use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
 
+struct TestChatCompletionsCall<'a> {
+    request: ChatCompletionsRequest<'a>,
+    options: RequestOptions,
+}
+
 fn prepare_chat_completions_call(
-    request: ChatCompletionsRequest<'_>,
+    call: TestChatCompletionsCall<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
-    prepare_provider_request(resolve_request(request)?)
+    prepare_provider_request(resolve_request(
+        call.request,
+        call.options,
+        &LiteLlmRequestContext {
+            ..Default::default()
+        },
+    )?)
 }
 
 fn request<'a>(
@@ -17,25 +30,30 @@ fn request<'a>(
     provider: Option<&'a str>,
     messages: Value,
     optional_params: Value,
-) -> ChatCompletionsRequest<'a> {
-    ChatCompletionsRequest {
-        model,
-        messages,
-        optional_params: match optional_params {
-            Value::Object(map) => map,
-            other => panic!("params must be an object, got {other}"),
+) -> TestChatCompletionsCall<'a> {
+    TestChatCompletionsCall {
+        request: ChatCompletionsRequest {
+            model,
+            messages,
+            optional_params: match optional_params {
+                Value::Object(map) => map,
+                other => panic!("params must be an object, got {other}"),
+            },
         },
-        api_key: Some("sk-test"),
-        api_base: None,
-        custom_llm_provider: provider,
-        extra_headers: None,
-        timeout: None,
+        options: RequestOptions {
+            api_key: (Some("sk-test")).map(|value| value.to_string()),
+            api_base: None,
+            custom_llm_provider: (provider).map(|value| value.to_string()),
+            extra_headers: None,
+            timeout: None,
+            ..Default::default()
+        },
     }
 }
 
 /// `ProviderChatCompletionsRequest` deliberately has no `Debug` (its headers
 /// carry resolved credentials), so unwrap the failure case by hand.
-fn decline(request: ChatCompletionsRequest<'_>) -> Error {
+fn decline(request: TestChatCompletionsCall<'_>) -> Error {
     match prepare_chat_completions_call(request) {
         Err(error) => error,
         Ok(prepared) => panic!("expected a decline, prepared a call to {}", prepared.url),
@@ -107,7 +125,7 @@ fn the_deployment_credential_replaces_a_caller_supplied_auth_header() {
         json!([{"role": "user", "content": "hi"}]),
         json!({}),
     );
-    call.extra_headers = Some(Map::from_iter([(
+    call.options.extra_headers = Some(Map::from_iter([(
         "X-Api-Key".to_string(),
         json!("sk-caller"),
     )]));
@@ -132,7 +150,7 @@ fn a_forwarded_authorization_header_suppresses_the_resolved_api_key_header() {
         json!([{"role": "user", "content": "hi"}]),
         json!({}),
     );
-    call.extra_headers = Some(Map::from_iter([
+    call.options.extra_headers = Some(Map::from_iter([
         (
             "Authorization".to_string(),
             json!("Bearer sk-ant-oat01-token"),
@@ -168,7 +186,7 @@ fn an_unrelated_forwarded_authorization_does_not_defer_the_resolved_key() {
         json!([{"role": "user", "content": "hi"}]),
         json!({}),
     );
-    call.extra_headers = Some(Map::from_iter([
+    call.options.extra_headers = Some(Map::from_iter([
         ("Authorization".to_string(), json!("Bearer unrelated")),
         ("X-Api-Key".to_string(), json!("sk-caller")),
     ]));
@@ -199,7 +217,7 @@ fn declines_an_unsupported_request_before_resolving_credentials() {
         json!([{"role": "user", "content": "hi"}]),
         json!({"stream": true}),
     );
-    call.api_key = None;
+    call.options.api_key = None;
     // No api_key is set and no env is consulted: the gate must run first, so the
     // error is the decline rather than a missing-credential error.
     assert_eq!(decline(call), Error::Declined("streaming"));
@@ -261,7 +279,7 @@ fn rejects_non_string_extra_headers() {
         json!([{"role": "user", "content": "hi"}]),
         json!({}),
     );
-    call.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
+    call.options.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
     assert_eq!(
         decline(call),
         Error::InvalidRequest(
@@ -279,7 +297,7 @@ fn prepares_a_bedrock_call_without_resolving_credentials() {
         json!([{"role": "user", "content": "hi"}]),
         json!({"maxTokens": 16}),
     );
-    call.api_key = None;
+    call.options.api_key = None;
     let prepared = prepare_chat_completions_call(call).expect("prepares");
     assert_eq!(
         prepared.url,
@@ -312,15 +330,16 @@ async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
         "bedrock/us-east-1/anthropic.claude-v2",
         None,
         json!([{"role": "user", "content": "hi"}]),
-        json!({
-            "maxTokens": 16,
-            "aws_access_key_id": "AKIDEXAMPLE",
-            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
-        }),
+        json!({"maxTokens": 16}),
     );
+    call.options.bedrock = Some(BedrockOptions {
+        aws_access_key_id: Some("AKIDEXAMPLE".to_string()),
+        aws_secret_access_key: Some("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".to_string()),
+        ..Default::default()
+    });
     // A key would resolve to a bearer token and never reach the signer.
-    call.api_key = None;
-    call.extra_headers = Some(Map::from_iter([(
+    call.options.api_key = None;
+    call.options.extra_headers = Some(Map::from_iter([(
         "x-request-id".to_string(),
         json!("abc-123"),
     )]));
@@ -367,14 +386,16 @@ async fn a_forwarded_header_the_signer_computes_declines_to_python() {
             "bedrock/us-east-1/anthropic.claude-v2",
             None,
             json!([{"role": "user", "content": "hi"}]),
-            json!({
-                "maxTokens": 16,
-                "aws_access_key_id": "AKIDEXAMPLE",
-                "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
-            }),
+            json!({"maxTokens": 16}),
         );
-        call.api_key = None;
-        call.extra_headers = Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
+        call.options.bedrock = Some(BedrockOptions {
+            aws_access_key_id: Some("AKIDEXAMPLE".to_string()),
+            aws_secret_access_key: Some("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".to_string()),
+            ..Default::default()
+        });
+        call.options.api_key = None;
+        call.options.extra_headers =
+            Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
         let error = super::handler::signed_headers(&prepared, br#"{"a":1}"#)
             .await
@@ -399,7 +420,7 @@ fn a_bedrock_deployment_bearer_outranks_a_forwarded_authorization() {
         json!([{"role": "user", "content": "hi"}]),
         json!({"maxTokens": 16}),
     );
-    call.extra_headers = Some(Map::from_iter([(
+    call.options.extra_headers = Some(Map::from_iter([(
         "Authorization".to_string(),
         json!("Bearer caller-supplied"),
     )]));
@@ -432,7 +453,7 @@ fn an_anthropic_forwarded_oauth_bearer_still_outranks_the_resolved_key() {
         json!([{"role": "user", "content": "hi"}]),
         json!({}),
     );
-    call.extra_headers = Some(Map::from_iter([(
+    call.options.extra_headers = Some(Map::from_iter([(
         "authorization".to_string(),
         json!("Bearer sk-ant-oat01-forwarded"),
     )]));
@@ -595,7 +616,7 @@ mod round_trip {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    use crate::chat_completions::chat_completions;
+    use crate::chat_completions::chat_completions as run_chat_completions;
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
         let mut request = Vec::new();
@@ -658,20 +679,32 @@ mod round_trip {
         (format!("http://127.0.0.1:{port}/v1/messages"), handle)
     }
 
-    fn call(api_base: &str, messages: Value, params: Value) -> ChatCompletionsRequest<'_> {
-        ChatCompletionsRequest {
-            model: "anthropic/claude-sonnet-4-5",
-            messages,
-            optional_params: match params {
-                Value::Object(map) => map,
-                other => panic!("params must be an object, got {other}"),
+    fn call(api_base: &str, messages: Value, params: Value) -> TestChatCompletionsCall<'_> {
+        TestChatCompletionsCall {
+            request: ChatCompletionsRequest {
+                model: "anthropic/claude-sonnet-4-5",
+                messages,
+                optional_params: match params {
+                    Value::Object(map) => map,
+                    other => panic!("params must be an object, got {other}"),
+                },
             },
-            api_key: Some("sk-test"),
-            api_base: Some(api_base),
-            custom_llm_provider: None,
-            extra_headers: None,
-            timeout: Some(std::time::Duration::from_secs(10)),
+            options: RequestOptions {
+                api_key: (Some("sk-test")).map(|value| value.to_string()),
+                api_base: (Some(api_base)).map(|value| value.to_string()),
+                custom_llm_provider: None,
+                extra_headers: None,
+                timeout: Some(std::time::Duration::from_secs(10)),
+                ..Default::default()
+            },
         }
+    }
+
+    async fn execute(
+        call: TestChatCompletionsCall<'_>,
+        context: &LiteLlmRequestContext,
+    ) -> Result<super::super::types::ChatCompletionsResponse, Error> {
+        run_chat_completions(call.request, &call.options, context).await
     }
 
     const GOOD_BODY: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
@@ -679,14 +712,19 @@ mod round_trip {
     #[tokio::test]
     async fn round_trip_sends_the_translated_body_and_normalizes_the_response() {
         let (api_base, handle) = serve_once("200 OK", GOOD_BODY).await;
-        let response = chat_completions(call(
-            &api_base,
-            json!([
-                {"role": "system", "content": "be terse"},
-                {"role": "user", "content": "hi"}
-            ]),
-            json!({"max_tokens": 16}),
-        ))
+        let response = execute(
+            call(
+                &api_base,
+                json!([
+                    {"role": "system", "content": "be terse"},
+                    {"role": "user", "content": "hi"}
+                ]),
+                json!({"max_tokens": 16}),
+            ),
+            &LiteLlmRequestContext {
+                ..Default::default()
+            },
+        )
         .await
         .expect("call succeeds");
 
@@ -724,11 +762,16 @@ mod round_trip {
         const NO_USAGE: &str =
             r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#;
         let (api_base, handle) = serve_once("200 OK", NO_USAGE).await;
-        let err = chat_completions(call(
-            &api_base,
-            json!([{"role": "user", "content": "hi"}]),
-            json!({"max_tokens": 16}),
-        ))
+        let err = execute(
+            call(
+                &api_base,
+                json!([{"role": "user", "content": "hi"}]),
+                json!({"max_tokens": 16}),
+            ),
+            &LiteLlmRequestContext {
+                ..Default::default()
+            },
+        )
         .await
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
@@ -742,11 +785,16 @@ mod round_trip {
     async fn a_tool_use_block_in_the_response_is_also_reported_as_already_sent() {
         const TOOL_USE: &str = r#"{"model":"m","content":[{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#;
         let (api_base, handle) = serve_once("200 OK", TOOL_USE).await;
-        let err = chat_completions(call(
-            &api_base,
-            json!([{"role": "user", "content": "hi"}]),
-            json!({"max_tokens": 16}),
-        ))
+        let err = execute(
+            call(
+                &api_base,
+                json!([{"role": "user", "content": "hi"}]),
+                json!({"max_tokens": 16}),
+            ),
+            &LiteLlmRequestContext {
+                ..Default::default()
+            },
+        )
         .await
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
@@ -760,11 +808,16 @@ mod round_trip {
     async fn an_upstream_error_status_keeps_its_code() {
         let (api_base, handle) =
             serve_once("429 Too Many Requests", r#"{"error":"slow down"}"#).await;
-        let err = chat_completions(call(
-            &api_base,
-            json!([{"role": "user", "content": "hi"}]),
-            json!({"max_tokens": 16}),
-        ))
+        let err = execute(
+            call(
+                &api_base,
+                json!([{"role": "user", "content": "hi"}]),
+                json!({"max_tokens": 16}),
+            ),
+            &LiteLlmRequestContext {
+                ..Default::default()
+            },
+        )
         .await
         .expect_err("upstream rejects");
         handle.await.expect("server task");
@@ -781,11 +834,16 @@ mod round_trip {
             listener.local_addr().expect("has an address").port()
             // Dropped here, so the port is closed and the connect is refused.
         };
-        let err = chat_completions(call(
-            &format!("http://127.0.0.1:{port}/v1/messages"),
-            json!([{"role": "user", "content": "hi"}]),
-            json!({"max_tokens": 16}),
-        ))
+        let err = execute(
+            call(
+                &format!("http://127.0.0.1:{port}/v1/messages"),
+                json!([{"role": "user", "content": "hi"}]),
+                json!({"max_tokens": 16}),
+            ),
+            &LiteLlmRequestContext {
+                ..Default::default()
+            },
+        )
         .await
         .expect_err("nothing is listening");
         assert!(

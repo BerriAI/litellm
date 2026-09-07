@@ -4,6 +4,8 @@ use litellm_core::audio_transcription::{
 };
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use litellm_core::error::Error;
+use litellm_core::request_context::RequestAttribution;
+use litellm_core::request_options::RequestOptions;
 use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
@@ -15,14 +17,12 @@ use crate::integrations::custom_guardrail::{
 use crate::integrations::custom_logger::{
     CallType, CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{
-    RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
-};
+use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
 
 pub(crate) struct AudioTranscriptionLifecycleHooks {
     logger_runner: CustomLoggerRunner,
     guardrail_runner: CustomGuardrailRunner,
-    request_metadata: RequestMetadata,
+    request_metadata: RequestAttribution,
 }
 
 type AudioFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -32,7 +32,7 @@ impl AudioTranscriptionLifecycleHooks {
     pub(crate) fn new(
         logger_runner: CustomLoggerRunner,
         guardrail_runner: CustomGuardrailRunner,
-        request_metadata: RequestMetadata,
+        request_metadata: RequestAttribution,
     ) -> Self {
         Self {
             logger_runner,
@@ -94,23 +94,29 @@ impl AudioTranscriptionLifecycleHooks {
             custom_llm_provider,
             audio,
             api_key,
+            bedrock,
             api_base,
             extra_headers,
             optional_params,
             timeout,
             ..
         } = request;
-        let provider_request =
-            prepare_audio_transcription_provider_call(CoreAudioTranscriptionRequest {
+        let provider_request = prepare_audio_transcription_provider_call(
+            CoreAudioTranscriptionRequest {
                 model: &model,
                 audio,
-                api_key: api_key.as_deref(),
-                api_base: api_base.as_deref(),
-                custom_llm_provider: Some(&custom_llm_provider),
-                extra_headers,
                 optional_params,
+            },
+            RequestOptions {
+                bedrock: Some(bedrock),
+                api_key: (api_key.as_deref()).map(|value| value.to_string()),
+                api_base: (api_base.as_deref()).map(|value| value.to_string()),
+                custom_llm_provider: (Some(&custom_llm_provider)).map(|value| value.to_string()),
+                extra_headers,
                 timeout,
-            })?;
+                ..Default::default()
+            },
+        )?;
         self.run_during_call_guardrails(provider_request).await
     }
 
@@ -251,7 +257,7 @@ impl CallLifecycleHooks<PreparedAudioTranscriptionRequest, ProviderAudioTranscri
     }
 }
 
-fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
+fn guardrail_context(metadata: &RequestAttribution) -> GuardrailContext {
     GuardrailContext {
         call_type: CallType::Other("audio_transcription".to_string()),
         selected_guardrails: Vec::new(),

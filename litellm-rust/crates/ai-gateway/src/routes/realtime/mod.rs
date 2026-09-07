@@ -4,6 +4,7 @@
 //! socket↔events adapter. The pure logic (no axum) lives in [`service`]. Auth is
 //! the `RequireMasterKey` extractor, so the handler stays thin.
 
+use litellm_core::request_context::RequestAttribution;
 mod service;
 
 use std::sync::Arc;
@@ -24,7 +25,7 @@ use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
 use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
+
 use crate::realtime::streaming::{RealTimeStreaming, SessionStatus};
 use crate::state::AppState;
 
@@ -110,9 +111,9 @@ async fn bridge(
     // to spend logs and every callback integration; the SHA-256 (matching the
     // proxy's hash_token) keeps the plaintext master key out of all of them while
     // still matching the key's hash in LiteLLM_SpendLogs.
-    let metadata = RequestMetadata {
+    let metadata = RequestAttribution {
         user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
-        ..RequestMetadata::default()
+        ..RequestAttribution::default()
     };
 
     // Owned by THIS task only. The splice observes it via a synchronous `&mut`

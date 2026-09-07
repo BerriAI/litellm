@@ -3,6 +3,7 @@ use litellm_core::error::Error;
 use litellm_core::providers::reducto::ocr::transformation::{
     build_upload_request, extract_document_source, extract_upload_file_id,
 };
+use litellm_core::request_context::RequestAttribution;
 use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
@@ -16,14 +17,12 @@ use crate::integrations::custom_guardrail::{
 use crate::integrations::custom_logger::{
     CallType, CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{
-    RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
-};
+use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
 
 pub(crate) struct OcrLifecycleHooks {
     logger_runner: CustomLoggerRunner,
     guardrail_runner: CustomGuardrailRunner,
-    request_metadata: RequestMetadata,
+    request_metadata: RequestAttribution,
 }
 
 type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
@@ -33,7 +32,7 @@ impl OcrLifecycleHooks {
     pub(crate) fn new(
         logger_runner: CustomLoggerRunner,
         guardrail_runner: CustomGuardrailRunner,
-        request_metadata: RequestMetadata,
+        request_metadata: RequestAttribution,
     ) -> Self {
         Self {
             logger_runner,
@@ -85,10 +84,16 @@ impl OcrLifecycleHooks {
             request.api_key.as_deref(),
             &env_lookup,
         )?;
+        let url_params = request
+            .optional_params
+            .clone()
+            .into_iter()
+            .chain(request.vertex.into_map())
+            .collect();
         let url = config.complete_url(
             request.api_base.as_deref(),
             &request.model,
-            &request.optional_params,
+            &url_params,
             &env_lookup,
         )?;
         let model = request.model.clone();
@@ -323,7 +328,7 @@ impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLi
     }
 }
 
-fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
+fn guardrail_context(metadata: &RequestAttribution) -> GuardrailContext {
     GuardrailContext {
         call_type: CallType::Ocr,
         selected_guardrails: Vec::new(),

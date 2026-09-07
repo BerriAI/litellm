@@ -4,6 +4,7 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock.audio_transcription import BedrockAudioTranscriptionRustDispatch
+from litellm.rust_bridge.request import NativeRequestContext, NativeRequestOptions, NativeTranscriptionRequest
 from litellm.rust_bridge.runtime import Handled
 
 rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
@@ -12,33 +13,29 @@ rust_bridge = importlib.import_module("litellm.rust_bridge.transcription")
 class SyncBridge:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.contexts: list[NativeRequestContext] = []
 
     def __call__(
         self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeTranscriptionRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
-        self.calls.append({"model": model, "audio": audio, "optional_params": optional_params})
+        self.calls.append(
+            {"model": request.model, "audio": request.audio, "optional_params": request.optional_params}
+        )
+        self.contexts.append(context)
         return {"text": "hello"}
 
 
 class AsyncBridge:
     async def __call__(
         self,
-        model: str,
-        audio: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeTranscriptionRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         return {"text": "async"}
 
@@ -55,10 +52,17 @@ def test_enabled_sync_bridge_receives_audio() -> None:
         extra_headers=None,
         optional_params={"temperature": 0},
         timeout=5.0,
+        stream=True,
+        has_custom_client=True,
+        input_source_kind="file",
     )
     assert isinstance(result, Handled)
     assert result.value == {"text": "hello"}
     assert bridge.calls[0]["audio"] == {"data": "AQI=", "format": "wav", "filename": "audio.wav"}
+    assert bridge.contexts[0].capabilities.execution_mode == "sync"
+    assert bridge.contexts[0].capabilities.stream is True
+    assert bridge.contexts[0].capabilities.has_custom_client is True
+    assert bridge.contexts[0].capabilities.input_source_kind == "file"
 
 
 @pytest.mark.asyncio
@@ -121,7 +125,7 @@ async def test_dispatch_async_path_requires_bridge(monkeypatch: pytest.MonkeyPat
 
 def test_bedrock_transcription_uses_rust_only_path() -> None:
     rust_bridge.configure_rust_transcription(
-        transcription=lambda **_: {"text": "rust"},
+        transcription=lambda *_args, **_: {"text": "rust"},
         atranscription=None,
     )
     try:
@@ -137,7 +141,7 @@ def test_bedrock_transcription_uses_rust_only_path() -> None:
 
 @pytest.mark.asyncio
 async def test_bedrock_atranscription_uses_rust_only_path() -> None:
-    async def rust_response(**_: object) -> dict[str, object]:
+    async def rust_response(*_args: object, **_: object) -> dict[str, object]:
         return {"text": "rust"}
 
     rust_bridge.configure_rust_transcription(transcription=None, atranscription=rust_response)

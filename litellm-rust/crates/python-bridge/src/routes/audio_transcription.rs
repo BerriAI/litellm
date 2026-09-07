@@ -1,48 +1,39 @@
+use crate::errors::core_error_to_pyerr;
+use crate::marshal::{NativeRequestContext, NativeRequestOptions};
 use litellm_core::Error;
+use litellm_core::audio_transcription::AudioTranscriptionRequest;
+use litellm_core::audio_transcription::audio_transcription as run_route;
+use litellm_core::request_context::LiteLlmRequestContext;
+use pyo3::prelude::*;
+use serde_json::{Map, Value};
 use std::future::Future;
 
-use litellm_core::audio_transcription::{
-    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
-};
-use pyo3::prelude::*;
-use serde_json::Value;
-
-use crate::errors::core_error_to_pyerr;
-use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty};
+#[derive(FromPyObject)]
+struct AudioTranscriptionInputs {
+    model: String,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)]
+    audio: Value,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)]
+    optional_params: Map<String, Value>,
+}
 
 fn prepare_transcription(
-    inputs: AudioTranscriptionInputs,
+    input: AudioTranscriptionInputs,
+    options: NativeRequestOptions,
+    context: NativeRequestContext,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
-    let audio = inputs.audio;
-    let options = RouteOptions::from_python(RouteOptionsInputs {
-        model: inputs.model,
-        api_key: inputs.api_key,
-        api_base: inputs.api_base,
-        custom_llm_provider: inputs.custom_llm_provider,
-        extra_headers: inputs.extra_headers,
-        timeout_seconds: inputs.timeout_seconds,
-    })?;
-    let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
-
+    let context: LiteLlmRequestContext = context.into();
+    let audio = input.audio;
     Ok(async move {
-        let RouteOptions {
-            model,
-            api_key,
-            api_base,
-            custom_llm_provider,
-            extra_headers,
-            timeout,
-        } = options;
-        run_audio_transcription(AudioTranscriptionRequest {
-            model: &model,
-            audio,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-        })
+        run_route(
+            AudioTranscriptionRequest {
+                model: &input.model,
+                audio,
+                optional_params: input.optional_params,
+            },
+            &options.into(),
+            &context,
+        )
         .await
     })
 }
@@ -50,22 +41,7 @@ fn prepare_transcription(
 bridge_route! {
     sync = transcription,
     asynchronous = atranscription,
-    inputs = AudioTranscriptionInputs,
-    required = {
-        model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        audio: serde_json::Value,
-    },
-    optional = {
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        extra_headers: Option<serde_json::Value>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        optional_params: Option<serde_json::Value>,
-        timeout_seconds: Option<f64>,
-    },
+    request = AudioTranscriptionInputs,
     prepare = prepare_transcription,
     errors = core_error_to_pyerr,
 }

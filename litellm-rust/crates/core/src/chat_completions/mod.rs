@@ -7,6 +7,8 @@
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
 use crate::Error;
+use crate::request_context::LiteLlmRequestContext;
+use crate::request_options::RequestOptions;
 mod client;
 mod common_utils;
 pub mod conversation;
@@ -25,8 +27,11 @@ use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
+    options: &RequestOptions,
+    context: &LiteLlmRequestContext,
 ) -> Result<ChatCompletionsResponse, Error> {
-    execute_chat_completions_provider_call(resolve_request(request)?).await
+    execute_chat_completions_provider_call(resolve_request(request, options.clone(), context)?)
+        .await
 }
 
 /// Whether the core would accept this request, without resolving credentials or

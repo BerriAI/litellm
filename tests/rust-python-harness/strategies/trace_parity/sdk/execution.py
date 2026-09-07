@@ -60,6 +60,66 @@ def _collect(
     return tuple(profiler.events)
 
 
+def _native_kwargs(route: str, kwargs: dict[str, object]) -> dict[str, object]:
+    from pydantic import TypeAdapter
+
+    from litellm.rust_bridge.chat_completions import NativeChatCompletionsRequest
+    from litellm.rust_bridge.messages import NativeMessagesRequest
+    from litellm.rust_bridge.ocr import NativeOCRRequest
+    from litellm.rust_bridge.request import (
+        NativeRequestContext,
+        NativeRequestOptions,
+        bedrock_options,
+        vertex_options,
+    )
+    from litellm.rust_bridge.transcription import NativeTranscriptionRequest
+
+    params: Final = TypeAdapter(dict[str, object]).validate_python(kwargs.get("optional_params", {}))
+    options: Final = TypeAdapter(NativeRequestOptions).validate_python(
+        {
+            **{
+                key: kwargs.get(key)
+                for key in (
+                    "api_key",
+                    "api_base",
+                    "custom_llm_provider",
+                    "extra_headers",
+                    "extra_query",
+                    "timeout_seconds",
+                )
+            },
+            "bedrock": bedrock_options(params),
+            "vertex": vertex_options(params),
+        }
+    )
+    if route == "chat_completions":
+        request: Final = NativeChatCompletionsRequest(
+            model=TypeAdapter(str).validate_python(kwargs.get("model")),
+            messages=TypeAdapter(list[object]).validate_python(kwargs.get("messages")),
+            optional_params=params,
+        )
+    elif route == "messages":
+        request = NativeMessagesRequest(
+            model=TypeAdapter(str).validate_python(kwargs.get("model")),
+            body=TypeAdapter(dict[str, object]).validate_python(kwargs.get("body")),
+        )
+    elif route == "ocr":
+        request = NativeOCRRequest(
+            model=TypeAdapter(str).validate_python(kwargs.get("model")),
+            document=TypeAdapter(dict[str, object]).validate_python(kwargs.get("document")),
+            optional_params=params,
+        )
+    elif route in {"transcription", "audio_transcription"}:
+        request = NativeTranscriptionRequest(
+            model=TypeAdapter(str).validate_python(kwargs.get("model")),
+            audio=TypeAdapter(dict[str, object]).validate_python(kwargs.get("audio")),
+            optional_params=params,
+        )
+    else:
+        raise ValueError(f"unsupported native trace route: {route}")
+    return {"request": request, "options": options, "context": NativeRequestContext()}
+
+
 def collect_trace(
     spec: RouteSpec, engine: Engine, *, asynchronous: bool
 ) -> tuple[FunctionTraceEvent, ...] | TraceExecutionFailure:
@@ -77,7 +137,12 @@ def collect_trace(
                 "api_base": provider.url,
                 **({"timeout_seconds": 5} if engine == "rust" else {"timeout": 5}),
             }
-            events: Final = _collect(function, kwargs, engine, asynchronous=asynchronous)
+            events: Final = _collect(
+                function,
+                _native_kwargs(spec.route, kwargs) if engine == "rust" else kwargs,
+                engine,
+                asynchronous=asynchronous,
+            )
             provider.take_requests(len(fixture.provider_responses))
     except Exception as error:
         return TraceExecutionFailure(engine, f"{type(error).__name__}: {error}")

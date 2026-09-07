@@ -14,6 +14,15 @@ from litellm.llms.base_llm.ocr.transformation import OCR_REQUEST_FORMAT_PARAM, B
 from litellm.rust_bridge import configuration as _configuration
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.protocols import RustAocr, RustOcr
+from litellm.rust_bridge.request import (
+    NativeOCRRequest,
+    NativeRequestCapabilities,
+    NativeRequestOptions,
+    PreparedNativeCall,
+    call_native,
+    request_context,
+    vertex_options,
+)
 from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
@@ -68,6 +77,21 @@ def _rust_ocr_supported(prepared_request: PreparedOCRRequest) -> bool:
     if not prepared_request.provider_config.supports_rust_bridge():
         return False
     return prepared_request.custom_llm_provider in _RUST_OCR_PROVIDERS
+
+
+def _ocr_input_source_kind(document: dict[str, object]) -> str:
+    if "document_url" in document:
+        return "document_url"
+    if "image_url" in document:
+        return "image_url"
+    if "file" in document:
+        return "file"
+    return "inline"
+
+
+def _ocr_request_format(optional_params: dict[str, object]) -> str | None:
+    value = optional_params.get(OCR_REQUEST_FORMAT_PARAM)
+    return value if isinstance(value, str) else None
 
 
 def _rust_bridge_optional_params(
@@ -170,15 +194,36 @@ def attempt_ocr(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
         ),
-        call=lambda native, prepared: native(
-            model=prepared_request.model,
-            document=prepared_request.document,
-            api_key=prepared.api_key,
-            api_base=prepared.api_base,
-            custom_llm_provider=prepared_request.custom_llm_provider,
-            extra_headers=prepared.headers,
-            optional_params=prepared.optional_params,
-            timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
+        call=lambda native, prepared: call_native(
+            native,
+            PreparedNativeCall(
+                request=NativeOCRRequest(
+                    model=prepared_request.model,
+                    document=prepared_request.document,
+                    optional_params=prepared.optional_params,
+                ),
+                options=NativeRequestOptions(
+                    api_key=prepared.api_key,
+                    api_base=prepared.api_base,
+                    custom_llm_provider=prepared_request.custom_llm_provider,
+                    extra_headers=prepared.headers,
+                    timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
+                    vertex=vertex_options(prepared.optional_params),
+                ),
+                context=request_context(
+                    logging_obj=prepared_request.litellm_logging_obj,
+                    request_model=prepared_request.model,
+                    litellm_params=prepared_request.litellm_params,
+                    capabilities=NativeRequestCapabilities(
+                        execution_mode="sync",
+                        input_source_kind=_ocr_input_source_kind(prepared_request.document),
+                        request_format=_ocr_request_format(prepared_request.optional_params),
+                        native_response_format=(
+                            prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native"
+                        ),
+                    ),
+                ),
+            ),
         ),
         adapt=OCRResponse.model_validate,
         eligible=_rust_ocr_supported(prepared_request),
@@ -196,15 +241,36 @@ async def aattempt_ocr(
             prepared_request=prepared_request,
             resolve_api_key=resolve_api_key,
         ),
-        call=lambda native, prepared: native(
-            model=prepared_request.model,
-            document=prepared_request.document,
-            api_key=prepared.api_key,
-            api_base=prepared.api_base,
-            custom_llm_provider=prepared_request.custom_llm_provider,
-            extra_headers=prepared.headers,
-            optional_params=prepared.optional_params,
-            timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
+        call=lambda native, prepared: call_native(
+            native,
+            PreparedNativeCall(
+                request=NativeOCRRequest(
+                    model=prepared_request.model,
+                    document=prepared_request.document,
+                    optional_params=prepared.optional_params,
+                ),
+                options=NativeRequestOptions(
+                    api_key=prepared.api_key,
+                    api_base=prepared.api_base,
+                    custom_llm_provider=prepared_request.custom_llm_provider,
+                    extra_headers=prepared.headers,
+                    timeout_seconds=timeout_to_seconds(prepared_request.effective_timeout),
+                    vertex=vertex_options(prepared.optional_params),
+                ),
+                context=request_context(
+                    logging_obj=prepared_request.litellm_logging_obj,
+                    request_model=prepared_request.model,
+                    litellm_params=prepared_request.litellm_params,
+                    capabilities=NativeRequestCapabilities(
+                        execution_mode="async",
+                        input_source_kind=_ocr_input_source_kind(prepared_request.document),
+                        request_format=_ocr_request_format(prepared_request.optional_params),
+                        native_response_format=(
+                            prepared_request.optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native"
+                        ),
+                    ),
+                ),
+            ),
         ),
         adapt=OCRResponse.model_validate,
         eligible=_rust_ocr_supported(prepared_request),

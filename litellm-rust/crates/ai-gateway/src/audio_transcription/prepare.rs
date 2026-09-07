@@ -1,3 +1,7 @@
+use crate::integrations::types::RequestHooks;
+use litellm_core::call_lifecycle::CallLifecycleContext;
+use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -9,38 +13,50 @@ use crate::integrations::custom_guardrail::CustomGuardrailRunner;
 use crate::integrations::custom_logger::CustomLoggerRunner;
 
 pub(crate) struct PreparedAudioTranscriptionCall {
+    pub(crate) context: CallLifecycleContext,
     pub(crate) request: PreparedAudioTranscriptionRequest,
     pub(crate) hooks: AudioTranscriptionLifecycleHooks,
 }
 
 pub(crate) fn prepare_audio_transcription_call(
     request: AudioTranscriptionRequest<'_>,
+    options: RequestOptions,
+    context: &LiteLlmRequestContext,
+    hooks: RequestHooks,
 ) -> PreparedAudioTranscriptionCall {
-    let call_id = request
+    let call_id = context
         .litellm_call_id
-        .map(str::to_string)
+        .clone()
         .unwrap_or_else(new_audio_transcription_call_id);
-    let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
-        .unwrap_or(CustomLlmProvider {
-            model: request.model,
-            custom_llm_provider: "bedrock",
-        });
+    let provider_info =
+        get_custom_llm_provider(request.model, options.custom_llm_provider.as_deref()).unwrap_or(
+            CustomLlmProvider {
+                model: request.model,
+                custom_llm_provider: "bedrock",
+            },
+        );
     PreparedAudioTranscriptionCall {
+        context: CallLifecycleContext::new(
+            "audio_transcription",
+            provider_info.model,
+            provider_info.custom_llm_provider,
+            call_id,
+        ),
         request: PreparedAudioTranscriptionRequest {
             model: provider_info.model.to_string(),
             custom_llm_provider: provider_info.custom_llm_provider.to_string(),
-            litellm_call_id: call_id,
             audio: request.audio,
-            api_key: request.api_key.map(str::to_string),
-            api_base: request.api_base.map(str::to_string),
-            extra_headers: request.extra_headers,
+            bedrock: options.bedrock.unwrap_or_default(),
+            api_key: options.api_key,
+            api_base: options.api_base,
+            extra_headers: options.extra_headers,
             optional_params: request.optional_params,
-            timeout: request.timeout,
+            timeout: options.timeout,
         },
         hooks: AudioTranscriptionLifecycleHooks::new(
-            CustomLoggerRunner::new(request.callbacks),
-            CustomGuardrailRunner::new(request.guardrails),
-            request.request_metadata,
+            CustomLoggerRunner::new(hooks.callbacks),
+            CustomGuardrailRunner::new(hooks.guardrails),
+            context.attribution.clone(),
         ),
     }
 }

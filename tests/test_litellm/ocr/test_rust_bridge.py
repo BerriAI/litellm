@@ -12,6 +12,7 @@ import pytest
 import litellm
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import configuration
+from litellm.rust_bridge.request import NativeOCRRequest, NativeRequestContext, NativeRequestOptions
 from litellm.rust_bridge.runtime import Handled
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
@@ -46,30 +47,28 @@ class RecordingBridge:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.contexts: list[NativeRequestContext] = []
 
     def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "document": document,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "optional_params": optional_params,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "document": request.document,
+                "api_key": options.api_key,
+                "api_base": options.api_base,
+                "custom_llm_provider": options.custom_llm_provider,
+                "extra_headers": options.extra_headers,
+                "optional_params": request.optional_params,
+                "timeout_seconds": options.timeout_seconds,
             }
         )
+        self.contexts.append(context)
         return dict(FAKE_OCR_RESPONSE)
 
 
@@ -78,44 +77,38 @@ class RecordingAsyncBridge:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.contexts: list[NativeRequestContext] = []
 
     async def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         self.calls.append(
             {
-                "model": model,
-                "document": document,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "optional_params": optional_params,
-                "timeout_seconds": timeout_seconds,
+                "model": request.model,
+                "document": request.document,
+                "api_key": options.api_key,
+                "api_base": options.api_base,
+                "custom_llm_provider": options.custom_llm_provider,
+                "extra_headers": options.extra_headers,
+                "optional_params": request.optional_params,
+                "timeout_seconds": options.timeout_seconds,
             }
         )
+        self.contexts.append(context)
         return dict(FAKE_OCR_RESPONSE)
 
 
 class RaisingBridge:
     def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -123,14 +116,10 @@ class RaisingBridge:
 class RaisingAsyncBridge:
     async def __call__(
         self,
-        model: str,
-        document: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        optional_params: dict[str, object],
-        timeout_seconds: float | None,
+        request: NativeOCRRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
     ) -> dict[str, object]:
         raise RuntimeError("bridge failed")
 
@@ -413,6 +402,9 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
     response = response.value
     assert isinstance(response, OCRResponse)
     assert response.pages[0].markdown == "hello world"
+    assert bridge.contexts[0].capabilities.execution_mode == "sync"
+    assert bridge.contexts[0].capabilities.input_source_kind == "document_url"
+    assert bridge.contexts[0].capabilities.native_response_format is False
     assert bridge.calls[0] == {
         "model": "mistral-ocr-latest",
         "document": DOCUMENT,

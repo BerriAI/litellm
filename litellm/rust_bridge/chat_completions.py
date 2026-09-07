@@ -27,6 +27,17 @@ from litellm.rust_bridge.protocols import (
     RustChatCompletions,
     RustChatCompletionsDecline,
 )
+from litellm.rust_bridge.request import (
+    NativeAnthropicOptions,
+    NativeBedrockOptions,
+    NativeChatCompletionsRequest,
+    NativeRequestCapabilities,
+    NativeRequestContext,
+    NativeRequestOptions,
+    PreparedNativeCall,
+    call_native,
+    with_capabilities,
+)
 from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.utils import ModelResponse
@@ -224,29 +235,46 @@ def chat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
+    bedrock: NativeBedrockOptions | None = None,
+    anthropic: NativeAnthropicOptions | None = None,
+    stream: bool = False,
+    has_custom_client: bool = False,
     eligible: bool = True,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[ModelResponse]:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
         return _build_model_response(rust_response, model_response)
 
-    def call(native: RustChatCompletions, timeout_seconds: float | None) -> Mapping[str, object]:
-        return native(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_seconds,
-        )
+    def call(
+        native: RustChatCompletions, prepared: PreparedNativeCall[NativeChatCompletionsRequest]
+    ) -> Mapping[str, object]:
+        return call_native(native, prepared)
 
     return attempt(
         load=_CHAT.load,
         enabled=rust_enabled(),
         eligible=eligible,
-        prepare=lambda: timeout_to_seconds(timeout),
+        prepare=lambda: PreparedNativeCall(
+            request=NativeChatCompletionsRequest(model=model, messages=messages, optional_params=optional_params),
+            options=NativeRequestOptions(
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+                bedrock=bedrock,
+                anthropic=anthropic,
+            ),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="sync",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                ),
+            ),
+        ),
         call=call,
         adapt=adapt,
     )
@@ -264,29 +292,47 @@ async def achat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     on_response: ResponseObserver,
+    bedrock: NativeBedrockOptions | None = None,
+    anthropic: NativeAnthropicOptions | None = None,
+    stream: bool = False,
+    has_custom_client: bool = False,
     eligible: bool = True,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[ModelResponse]:
     def adapt(rust_response: Mapping[str, object]) -> ModelResponse:
         on_response(rust_response)
         return _build_model_response(rust_response, model_response)
 
-    async def call(native: RustAchatCompletions, timeout_seconds: float | None) -> Mapping[str, object]:
-        return await native(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_seconds,
-        )
+    async def call(
+        native: RustAchatCompletions,
+        prepared: PreparedNativeCall[NativeChatCompletionsRequest],
+    ) -> Mapping[str, object]:
+        return await call_native(native, prepared)
 
     return await aattempt(
         load=_ACHAT.load,
         enabled=rust_enabled(),
         eligible=eligible,
-        prepare=lambda: timeout_to_seconds(timeout),
+        prepare=lambda: PreparedNativeCall(
+            request=NativeChatCompletionsRequest(model=model, messages=messages, optional_params=optional_params),
+            options=NativeRequestOptions(
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+                bedrock=bedrock,
+                anthropic=anthropic,
+            ),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="async",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                ),
+            ),
+        ),
         call=call,
         adapt=adapt,
     )

@@ -8,6 +8,15 @@ import httpx
 
 from litellm.rust_bridge.bindings import UNCHANGED, NativeBinding, Unchanged
 from litellm.rust_bridge.protocols import RustAmessages, RustMessages
+from litellm.rust_bridge.request import (
+    NativeMessagesRequest,
+    NativeRequestCapabilities,
+    NativeRequestContext,
+    NativeRequestOptions,
+    PreparedNativeCall,
+    call_native,
+    with_capabilities,
+)
 from litellm.rust_bridge.runtime import DispatchResult, aattempt, attempt, identity
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 
@@ -49,21 +58,35 @@ def messages(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
+    stream: bool = False,
+    has_custom_client: bool = False,
+    has_agentic_hook: bool = False,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[dict[str, object]]:
     return attempt(
         load=_MESSAGES.load,
         enabled=True,
         eligible=True,
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda rust_messages, timeout_seconds: rust_messages(
-            model=model,
-            body=body,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            request=NativeMessagesRequest(model=model, body=body),
+            options=NativeRequestOptions(
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+            ),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="sync",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    has_agentic_hook=has_agentic_hook,
+                ),
+            ),
         ),
+        call=call_native,
         adapt=identity,
     )
 
@@ -77,20 +100,34 @@ async def amessages(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
+    stream: bool = False,
+    has_custom_client: bool = False,
+    has_agentic_hook: bool = False,
+    context: NativeRequestContext | None = None,
 ) -> DispatchResult[dict[str, object]]:
     return await aattempt(
         load=_AMESSAGES.load,
         enabled=True,
         eligible=True,
-        prepare=lambda: timeout_to_seconds(timeout),
-        call=lambda rust_amessages, timeout_seconds: rust_amessages(
-            model=model,
-            body=body,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_seconds,
+        prepare=lambda: PreparedNativeCall(
+            request=NativeMessagesRequest(model=model, body=body),
+            options=NativeRequestOptions(
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+            ),
+            context=with_capabilities(
+                context or NativeRequestContext(),
+                NativeRequestCapabilities(
+                    execution_mode="async",
+                    stream=stream,
+                    has_custom_client=has_custom_client,
+                    has_agentic_hook=has_agentic_hook,
+                ),
+            ),
         ),
+        call=call_native,
         adapt=identity,
     )

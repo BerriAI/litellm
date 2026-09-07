@@ -1,5 +1,8 @@
+use crate::integrations::types::RequestHooks;
 use litellm_core::Error;
 use litellm_core::call_lifecycle::CallLifecycle;
+use litellm_core::request_context::LiteLlmRequestContext;
+use litellm_core::request_options::RequestOptions;
 use serde_json::Value;
 
 mod common_utils;
@@ -14,10 +17,19 @@ use handler::execute_ocr_provider_call;
 use prepare::{PreparedOcrCall, prepare_ocr_call};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
-    let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
+pub async fn ocr(
+    request: OcrRequest<'_>,
+    options: &RequestOptions,
+    context: &LiteLlmRequestContext,
+    hooks: RequestHooks,
+) -> Result<Value, Error> {
+    let PreparedOcrCall {
+        request,
+        context,
+        hooks,
+    } = prepare_ocr_call(request, options.clone(), context, hooks);
     CallLifecycle::default()
-        .run_request(request, &hooks, |request| {
+        .run(context, request, &hooks, |request| {
             execute_ocr_provider_call(request, &hooks)
         })
         .await
@@ -25,12 +37,14 @@ pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
 
 #[cfg(test)]
 mod tests {
+    use crate::integrations::types::RequestHooks;
+    use litellm_core::request_context::LiteLlmRequestContext;
+    use litellm_core::request_options::RequestOptions;
     use serde_json::{Map, json};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
     use super::{OcrRequest, ocr};
-    use crate::integrations::types::RequestMetadata;
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
         let mut request = Vec::new();
@@ -65,24 +79,25 @@ mod tests {
         String::from_utf8(request).expect("request is utf8")
     }
 
-    fn base_ocr_request(model: &str) -> OcrRequest<'_> {
-        OcrRequest {
-            model,
-            document: json!({
-                "type": "document_url",
-                "document_url": "https://example.com/doc.pdf"
-            }),
-            api_key: Some("sk-test"),
-            api_base: None,
-            custom_llm_provider: None,
-            extra_headers: None,
-            optional_params: Map::new(),
-            timeout: None,
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: RequestMetadata::default(),
-            litellm_call_id: None,
-        }
+    fn base_ocr_request(model: &str) -> (OcrRequest<'_>, RequestOptions) {
+        (
+            OcrRequest {
+                model,
+                document: json!({
+                    "type": "document_url",
+                    "document_url": "https://example.com/doc.pdf"
+                }),
+                optional_params: Map::new(),
+            },
+            RequestOptions {
+                api_key: (Some("sk-test")).map(|value| value.to_string()),
+                api_base: None,
+                custom_llm_provider: None,
+                extra_headers: None,
+                timeout: None,
+                ..Default::default()
+            },
+        )
     }
 
     #[tokio::test]
@@ -120,10 +135,10 @@ mod tests {
             (upload_request, parse_request)
         });
         let api_base = format!("http://{address}");
-        let mut request = base_ocr_request("reducto/parse-v3");
-        request.api_base = Some(&api_base);
-        request.api_key = None;
-        request.extra_headers = Some(Map::from_iter([
+        let (mut request, mut options) = base_ocr_request("reducto/parse-v3");
+        options.api_base = Some(&api_base).map(|value| value.to_string());
+        options.api_key = None;
+        options.extra_headers = Some(Map::from_iter([
             ("Authorization".to_string(), json!("Bearer test-key")),
             ("x-trace-id".to_string(), json!("trace-1")),
         ]));
@@ -140,7 +155,18 @@ mod tests {
             ("settings".to_string(), json!({"ocr_system": "standard"})),
         ]);
 
-        let response = ocr(request).await.expect("Reducto OCR succeeds");
+        let response = ocr(
+            request,
+            &options,
+            &LiteLlmRequestContext {
+                ..Default::default()
+            },
+            RequestHooks {
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("Reducto OCR succeeds");
 
         assert_eq!(response["pages"].as_array().map(Vec::len), Some(3));
         assert_eq!(

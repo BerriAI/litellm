@@ -12,7 +12,8 @@ import pytest
 import litellm
 from litellm.rust_bridge import bindings, configuration
 from litellm.rust_bridge import chat_completions as bridge
-from litellm.rust_bridge.runtime import Handled, NativeSkipped, NativeFailed
+from litellm.rust_bridge.request import NativeChatCompletionsRequest, NativeRequestContext, NativeRequestOptions
+from litellm.rust_bridge.runtime import Handled, NativeFailed, NativeSkipped
 from litellm.types.utils import ModelResponse
 
 RUST_RESPONSE = {
@@ -95,17 +96,41 @@ class _RecordingCall:
         self.result = result if result is not None else dict(RUST_RESPONSE)
         self.error = error
         self.calls: list[dict] = []
+        self.contexts: list[NativeRequestContext] = []
 
-    def __call__(self, **kwargs):
+    def __call__(
+        self,
+        request: NativeChatCompletionsRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
+    ):
+        kwargs = {
+            "model": request.model,
+            "messages": request.messages,
+            "optional_params": request.optional_params,
+            "api_key": options.api_key,
+            "api_base": options.api_base,
+            "custom_llm_provider": options.custom_llm_provider,
+            "extra_headers": options.extra_headers,
+            "timeout_seconds": options.timeout_seconds,
+        }
         self.calls.append(kwargs)
+        self.contexts.append(context)
         if self.error is not None:
             raise self.error
         return self.result
 
 
 class _RecordingAsyncCall(_RecordingCall):
-    async def __call__(self, **kwargs):
-        return _RecordingCall.__call__(self, **kwargs)
+    async def __call__(
+        self,
+        request: NativeChatCompletionsRequest,
+        *,
+        options: NativeRequestOptions,
+        context: NativeRequestContext,
+    ):
+        return _RecordingCall.__call__(self, request, options=options, context=context)
 
 
 def _accepts(**overrides) -> bool:
@@ -267,6 +292,18 @@ class TestSyncCall:
         bridge.set_rust_chat_completions(chat_completions=native)
         bridge.chat_completions(**_call_kwargs(ModelResponse()))
         assert native.calls[0]["timeout_seconds"] == 30.0
+
+    def test_preserves_execution_and_client_capabilities(self):
+        native = _RecordingCall()
+        bridge.set_rust_chat_completions(chat_completions=native)
+        bridge.chat_completions(
+            **_call_kwargs(ModelResponse()),
+            stream=True,
+            has_custom_client=True,
+        )
+        assert native.contexts[0].capabilities.execution_mode == "sync"
+        assert native.contexts[0].capabilities.stream is True
+        assert native.contexts[0].capabilities.has_custom_client is True
 
     def test_reports_unavailable_bridge(self, monkeypatch):
         _hide_native_bridge(monkeypatch)
