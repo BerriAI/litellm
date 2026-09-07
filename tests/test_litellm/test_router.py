@@ -2523,6 +2523,44 @@ def test_adopt_fallback_response_headers_replaces_rather_than_merges():
     assert wrapper._hidden_params["additional_headers"] == {"llm_provider-x-request-id": "req-FALLBACK"}
 
 
+def test_adopt_fallback_response_headers_survives_a_collected_wrapper():
+    """LIT-6767: the fallback generator holds only a weak reference to its wrapper.
+
+    A client that disconnects mid-stream can drop the wrapper while the generator is
+    still draining, and the adoption call has to keep working with nothing to adopt into
+    so the deployment slot is still released.
+    """
+    import weakref
+    from unittest.mock import MagicMock
+
+    from litellm.router import FallbackAwareStreamWrapper, Router
+
+    fallback: Final = MagicMock()
+    fallback._response_headers = {"x-request-id": "req-FALLBACK"}
+    fallback._hidden_params = {
+        "model_id": "fallback-deployment",
+        "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
+    }
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+    )
+    live_ref: Final = weakref.ref(wrapper)
+    prepared: Final = Router._adopt_fallback_response_headers(live_ref, fallback)
+    assert prepared == (fallback._hidden_params, fallback._hidden_params["additional_headers"])
+    assert wrapper.fallback_headers_adopted is True
+    assert wrapper._response_headers == {"x-request-id": "req-FALLBACK"}
+
+    dead_ref: Final = weakref.ref(wrapper)
+    del wrapper
+    assert dead_ref() is None
+    # no wrapper left to repoint, and the caller still needs the params for the chunks
+    assert Router._adopt_fallback_response_headers(dead_ref, fallback) == prepared
+
+
 def test_adopt_fallback_response_headers_drops_headers_the_fallback_cannot_replace():
     """LIT-6767: a fallback that carries no raw provider headers publishes none.
 
