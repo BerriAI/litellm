@@ -489,6 +489,7 @@ class TestAutoRouterBenchmarks:
         monkeypatch: pytest.MonkeyPatch,
         rows: Sequence[Mapping[str, object]],
         model_list: Sequence[object],
+        api_key: str | None = None,
     ) -> AutoRouterBenchmarksResponse:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
@@ -503,6 +504,7 @@ class TestAutoRouterBenchmarks:
             user_api_key_dict=ADMIN,
             start_date="2026-07-01",
             end_date="2026-08-01",
+            api_key=api_key,
         )
 
     ROW = _SessionAggRow(
@@ -652,8 +654,9 @@ class TestAutoRouterBenchmarks:
             user_api_key_dict=ADMIN,
             start_date="2026-07-01",
             end_date="2026-08-01",
+            api_key="key-hash",
         )
-        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00")
+        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash")
         assert response.routers_in_scope == 1
         assert response.groups[0].router_name == "live-auto"
         assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0

@@ -3485,6 +3485,55 @@
         "supports_response_schema": true,
         "supports_tool_choice": true
     },
+    "azure_ai/gpt-6-astra": {
+        "cache_creation_input_token_cost": 1.25e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-05,
+        "cache_read_input_token_cost": 1e-06,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-06,
+        "input_cost_per_token": 1e-05,
+        "input_cost_per_token_above_272k_tokens": 2e-05,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-05,
+        "output_cost_per_token_above_272k_tokens": 7.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "source": "https://ai.azure.com/catalog/models/gpt-6-astra",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_max_reasoning_effort": false,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_none_reasoning_effort": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_cache_breakpoint": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
     "azure_ai/gpt-5.5": {
         "deprecation_date": "2027-10-26",
         "cache_read_input_token_cost": 5e-07,
@@ -7189,7 +7238,7 @@
         ],
         "supports_computer_use": true,
         "supports_function_calling": true,
-        "supports_max_reasoning_effort": true,
+        "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
         "supports_none_reasoning_effort": true,
@@ -7455,7 +7504,7 @@
         ],
         "supports_computer_use": true,
         "supports_function_calling": true,
-        "supports_max_reasoning_effort": true,
+        "supports_max_reasoning_effort": false,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
         "supports_none_reasoning_effort": true,
@@ -30742,6 +30791,9 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-05,
+        "reasoning_effort_levels": [
+            "medium"
+        ],
         "source": "https://developers.openai.com/api/docs/models/chat-latest",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -30759,6 +30811,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -34898,9 +34951,9 @@
         "supports_audio_input": true
     },
     "mistral/voxtral-mini-tts-latest": {
+        "input_cost_per_character": 1.6e-05,
         "litellm_provider": "mistral",
         "mode": "audio_speech",
-        "output_cost_per_character": 1.6e-05,
         "source": "https://docs.mistral.ai/models/model-cards/voxtral-tts-26-03",
         "supported_endpoints": [
             "/v1/audio/speech"
@@ -37176,6 +37229,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -37216,6 +37270,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -37427,6 +37482,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -37467,6 +37523,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -56467,9 +56524,9 @@
         "supports_audio_input": true
     },
     "mistral/voxtral-mini-tts-2603": {
+        "input_cost_per_character": 1.6e-05,
         "litellm_provider": "mistral",
         "mode": "audio_speech",
-        "output_cost_per_character": 1.6e-05,
         "source": "https://docs.mistral.ai/models/model-cards/voxtral-tts-26-03",
         "supported_endpoints": [
             "/v1/audio/speech"
