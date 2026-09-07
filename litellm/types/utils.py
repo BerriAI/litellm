@@ -124,7 +124,6 @@ class CostPerToken(TypedDict, total=False):
     input_cost_per_token: Required[float]
     output_cost_per_token: Required[float]
     cache_read_input_token_cost: float
-    implicit_cache_read_input_token_cost: ReadOnly[float]
     cache_creation_input_token_cost: float
 
 

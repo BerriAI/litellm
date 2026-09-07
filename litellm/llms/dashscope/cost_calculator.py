@@ -45,7 +45,6 @@ class TokenBreakdown:
 def get_cache_read_mode(
     usage: Usage,
     cached_tokens: int,
-    cache_control_requested: bool = False,
 ) -> QwenContextCacheMode | None:
     if cached_tokens <= 0:
         return None
@@ -58,14 +57,11 @@ def get_cache_read_mode(
         return "explicit"
     if cache_type is not None:
         return None
-    if cache_control_requested:
-        return "explicit"
     return "implicit"
 
 
 def _extract_token_breakdown(
     usage: Usage,
-    cache_control_requested: bool = False,
 ) -> TokenBreakdown:
     prompt_details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = prompt_details["cache_hit_tokens"]
@@ -84,7 +80,6 @@ def _extract_token_breakdown(
         cache_read_mode=get_cache_read_mode(
             usage=usage,
             cached_tokens=cached_tokens,
-            cache_control_requested=cache_control_requested,
         ),
     )
 
@@ -174,12 +169,8 @@ def get_token_breakdown_and_rates(
     model_info: ModelInfo,
     usage: Usage,
     current_time: datetime | None = None,
-    cache_control_requested: bool = False,
 ) -> tuple[TokenBreakdown, TokenRates]:
-    breakdown: Final = _extract_token_breakdown(
-        usage,
-        cache_control_requested=cache_control_requested,
-    )
+    breakdown: Final = _extract_token_breakdown(usage)
     raw_tiers: Final = model_info.get("tiered_pricing")
     tiered_pricing: Final = (
         cast(  # cast-ok: ModelInfo's legacy tier type uses Any; the list check preserves the existing runtime boundary
@@ -218,7 +209,6 @@ def cost_per_token(
     usage: Usage,
     custom_llm_provider: str = "dashscope",
     current_time: datetime | None = None,
-    cache_control_requested: bool = False,
 ) -> tuple[float, float]:
     """
     Calculate cost per token for Dashscope models.
@@ -240,7 +230,6 @@ def cost_per_token(
         model_info=model_info,
         usage=usage,
         current_time=current_time,
-        cache_control_requested=cache_control_requested,
     )
 
     return _bill(breakdown, rates)
