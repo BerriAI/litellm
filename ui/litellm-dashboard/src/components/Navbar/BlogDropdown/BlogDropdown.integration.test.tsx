@@ -15,7 +15,9 @@ vi.mock("@/app/(dashboard)/hooks/useDisableBlogPosts", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/blogPosts/useBlogPosts", () => ({
   useBlogPosts: () => ({
-    data: { posts: [{ title: "Post One", date: "2026-02-01", description: "Description one", url: "https://example.com/1" }] },
+    data: {
+      posts: [{ title: "Post One", date: "2026-02-01", description: "Description one", url: "https://example.com/1" }],
+    },
     isLoading: false,
     isError: mockIsError,
     refetch: mockRefetch,
