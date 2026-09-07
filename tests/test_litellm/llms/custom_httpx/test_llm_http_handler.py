@@ -3371,13 +3371,16 @@ async def test_completion_signs_and_logs_off_the_event_loop_after_the_async_tran
 
 async def test_completion_keeps_sync_transform_request_before_returning_by_default():
     config = _TransformRecordingConfig(transform_async=False)
+    loop_thread = threading.current_thread()
 
     pending, captured = _start_async_completion(config)
     assert config.transform_calls == ["sync"]
+    assert config.sign_threads == []
 
     response = await pending
 
     assert config.transform_calls == ["sync"]
+    assert config.sign_threads and all(thread is not loop_thread for thread in config.sign_threads)
     assert captured["body"] == {"transformed_by": "sync"}
     assert response.choices[0].message.content == "sync"
 

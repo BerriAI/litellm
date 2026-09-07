@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import threading
@@ -707,6 +708,45 @@ def test_sign_request_with_sigv4():
         assert result_headers["Authorization"] != "Bearer test_token"
         assert result_headers["Content-Type"] == "application/json"
         assert result_body == mock_request.body
+
+
+@pytest.mark.asyncio
+async def test_async_sign_request_offloads_bedrock_credential_resolution():
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
+
+    config = AmazonInvokeConfig()
+    credential_started = threading.Event()
+    credential_release = threading.Event()
+    heartbeat_seen = asyncio.Event()
+
+    def get_credentials(**kwargs) -> Credentials:
+        credential_started.set()
+        credential_release.wait(timeout=1)
+        return Credentials("test_key", "test_secret", "test_token")
+
+    async def heartbeat() -> None:
+        while not credential_release.is_set():
+            await asyncio.sleep(0.01)
+            heartbeat_seen.set()
+
+    with patch.dict(os.environ, {}, clear=True), patch.object(config, "get_credentials", side_effect=get_credentials):
+        heartbeat_task = asyncio.create_task(heartbeat())
+        signing_task = asyncio.create_task(
+            config.async_sign_request(
+                headers={},
+                optional_params={"aws_region_name": "us-west-2"},
+                request_data={"prompt": "test"},
+                api_base="https://bedrock-runtime.us-west-2.amazonaws.com/model/test/invoke",
+            )
+        )
+        await asyncio.to_thread(credential_started.wait, 1)
+        await asyncio.wait_for(heartbeat_seen.wait(), timeout=1)
+        credential_release.set()
+        result_headers, result_body = await signing_task
+        await heartbeat_task
+
+    assert result_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert result_body == b'{"prompt": "test"}'
 
 
 def test_sign_request_with_api_key_bearer_token():

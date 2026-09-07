@@ -4,6 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
+from asyncio import to_thread
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final, Union
 
@@ -280,6 +281,30 @@ class BaseConfig(ABC):
         Update the headers with the signed headers in this function. The return values will be sent as headers in the http request.
         """
         return headers, None
+
+    async def async_sign_request(
+        self,
+        headers: dict[str, object],  # mutable-ok: legacy provider signing callback uses mutable dictionaries
+        optional_params: dict[str, object],  # mutable-ok: legacy provider signing callback uses mutable dictionaries
+        request_data: dict[str, object],  # mutable-ok: legacy provider signing callback uses mutable dictionaries
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, object], bytes | None]:  # mutable-ok: legacy provider signing callback returns mutable headers
+        sign_request: Final = self.sign_request
+        return await to_thread(
+            sign_request,
+            headers=headers,
+            optional_params=optional_params,
+            request_data=request_data,
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
 
     def get_complete_url(
         self,

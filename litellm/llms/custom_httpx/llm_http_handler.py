@@ -544,23 +544,24 @@ class BaseLLMHTTPHandler:
 
         def sign_and_log(
             transformed: dict[str, object],  # mutable-ok: async_completion takes dict
-        ) -> tuple[dict[str, object], dict[str, object], bytes | None]:  # mutable-ok: async_completion takes dict
+            signed: tuple[dict[str, object], bytes | None] | None = None,  # mutable-ok: signing returns mutable headers
+        ) -> tuple[  # mutable-ok: dispatch APIs use mutable dictionaries
+            dict[str, object], dict[str, object], bytes | None
+        ]:
             data: Final = {**transformed, **extra_body} if extra_body is not None else transformed
-            signed: Final = cast(  # cast-ok: sign_request is declared as a bare dict
-                "tuple[dict[str, object], bytes | None]",
-                provider_config.sign_request(
-                    headers=request_headers,
-                    optional_params={
-                        **optional_params,
-                        **_aws_signing_overrides(optional_params, litellm_params),
-                    },
-                    request_data=data,
-                    api_base=api_base,
-                    api_key=api_key,
-                    stream=stream,
-                    fake_stream=fake_stream,
-                    model=model,
-                ),
+            sign_request: Final = provider_config.sign_request
+            signed_request: Final = signed or sign_request(
+                headers=request_headers,
+                optional_params={  # mutable-ok: legacy signing API accepts mutable optional parameters
+                    **optional_params,
+                    **_aws_signing_overrides(optional_params, litellm_params),
+                },
+                request_data=data,
+                api_base=api_base,
+                api_key=api_key,
+                stream=stream,
+                fake_stream=fake_stream,
+                model=model,
             )
             logging_obj.pre_call(
                 input=messages,
@@ -568,12 +569,35 @@ class BaseLLMHTTPHandler:
                 additional_args={
                     "complete_input_dict": data,
                     "api_base": api_base,
-                    "headers": signed[0],
+                    "headers": signed_request[0],
                 },
             )
             if litellm_params.get("_websearch_interception_converted_stream", False):
                 logging_obj.model_call_details["websearch_interception_converted_stream"] = True
-            return data, signed[0], signed[1]
+            return data, signed_request[0], signed_request[1]
+
+        async def async_sign_and_log(
+            transformed: dict[str, object],  # mutable-ok: async_completion takes a mutable request dictionary
+        ) -> tuple[  # mutable-ok: dispatch APIs use mutable dictionaries
+            dict[str, object], dict[str, object], bytes | None
+        ]:
+            data: Final = (
+                {**transformed, **extra_body} if extra_body is not None else transformed
+            )  # mutable-ok: signing providers may augment the request dictionary
+            signed: Final = await provider_config.async_sign_request(
+                headers=request_headers,
+                optional_params={  # mutable-ok: legacy signing API accepts mutable optional parameters
+                    **optional_params,
+                    **_aws_signing_overrides(optional_params, litellm_params),
+                },
+                request_data=data,
+                api_base=api_base,
+                api_key=api_key,
+                stream=stream,
+                fake_stream=fake_stream,
+                model=model,
+            )
+            return await asyncio.to_thread(sign_and_log, transformed, signed)
 
         def dispatch_async(
             data: dict[str, object],  # mutable-ok: async_completion takes dict
@@ -627,19 +651,32 @@ class BaseLLMHTTPHandler:
         if acompletion is True and provider_config.uses_async_transform_request:
 
             async def transform_then_dispatch() -> ModelResponse | CustomStreamWrapper:
-                transformed: Final = cast(  # cast-ok: async_transform_request is declared as a bare dict
-                    "dict[str, object]",
-                    await provider_config.async_transform_request(
-                        model=model,
-                        messages=messages,
-                        optional_params=optional_params,
-                        litellm_params=litellm_params,
-                        headers=request_headers,
-                    ),
+                async_transform_request: Final = provider_config.async_transform_request
+                transformed: Final = await async_transform_request(
+                    model=model,
+                    messages=messages,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    headers=request_headers,
                 )
-                return await dispatch_async(*await asyncio.to_thread(sign_and_log, transformed))
+                return await dispatch_async(*await async_sign_and_log(transformed))
 
             return transform_then_dispatch()
+
+        if acompletion is True:
+            transform_request: Final = provider_config.transform_request
+            transformed: Final = transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=request_headers,
+            )
+
+            async def sign_then_dispatch() -> ModelResponse | CustomStreamWrapper:
+                return await dispatch_async(*await async_sign_and_log(transformed))
+
+            return sign_then_dispatch()
 
         data, signed_headers, signed_json_body = sign_and_log(
             provider_config.transform_request(
@@ -650,9 +687,6 @@ class BaseLLMHTTPHandler:
                 headers=request_headers,
             )
         )
-
-        if acompletion is True:
-            return dispatch_async(data, signed_headers, signed_json_body)
 
         if stream is True:
             data = self._add_stream_param_to_request_body(
