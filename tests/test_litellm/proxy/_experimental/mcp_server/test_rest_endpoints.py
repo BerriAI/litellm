@@ -177,6 +177,36 @@ class TestExecuteWithMcpClient:
         assert "https://api.example.com/mcp/" in message
         assert "30s" in message
 
+    def test_connection_error_message_hides_arbitrary_http_exception_detail(self):
+        message = rest_endpoints._connection_error_message(
+            HTTPException(status_code=500, detail="secret upstream detail"),
+            "https://api.example.com/mcp/",
+            30.0,
+        )
+
+        assert "secret upstream detail" not in message
+
+    @pytest.mark.asyncio
+    async def test_none_mode_url_credentials_returns_actionable_redacted_error(self):
+        async def unreached_operation(client):
+            raise AssertionError("operation must not run for an invalid server configuration")
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://lit-user:s3cr3t@upstream.example.com/mcp",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(payload, unreached_operation)
+
+        message = str(result["message"])
+        assert result["error"] is True
+        assert "Basic Auth" in message
+        assert "auth_type: basic" in message
+        assert "auth_value: username:password" in message
+        assert "lit-user" not in message
+        assert "s3cr3t" not in message
+
     @pytest.mark.asyncio
     async def test_forwards_static_headers(self, monkeypatch):
         """Ensure static_headers are forwarded to the MCP client during test calls.

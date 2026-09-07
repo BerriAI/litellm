@@ -1,5 +1,6 @@
 import { fireEvent, renderWithProviders, screen, within } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
+import React from "react";
 import { vi } from "vitest";
 import ComplexityRouterConfig, { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 vi.mock(
@@ -1688,5 +1689,85 @@ describe("ComplexityRouterConfig tier editing", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     expect(screen.getByLabelText("Display name for the Simple tier")).toBeInTheDocument();
     expect(screen.queryByText("Display names rename the built-in tiers", { exact: false })).not.toBeInTheDocument();
+  });
+});
+
+describe("classifier vision settings", () => {
+  const llmValue: ComplexityRouterConfigValue = {
+    ...defaultValue,
+    classifier_type: "llm",
+    classifier_llm_config: { model: "gpt-3.5-turbo", timeout_ms: 3000 },
+  };
+
+  const VisionFixture = ({ onChange = vi.fn() }: { onChange?: ReturnType<typeof vi.fn> }) => {
+    const [value, setValue] = React.useState(llmValue);
+    return (
+      <ComplexityRouterConfig
+        modelInfo={mockModelInfo}
+        value={value}
+        onChange={(nextValue) => {
+          setValue(nextValue);
+          onChange(nextValue);
+        }}
+      />
+    );
+  };
+
+  it("starts off and reveals the default cap when enabled", () => {
+    renderWithProviders(<VisionFixture />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    const vision = screen.getByRole("switch", { name: "Use images for classification" });
+    expect(vision).not.toBeChecked();
+    expect(screen.queryByLabelText("Maximum images per request")).not.toBeInTheDocument();
+
+    fireEvent.click(vision);
+
+    expect(screen.getByLabelText("Maximum images per request")).toHaveValue("1");
+  });
+
+  it("writes the switch and a clamped image cap into the classifier config", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<VisionFixture onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    fireEvent.click(screen.getByRole("switch", { name: "Use images for classification" }));
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { ...llmValue.classifier_llm_config, vision: { enabled: true, max_images: 1 } },
+    });
+
+    fireEvent.change(screen.getByLabelText("Maximum images per request"), { target: { value: "1.7" } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { ...llmValue.classifier_llm_config, vision: { enabled: true, max_images: 2 } },
+    });
+  });
+
+  it("keeps the image cap draft empty until a valid value is entered", () => {
+    const onChange = vi.fn();
+    renderWithProviders(<VisionFixture onChange={onChange} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.click(screen.getByRole("switch", { name: "Use images for classification" }));
+    onChange.mockClear();
+
+    const input = screen.getByLabelText("Maximum images per request");
+    fireEvent.change(input, { target: { value: "" } });
+
+    expect(input).toHaveValue("");
+    expect(onChange).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: "0" } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...llmValue,
+      classifier_llm_config: { ...llmValue.classifier_llm_config, vision: { enabled: true, max_images: 1 } },
+    });
+  });
+
+  it("is absent when the classifier is heuristic", () => {
+    renderWithProviders(<ComplexityRouterConfig modelInfo={mockModelInfo} value={defaultValue} onChange={vi.fn()} />);
+    fireEvent.click(screen.getByText("Advanced: Classification Method"));
+
+    expect(screen.queryByText("Use images for classification")).not.toBeInTheDocument();
   });
 });

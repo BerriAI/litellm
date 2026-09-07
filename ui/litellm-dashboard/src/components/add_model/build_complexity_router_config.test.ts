@@ -1170,12 +1170,13 @@ describe("buildComplexityRouterConfig stall escalation", () => {
   });
 
   it("emits the toggle and both knobs when it is on", () => {
-    const config = buildComplexityRouterConfig({
+    const params: BuildComplexityRouterConfigParams = {
       ...baseParams,
       stallEscalationEnabled: true,
       stallEscalationWindow: 8,
       stallEscalationRepeatThreshold: 4,
-    });
+    };
+    const config = buildComplexityRouterConfig(params);
     expect(config.stall_escalation_enabled).toBe(true);
     expect(config.stall_escalation_window).toBe(8);
     expect(config.stall_escalation_repeat_threshold).toBe(4);
@@ -1205,5 +1206,40 @@ describe("dryRunRejection", () => {
   it("lets a valid verdict through, including the fail-open one a transport failure returns", () => {
     expect(dryRunRejection({ valid: true })).toBeNull();
     expect(dryRunRejection({ valid: true, error: null })).toBeNull();
+  });
+});
+
+describe("classifier vision wire payload", () => {
+  const vision = { enabled: true, max_images: 3 };
+  const classifierLlmConfig = { model: "classifier", timeout_ms: 3000, vision };
+
+  it("keeps vision through the standard-tier payload", () => {
+    const params = { ...baseParams, classifierType: "llm" as const, classifierLlmConfig };
+    const payload = buildComplexityRouterConfig(params);
+
+    expect(payload.classifier_llm_config).toMatchObject({ vision });
+  });
+
+  it("keeps vision through the custom-tier payload", () => {
+    const customTierSet = {
+      tiers: [
+        { id: "simple", name: "simple", definition: "small talk", models: ["gpt-4o-mini"] },
+        { id: "complex", name: "complex", definition: "hard work", models: ["gpt-4o"] },
+      ],
+      fallback_tier_id: "simple",
+    };
+    const payload = buildComplexityRouterConfig({ ...baseParams, customTierSet, classifierLlmConfig });
+
+    expect(payload.classifier_llm_config).toMatchObject({ vision });
+  });
+
+  it("keeps an untouched classifier config free of vision", () => {
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "classifier", timeout_ms: 3000 },
+    });
+
+    expect(payload.classifier_llm_config).not.toHaveProperty("vision");
   });
 });

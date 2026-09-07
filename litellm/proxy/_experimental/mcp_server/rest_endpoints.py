@@ -18,6 +18,7 @@ from litellm.exceptions import (
 )
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPServerListError,
+    MCPServerURLCredentialsError,
     MCPUpstreamAuthError,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
@@ -75,6 +76,8 @@ _MCP_GUARDRAIL_REJECTIONS: Final = (
 
 
 def _connection_error_message(exc: BaseException, url: str | None, timeout_seconds: float) -> str:
+    if isinstance(exc, MCPServerURLCredentialsError):
+        return str(exc.detail)
     if isinstance(exc, TimeoutError):
         return (
             f"Failed to connect to MCP server: no response from {url or 'the server'} "
@@ -101,6 +104,9 @@ if MCP_AVAILABLE:
     from mcp.types import Tool as MCPTool
 
     from litellm.experimental_mcp_client.client import MCPClient
+    from litellm.llms.litellm_proxy.skills.skill_search import (
+        DEFAULT_SKILL_SEARCH_TOP_K,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
         global_mcp_server_manager,
@@ -185,10 +191,12 @@ if MCP_AVAILABLE:
             AGENT_SEARCH_TOOL_NAME,
             DEFAULT_AGENT_SEARCH_TOP_K,
             MCP_TOOL_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
             coerce_top_k,
             handle_agent_search,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
+            handle_skill_search,
         )
         from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
         from litellm.proxy.proxy_server import general_settings, proxy_config, proxy_logging_obj
@@ -204,6 +212,14 @@ if MCP_AVAILABLE:
                 query=str(tool_arguments.get("query", "")),
                 top_k=coerce_top_k(
                     tool_arguments.get("top_k", DEFAULT_AGENT_SEARCH_TOP_K), default=DEFAULT_AGENT_SEARCH_TOP_K
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
+        if tool_name == SKILL_SEARCH_TOOL_NAME:
+            return await handle_skill_search(
+                query=str(tool_arguments.get("query", "")),
+                top_k=coerce_top_k(
+                    tool_arguments.get("top_k", DEFAULT_SKILL_SEARCH_TOP_K), default=DEFAULT_SKILL_SEARCH_TOP_K
                 ),
                 user_api_key_dict=user_api_key_dict,
             )

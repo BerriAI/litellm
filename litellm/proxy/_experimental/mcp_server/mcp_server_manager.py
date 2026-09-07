@@ -13,9 +13,19 @@ import json
 import os
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Container,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypedDict, cast
 from urllib.parse import ParseResult, urlparse
 
@@ -145,11 +155,18 @@ from litellm.proxy._types import (
     MCPTransportType,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    is_per_server_oauth_discovery_eligible,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
-from litellm.proxy.utils import PrismaClient, ProxyLogging, get_server_root_path
+from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
+    id_jag_assertion_capture_gap_at_startup,
+)
+from litellm.proxy.middleware.per_request_root_path_middleware import (
+    get_request_root_path,
+)
+from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import (
@@ -307,6 +324,7 @@ class MCPServerConfig(TypedDict, total=False):
     :meth:`MCPServerManager.load_servers_from_config`. Every key is optional: YAML supplies
     whatever the admin wrote, and each read applies its own default."""
 
+    server_id: ReadOnly[str]
     alias: str
     description: str
     mcp_info: MCPInfo
@@ -330,6 +348,7 @@ class MCPServerConfig(TypedDict, total=False):
     token_endpoint_auth_method: MCPTokenEndpointAuthMethod
     scopes: str | Sequence[str]
     dcr_bridge: object
+    per_server_oauth_discovery: ReadOnly[object]
     extra_headers: _StringList
     allowed_tools: _StringList
     disallowed_tools: _StringList
@@ -398,6 +417,189 @@ def _blank_to_none(value: str | None) -> str | None:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def _config_per_server_oauth_discovery(
+    server_config: MCPServerConfig,
+    server_ref: str,
+    auth_type: MCPAuthType | None,
+    oauth2_flow: object,
+) -> bool:
+    match server_config.get("per_server_oauth_discovery", False):
+        case bool() as enabled:
+            pass
+        case other:
+            raise ValueError(
+                f"Invalid config for MCP server '{server_ref}': per_server_oauth_discovery must be a boolean "
+                f"(got {other!r})."
+            )
+    relay_eligible: Final = is_per_server_oauth_discovery_eligible(
+        auth_type, oauth2_flow, server_config.get("delegate_auth_to_upstream", False)
+    )
+    if enabled and not relay_eligible:
+        raise ValueError(
+            f"Invalid config for MCP server '{server_ref}': per_server_oauth_discovery is only supported for "
+            "auth_type oauth2 with oauth2_flow authorization_code and without delegate_auth_to_upstream."
+        )
+    return enabled
+
+
+def _pinned_config_server_id(raw_server_id: object, server_name: str) -> str | None:
+    """Return the ``server_id`` an admin pinned for this config.yaml server, or ``None`` when absent.
+
+    Without a pin the id is derived by hashing ``server_name|url|transport|auth_type|alias``, so
+    editing any of those fields mints a new id and every ``object_permission.mcp_servers`` grant
+    holding the old one silently stops matching. A pinned id is used verbatim and survives those
+    edits. Blank and non-string values are rejected rather than silently falling back to the hash,
+    because a config that pins an id and still churns is the failure this field exists to prevent.
+
+    Under ``LITELLM_USE_SHORT_MCP_TOOL_PREFIX`` the tool prefix is derived from the server_id, so
+    pinning an id other than the one already in use renames every tool that server exposes.
+    """
+    if raw_server_id is None:
+        return None
+    if not isinstance(raw_server_id, str) or not raw_server_id.strip():
+        raise ValueError(
+            f"Invalid config for MCP server '{server_name}': server_id must be a non-empty string "
+            f"(got {raw_server_id!r})."
+        )
+    return raw_server_id.strip()
+
+
+def _first_mapped_alias(server_name: str, mcp_aliases: Mapping[str, str] | None) -> str | None:
+    """The ``mcp_aliases`` name ``load_servers_from_config`` will assign to this server, if any.
+
+    Mirrors that loop, which takes the first mapping pointing at the server and stops. A later
+    mapping for the same server is never applied, so it stays free for another entry to pin.
+    """
+    if mcp_aliases is None:
+        return None
+    return next(
+        (alias_name for alias_name, target_server_name in mcp_aliases.items() if target_server_name == server_name),
+        None,
+    )
+
+
+def _assigned_alias(
+    server_name: str, server_config: MCPServerConfig, mcp_aliases: Mapping[str, str] | None
+) -> str | None:
+    """The alias ``load_servers_from_config`` will give this entry: its own, else the first mapping.
+
+    ``is None``, not falsiness: the loader only consults the mapping when the key is absent, so an
+    entry that sets ``alias: ""`` gets no mapped alias and reserves nothing.
+    """
+    alias: Final = server_config.get("alias")
+    return _first_mapped_alias(server_name, mcp_aliases) if alias is None else alias
+
+
+def _validate_config_server_names(mcp_servers_config: Mapping[str, MCPServerConfig]) -> None:
+    """Reject bad server names before ``_config_identifier_owners`` reads any entry's body.
+
+    The identifier index walks every entry up front, so without this pass a malformed entry under
+    a bad name would surface as an ``AttributeError`` from the index instead of the name error.
+    """
+    for server_name in mcp_servers_config:
+        validate_mcp_server_name(server_name)
+
+
+def _config_identifier_owners(
+    mcp_servers_config: Mapping[str, MCPServerConfig],
+    mcp_aliases: Mapping[str, str] | None,
+) -> Mapping[str, frozenset[str]]:
+    """Map every server_name and alias in the config to the entries that own it.
+
+    ``expand_permission_list`` resolves a grant against the registry keys before it falls back to
+    matching alias and server_name, so an id equal to another entry's name or alias captures that
+    entry's grants. Derived ids are hashes and never collide with a name, so this only matters once
+    an id is pinned.
+
+    An alias is either set on the entry or mapped to it from ``litellm_settings.mcp_aliases``. Only
+    a name the loader below will really assign is reserved: the mapping is ignored for an entry that
+    sets its own ``alias``, and only the first mapping wins for one that does not, so reserving every
+    mapping would fail startup on a pin that was never going to collide.
+
+    One identifier can have several owners when an entry's alias equals another entry's name. All of
+    them are kept: a grant naming that identifier resolves to every match while no id is pinned, and
+    a pin equal to it would narrow the grant to the pinning entry alone, even when that entry is one
+    of the owners.
+    """
+    claims: Final = tuple(
+        (identifier, server_name)
+        for server_name, server_config in mcp_servers_config.items()
+        for identifier in (server_name, _assigned_alias(server_name, server_config, mcp_aliases))
+        if identifier
+    )
+    return MappingProxyType(
+        {identifier: frozenset(owner for claimed, owner in claims if claimed == identifier) for identifier, _ in claims}
+    )
+
+
+def _config_ids_capturing_db_identifiers(
+    config_server_ids: Container[str],
+    db_servers: Iterable[MCPServer],
+) -> frozenset[str]:
+    """Config server ids that are a database-backed server's name, server_name or alias.
+
+    ``expand_permission_list`` matches a grant against the registry keys before it matches names, so
+    such an id answers every grant written for the database server, and the database server itself
+    stops being reachable by name. The config load cannot catch this because the database registry
+    is not loaded yet, so it is reported from the reload that does have both halves.
+
+    An identifier equal to the database server's own id is skipped: ``get_registry`` is
+    ``config_mcp_servers | registry``, so there the database server wins the id outright and the
+    shadow warning above is the accurate one. Reporting both would contradict. The skip is per
+    identifier rather than per server, so a row that shadows one config id and captures another
+    still reports the capture.
+    """
+    return frozenset(
+        identifier
+        for server in db_servers
+        for identifier in (server.name, server.server_name, server.alias)
+        if identifier and identifier != server.server_id and identifier in config_server_ids
+    )
+
+
+def _reject_config_server_id_collision(
+    assigned_server_ids: Mapping[str, str],
+    server_id: str,
+    server_name: str,
+    pinned: bool,
+    db_backed_server_ids: Mapping[str, object],
+    identifier_owners: Mapping[str, frozenset[str]],
+) -> None:
+    """Raise when ``server_id`` is already taken, either by an earlier config entry or by the database.
+
+    Two config entries sharing an id would silently overwrite each other in ``config_mcp_servers``,
+    and an id already held by a database-backed server is hidden by it, because ``get_registry`` is
+    ``config_mcp_servers | registry`` and the right operand wins. A pinned id that is another
+    entry's server_name or alias captures that entry's permission grants the same way. Derived ids
+    cannot collide (the unique config key is part of the hash input), so all three only happen once
+    an id is pinned.
+
+    Pinning an identifier this entry itself owns is allowed, because a grant naming it already
+    resolved here, but only when no other entry owns it too. An entry whose alias is this entry's
+    server_name shares the identifier, and pinning it would take that entry's grants.
+    """
+    claimed_by = assigned_server_ids.get(server_id)
+    if claimed_by is not None:
+        raise ValueError(
+            f"Invalid config for MCP server '{server_name}': server_id '{server_id}' is already "
+            f"used by MCP server '{claimed_by}'. Each mcp_servers entry needs its own id."
+        )
+    if pinned and server_id in db_backed_server_ids:
+        raise ValueError(
+            f"Invalid config for MCP server '{server_name}': server_id '{server_id}' belongs to a "
+            "database-backed MCP server. The database entry takes precedence over config.yaml, so "
+            "this server would never be reachable."
+        )
+    other_owners: Final = identifier_owners.get(server_id, frozenset()) - frozenset((server_name,))
+    if pinned and other_owners:
+        owner_names: Final = "', '".join(sorted(other_owners))
+        raise ValueError(
+            f"Invalid config for MCP server '{server_name}': server_id '{server_id}' is the "
+            f"server_name or alias of MCP server '{owner_names}'. Permission entries naming "
+            f"'{server_id}' would resolve to '{server_name}' alone and no longer reach '{owner_names}'."
+        )
 
 
 def _uses_issuer_anchor(manual_issuer: str | None, is_discovery_auth_type: bool) -> bool:
@@ -1213,6 +1415,20 @@ def _warn_internal_delegate_pkce_if_applicable(server: MCPServer, *, source: str
     )
 
 
+def _warn_config_id_jag_server_outruns_sso(server: MCPServer) -> None:
+    if server.auth_type != MCPAuth.oauth2_id_jag:
+        return
+    gap: Final = id_jag_assertion_capture_gap_at_startup()
+    if gap is None:
+        return
+    verbose_logger.warning(
+        "MCP server %r (id=%s, source=config) is declared with auth_type=oauth2_id_jag, but %s.",
+        get_server_prefix(server),
+        server.server_id,
+        gap,
+    )
+
+
 def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | None:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -1565,6 +1781,11 @@ class MCPServerManager:
         # empty result, or failure). Used to throttle re-probes for servers that do
         # not return instructions, and to apply a short cooldown after failures.
         self._upstream_initialize_instructions_probed_at: dict[str, float] = {}
+        # Last set of config server ids found shadowed by database rows. reload_servers_from_database
+        # runs on the config-reload timer, so this keeps a standing misconfiguration from re-logging
+        # the same warning every interval; a change in the set logs again.
+        self._warned_shadowed_config_server_ids: frozenset[str] = frozenset()
+        self._warned_capturing_config_server_ids: frozenset[str] = frozenset()
         self._oauth_discovery_on_startup = _mcp_oauth_discovery_on_startup_enabled()
         self._oauth_discovery_generation_counter = 0
         self._oauth_discovery_slots: tuple[_OAuthDiscoverySlot, ...] = ()
@@ -1958,10 +2179,14 @@ class MCPServerManager:
 
         # Track which aliases have been used to ensure only first occurrence is used
         used_aliases: Final = set()
+        # server_id -> the config server_name that claimed it, so a pinned id cannot silently
+        # overwrite another server's entry in self.config_mcp_servers.
+        assigned_server_ids: MutableMapping[str, str] = {}  # mutable-ok: per-load collision index
+        _validate_config_server_names(mcp_servers_config)
+        identifier_owners: Final = _config_identifier_owners(mcp_servers_config, mcp_aliases)
 
         for server_name, raw_server_config in mcp_servers_config.items():
             server_config: MCPServerConfig = raw_server_config
-            validate_mcp_server_name(server_name)
             _mcp_info: MCPInfo = server_config.get("mcp_info", None) or {}
             # Preserve all custom fields from config while setting defaults for core fields
             mcp_info: MCPInfo = _mcp_info.copy()
@@ -1994,14 +2219,24 @@ class MCPServerManager:
             name_for_prefix = get_server_prefix(temp_server)
 
             server_url = server_config.get("url", None) or ""
-            # Generate stable server ID based on parameters
-            server_id = self._generate_stable_server_id(
+            # An explicitly pinned server_id wins; otherwise derive one from the parameters.
+            pinned_server_id = _pinned_config_server_id(server_config.get("server_id"), server_name)
+            server_id = pinned_server_id or self._generate_stable_server_id(
                 server_name=server_name,
                 url=server_url,
                 transport=server_config.get("transport", MCPTransport.http),
                 auth_type=server_config.get("auth_type", None),
                 alias=alias,
             )
+            _reject_config_server_id_collision(
+                assigned_server_ids,
+                server_id,
+                server_name,
+                pinned=pinned_server_id is not None,
+                db_backed_server_ids=self.registry,
+                identifier_owners=identifier_owners,
+            )
+            assigned_server_ids[server_id] = server_name
 
             _warn_on_server_name_fields(
                 server_id=server_id,
@@ -2102,6 +2337,9 @@ class MCPServerManager:
                 )
 
             config_dcr_bridge = server_config.get("dcr_bridge", None)
+            config_per_server_oauth_discovery = _config_per_server_oauth_discovery(
+                server_config, server_name or server_id, auth_type, config_oauth2_flow
+            )
             if config_dcr_bridge is not None and not isinstance(config_dcr_bridge, bool):
                 raise ValueError(
                     f"Invalid config for MCP server '{server_name or server_id}': dcr_bridge "
@@ -2173,6 +2411,7 @@ class MCPServerManager:
                 delegate_auth_to_upstream=bool(server_config.get("delegate_auth_to_upstream", False)),
                 oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
                 dcr_bridge=config_dcr_bridge,
+                per_server_oauth_discovery=config_per_server_oauth_discovery,
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -2205,6 +2444,7 @@ class MCPServerManager:
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
+            _warn_config_id_jag_server_outruns_sso(new_server)
             self.config_mcp_servers[server_id] = new_server
             self._set_oauth_discovery_deferred(
                 server_id,
@@ -2697,6 +2937,7 @@ class MCPServerManager:
             delegate_auth_to_upstream=bool(getattr(mcp_server, "delegate_auth_to_upstream", False)),
             oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
             dcr_bridge=getattr(mcp_server, "dcr_bridge", None),
+            per_server_oauth_discovery=bool(getattr(mcp_server, "per_server_oauth_discovery", False)),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
@@ -3620,7 +3861,7 @@ class MCPServerManager:
                 if err.tag == "unauthorized" and isinstance(spec.config, AuthorizationCodeConfig):
                     # authorization_code's missing per-user token -> the per-server browser-OAuth
                     # challenge, built here where the full MCPServer is in hand.
-                    raise_user_oauth_challenge(server, root_path=get_server_root_path())
+                    raise_user_oauth_challenge(server, root_path=get_request_root_path())
                 if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     # token_exchange (OBO): a missing/rejected subject token -> the RFC 9728 challenge
                     # pointing at the IdP the client must SSO with to obtain one, rather than an opaque
@@ -3628,7 +3869,7 @@ class MCPServerManager:
                     # Access) threads its claims blob into the challenge for the client to satisfy.
                     raise_token_exchange_challenge(
                         server,
-                        root_path=get_server_root_path(),
+                        root_path=get_request_root_path(),
                         claims=err.unauthorized.claims,
                     )
                 raise_public(err)
@@ -3676,7 +3917,7 @@ class MCPServerManager:
         if spec is None or not isinstance(spec.config, (TokenExchangeConfig, IdJagConfig)):
             return
         if subject_token is None and isinstance(spec.config, TokenExchangeConfig):
-            raise_token_exchange_challenge(resolved_server, root_path=get_server_root_path())
+            raise_token_exchange_challenge(resolved_server, root_path=get_request_root_path())
         match await self._cred_provider.resolve_credentials(to_subject(user_api_key_auth, subject_token), spec):
             case Ok(_):
                 return
@@ -3684,7 +3925,7 @@ class MCPServerManager:
                 if err.tag == "unauthorized" and isinstance(spec.config, TokenExchangeConfig):
                     raise_token_exchange_challenge(
                         resolved_server,
-                        root_path=get_server_root_path(),
+                        root_path=get_request_root_path(),
                         claims=err.unauthorized.claims,
                     )
                 raise_public(err)
@@ -6123,6 +6364,33 @@ class MCPServerManager:
 
         verbose_logger.debug("MCP registry refreshed (%s servers in registry)", len(registered_registry))
 
+        # get_registry() is ``config_mcp_servers | registry``, so a database row sharing an id with a
+        # config.yaml server hides that server everywhere. Only reachable once an operator pins
+        # ``server_id`` in config.yaml; say so rather than letting the server disappear silently.
+        shadowed_config_server_ids: Final = frozenset(self.config_mcp_servers.keys() & registered_registry.keys())
+        if shadowed_config_server_ids and shadowed_config_server_ids != self._warned_shadowed_config_server_ids:
+            verbose_logger.warning(
+                "config.yaml MCP server_id(s) %s are also database-backed MCP servers. The database "
+                "entry takes precedence, so the config.yaml server is unreachable. Give the config "
+                "entry a different server_id.",
+                ", ".join(sorted(shadowed_config_server_ids)),
+            )
+        self._warned_shadowed_config_server_ids = shadowed_config_server_ids
+
+        # The mirror image of the block above: a config server_id that is a database server's name
+        # answers that server's grants instead, because ids are matched before names.
+        capturing_config_server_ids: Final = _config_ids_capturing_db_identifiers(
+            self.config_mcp_servers.keys(), registered_registry.values()
+        )
+        if capturing_config_server_ids and capturing_config_server_ids != self._warned_capturing_config_server_ids:
+            verbose_logger.warning(
+                "config.yaml MCP server_id(s) %s are the name or alias of a database-backed MCP "
+                "server. Permission entries naming them resolve to the config.yaml server, not the "
+                "database one. Give the config entry a different server_id.",
+                ", ".join(sorted(capturing_config_server_ids)),
+            )
+        self._warned_capturing_config_server_ids = capturing_config_server_ids
+
         await self._hydrate_config_servers_dcr_clients()
 
     def get_mcp_servers_from_ids(self, server_ids: list[str]) -> list[MCPServer]:
@@ -6459,6 +6727,7 @@ class MCPServerManager:
             registration_url=server.configured_registration_url or server.registration_url,
             oauth2_flow=server.oauth2_flow,
             dcr_bridge=server.dcr_bridge,
+            per_server_oauth_discovery=server.per_server_oauth_discovery,
             token_exchange_endpoint=server.token_exchange_endpoint,
             audience=server.audience,
             subject_token_type=server.subject_token_type,
@@ -6577,6 +6846,7 @@ class MCPServerManager:
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
             oauth_passthrough=getattr(server, "oauth_passthrough", False),
             dcr_bridge=server.dcr_bridge,
+            per_server_oauth_discovery=server.per_server_oauth_discovery,
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

@@ -22,12 +22,19 @@ const makeDeletedTeam = (overrides: Partial<DeletedTeam> = {}): DeletedTeam => (
   ...overrides,
 });
 
+const paginationProps = {
+  pagination: { pageIndex: 0, pageSize: 25 },
+  onPaginationChange: vi.fn(),
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 it("should display team information", () => {
-  renderWithProviders(<DeletedTeamsTable teams={[makeDeletedTeam()]} isLoading={false} />);
+  renderWithProviders(
+    <DeletedTeamsTable teams={[makeDeletedTeam()]} isLoading={false} rowCount={1} {...paginationProps} />,
+  );
 
   expect(screen.getByText("Test Team")).toBeInTheDocument();
   expect(screen.getByText("team-1")).toBeInTheDocument();
@@ -39,7 +46,7 @@ it("should sort teams by deleted_at descending by default", () => {
     makeDeletedTeam({ team_id: "team-old", team_alias: "older-team", deleted_at: "2024-01-01T10:00:00Z" }),
     makeDeletedTeam({ team_id: "team-new", team_alias: "newer-team", deleted_at: "2024-06-01T10:00:00Z" }),
   ];
-  renderWithProviders(<DeletedTeamsTable teams={teams} isLoading={false} />);
+  renderWithProviders(<DeletedTeamsTable teams={teams} isLoading={false} rowCount={2} {...paginationProps} />);
 
   const rows = screen.getAllByRole("row").slice(1);
   expect(within(rows[0]).getByText("newer-team")).toBeInTheDocument();
@@ -47,13 +54,30 @@ it("should sort teams by deleted_at descending by default", () => {
 });
 
 it("should show skeleton rows when loading", () => {
-  renderWithProviders(<DeletedTeamsTable teams={[]} isLoading />);
+  renderWithProviders(<DeletedTeamsTable teams={[]} isLoading rowCount={0} {...paginationProps} />);
 
   expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
 });
 
 it("should show the empty state when there are no deleted teams", () => {
-  renderWithProviders(<DeletedTeamsTable teams={[]} isLoading={false} />);
+  renderWithProviders(<DeletedTeamsTable teams={[]} isLoading={false} rowCount={0} {...paginationProps} />);
 
   expect(screen.getByText("No deleted teams found")).toBeInTheDocument();
+});
+
+it("renders the shared pagination footer with the server row count", () => {
+  renderWithProviders(
+    <DeletedTeamsTable
+      teams={[makeDeletedTeam()]}
+      isLoading={false}
+      rowCount={137}
+      pagination={{ pageIndex: 2, pageSize: 50 }}
+      onPaginationChange={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 101-137 of 137");
+  expect(screen.getByTestId("pagination-page-size")).toHaveTextContent("50");
+  expect(screen.getByTestId("pagination-prev")).toBeEnabled();
+  expect(screen.getByTestId("pagination-next")).toBeDisabled();
 });
