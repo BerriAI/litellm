@@ -4418,12 +4418,16 @@ def get_optional_params(
         bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
         bedrock_base_model: Final = BedrockModelInfo.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
-            optional_params = litellm.AmazonConverseConfig().map_openai_params(
+            _converse_config: Final = litellm.AmazonConverseConfig()
+            # Set before the call, read via getattr inside map_openai_params —
+            # keeps the override signature-compatible with BaseConfig. See the
+            # comment on that method for why.
+            _converse_config.configured_base_model = base_model
+            optional_params = _converse_config.map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
-                base_model=base_model,
             )
         elif bedrock_route == "openai":
             optional_params = litellm.AmazonBedrockOpenAIConfig().map_openai_params(

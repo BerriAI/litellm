@@ -126,6 +126,12 @@ class AmazonConverseConfig(BaseConfig):
     temperature: int | None
     topP: int | None
     topK: int | None
+    # Opaque-id fallback for adaptive-thinking capability resolution (an
+    # application inference profile ARN in `model` carries no version
+    # substring). Set by the caller (get_optional_params) before
+    # map_openai_params runs; not a constructor param, so map_openai_params's
+    # override stays signature-compatible with BaseConfig.
+    configured_base_model: str | None = None
 
     def __init__(
         self,
@@ -878,8 +884,15 @@ class AmazonConverseConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-        base_model: str | None = None,
     ) -> dict:
+        # Application inference profile ARNs carry no version substring, so the
+        # adaptive-thinking capability lookup below resolves nothing for them.
+        # `configured_base_model` is the opaque-id fallback set by the caller
+        # (get_optional_params, from litellm_params.base_model) — same role as
+        # Azure's base_model, threaded via an instance attribute rather than a
+        # map_openai_params parameter so the override stays compatible with
+        # BaseConfig's shared signature.
+        base_model: Final = self.configured_base_model
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
 
         for param, value in non_default_params.items():
