@@ -363,22 +363,46 @@ class TestVertexAILivePassthroughLoggingHandler:
         cost = self._session_cost(handler, mock_logging_obj, self._live_messages(turns), self.NATIVE_AUDIO_MODEL)
         assert cost == pytest.approx(self._expected_session_cost(turns), rel=1e-9)
 
-    def test_server_side_tool_use_prompt_tokens_are_reported(self, handler, mock_logging_obj):
-        """toolUsePromptTokenCount was dropped, so a grounded session logged fewer tokens than it used.
+    TOOL_USE_PER_TURN = (100, 250, 400)
 
-        It is reported, not billed. Nothing in the shared Gemini input-cost path prices
-        tool-use tokens, and folding them into prompt_tokens here would suppress that
-        path's cache-overlap correction and raise the bill instead.
+    def _grounded_messages(self):
+        """The three-turn session again, with each turn's own toolUsePromptTokenCount attached."""
+        messages = self._live_messages(self.AUDIO_SESSION[:3])
+        head, turns = messages[0], messages[1:]
+        return [head] + [
+            {**message, "usageMetadata": {**message["usageMetadata"], "toolUsePromptTokenCount": tool_use}}
+            for message, tool_use in zip(turns, self.TOOL_USE_PER_TURN)
+        ]
+
+    def test_server_side_tool_use_prompt_tokens_are_summed_over_the_session(self, handler, mock_logging_obj):
+        """toolUsePromptTokenCount rode the unknown-key pass-through, so it took the first turn only.
+
+        Every other total beside it is summed across the session, and the first turn is the
+        smallest number in the series, so a grounded session logged far fewer tool-use tokens
+        than it used. This session's turns are deliberately distinct, so 750 can only come from
+        summing: first-turn selection gives 100, last-turn or max gives 400.
         """
-        messages = self._live_messages(self.AUDIO_SESSION[:1])
-        grounded = [dict(message) for message in messages]
-        grounded[-1]["usageMetadata"] = {**grounded[-1]["usageMetadata"], "toolUsePromptTokenCount": 500}
+        grounded = self._grounded_messages()
 
         usage = self._session_usage(handler, mock_logging_obj, grounded, self.NATIVE_AUDIO_MODEL)
-        assert usage.prompt_tokens_details.tool_use_tokens == 500
+        assert usage.prompt_tokens_details.tool_use_tokens == sum(self.TOOL_USE_PER_TURN)
 
-        plain_cost = self._session_cost(handler, mock_logging_obj, messages, self.NATIVE_AUDIO_MODEL)
-        grounded_cost = self._session_cost(handler, mock_logging_obj, grounded, self.NATIVE_AUDIO_MODEL)
+    def test_reporting_tool_use_tokens_does_not_move_the_bill(self, handler, mock_logging_obj):
+        """Deliberate boundary: these tokens are reported here, and priced nowhere.
+
+        generic_cost_per_token reads the input bill out of prompt_tokens_details, and falls
+        back to prompt_tokens only when the details carry no text or a cache hit overlaps them,
+        so adding tool-use tokens to prompt_tokens is worth nothing on an ordinary Live turn and
+        over-charges against the cache-overlap correction when it is not. Pricing them belongs
+        in the shared input-cost path, beside the modality terms that already read the details.
+        """
+        turns = self.AUDIO_SESSION[:3]
+        plain_cost = self._session_cost(handler, mock_logging_obj, self._live_messages(turns), self.NATIVE_AUDIO_MODEL)
+        grounded_cost = self._session_cost(
+            handler, mock_logging_obj, self._grounded_messages(), self.NATIVE_AUDIO_MODEL
+        )
+
+        assert plain_cost == pytest.approx(self._expected_session_cost(turns), rel=1e-9)
         assert grounded_cost == pytest.approx(plain_cost, rel=1e-9), "reporting tool use must not move the bill"
 
     def test_a_malformed_details_entry_does_not_cost_the_whole_session(self, handler, mock_logging_obj):
