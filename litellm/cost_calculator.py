@@ -2597,25 +2597,37 @@ def _get_model_info_or_none(model: str, custom_llm_provider: str) -> ModelInfo |
         return None
 
 
+def _declared_transcription_rate(info: ModelInfo | None, keys: tuple[str, ...]) -> float | None:
+    """First of ``keys`` this entry actually prices, or ``None`` if it prices none of them.
+
+    Whether a rate was set is read off the raw ``litellm.model_cost`` entry rather than off
+    ``info``, because ``get_model_info`` defaults ``input_cost_per_token`` and
+    ``output_cost_per_token`` to 0 for entries that omit them. Those synthesized zeros are
+    indistinguishable from a deliberate zero, so reading presence off ``info`` bills an override
+    that prices only seconds at nothing instead of falling through to the public token rates.
+    """
+    if info is None:
+        return None
+    declared: Final = litellm.model_cost.get(info.get("key"))
+    if declared is None:
+        return None
+    return next(
+        (float(value) for key in keys if declared.get(key) is not None and (value := info.get(key)) is not None),
+        None,
+    )
+
+
 def _transcription_rate(keys: tuple[str, ...], override: ModelInfo | None, base: ModelInfo | None) -> float:
     """First rate set for any of ``keys``, resolving within one entry before the next.
 
     The deployment override is consulted as a whole entry first, so an override that
     prices only tokens applies its token rate to audio rather than reaching past itself
-    for the public audio rate. Rates the override leaves unset fall through to ``base``,
-    because replacing it outright would bill those at nothing.
-
-    Presence is tested with ``is not None`` rather than truthiness, so a deliberate zero
-    wins instead of falling through to a public rate.
+    for the public audio rate, and a rate it deliberately sets to zero wins. Rates the
+    override leaves unset fall through to ``base``, because replacing it outright would
+    bill those at nothing.
     """
-    for info in (override, base):
-        if info is None:
-            continue
-        for key in keys:
-            value = info.get(key)
-            if value is not None:
-                return float(value)
-    return 0.0
+    rates: Final = (_declared_transcription_rate(info, keys) for info in (override, base))
+    return next((rate for rate in rates if rate is not None), 0.0)
 
 
 def _transcription_usage_cost(

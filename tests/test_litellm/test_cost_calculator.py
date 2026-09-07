@@ -955,35 +955,119 @@ def test_realtime_transcription_partial_override_keeps_unset_rates(monkeypatch):
 @pytest.mark.parametrize(
     "label,override,expected_audio_rate,expected_per_second",
     [
-        # base is the public ASR entry: audio 6e-06, token 2.5e-06, per-second 0.017/60
         ("tokens only", {"input_cost_per_token": 0.0}, 0.0, 0.017 / 60),
         ("audio zeroed", {"input_cost_per_audio_token": 0.0}, 0.0, 0.017 / 60),
+        ("per second only", {"input_cost_per_second": 0.001}, 6e-06, 0.001),
         ("empty override", {}, 6e-06, 0.017 / 60),
         ("no override", None, 6e-06, 0.017 / 60),
     ],
 )
-def test_transcription_rate_precedence(label, override, expected_audio_rate, expected_per_second):
+def test_transcription_rate_precedence(monkeypatch, label, override, expected_audio_rate, expected_per_second):
     """Rates resolve within one entry before moving to the next, and zero is a real value.
 
     An override that prices only tokens must apply its own token rate to audio rather
-    than reaching past itself for the public audio rate, and a deliberate zero must win
-    instead of being treated as unset.
+    than reaching past itself for the public audio rate, a deliberate zero must win
+    instead of being treated as unset, and a rate the override never mentions must keep
+    the base entry's value.
     """
-    from litellm.cost_calculator import _transcription_rate
+    from litellm.cost_calculator import handle_realtime_transcription_cost_calculation
 
-    base = {
-        "input_cost_per_audio_token": 6e-06,
-        "input_cost_per_token": 2.5e-06,
-        "input_cost_per_second": 0.017 / 60,
-    }
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-    audio_rate = _transcription_rate(("input_cost_per_audio_token", "input_cost_per_token"), override, base)
-    assert audio_rate == pytest.approx(expected_audio_rate, rel=1e-9), f"{label}: audio rate"
+    base_model = "asr-precedence-base"
+    deployment_id = "asr-precedence-deployment"
+    litellm.register_model(
+        model_cost={
+            base_model: {
+                "litellm_provider": "openai",
+                "mode": "audio_transcription",
+                "input_cost_per_audio_token": 6e-06,
+                "input_cost_per_token": 2.5e-06,
+                "input_cost_per_second": 0.017 / 60,
+            }
+        }
+    )
+    if override is not None:
+        litellm.register_model(
+            model_cost={deployment_id: {"litellm_provider": "openai", "mode": "audio_transcription", **override}}
+        )
 
-    per_second = _transcription_rate(("input_cost_per_second",), override, base)
-    assert per_second == pytest.approx(expected_per_second, rel=1e-9), (
+    def cost_for(usage: dict) -> float:
+        return handle_realtime_transcription_cost_calculation(
+            results=[
+                {"type": "transcription_session.created", "session": {"model": base_model}},
+                {"type": "conversation.item.input_audio_transcription.completed", "usage": usage},
+            ],
+            custom_llm_provider="openai",
+            litellm_model_name=base_model,
+            custom_pricing_model=deployment_id if override is not None else None,
+        )
+
+    audio_cost = cost_for({"type": "tokens", "input_token_details": {"audio_tokens": 100}})
+    assert audio_cost == pytest.approx(100 * expected_audio_rate, rel=1e-9), f"{label}: audio rate"
+
+    per_second_cost = cost_for({"type": "duration", "seconds": 120.0})
+    assert per_second_cost == pytest.approx(120.0 * expected_per_second, rel=1e-9), (
         f"{label}: an override must never blank a rate it does not set"
     )
+
+
+def test_realtime_transcription_per_second_override_keeps_public_token_rates(monkeypatch):
+    """A per-second override must not zero the token rates ``get_model_info`` synthesizes.
+
+    ``get_model_info`` defaults input_cost_per_token and output_cost_per_token to 0 for entries
+    that omit them, so a deployment priced only per second looked like it had declared token
+    rates of 0. Token-shaped transcription then billed nothing instead of falling through to the
+    public ASR rates, while the per-second rate the operator did set stayed in force.
+    """
+    from litellm.cost_calculator import handle_realtime_transcription_cost_calculation
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    asr_model = "gpt-4o-transcribe"
+    per_second_rate = 0.001
+    deployment_id = "deployment-hash-per-second-only"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "audio_transcription",
+                "input_cost_per_second": per_second_rate,
+            }
+        }
+    )
+
+    public = litellm.model_cost[asr_model]
+    session_event = {"type": "transcription_session.created", "session": {"model": asr_model}}
+
+    def cost_for(usage: dict) -> float:
+        return handle_realtime_transcription_cost_calculation(
+            results=[session_event, {"type": "conversation.item.input_audio_transcription.completed", "usage": usage}],
+            custom_llm_provider="openai",
+            litellm_model_name=asr_model,
+            custom_pricing_model=deployment_id,
+        )
+
+    token_cost = cost_for(
+        {
+            "type": "tokens",
+            "input_token_details": {"audio_tokens": 400, "text_tokens": 12},
+            "output_tokens": 30,
+        }
+    )
+    expected_token_cost = (
+        400 * public["input_cost_per_audio_token"]
+        + 12 * public["input_cost_per_token"]
+        + 30 * public["output_cost_per_token"]
+    )
+    assert expected_token_cost > 0, "the public ASR token rates must be non-zero for this test to mean anything"
+    assert token_cost == pytest.approx(expected_token_cost, rel=1e-9), (
+        "an override that prices only seconds must leave the public token rates in place"
+    )
+
+    assert cost_for({"type": "duration", "seconds": 120.0}) == pytest.approx(120.0 * per_second_rate, rel=1e-9)
 
 
 def test_realtime_transcription_no_completed_events_is_zero(monkeypatch):
