@@ -1225,6 +1225,7 @@ _LIVE_CALL_HOST_SUFFIXES = (
     ".azure.com",
     ".tavily.com",
     ".serper.dev",
+    ".serpapi.com",
     ".searchapi.io",
     ".firecrawl.dev",
     ".exa.ai",
