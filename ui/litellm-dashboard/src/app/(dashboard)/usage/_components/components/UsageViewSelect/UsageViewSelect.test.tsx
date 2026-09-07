@@ -1,86 +1,17 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { chooseSelectOption } from "@/../tests/test-utils";
 import { UsageViewSelect } from "./UsageViewSelect";
 
-vi.mock("antd", async () => {
-  const React = await import("react");
+const openMenu = async (user: ReturnType<typeof userEvent.setup>) => {
+  await user.click(screen.getByRole("combobox"));
+};
 
-  function Select(props: any) {
-    const { value, onChange, options, optionRender, labelRender, ...rest } = props;
-
-    const optionElements = options?.map((opt: any) =>
-      React.createElement("option", { key: opt.value, value: opt.value }, opt.label),
-    );
-
-    const optionRenderOutputs = options
-      ?.map((opt: any) => {
-        if (optionRender) {
-          const rendered = optionRender({ value: opt.value, label: opt.label });
-          return React.createElement(
-            "div",
-            {
-              key: `option-render-${opt.value}`,
-              "data-testid": `option-render-${opt.value}`,
-              style: { display: "none" },
-            },
-            rendered,
-          );
-        }
-        return null;
-      })
-      .filter(Boolean);
-
-    return React.createElement(
-      React.Fragment,
-      null,
-      React.createElement(
-        "select",
-        {
-          ...rest,
-          value,
-          onChange: (e: any) => onChange?.(e.target.value),
-          role: "combobox",
-        },
-        optionElements,
-      ),
-      ...(optionRenderOutputs || []),
-    );
-  }
-  (Select as any).displayName = "AntdSelect";
-
-  function Badge(props: any) {
-    const { count, color, children, ...rest } = props;
-    return React.createElement(
-      "span",
-      { ...rest, "data-testid": "antd-badge", "data-color": color },
-      count && React.createElement("span", { "data-testid": "antd-badge-count" }, count),
-      children,
-    );
-  }
-  (Badge as any).displayName = "AntdBadge";
-
-  return { Select, Badge };
-});
-
-vi.mock("@ant-design/icons", async () => {
-  const React = await import("react");
-
-  function Icon(props: any) {
-    return React.createElement("span", { "data-testid": "antd-icon" });
-  }
-
-  return {
-    GlobalOutlined: Icon,
-    BankOutlined: Icon,
-    TeamOutlined: Icon,
-    ShoppingCartOutlined: Icon,
-    TagsOutlined: Icon,
-    RobotOutlined: Icon,
-    UserOutlined: Icon,
-    LineChartOutlined: Icon,
-    BarChartOutlined: Icon,
-  };
-});
+// The listbox is portalled outside the render container in both antd and Base UI, so an
+// option is "offered" when the label appears more times on the page than inside the trigger.
+const offers = (container: HTMLElement, label: string) =>
+  screen.queryAllByText(label).length > within(container).queryAllByText(label).length;
 
 describe("UsageViewSelect", () => {
   const mockOnChange = vi.fn();
@@ -89,53 +20,89 @@ describe("UsageViewSelect", () => {
     mockOnChange.mockClear();
   });
 
-  it("should render", () => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" />);
+  it("should render", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" />);
 
     expect(screen.getByText("Usage View")).toBeInTheDocument();
     expect(screen.getByText("Select the usage data you want to view")).toBeInTheDocument();
     expect(screen.getByRole("combobox")).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Your Usage" })).toBeInTheDocument();
+
+    await openMenu(user);
+    expect(offers(container, "Your Usage")).toBe(true);
   });
 
-  it("should call onChange when value changes", () => {
+  it("should call onChange when value changes", async () => {
+    const user = userEvent.setup();
     render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
 
-    const select = screen.getByRole("combobox");
-    act(() => {
-      fireEvent.change(select, { target: { value: "team" } });
-    });
+    await chooseSelectOption(user, screen.getByRole("combobox"), /^Team Usage/);
 
-    expect(mockOnChange).toHaveBeenCalledWith("team");
+    expect(mockOnChange).toHaveBeenCalled();
+    expect(mockOnChange.mock.calls[0][0]).toBe("team");
   });
 
-  it("should show Tag Usage for non-admin users with tag usage permission", () => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />);
+  it("should show Tag Usage for non-admin users with tag usage permission", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />,
+    );
 
-    expect(screen.getByRole("option", { name: "Tag Usage" })).toBeInTheDocument();
+    await openMenu(user);
+    expect(offers(container, "Tag Usage")).toBe(true);
   });
 
-  it("should hide Tag Usage for non-admin users without tag usage permission", () => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" />);
+  it("should hide Tag Usage for non-admin users without tag usage permission", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" />);
 
-    expect(screen.queryByRole("option", { name: "Tag Usage" })).not.toBeInTheDocument();
+    await openMenu(user);
+    expect(offers(container, "Tag Usage")).toBe(false);
   });
 
-  it.each(["Organization Usage", "Agent Usage (A2A)"])("should show %s to an admin", (optionName) => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
+  it.each(["Organization Usage", "Agent Usage (A2A)"])("should show %s to an admin", async (optionName) => {
+    const user = userEvent.setup();
+    const { container } = render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Admin" />);
 
-    expect(screen.getByRole("option", { name: optionName })).toBeInTheDocument();
+    await openMenu(user);
+    expect(offers(container, optionName)).toBe(true);
   });
 
-  it.each(["Organization Usage", "Agent Usage (A2A)"])("should hide %s from an internal user", (optionName) => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />);
+  it.each(["Organization Usage", "Agent Usage (A2A)"])("should hide %s from an internal user", async (optionName) => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />,
+    );
 
-    expect(screen.queryByRole("option", { name: optionName })).not.toBeInTheDocument();
+    await openMenu(user);
+    expect(offers(container, optionName)).toBe(false);
   });
 
-  it.each(["Team Usage", "Tag Usage"])("should keep %s available to an internal user", (optionName) => {
-    render(<UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />);
+  // An org admin's session role is "Internal User" — org-admin-ness lives in the
+  // membership table — so the two rows above cannot tell them apart from a plain
+  // internal user. Organization Usage must open for them, and only that option:
+  // the proxy serves them /organization/daily/activity scoped to the orgs they
+  // administer, but still refuses the agent usage route.
+  it.each([
+    ["Organization Usage", true],
+    ["Agent Usage (A2A)", false],
+  ] as const)("should offer %s to an org admin: %s", async (optionName, expected) => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" isOrgAdmin={true} />,
+    );
 
-    expect(screen.getByRole("option", { name: optionName })).toBeInTheDocument();
+    await openMenu(user);
+    expect(offers(container, optionName)).toBe(expected);
+  });
+
+  it.each(["Team Usage", "Tag Usage"])("should keep %s available to an internal user", async (optionName) => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />,
+    );
+
+    await openMenu(user);
+    expect(offers(container, optionName)).toBe(true);
   });
 });

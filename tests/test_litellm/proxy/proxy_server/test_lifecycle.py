@@ -61,6 +61,7 @@ def test_cleanup_router_config_variables_resets_globals(monkeypatch):
     monkeypatch.setattr(ps, "user_custom_auth", lambda x: x, raising=False)
     monkeypatch.setattr(ps, "health_check_interval", 42, raising=False)
     monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(ps, "heuristic_v1_tuning_baselines", {"router": "baseline"}, raising=False)
 
     cleanup_router_config_variables()
 
@@ -70,6 +71,7 @@ def test_cleanup_router_config_variables_resets_globals(monkeypatch):
         "user_custom_auth": ps.user_custom_auth,
         "health_check_interval": ps.health_check_interval,
         "prisma_client": ps.prisma_client,
+        "heuristic_v1_tuning_baselines": ps.heuristic_v1_tuning_baselines,
     }
     assert normalize(observed) == {
         "master_key": None,
@@ -77,6 +79,7 @@ def test_cleanup_router_config_variables_resets_globals(monkeypatch):
         "user_custom_auth": None,
         "health_check_interval": None,
         "prisma_client": None,
+        "heuristic_v1_tuning_baselines": None,
     }
 
 
@@ -524,8 +527,9 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
+def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(monkeypatch):
     import litellm
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
     fake_prisma = MagicMock()
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
@@ -536,15 +540,18 @@ def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
     before_async = len(litellm._async_success_callback)
 
     cost_tracking()
+    cost_tracking()
 
     observed = {
         "added_to_callbacks": len(litellm.callbacks) - before_callbacks,
         "added_to_async_success": len(litellm._async_success_callback) - before_async,
+        "shadow_eval_loggers": sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks),
         "prisma_was_set": True,
     }
     assert normalize(observed) == {
-        "added_to_callbacks": 1,
+        "added_to_callbacks": 2,
         "added_to_async_success": 1,
+        "shadow_eval_loggers": 1,
         "prisma_was_set": True,
     }
 
@@ -812,6 +819,21 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     assert budget_check_pos < warn_pos < next_startup_section_pos, (
         "DB-less budget warning must run after Prisma setup and the DB-backed budget block"
     )
+
+
+@pytest.mark.asyncio
+async def test_tuning_baseline_waits_for_a_complete_db_model_census(monkeypatch):
+    prisma_client = MagicMock()
+    monkeypatch.setattr(ps.proxy_config, "_get_models_from_db", AsyncMock(return_value=None))
+
+    result = await ProxyStartupEvent.enforce_heuristic_v1_tuning_baseline(
+        prisma_client=prisma_client,
+        llm_router=None,
+        limit=1,
+    )
+
+    assert result is None
+    prisma_client.db.litellm_config.find_unique.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

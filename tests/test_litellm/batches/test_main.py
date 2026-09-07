@@ -23,16 +23,14 @@ production. Provider env vars are not required: missing creds resolve to None an
 flow through harmlessly because the handler is mocked.
 """
 
-import os
-import sys
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict
+from types import MappingProxyType
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 import litellm.batches.main as bm
@@ -742,3 +740,33 @@ def test_resolve_timeout__httpx_timeout_returns_float_read():
     resolved = bm._resolve_timeout(_params(timeout=t), {}, "openai")
     assert isinstance(resolved, float)
     assert resolved == 99.0
+
+
+def test_retrieve__forwards_trusted_model_credentials_into_litellm_params(seams):
+    """The batch's cost is computed by reading its output file after the retrieve, and
+    Bedrock resolves that bucket only from this immutable snapshot. get_litellm_params has
+    a fixed signature that drops it, so without re-adding it here the snapshot never
+    reaches the logging object and cost accounting fails on a bucket that is configured."""
+    snapshot = MappingProxyType({"s3_bucket_name": "configured-bucket"})
+    logging_obj = MagicMock()
+
+    bm.retrieve_batch(
+        batch_id="batch-1",
+        custom_llm_provider="openai",
+        litellm_logging_obj=logging_obj,
+        _litellm_internal_model_credentials=snapshot,
+    )
+
+    litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
+    assert litellm_params["_litellm_internal_model_credentials"] is snapshot
+
+
+def test_retrieve__omits_trusted_model_credentials_when_not_supplied(seams):
+    """A retrieve with no snapshot must not invent an empty one, which would read as a
+    configured bucket of nothing."""
+    logging_obj = MagicMock()
+
+    bm.retrieve_batch(batch_id="batch-1", custom_llm_provider="openai", litellm_logging_obj=logging_obj)
+
+    litellm_params = logging_obj.update_from_kwargs.call_args.kwargs["litellm_params"]
+    assert "_litellm_internal_model_credentials" not in litellm_params

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Protocol
 
 from typing_extensions import (
     Required,
@@ -745,6 +745,17 @@ class VertexVideoGenerationResponse(TypedDict, total=False):
 
 
 VERTEX_CREDENTIALS_TYPES = str | dict[str, str]
+
+
+class VertexAccessTokenResolver(Protocol):
+    """Resolves a Google OAuth access token and the project id it belongs to."""
+
+    async def __call__(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    ) -> tuple[str, str]: ...
 
 
 class VertexPartnerProvider(str, Enum):

@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import re
 import sys
@@ -12,7 +13,13 @@ from pydantic import PositiveInt, TypeAdapter, ValidationError
 import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH, STANDARD_CUSTOMER_ID_HEADERS
+from litellm.constants import (
+    BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    EMPTY_MAPPING,
+    INVALID_VIRTUAL_KEY_ERROR_MARKER,
+    MINIMUM_CUSTOM_KEY_LENGTH,
+    STANDARD_CUSTOMER_ID_HEADERS,
+)
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import (
     SSRFError,
@@ -27,6 +34,43 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
+
+
+def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
+    """True when an authentication error rejects a malformed virtual key.
+
+    Classifies only by the marker stamped where that 401 is raised. Message
+    content is never inspected: other 401s interpolate caller-supplied values
+    (vector store ids, organization ids) into their messages, so a phrase
+    match would let a request body demote an authorization failure to the
+    quiet log path.
+    """
+    if not isinstance(exception, (HTTPException, ProxyException)):
+        return False
+
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    if str(status_code) != str(status.HTTP_401_UNAUTHORIZED):
+        return False
+
+    return getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
+
+
+def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual_key: bool) -> ProxyException:
+    """Return an independently marked malformed-key exception after callback transformations."""
+    if not is_invalid_virtual_key or str(exception.code) != str(status.HTTP_401_UNAUTHORIZED):
+        return exception
+    marked_exception: Final = ProxyException(
+        message=exception.message,
+        type=exception.type,
+        param=exception.param,
+        code=exception.code,
+        headers=exception.headers.copy(),
+        openai_code=None if exception.openai_code is None else str(exception.openai_code),
+        provider_specific_fields=exception.provider_specific_fields,
+    )
+    setattr(marked_exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+    return marked_exception
 
 
 def _get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
@@ -217,8 +261,10 @@ _SAFE_CLIENT_CALLBACK_PARAMS: Final[frozenset[str]] = frozenset(
 _EXTRA_BANNED_OBSERVABILITY_PARAMS: Final[frozenset[str]] = frozenset(
     {
         "posthog_api_url",
-        "phoenix_project_name",
-        "phoenix_project_name_override",
+        # ``phoenix_project_name`` / ``phoenix_project_name_override`` are NOT
+        # banned: on the proxy the Phoenix integrations only read them from
+        # ``user_api_key_auth_metadata`` (key/team config), so the bare request
+        # fields are inert and rejecting them just breaks SDK-style callers.
         # Server-reserved: written exclusively by add_user_api_key_auth_to_request_metadata
         # from the authenticated key's database record.  A caller-supplied value
         # would survive the server merge and let an authenticated user redirect
@@ -304,6 +350,12 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # the request away from the admin's pinned configuration.
     "nvcf_function_id",
     "use_ssl",
+    # Per-deployment opt-in that hands the whole call to the Rust core. It is a
+    # deployment decision, not a request one: the Rust path uses its own client
+    # rather than the one the deployment configured, and reports no post_call,
+    # so a caller-supplied value picks a transport and a callback surface the
+    # admin did not choose.
+    "rust",
     # SDK-only field; also rejected outright in is_request_body_safe.
     "model_list",
     "vertex_ai_credentials",
@@ -595,7 +647,7 @@ def route_in_additonal_public_routes(current_route: str):
 
         # Check wildcard patterns
         for route_pattern in routes_defined:
-            if RouteChecks._route_matches_wildcard_pattern(route=current_route, pattern=route_pattern):
+            if RouteChecks.route_matches_wildcard_pattern(route=current_route, pattern=route_pattern):
                 return True
 
         return False
@@ -943,7 +995,7 @@ def get_key_model_rpm_limit(
 
     # 2. Check model_max_budget
     if user_api_key_dict.model_max_budget:
-        model_rpm_limit: Final[dict[str, Any]] = {}
+        model_rpm_limit: Final[dict[str, int]] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
             if isinstance(budget, dict) and budget.get("rpm_limit") is not None:
                 model_rpm_limit[model] = budget["rpm_limit"]
@@ -986,7 +1038,7 @@ def get_key_model_tpm_limit(
 
     # 2. Check model_max_budget (iterate per-model like RPM does)
     if user_api_key_dict.model_max_budget:
-        model_tpm_limit: Final[dict[str, Any]] = {}
+        model_tpm_limit: Final[dict[str, int]] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
             if isinstance(budget, dict) and budget.get("tpm_limit") is not None:
                 model_tpm_limit[model] = budget["tpm_limit"]
@@ -1049,7 +1101,7 @@ def _validated_output_token_estimates_per_model(raw: object) -> Mapping[str, int
 
 
 def _estimated_output_tokens_from_metadata(
-    metadata: Mapping[str, Any] | None,
+    metadata: Mapping[str, object] | None,
     model_name: str | None,
 ) -> int | None:
     """Resolve the per-model, then global, estimate out of one metadata blob.
@@ -1169,10 +1221,50 @@ def enforce_output_token_estimates_are_admin_only(
     )
 
 
+class BatchEnqueuedTokenLimitRequest(Protocol):
+    """The shape of any management request that can carry a batch enqueued-token limit."""
+
+    @property
+    def metadata(self) -> Mapping[str, object] | None: ...
+
+    @property
+    def model_fields_set(self) -> Collection[str]: ...
+
+
+def enforce_batch_enqueued_token_limit_is_admin_only(
+    data: BatchEnqueuedTokenLimitRequest,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+    entity: Literal["key", "team"],
+) -> None:
+    """Only a proxy admin may change a key or team's batch enqueued-token limit.
+
+    When set, ``batch_enqueued_token_limit`` replaces the standard RPM/TPM checks
+    for batch submissions, so a holder-writable copy would let a caller lift their
+    own batch quota. Gated on the resulting value rather than on presence, so a
+    form resending the stored value stays a no-op.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
+        return
+    stored: Final[Mapping[str, object]] = existing_metadata or EMPTY_MAPPING
+    requested: Final[Mapping[str, object]] = (
+        (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
+    )
+    if requested.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY) == stored.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={  # mutable-ok: HTTPException.detail has no immutable form
+            "error": f"Only proxy admins can set {BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} on a {entity}. "
+            "It replaces the standard rate limit checks for batch submissions."
+        },
+    )
+
+
 def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
     metadata_accessor_key: Literal["team_metadata", "organization_metadata", "project_metadata"],
-    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
+    rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit", "model_itpm_limit", "model_otpm_limit"],
 ) -> dict[str, int] | None:
     if getattr(user_api_key_dict, metadata_accessor_key):
         return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
@@ -1311,7 +1403,7 @@ def is_pass_through_provider_route(route: str) -> bool:
     return False
 
 
-def _has_user_setup_sso() -> bool:
+def has_user_setup_sso() -> bool:
     """
     Check if the user has set up single sign-on (SSO).
 
@@ -1332,6 +1424,63 @@ def _has_user_setup_sso() -> bool:
         or bool(saml_idp_metadata_url)
         or bool(saml_idp_metadata_xml)
     )
+
+
+def _is_google_ready() -> bool:
+    return bool(os.getenv("GOOGLE_CLIENT_ID")) and bool(os.getenv("GOOGLE_CLIENT_SECRET"))
+
+
+def _is_microsoft_ready() -> bool:
+    return (
+        bool(os.getenv("MICROSOFT_CLIENT_ID"))
+        and bool(os.getenv("MICROSOFT_CLIENT_SECRET"))
+        and bool(os.getenv("MICROSOFT_TENANT"))
+    )
+
+
+def _is_generic_oauth_ready() -> bool:
+    return (
+        bool(os.getenv("GENERIC_CLIENT_ID"))
+        and bool(os.getenv("GENERIC_CLIENT_SECRET"))
+        and bool(os.getenv("GENERIC_AUTHORIZATION_ENDPOINT"))
+        and bool(os.getenv("GENERIC_TOKEN_ENDPOINT"))
+        and bool(os.getenv("GENERIC_USERINFO_ENDPOINT"))
+    )
+
+
+def _is_saml_ready() -> bool:
+    if not (os.getenv("SAML_IDP_METADATA_URL") or os.getenv("SAML_IDP_METADATA_XML")):
+        return False
+    # SAML's runtime (python3-saml) is an optional dependency; the SAML
+    # handler itself fails closed on every request when it is missing
+    # (SAMLAuthHandler raises before touching the IdP), so metadata alone
+    # is not "ready" either. find_spec raises ModuleNotFoundError (rather
+    # than returning None) when the top-level package is absent entirely,
+    # so this must not be a bare boolean expression or every password
+    # login would 500 on a deployment that configured SAML metadata
+    # without installing the optional extra.
+    try:
+        return importlib.util.find_spec("onelogin.saml2.auth") is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def is_sso_provider_fully_configured() -> bool:
+    """Whether ANY configured SSO provider has every companion setting it
+    needs to actually authenticate a user, not merely a client id.
+
+    A lone ``MICROSOFT_CLIENT_ID`` with no secret or tenant makes
+    ``has_user_setup_sso()`` return True while every real sign-in attempt
+    fails, so a gate that BLOCKS the password fallback (unlike the UI
+    discovery use of ``has_user_setup_sso()``, where a dead login button is
+    merely confusing) must check readiness here, or it can lock every admin
+    out with no way to sign in at all. Checks every provider independently
+    (mirroring ``/sso/readiness``'s per-provider requirements) rather than
+    stopping at the first one with a client id set, so a stray leftover
+    client id for an unused provider can never mask a different, fully
+    configured provider that would otherwise satisfy this gate.
+    """
+    return _is_google_ready() or _is_microsoft_ready() or _is_generic_oauth_ready() or _is_saml_ready()
 
 
 def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:
@@ -1575,7 +1724,7 @@ def _dedupe_model_candidates(candidates: list[str]) -> list[str]:
     return deduped
 
 
-def _get_case_insensitive_mapping_value(mapping: Mapping[str, Any] | None, key: str) -> Any:
+def _get_case_insensitive_mapping_value(mapping: Mapping[str, object] | None, key: str) -> object:
     if not mapping:
         return None
     if key in mapping:
@@ -1679,8 +1828,8 @@ def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | Non
 def _extract_model_candidates_from_request(
     request_data: dict,
     route: str,
-    request_headers: Mapping[str, Any] | None = None,
-    request_query_params: Mapping[str, Any] | None = None,
+    request_headers: Mapping[str, object] | None = None,
+    request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
 ) -> list[str]:
     candidates: Final[list[str]] = []
@@ -1748,7 +1897,7 @@ def _format_model_candidates(
     return candidates
 
 
-def _request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool:
+def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool:
     """Whether FastAPI resolved this request to a user-defined pass-through handler.
 
     Reads the marker set by ``create_pass_through_route`` off the dispatched endpoint
@@ -1772,8 +1921,8 @@ def _request_dispatched_to_pass_through_endpoint(request: Request | None) -> boo
 def get_model_from_request(
     request_data: dict,
     route: str,
-    request_headers: Mapping[str, Any] | None = None,
-    request_query_params: Mapping[str, Any] | None = None,
+    request_headers: Mapping[str, object] | None = None,
+    request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
     request: Request | None = None,
 ) -> str | list[str] | None:
@@ -1789,7 +1938,7 @@ def get_model_from_request(
     and does not carry the marker. Built-in provider passthrough routes
     (``/vertex_ai``, ``/gemini``, ...) are separate handlers and keep model enforcement.
     """
-    if _request_dispatched_to_pass_through_endpoint(request):
+    if request_dispatched_to_pass_through_endpoint(request):
         return None
 
     candidates: Final = _extract_model_candidates_from_request(

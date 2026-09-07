@@ -5,18 +5,6 @@ from litellm.llms.tencent.cost_calculator import cost_per_token
 from litellm.types.utils import Usage
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
-
 
 def test_cost_per_token_uses_tencent_model_pricing(local_model_cost_map):
     usage = Usage(prompt_tokens=1000, completion_tokens=2000, total_tokens=3000)

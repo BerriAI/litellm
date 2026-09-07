@@ -84,7 +84,7 @@ class TestResponsesAPIWebSocketSupport:
 
     def test_azure_websocket_url_requires_api_base(self):
         config = AzureOpenAIResponsesAPIConfig()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='api_base is required for Azure WebSocket'):
             config.get_websocket_url(api_base=None, litellm_params={})
 
     def test_azure_model_not_in_websocket_url(self):
@@ -1028,6 +1028,171 @@ class TestWebSocketErrorHandling:
         error_event = mock_websocket.send_text.call_args[0][0]
         assert "error" in error_event
         assert "Invalid JSON" in error_event
+
+
+class TestWebSocketProjectQuotaEnforcement:
+    """VERIA regression: the connection-level pre-call hook only runs once,
+    but a WebSocket connection accepts many response.create frames. Every
+    frame must be checked against any registered project ITPM/OTPM quota
+    callback, not just the first one."""
+
+    @pytest.mark.asyncio
+    async def test_managed_handler_blocks_frame_rejected_by_quota_callback(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.exceptions import RateLimitError
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        aresponses_called = False
+
+        async def fake_aresponses(*args, **kwargs):
+            nonlocal aresponses_called
+            aresponses_called = True
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+
+        quota_callback = MagicMock()
+        quota_callback.enforce_project_io_token_quota_for_frame = AsyncMock(
+            side_effect=RateLimitError(message="project OTPM exceeded", llm_provider="", model="")
+        )
+
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+        mock_logging_obj = Logging(
+            model="test-model",
+            messages=[],
+            stream=True,
+            call_type="aresponses",
+            start_time=0,
+            litellm_call_id="test-id",
+            function_id="test-func",
+        )
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=mock_websocket,
+            model="test-model",
+            logging_obj=mock_logging_obj,
+            quota_callbacks=[quota_callback],
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+
+        quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
+        assert aresponses_called is False
+        mock_websocket.send_text.assert_called_once()
+        error_event = mock_websocket.send_text.call_args[0][0]
+        assert "rate_limit_exceeded" in error_event
+
+    @pytest.mark.asyncio
+    async def test_managed_handler_forwards_frame_allowed_by_quota_callback(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        aresponses_called = False
+
+        async def fake_aresponses(*args, **kwargs):
+            nonlocal aresponses_called
+            aresponses_called = True
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+
+        quota_callback = MagicMock()
+        quota_callback.enforce_project_io_token_quota_for_frame = AsyncMock(return_value=None)
+
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+        mock_logging_obj = Logging(
+            model="test-model",
+            messages=[],
+            stream=True,
+            call_type="aresponses",
+            start_time=0,
+            litellm_call_id="test-id",
+            function_id="test-func",
+        )
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=mock_websocket,
+            model="test-model",
+            logging_obj=mock_logging_obj,
+            quota_callbacks=[quota_callback],
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+
+        quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
+        assert aresponses_called is True
+
+    @pytest.mark.asyncio
+    async def test_native_handler_blocks_frame_rejected_by_quota_callback(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.exceptions import RateLimitError
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        quota_callback = MagicMock()
+        quota_callback.enforce_project_io_token_quota_for_frame = AsyncMock(
+            side_effect=RateLimitError(message="project OTPM exceeded", llm_provider="", model="")
+        )
+
+        mock_backend_ws = MagicMock()
+        mock_backend_ws.send = AsyncMock()
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=mock_websocket,
+            backend_ws=mock_backend_ws,
+            logging_obj=MagicMock(),
+            authorized_model="gpt-4o",
+            quota_callbacks=[quota_callback],
+        )
+
+        allowed = await handler._enforce_or_reject_frame(
+            json.dumps({"type": "response.create", "input": "hi"})
+        )
+
+        assert allowed is False
+        mock_backend_ws.send.assert_not_called()
+        mock_websocket.send_text.assert_called_once()
+        assert "rate_limit_exceeded" in mock_websocket.send_text.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_native_handler_forwards_frame_allowed_by_quota_callback(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        quota_callback = MagicMock()
+        quota_callback.enforce_project_io_token_quota_for_frame = AsyncMock(return_value=None)
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=MagicMock(),
+            backend_ws=MagicMock(),
+            logging_obj=MagicMock(),
+            authorized_model="gpt-4o",
+            quota_callbacks=[quota_callback],
+        )
+
+        allowed = await handler._enforce_or_reject_frame(
+            json.dumps({"type": "response.create", "input": "hi"})
+        )
+
+        assert allowed is True
+        quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
 
 
 class TestNativeWebSocketGuardrails:

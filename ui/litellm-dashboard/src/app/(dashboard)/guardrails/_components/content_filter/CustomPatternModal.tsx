@@ -1,8 +1,9 @@
 import React from "react";
-import { Typography, Select, Modal, Space, Button, Input } from "antd";
-
-const { Text } = Typography;
-const { Option } = Select;
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ACTION_ITEMS } from "./action_options";
 
 interface CustomPatternModalProps {
   visible: boolean;
@@ -28,50 +29,66 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
   onCancel,
 }) => {
   return (
-    <Modal title="Add custom regex pattern" open={visible} onCancel={onCancel} footer={null} width={800}>
-      <Space direction="vertical" style={{ width: "100%" }} size="large">
-        <div>
-          <Text strong>Pattern name</Text>
-          <Input
-            placeholder="e.g., internal_id, employee_code"
-            value={patternName}
-            onChange={(e) => onNameChange(e.target.value)}
-            style={{ marginTop: 8 }}
-          />
+    <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[800px]">
+        <DialogHeader>
+          <DialogTitle>Add custom regex pattern</DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-6">
+          <div>
+            <p className="font-semibold">Pattern name</p>
+            <Input
+              className="mt-2"
+              placeholder="e.g., internal_id, employee_code"
+              value={patternName}
+              onChange={(e) => onNameChange(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <p className="font-semibold">Regex pattern</p>
+            <Input
+              className="mt-2"
+              placeholder="e.g., ID-[0-9]{6}"
+              value={patternRegex}
+              onChange={(e) => onRegexChange(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Enter a valid regular expression to match sensitive data</p>
+          </div>
+
+          <div>
+            <p className="font-semibold">Action</p>
+            <p className="mt-1 mb-2 text-muted-foreground">
+              Choose what action the guardrail should take when this pattern is detected
+            </p>
+            <Select
+              items={ACTION_ITEMS}
+              value={patternAction}
+              onValueChange={(value: string | null) => value && onActionChange(value as "BLOCK" | "MASK")}
+            >
+              <SelectTrigger className="w-full" aria-label="Action">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ACTION_ITEMS.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
-        <div>
-          <Text strong>Regex pattern</Text>
-          <Input
-            placeholder="e.g., ID-[0-9]{6}"
-            value={patternRegex}
-            onChange={(e) => onRegexChange(e.target.value)}
-            style={{ marginTop: 8 }}
-          />
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            Enter a valid regular expression to match sensitive data
-          </Text>
-        </div>
-
-        <div>
-          <Text strong>Action</Text>
-          <Text type="secondary" style={{ display: "block", marginTop: 4, marginBottom: 8 }}>
-            Choose what action the guardrail should take when this pattern is detected
-          </Text>
-          <Select value={patternAction} onChange={onActionChange} style={{ width: "100%" }}>
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
-          </Select>
-        </div>
-      </Space>
-
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button onClick={onCancel}>Cancel</Button>
-        <Button type="primary" onClick={onAdd}>
-          Add
-        </Button>
-      </div>
-    </Modal>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={onAdd}>Add</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

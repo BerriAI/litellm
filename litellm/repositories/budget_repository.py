@@ -2,17 +2,21 @@
 Budget repository for database operations on LiteLLM_BudgetTable.
 """
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
     """Repository for budget database operations."""
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["prisma_models.LiteLLM_BudgetTable"]:
         return self.prisma_client.db.litellm_budgettable
 
     @property

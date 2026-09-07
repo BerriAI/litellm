@@ -1,10 +1,10 @@
-import { Alert, Divider, Typography } from "antd";
+import { TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
+import { Alert, AlertDescription } from "@/components/shared/Alert";
+import { Separator } from "@/components/ui/separator";
 import ContentFilterConfiguration from "./ContentFilterConfiguration";
 import ContentFilterDisplay from "./ContentFilterDisplay";
 import type { CompetitorIntentConfig } from "./CompetitorIntentConfiguration";
-
-const { Text } = Typography;
 
 interface Pattern {
   id: string;
@@ -233,19 +233,17 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
   // Edit mode
   return (
     <>
-      <Divider orientation="left">Content Filter Configuration</Divider>
+      <div className="my-6 flex items-center gap-4">
+        <span className="shrink-0 font-medium">Content Filter Configuration</span>
+        <Separator className="flex-1" />
+      </div>
       {hasUnsavedChanges && (
-        <Alert
-          type="warning"
-          showIcon
-          className="mb-4"
-          message={
-            <Text>
-              You have unsaved changes to patterns or keywords. Remember to click &quot;Save Changes&quot; at the
-              bottom.
-            </Text>
-          }
-        />
+        <Alert variant="warning" className="mb-4">
+          <TriangleAlert />
+          <AlertDescription>
+            You have unsaved changes to patterns or keywords. Remember to click &quot;Save Changes&quot; at the bottom.
+          </AlertDescription>
+        </Alert>
       )}
       <div className="mb-6">
         {guardrailSettings && guardrailSettings.content_filter_settings && (

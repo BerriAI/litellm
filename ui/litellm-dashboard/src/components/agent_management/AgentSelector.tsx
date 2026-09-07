@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Select } from "antd";
+import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
 import { getAgentsList } from "../networking";
 
 interface Agent {
@@ -61,18 +61,16 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
   }, [accessToken]);
 
   // Combine options, access groups first
-  const options = [
+  const options: MultiSelectOption[] = [
     ...accessGroups.map((group) => ({
       label: group,
       value: `group:${group}`,
-      isAccessGroup: true,
-      searchText: `${group} Access Group`,
+      description: "Access Group",
     })),
     ...agents.map((agent) => ({
       label: `${agent.agent_name || agent.agent_id}`,
       value: agent.agent_id,
-      isAccessGroup: false,
-      searchText: `${agent.agent_name || agent.agent_id} ${agent.agent_id} Agent`,
+      description: "Agent",
     })),
   ];
 
@@ -88,50 +86,16 @@ const AgentSelector: React.FC<AgentSelectorProps> = ({
 
   return (
     <div>
-      <Select
-        mode="multiple"
-        placeholder={placeholder}
-        onChange={handleChange}
+      <MultiSelect
+        options={options}
         value={selectedValues}
+        onValueChange={handleChange}
+        placeholder={placeholder}
+        emptyText="No agents found"
         loading={loading}
-        className={className}
-        allowClear
-        showSearch
-        style={{ width: "100%" }}
         disabled={disabled}
-        filterOption={(input, option) => {
-          const searchText = options.find((opt) => opt.value === option?.value)?.searchText || "";
-          return searchText.toLowerCase().includes(input.toLowerCase());
-        }}
-      >
-        {options.map((opt) => (
-          <Select.Option key={opt.value} value={opt.value} label={opt.label}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span
-                style={{
-                  display: "inline-block",
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: opt.isAccessGroup ? "#52c41a" : "#722ed1",
-                  flexShrink: 0,
-                }}
-              />
-              <span style={{ flex: 1 }}>{opt.label}</span>
-              <span
-                style={{
-                  color: opt.isAccessGroup ? "#52c41a" : "#722ed1",
-                  fontSize: "12px",
-                  fontWeight: 500,
-                  opacity: 0.8,
-                }}
-              >
-                {opt.isAccessGroup ? "Access Group" : "Agent"}
-              </span>
-            </div>
-          </Select.Option>
-        ))}
-      </Select>
+        className={`w-full ${className ?? ""}`}
+      />
     </div>
   );
 };
