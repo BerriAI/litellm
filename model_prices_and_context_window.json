@@ -59487,9 +59487,6 @@
         "output_cost_per_second": 0.05,
         "output_cost_per_second_480p": 0.05,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video",
-        "supported_endpoints": [
-            "/v1/videos"
-        ],
         "supported_modalities": [
             "text",
             "image",
@@ -59507,9 +59504,6 @@
         "output_cost_per_second_1080p": 0.25,
         "output_cost_per_second_480p": 0.08,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
-        "supported_endpoints": [
-            "/v1/videos"
-        ],
         "supported_modalities": [
             "text",
             "image",
@@ -59527,9 +59521,6 @@
         "output_cost_per_second_1080p": 0.25,
         "output_cost_per_second_480p": 0.08,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
-        "supported_endpoints": [
-            "/v1/videos"
-        ],
         "supported_modalities": [
             "text",
             "image",
@@ -59547,9 +59538,6 @@
         "output_cost_per_second_1080p": 0.25,
         "output_cost_per_second_480p": 0.08,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
-        "supported_endpoints": [
-            "/v1/videos"
-        ],
         "supported_modalities": [
             "text",
             "image",
