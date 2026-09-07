@@ -1159,7 +1159,7 @@ async def test_every_checkpoint_payload_is_json_serializable():
     with patch.object(g._async_handler, "post", new=_post):
         await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
     payloads = [json_lib.loads(body) for body in encoded]
-    assert sorted(p["data_type"] for p in payloads) == ["FILE", "TEXT", "TEXT", "TOOL", "TOOL"]
+    assert sorted(p["data_type"] for p in payloads) == ["FILE", "TEXT", "TEXT", "TOOL", "TOOL", "TOOL"]
     assert all(p["data"]["tool_input"] == {} for p in payloads if p["data_type"] == "TOOL")
 
 
@@ -1745,3 +1745,51 @@ async def test_apply_guardrail_resolved_by_alias_routes_checkpoints_by_name():
     assert seen["body"]["application_name"] == "Weather App"
     assert seen["body"]["input_type"] == "request"
     assert "application_id" not in seen["body"]
+
+
+@pytest.mark.asyncio
+async def test_message_tool_calls_are_scanned_without_top_level_tool_calls():
+    g = _static_guardrail()
+    inputs = GenericGuardrailAPIInputs(
+        texts=[],
+        structured_messages=[
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "exfil", "arguments": "{}"}}],
+            }
+        ],
+    )
+    with patch.object(
+        g._async_handler, "post", new=_post_returning(lambda body: _BLOCK if body["data_type"] == "TOOL" else _ALLOW)
+    ):
+        with pytest.raises(OvalixGuardrailBlockedException):
+            await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+
+
+@pytest.mark.asyncio
+async def test_tool_call_present_in_both_sources_is_scanned_once():
+    g = _static_guardrail()
+    call = {"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "sf"}'}}
+    inputs = GenericGuardrailAPIInputs(
+        texts=[],
+        tool_calls=[call],
+        structured_messages=[{"role": "assistant", "tool_calls": [call]}],
+    )
+    tool_bodies = []
+
+    async def _post(url, headers=None, json=None):
+        if json["data_type"] == "TOOL":
+            tool_bodies.append(json)
+        r = MagicMock()
+        r.json.return_value = _ALLOW
+        r.raise_for_status = MagicMock()
+        return r
+
+    with patch.object(g._async_handler, "post", new=_post):
+        await g.apply_guardrail(inputs=inputs, request_data={}, input_type="request", logging_obj=None)
+    assert len(tool_bodies) == 1
+
+
+def test_extract_application_name_tolerates_unmatched_optional_group():
+    g = _static_guardrail()
+    assert g._extract_application_name("app-", re.compile(r"app-(\w+)?")) is None

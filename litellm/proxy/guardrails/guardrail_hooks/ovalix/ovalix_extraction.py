@@ -261,6 +261,30 @@ def tool_call_to_tool_data(tool_call: object) -> Mapping[str, object] | None:
     return make_tool_data(name, content, tool_input)
 
 
+def _message_tool_calls(message: Mapping[str, object]) -> Sequence[object]:
+    tool_calls: Final = message.get("tool_calls")
+    return tool_calls if isinstance(tool_calls, list) else ()
+
+
+def extract_tool_calls_from_messages(structured_messages: Sequence[object] | None) -> tuple[object, ...]:
+    """Tool calls declared on the messages themselves.
+
+    Surfaces such as the Anthropic request path populate ``structured_messages`` but leave the
+    top-level ``tool_calls`` input empty, so calls made in prior assistant turns are only visible here.
+    """
+    return tuple(
+        tool_call
+        for message in structured_messages or ()
+        if isinstance(message, Mapping)
+        for tool_call in _message_tool_calls(message)
+    )
+
+
+def tool_data_key(tool_data: Mapping[str, object]) -> str:
+    """Stable identity for a tool payload, so a call reached from two sources is only scanned once."""
+    return json.dumps(tool_data, sort_keys=True, default=str)
+
+
 def _tool_content_blocks(content: Sequence[object]) -> Iterator[str]:
     for block in content:
         if isinstance(block, Mapping):

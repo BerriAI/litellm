@@ -34,9 +34,11 @@ from litellm.proxy.guardrails.guardrail_hooks.ovalix.ovalix_extraction import (
     FilePart,
     extract_file_parts_from_images,
     extract_file_parts_from_messages,
+    extract_tool_calls_from_messages,
     extract_tool_results,
     make_tool_data,
     tool_call_to_tool_data,
+    tool_data_key,
     tool_result_text_indices,
 )
 from litellm.types.guardrails import GuardrailEventHooks
@@ -418,9 +420,14 @@ class OvalixGuardrail(CustomGuardrail):
             )
             return inputs
 
-        tool_call_items: Final = tuple(
-            ("TOOL", td) for td in (tool_call_to_tool_data(tc) for tc in (inputs.get("tool_calls") or ())) if td
+        tool_calls: Final = (
+            *(inputs.get("tool_calls") or ()),
+            *extract_tool_calls_from_messages(structured_messages),
         )
+        unique_tool_data: Final = {
+            tool_data_key(data): data for data in (tool_call_to_tool_data(tc) for tc in tool_calls) if data
+        }
+        tool_call_items: Final = tuple(("TOOL", data) for data in unique_tool_data.values())
         tool_block: Final = await self._check_items_block_only(
             tool_call_items,
             prompt_checkpoint,
@@ -562,8 +569,8 @@ class OvalixGuardrail(CustomGuardrail):
         match: Final = regex.search(alias)
         if not match:
             return None
-        name: Final = (match.group(1) if match.groups() else match.group(0)).strip()
-        return name or None
+        captured: Final = (match.group(1) if match.groups() else match.group(0)) or ""
+        return captured.strip() or None
 
     def _routing_cache_get(self, name: str) -> tuple[bool, ResolvedRouting | None]:
         entry: Final = self._routing_cache.get(name)
