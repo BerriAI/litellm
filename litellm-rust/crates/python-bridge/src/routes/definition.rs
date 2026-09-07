@@ -307,7 +307,8 @@ mod tests {
                 .expect("kwargs should accept extra_headers");
             let document = PyDict::new(py);
 
-            for (sync_name, async_name) in [("transcription", "atranscription")] {
+            {
+                let (sync_name, async_name) = ("transcription", "atranscription");
                 let sync_error = module
                     .getattr(sync_name)
                     .and_then(|function| function.call(("model", &document), Some(&kwargs)))
