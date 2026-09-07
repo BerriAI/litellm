@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     import tiktoken
 
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -136,6 +137,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self.token_creator = None
         self._base_url = None
         self._resource_group = None
+        self._http_client: HTTPHandler | None = None
 
     def run_env_setup(self, service_key: str | None = None) -> None:
         try:
@@ -169,9 +171,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
 
     @cached_property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
-        client: Final = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
+        client: Final = self._http_client if self._http_client is not None else litellm.module_level_client
         deployments: Final = client.get(f"{self.base_url}/lm/deployments", headers=self.headers).json()
         valid: Final[list[tuple[str, str]]] = []
         for dep in deployments.get("resources", []):
