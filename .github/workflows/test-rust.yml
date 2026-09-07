@@ -139,6 +139,9 @@ jobs:
       - name: Install locked SDK dependencies for retained callback tests
         run: uv sync --frozen --no-default-groups --no-install-project --python 3.12
 
+      # Run serially: concurrent Python::attach threads racing gc.collect() in
+      # the cycle-collection scenarios reliably miss cycles about 20% of the
+      # time under parallel test execution.
       - name: Test retained callbacks with real Python logging
         env:
           PYO3_PYTHON: ${{ github.workspace }}/.venv/bin/python
@@ -146,4 +149,5 @@ jobs:
           LITELLM_LOCAL_MODEL_COST_MAP: "True"
         run: >-
           cargo test --manifest-path litellm-rust/Cargo.toml
-          -p litellm-python-interop --tests --locked -- --include-ignored
+          -p litellm-python-interop --tests --locked
+          -- --include-ignored --test-threads=1
