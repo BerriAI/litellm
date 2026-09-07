@@ -49,6 +49,7 @@ from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
     mcp_message_transport_span,
+    request_root_http_route,
     request_root_span,
     resolve_mcp_span_context,
     resolve_parent_context,
@@ -541,6 +542,7 @@ class OpenTelemetryV2(CustomLogger):
             payload,
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
+            request_route=request_root_http_route(),
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:

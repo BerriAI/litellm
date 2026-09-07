@@ -113,6 +113,21 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.classifier_llm_config).toEqual({ model: "gpt-4o-mini", timeout_ms: 3000 });
   });
 
+  it("preserves explicit classifier circuit-breaker settings, including disabled", () => {
+    const classifierLlmConfig = {
+      model: "gpt-4o-mini",
+      timeout_ms: 3000,
+      circuit_breaker_enabled: false,
+      circuit_breaker_cooldown_seconds: 45,
+    };
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig,
+    });
+    expect(config.classifier_llm_config).toEqual(classifierLlmConfig);
+  });
+
   it("omits classifier_llm_config when classifier_type is heuristic even if config lingers in state", () => {
     const config = buildComplexityRouterConfig({
       ...baseParams,
@@ -577,6 +592,12 @@ describe("classifier prompt and fallback", () => {
       timeout_ms: 1,
     });
   });
+
+  it.each([{}, { system_prompt: "x" }])("normalizeClassifierLlmConfig carries vision through %o", (extra) => {
+    const base = { model: "m", timeout_ms: 1, ...extra };
+    const vision = { enabled: true, max_images: 2 };
+    expect(normalizeClassifierLlmConfig({ ...base, vision })).toEqual({ ...base, vision });
+  });
 });
 
 describe("tier labels", () => {
@@ -967,13 +988,36 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     expect(build({ classificationPrompt: "   \n  " })).not.toHaveProperty("classification_prompt");
   });
 
-  it("never writes classification_prompt on a built-in router, which the backend rejects without tier_definitions", () => {
+  it("writes classification_prompt on a built-in router, whose tier bullets the backend derives", () => {
     const payload = buildComplexityRouterConfig({
       ...baseParams,
       classifierType: "llm",
-      classificationPrompt: "opening instructions",
+      classificationPrompt: "  opening instructions  ",
     });
-    expect(payload).not.toHaveProperty("classification_prompt");
+    expect(payload.classification_prompt).toBe("opening instructions");
+  });
+
+  it.each(["heuristic", "heuristic_v2"] as const)(
+    "keeps classification_prompt off a %s router, which never builds a classifier prompt",
+    (classifierType) => {
+      const payload = buildComplexityRouterConfig({
+        ...baseParams,
+        classifierType,
+        classificationPrompt: "opening instructions",
+      });
+      expect(payload).not.toHaveProperty("classification_prompt");
+    },
+  );
+
+  it("keeps classification_prompt off a router still holding a legacy whole-prompt override", () => {
+    // The backend rejects the pair: both replace the same prompt, so the payload must carry one.
+    const legacyPromptParams = {
+      ...baseParams,
+      classifierType: "llm" as const,
+      classifierLlmConfig: { model: "gpt-4o-mini", timeout_ms: 3000, system_prompt: "replace the whole rubric" },
+      classificationPrompt: "opening instructions",
+    };
+    expect(buildComplexityRouterConfig(legacyPromptParams)).not.toHaveProperty("classification_prompt");
   });
 
   it("omits a definition on a built-in name, letting the backend rubric supply it", () => {
@@ -1020,6 +1064,9 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       heuristicFirstMaxTier: "SIMPLE",
       hybridBoundaryMargin: 0.03,
       customTechnicalKeywords: ["kubernetes"],
+      stallEscalationEnabled: true,
+      stallEscalationWindow: 6,
+      stallEscalationRepeatThreshold: 3,
     };
     const emittingType = key === "heuristic_first_max_tier" ? "heuristic_first" : "llm";
     const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;
@@ -1114,6 +1161,35 @@ describe("hydrateCustomTierSet", () => {
   });
 });
 
+describe("buildComplexityRouterConfig stall escalation", () => {
+  it("omits all three keys when the toggle is off, since the backend rejects them next to session pinning", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, stallEscalationEnabled: false });
+    expect(config).not.toHaveProperty("stall_escalation_enabled");
+    expect(config).not.toHaveProperty("stall_escalation_window");
+    expect(config).not.toHaveProperty("stall_escalation_repeat_threshold");
+  });
+
+  it("emits the toggle and both knobs when it is on", () => {
+    const params: BuildComplexityRouterConfigParams = {
+      ...baseParams,
+      stallEscalationEnabled: true,
+      stallEscalationWindow: 8,
+      stallEscalationRepeatThreshold: 4,
+    };
+    const config = buildComplexityRouterConfig(params);
+    expect(config.stall_escalation_enabled).toBe(true);
+    expect(config.stall_escalation_window).toBe(8);
+    expect(config.stall_escalation_repeat_threshold).toBe(4);
+  });
+
+  it("emits the toggle alone when neither knob was touched, so both track the backend defaults", () => {
+    const config = buildComplexityRouterConfig({ ...baseParams, stallEscalationEnabled: true });
+    expect(config.stall_escalation_enabled).toBe(true);
+    expect(config).not.toHaveProperty("stall_escalation_window");
+    expect(config).not.toHaveProperty("stall_escalation_repeat_threshold");
+  });
+});
+
 describe("dryRunRejection", () => {
   it("blocks the save on a rejection whose message is missing, which the write would return as a raw 400", () => {
     expect(dryRunRejection({ valid: false })).toBe("The proxy rejected this auto-router configuration");
@@ -1130,5 +1206,40 @@ describe("dryRunRejection", () => {
   it("lets a valid verdict through, including the fail-open one a transport failure returns", () => {
     expect(dryRunRejection({ valid: true })).toBeNull();
     expect(dryRunRejection({ valid: true, error: null })).toBeNull();
+  });
+});
+
+describe("classifier vision wire payload", () => {
+  const vision = { enabled: true, max_images: 3 };
+  const classifierLlmConfig = { model: "classifier", timeout_ms: 3000, vision };
+
+  it("keeps vision through the standard-tier payload", () => {
+    const params = { ...baseParams, classifierType: "llm" as const, classifierLlmConfig };
+    const payload = buildComplexityRouterConfig(params);
+
+    expect(payload.classifier_llm_config).toMatchObject({ vision });
+  });
+
+  it("keeps vision through the custom-tier payload", () => {
+    const customTierSet = {
+      tiers: [
+        { id: "simple", name: "simple", definition: "small talk", models: ["gpt-4o-mini"] },
+        { id: "complex", name: "complex", definition: "hard work", models: ["gpt-4o"] },
+      ],
+      fallback_tier_id: "simple",
+    };
+    const payload = buildComplexityRouterConfig({ ...baseParams, customTierSet, classifierLlmConfig });
+
+    expect(payload.classifier_llm_config).toMatchObject({ vision });
+  });
+
+  it("keeps an untouched classifier config free of vision", () => {
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "llm",
+      classifierLlmConfig: { model: "classifier", timeout_ms: 3000 },
+    });
+
+    expect(payload.classifier_llm_config).not.toHaveProperty("vision");
   });
 });

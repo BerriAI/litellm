@@ -292,6 +292,18 @@ class StartShadowEvalRequest(BaseModel):
             "to across all their teams: JWT requests carrying their subject claim and virtual keys they own"
         ),
     )
+    models: tuple[str, ...] = Field(
+        default=(),
+        max_length=100,
+        description=(
+            "Model groups to narrow the sampled traffic to, matched on the group the caller "
+            "requested and resolved through model_group_alias, so an alias and its target are one "
+            "name. Empty samples every model the targets use. This ANDs with the targets: a job "
+            "over a user and one model samples that user's requests on that model across every key "
+            "they own, and none of their other traffic. Forward jobs only: a reverse job samples "
+            "exactly the traffic its own router served, which no other model group can name"
+        ),
+    )
     router_name: str | None = Field(
         default=None,
         description=(
@@ -372,11 +384,19 @@ class StartShadowEvalRequest(BaseModel):
     def _round_percentage(cls, value: float) -> float:
         return round(value, 2)
 
-    @field_validator("api_key_ids", "team_ids", "user_ids")
+    @field_validator("api_key_ids", "team_ids", "user_ids", "models")
     @classmethod
     def _dedupe_targets(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        """A target named twice would collide with itself on the one-active-per-(target, direction) index."""
+        """A target named twice would collide with itself on the one-active-per-(target, direction)
+        index; a model named twice is one scope entry."""
         return tuple(dict.fromkeys(value))
+
+    @field_validator("models")
+    @classmethod
+    def _models_are_names(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not all(name.strip() for name in value):
+            raise ValueError("models must be non-empty model group names")
+        return value
 
     @model_validator(mode="after")
     def _at_least_one_target_at_most_hundred(self) -> "StartShadowEvalRequest":
@@ -385,6 +405,18 @@ class StartShadowEvalRequest(BaseModel):
             raise ValueError("at least one target is required: pass api_key_ids, team_ids, or user_ids")
         if total > 100:
             raise ValueError("at most 100 targets per job across api_key_ids, team_ids, and user_ids")
+        return self
+
+    @model_validator(mode="after")
+    def _model_scope_is_forward_only(self) -> "StartShadowEvalRequest":
+        """A reverse job admits exactly the requests its own router served, so every one of
+        them names that router and nothing else; any other scope would sample nothing and
+        the router itself is a no-op. Both readings are rejected rather than shipped as a
+        job that silently never samples."""
+        if self.models and self.direction == "reverse":
+            raise ValueError(
+                "models is only meaningful for a forward job; a reverse job samples its own router's traffic"
+            )
         return self
 
     @model_validator(mode="after")
@@ -598,6 +630,10 @@ class ShadowEvalJobResponse(BaseModel):
             "Every auto-router this job runs as a shadow arm. Multi-router jobs sample one slice of "
             "traffic and judge every arm against the same real responses"
         ),
+    )
+    models: tuple[str, ...] = Field(
+        default=(),
+        description="Model groups the sampled traffic is narrowed to; empty means every model the targets use",
     )
     direction: ShadowEvalDirection = "forward"
     baseline_model: str | None = None

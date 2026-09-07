@@ -54,6 +54,7 @@ from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, 
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
+    get_jwt_key_mapping_cache_keys_for_token,
     get_org_object,
     get_project_object,
     get_team_object,
@@ -65,6 +66,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    evict_and_broadcast,
     publish_auth_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
@@ -2949,6 +2951,11 @@ async def update_key_fn(
     """
     Update an existing API key's parameters.
 
+    The body is a merge patch: a field left out keeps its stored value, and on the key's own columns
+    an explicit null clears it. The metadata-backed fields below are the exception, merging into the
+    stored metadata instead: passing one as null leaves it unchanged, while `metadata` itself
+    replaces the stored metadata wholesale.
+
     Parameters:
     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
@@ -5101,6 +5108,13 @@ async def _execute_virtual_key_regeneration(
     update_data.update(non_default_values)
     jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(data=update_data)
 
+    # Snapshot before the token update: the FK cascade rewrites mapping rows to the new hash,
+    # but their cached jwt_key_mapping entries still point at the old token (LIT-5379).
+    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_token(
+        hashed_token=hashed_api_key,
+        prisma_client=prisma_client,
+    )
+
     # If grace period set, insert deprecated key so old key remains valid
     await _insert_deprecated_key(
         prisma_client=prisma_client,
@@ -5125,6 +5139,8 @@ async def _execute_virtual_key_regeneration(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
 
     # After credential invalidation, so a failure here can never keep the old key alive.
     await sync_key_regeneration_access_group_membership(

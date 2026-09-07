@@ -1612,7 +1612,10 @@ if MCP_AVAILABLE:
         )
 
         server_headers: Final = lookup_mcp_server_auth_in_headers(
-            mcp_server_auth_headers, alias=server.alias, server_name=server.server_name
+            mcp_server_auth_headers,
+            alias=server.alias,
+            server_name=server.server_name,
+            access_groups=server.access_groups,
         )
         if isinstance(server_headers, str):
             return bool(server_headers.strip())
@@ -1712,6 +1715,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 alias=server.alias,
                 server_name=server.server_name,
+                access_groups=server.access_groups,
             )
 
         extra_headers: dict[str, str] | None = None
@@ -3482,7 +3486,7 @@ if MCP_AVAILABLE:
         is best-effort in that mode.
         """
 
-        def _bytes_for_hash(value: Any) -> bytes | None:
+        def _bytes_for_hash(value: object) -> bytes | None:
             """Only hash str/bytes secrets; skip mocks and other unexpected types."""
             if value is None:
                 return None
@@ -3844,22 +3848,24 @@ if MCP_AVAILABLE:
             # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
             # header lost, so the discovery flow needs this pre-emptive challenge.
             if server and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers:
-                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
                     raise_token_exchange_challenge,
                 )
-                from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
+                from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports proxy utils
+                    get_request_root_path,
+                )
 
-                raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                raise_token_exchange_challenge(server, root_path=get_request_root_path())
 
-            # token_exchange (OBO) with a subject present: run the exchange here at the transport
-            # edge, so a rejected subject raises the RFC 9728 challenge (and a gateway fault its
-            # public status) instead of the session opening and list_tools masking the failure as
-            # an empty tool list. Gated to single-server routes; the multi-server aggregate keeps
-            # absorbing per-server auth failures so one bad server cannot 401 the whole connect.
+            # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run
+            # the exchange here at the transport edge, so a rejected subject raises the RFC 9728
+            # challenge and any other failure its public status, instead of the session opening and
+            # list_tools masking it as an empty tool list. The manager owns which modes pre-flight
+            # and what each mints from. Gated to single-server routes the key may reach; the
+            # multi-server aggregate keeps absorbing per-server auth failures so one bad server
+            # cannot 401 the whole connect.
             if (
                 server
-                and server.auth_type == MCPAuth.oauth2_token_exchange
-                and oauth2_headers
                 and len(mcp_servers or []) == 1
                 and server.server_id
                 in frozenset(

@@ -10,6 +10,7 @@ at a different endpoint (bedrock-mantle.{region}.api.aws) with AWS SigV4 auth.
 from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -110,20 +111,12 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        model_id: Final = model.replace("mantle/", "", 1)
-
-        request: Final = self._build_bedrock_anthropic_request_base(
-            model=model_id,
-            messages=messages,
+        return self.transform_request(
+            model=model,
+            messages=await async_inline_remote_media(messages),
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
-        )
-        await self._async_convert_document_url_sources_to_base64(request)
-        return self._restore_mantle_body_fields(
-            request=request,
-            model_id=model_id,
-            optional_params=optional_params,
         )
 
     @staticmethod

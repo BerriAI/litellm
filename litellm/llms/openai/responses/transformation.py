@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
@@ -205,29 +206,76 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         `remove_cache_control_flag_from_messages_and_tools`; mirror that here.
         """
 
-        input = self._validate_input_param(input)
-        tools = response_api_optional_request_params.get("tools")
-        input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(
-            model=model, tools=tools, litellm_params=litellm_params
+        replay_safe_input, sanitized_tools = self._prepared_input_and_tools(
+            model=model,
+            input=input,
+            tools=response_api_optional_request_params.get("tools"),
+            litellm_params=litellm_params,
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        replay_safe_input: Final = self._drop_foreign_tool_call_item_ids(input)
         final_request_params: Final = dict(
             ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
         )
 
         return final_request_params
 
+    def _prepared_input_and_tools(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+        litellm_params: GenericLiteLLMParams,
+    ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
+        validated_input: Final = self._validate_input_param(input)
+        stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
+            model=model, input=validated_input, tools=tools
+        )
+        object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
+        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(
+            model=model, tools=object_schema_tools, litellm_params=litellm_params
+        )
+        return self._drop_foreign_tool_call_item_ids(stripped_input), sanitized_tools
+
+    def _tools_with_object_parameters(
+        self, model: str, tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None
+    ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
+        """Decode tool schemas handed over already JSON-encoded, which the Responses validator
+        rejects with a 400 naming the routed model rather than the tool. A null or absent schema
+        is left alone because the API accepts both."""
+        if tools is None:
+            return None
+        decoded: Final = [  # mutable-ok: request tools are a JSON list
+            self._tool_with_object_parameters(model=model, index=index, tool=tool) for index, tool in enumerate(tools)
+        ]
+        return cast("Sequence[ALL_RESPONSES_API_TOOL_PARAMS]", decoded)  # cast-ok: dict spread keeps each tool's shape
+
+    def _tool_with_object_parameters(self, model: str, index: int, tool: object) -> object:
+        if not isinstance(tool, dict) or tool.get("parameters") is None:
+            return tool
+        parameters: Final = tool["parameters"]
+        if isinstance(parameters, dict):
+            return tool
+        decoded: Final = safe_json_loads(parameters) if isinstance(parameters, str) else None
+        if isinstance(decoded, dict):
+            return {**tool, "parameters": decoded}  # mutable-ok: request tools are JSON dicts
+        raise litellm.BadRequestError(
+            message=(
+                f"Invalid type for 'tools[{index}].parameters': expected an object, "
+                f"but got {type(parameters).__name__} instead."
+            ),
+            model=model,
+            llm_provider=self.custom_llm_provider,
+        )
+
     def remove_cache_control_flag_from_input_and_tools(
         self,
         model: str,  # allows overrides to selectively run this
         input: str | ResponseInputParam,
-        tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None = None,
+        tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None = None,
     ) -> tuple[
         str | ResponseInputParam,
-        list[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+        Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
     ]:
         """Sibling of `remove_cache_control_flag_from_messages_and_tools` on
         the chat path. Strips Anthropic-only `cache_control` markers from
@@ -272,9 +320,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _flatten_tool_schema_combinators_for_openai(
         self,
         model: str,
-        tools: list[ALL_RESPONSES_API_TOOL_PARAMS] | None,  # mutable-ok: request tools are a JSON list
+        tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
         litellm_params: GenericLiteLLMParams,
-    ) -> list[ALL_RESPONSES_API_TOOL_PARAMS] | None:  # mutable-ok: request tools are a JSON list
+    ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
         """Flatten top-level schema combinators only where OpenAI's validator rejects them.
 
         OpenAI-compatible backends reusing this config (and the ChatGPT backend
@@ -293,7 +341,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         flattened: Final = [  # mutable-ok: request tools are a JSON list
             self._flattened_tool_or_passthrough(tool) for tool in tools
         ]
-        return cast("list[ALL_RESPONSES_API_TOOL_PARAMS]", flattened)  # cast-ok: dict spread keeps each tool's shape
+        return cast("Sequence[ALL_RESPONSES_API_TOOL_PARAMS]", flattened)  # cast-ok: spread keeps each tool's shape
 
     @staticmethod
     def _flattened_tool_or_passthrough(tool: object) -> object:
@@ -786,15 +834,14 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         compact_path: Final = parsed_url.path.rstrip("/") + "/compact"
         url: Final = str(parsed_url.copy_with(path=compact_path))
 
-        input = self._validate_input_param(input)
-        tools = response_api_optional_request_params.get("tools")
-        input, tools = self.remove_cache_control_flag_from_input_and_tools(model=model, input=input, tools=tools)
-        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(
-            model=model, tools=tools, litellm_params=litellm_params
+        replay_safe_input, sanitized_tools = self._prepared_input_and_tools(
+            model=model,
+            input=input,
+            tools=response_api_optional_request_params.get("tools"),
+            litellm_params=litellm_params,
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
-        replay_safe_input: Final = self._drop_foreign_tool_call_item_ids(input)
         data: Final = dict(
             ResponsesAPIRequestParams(model=model, input=replay_safe_input, **response_api_optional_request_params)
         )

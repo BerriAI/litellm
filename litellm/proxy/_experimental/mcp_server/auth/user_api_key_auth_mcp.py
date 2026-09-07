@@ -197,7 +197,7 @@ def _gateway_dcr_challenge_target(
     if targets is None:
         return None
     server: Final = global_mcp_server_manager.get_mcp_server_by_name(targets[0], client_ip=client_ip)
-    if server is None or not server.is_gateway_managed_oauth2:
+    if server is None or not server.advertises_gateway_authorization_server:
         return None
     return targets[0]
 

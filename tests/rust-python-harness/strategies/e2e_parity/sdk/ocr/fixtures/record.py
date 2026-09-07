@@ -8,7 +8,7 @@ from typing import Final, cast
 from dotenv import load_dotenv
 
 import litellm
-from litellm.rust_bridge.ocr import use_litellm_rust
+from litellm.rust_bridge.ocr import rust, set_rust_ocr
 from ......shared.parity.fixtures.cli import parse_recording_args
 from ......shared.parity.fixtures.media import structured_image_data_uri
 from ......shared.parity.fixtures.pipeline import record_fixtures
@@ -67,7 +67,8 @@ def main() -> int:
         os.environ.get(FIXTURE_DIR_ENV),
         DEFAULT_FIXTURE_DIRECTORY,
     )
-    use_litellm_rust(False, ocr=None, aocr=None)
+    rust(False)
+    set_rust_ocr(ocr=None, aocr=None)
     summary: Final = record_fixtures(targets, root, args.examples, args.concurrency, OcrParityCase)
     return summary.exit_code
 

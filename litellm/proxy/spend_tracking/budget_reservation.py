@@ -373,6 +373,33 @@ async def invalidate_budget_reservation_counters(
         await _invalidate_spend_counter(counter_key=counter_key)
 
 
+async def release_or_invalidate_budget_reservation(
+    budget_reservation: dict | None,  # mutable-ok: stamps finalized on the caller's shared reservation dict
+) -> None:
+    """Reconcile a still-open reservation on a terminal path that settles no cost.
+
+    A failed or upstream-refused request never runs the success cost callback, so
+    its pre-call reservation stays open and keeps the spend counter pinned above
+    real spend until the counter's TTL expires, 429ing later requests on the same
+    key. Release it to zero; if the release itself fails (e.g. the counter store is
+    unreachable) drop the reserved counters directly and mark the reservation
+    finalized so nothing reprocesses it. Idempotent: the finalized guard makes a
+    second call a no-op once success or failure handling already reconciled.
+    """
+    if budget_reservation is None or budget_reservation.get("finalized") is True:
+        return
+    try:
+        await asyncio.shield(release_budget_reservation(budget_reservation=budget_reservation))
+    except Exception:  # noqa: BLE001  # a cleanup failure must not pin the counter; drop it directly instead
+        verbose_proxy_logger.exception("Failed to release budget reservation; invalidating counters")
+        try:
+            await invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+        except Exception:  # noqa: BLE001  # nothing left to try; the finalized stamp below keeps it from being reprocessed
+            verbose_proxy_logger.exception("Failed to invalidate budget reservation counters after release failed")
+        finally:
+            budget_reservation["finalized"] = True
+
+
 async def _get_budget_counters(
     request_body: dict,
     valid_token: UserAPIKeyAuth,
@@ -1362,12 +1389,15 @@ def _approximate_input_size(request_body: Mapping[str, object]) -> int:
 def _count_input_tokens(request_body: dict, model: str) -> int | None:
     try:
         if "messages" in request_body:
-            return litellm.token_counter(
-                model=model,
-                messages=request_body.get("messages") or [],
-                tools=request_body.get("tools"),
-                tool_choice=request_body.get("tool_choice"),
-            )
+            try:
+                return litellm.token_counter(
+                    model=model,
+                    messages=request_body.get("messages") or (),
+                    tools=request_body.get("tools"),
+                    tool_choice=request_body.get("tool_choice"),
+                )
+            except ValueError:
+                return _count_text_tokens(model=model, text=request_body.get("messages"))
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
@@ -1415,11 +1445,7 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
-    requested: int | None = None
-    for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
-        requested = _to_int(request_body.get(key))
-        if requested is not None:
-            break
+    requested: Final = _requested_output_tokens(request_body)
 
     # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
     # (1) Without an explicit cap we still need a finite reservation so the
@@ -1430,9 +1456,19 @@ def _estimate_output_tokens(
     #     at the cap — the model can only physically emit max_output_tokens
     #     anyway, so reserving more is both wasteful and a DoS surface.
     model_ceiling: Final = _to_int(model_info.get("max_output_tokens")) or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
-    if requested is None:
-        requested = DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
-    return min(requested, model_ceiling)
+    return min(DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK if requested is None else requested, model_ceiling)
+
+
+_OUTPUT_TOKEN_FIELDS: Final = ("max_completion_tokens", "max_tokens", "max_output_tokens")
+
+
+def _requested_output_tokens(request_body: Mapping[str, object]) -> int | None:
+    inference_config: Final = request_body.get("inferenceConfig")
+    candidates: Final = (
+        *(request_body.get(field) for field in _OUTPUT_TOKEN_FIELDS),
+        inference_config.get("maxTokens") if isinstance(inference_config, Mapping) else None,
+    )
+    return next((tokens for tokens in map(_to_int, candidates) if tokens is not None), None)
 
 
 def _count_text_tokens(model: str, text: object) -> int:
