@@ -9,6 +9,9 @@ use support::native::{native_globals, run_fixture};
 
 #[rstest]
 #[case::differential_callbacks_wire("differential_callbacks_wire")]
+#[case::known_gap_send_time_auth_and_request_hook("known_gap_send_time_auth_and_request_hook")]
+#[case::known_gap_custom_transport("known_gap_custom_transport")]
+#[case::known_gap_pre_call_timeout_mutation("known_gap_pre_call_timeout_mutation")]
 #[case::negative_control_copied_caller_document("negative_control_copied_caller_document")]
 #[case::negative_control_rebound_logging_body("negative_control_rebound_logging_body")]
 #[case::negative_control_rebound_logging_headers("negative_control_rebound_logging_headers")]
@@ -42,14 +45,7 @@ fn retained_real_production_boundary_differential_and_lifecycle(
                 "/tests/fixtures/ocr_retained.py"
             ),
         )?;
-        let case = globals
-            .get_item("RealBoundaryTests")?
-            .unwrap()
-            .call1((format!("test_{scenario}"),))?;
-        let outcome = case.call_method0("debug");
-        let cleanup = case.call_method0("doCleanups");
-        outcome?;
-        cleanup?;
+        globals.get_item("run_case")?.unwrap().call1((scenario,))?;
         Ok(())
     })
 }

@@ -50,8 +50,8 @@ impl PreparedCall {
                 )
                 .map(InvocationOutcome::Returned),
             InvocationMode::Await => {
-                let adapter = AWAIT_CALL.get_or_try_init(py, || {
-                    PyModule::from_code(
+                if AWAIT_CALL.get(py).is_none() {
+                    let adapter = PyModule::from_code(
                         py,
                         c"async def invoke_awaited(callable, positional, keywords):
     if keywords is None:
@@ -61,9 +61,13 @@ impl PreparedCall {
                         c"retained_callback.py",
                         c"_retained_callback",
                     )?
-                    .getattr("invoke_awaited")
-                    .map(Bound::unbind)
-                })?;
+                    .getattr("invoke_awaited")?
+                    .unbind();
+                    let _ = AWAIT_CALL.set(py, adapter);
+                }
+
+                let adapter = AWAIT_CALL.get(py).unwrap();
+
                 adapter
                     .call1(py, (&self.callable, &self.positional, &self.keywords))
                     .map(InvocationOutcome::Awaitable)

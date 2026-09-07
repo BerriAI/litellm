@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import ModuleType
 from unittest.mock import patch
 
+import httpx
+
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -307,6 +309,83 @@ class RealBoundaryTests(unittest.TestCase):
                     self.assertEqual(await self.differential(mode), baseline)
 
         asyncio.run(exercise())
+
+    @unittest.expectedFailure
+    def test_known_gap_send_time_auth_and_request_hook(self):
+        """UC-HTTPX-SEND: pre_call, client auth, then request hook must determine the provider's wire headers."""
+        observations = []
+        for mode in ("python-sync", "native-sync"):
+            events = []
+
+            def request_hook(request, events=events):
+                events.append(("request_hook", request.headers["Authorization"]))
+                request.headers["X-Send-Hook"] = "present"
+
+            callback = Callback(
+                lambda view, events=events: events.append(("pre_call", view["headers"]["Authorization"]))
+            )
+            with httpx.Client(auth=("local-user", "local-password"), event_hooks={"request": [request_hook]}) as client:
+                before = len(self.server.requests)
+                response = invoke(mode, inputs(self.server, [callback], client=HTTPHandler(client=client)))
+            self.check_callbacks([callback])
+            self.assertEqual(response.pages[0].markdown, "local OCR")
+            self.assertEqual(len(self.server.requests), before + 1)
+            headers = dict(self.server.requests[-1][1])
+            observations.append((events, headers["authorization"], headers.get("x-send-hook")))
+        baseline, retained = observations
+        self.assertEqual(baseline[0][0], ("pre_call", "Bearer local-test-key"))
+        self.assertEqual(baseline[0][1], ("request_hook", baseline[1]))
+        self.assertTrue(baseline[1].startswith("Basic "))
+        self.assertEqual(baseline[2], "present")
+        self.assertEqual(retained, baseline, "UC-HTTPX-SEND: retained send omitted client auth/request hook")
+
+    @unittest.expectedFailure
+    def test_known_gap_custom_transport(self):
+        """UC-HTTPX-SEND: after pre_call, the client's transport must select the response without a network POST."""
+        observations = []
+        for mode in ("python-sync", "native-sync"):
+            events = []
+
+            def transport(request, events=events):
+                events.append("transport")
+                return httpx.Response(200, json={**RESPONSE, "pages": [{"index": 0, "markdown": "custom transport"}]})
+
+            callback = Callback(lambda view, events=events: events.append("pre_call"))
+            with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+                before = len(self.server.requests)
+                response = invoke(mode, inputs(self.server, [callback], client=HTTPHandler(client=client)))
+            self.check_callbacks([callback])
+            observations.append((events, len(self.server.requests) - before, response.pages[0].markdown))
+        baseline, retained = observations
+        self.assertEqual(baseline, (["pre_call", "transport"], 0, "custom transport"))
+        self.assertEqual(retained, baseline, "UC-HTTPX-SEND: retained send bypassed the custom transport")
+
+    @unittest.expectedFailure
+    def test_known_gap_pre_call_timeout_mutation(self):
+        """UC-TIMEOUT-MUTATION: a caller's timeout is changed by pre_call; encoding must accept read=None."""
+        observations = []
+        for mode in ("python-sync", "native-sync"):
+            timeout = httpx.Timeout(5.0)
+
+            def mutate_timeout(view, timeout=timeout):
+                timeout.read = None
+
+            callback = Callback(mutate_timeout)
+            kwargs = inputs(self.server, [callback], client=self.sync_client)
+            kwargs["timeout"] = timeout
+            before = len(self.server.requests)
+            try:
+                response = invoke(mode, kwargs)
+            except ValueError as error:
+                outcome = ("error", str(error))
+            else:
+                outcome = ("success", response.pages[0].markdown)
+            self.check_callbacks([callback])
+            self.assertIsNone(timeout.read)
+            observations.append((outcome, len(self.server.requests) - before))
+        baseline, retained = observations
+        self.assertEqual(baseline, (("success", "local OCR"), 1))
+        self.assertEqual(retained, baseline, "UC-TIMEOUT-MUTATION: retained encoding rejected the callback's timeout")
 
     def check_negative_control(self, boundary_factory, failure, expected_requests):
         async def exercise():
@@ -633,3 +712,13 @@ class RealBoundaryTests(unittest.TestCase):
             self.assertEqual(len(self.server.requests), 1)
 
         asyncio.run(exercise())
+
+
+def run_case(scenario):
+    suite = unittest.TestSuite([RealBoundaryTests("test_" + scenario)])
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
+    for _, traceback in result.expectedFailures:
+        assert "AssertionError:" in traceback and (
+            "UC-HTTPX-SEND:" in traceback or "UC-TIMEOUT-MUTATION:" in traceback
+        ), traceback
+    assert result.wasSuccessful(), "OCR retained parity test failed or unexpectedly succeeded"

@@ -159,7 +159,7 @@ pub(crate) fn run_async(boundary: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
 
 fn execution_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     static MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
-    let module = MODULE.get_or_try_init(py, || {
+    if MODULE.get(py).is_none() {
         let module = PyModule::from_code(
             py,
             c"class RetainedExecution:
@@ -196,7 +196,8 @@ async def drive(execution):
         module.add("_encode", wrap_pyfunction!(encode, &module)?)?;
         module.add("_finish", wrap_pyfunction!(finish, &module)?)?;
         module.add("_send", wrap_pyfunction!(send, &module)?)?;
-        Ok::<_, PyErr>(module.unbind())
-    })?;
+        let _ = MODULE.set(py, module.unbind());
+    }
+    let module = MODULE.get(py).unwrap();
     Ok(module.bind(py).clone())
 }
