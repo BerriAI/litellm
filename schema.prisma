@@ -343,6 +343,7 @@ model LiteLLM_MCPServerTable {
   delegate_auth_to_upstream Boolean @default(false)
   oauth_passthrough Boolean @default(false)
   dcr_bridge Boolean?
+  per_server_oauth_discovery Boolean @default(false)
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
@@ -1508,6 +1509,8 @@ model LiteLLM_AutoRouterSession {
   total_tokens          BigInt   @default(0)
   spend                 Float    @default(0)
   saved_spend           Float    @default(0)
+  classifier_cost       Float    @default(0)
+  classifier_cost_recorded_turns Int @default(0)
   tier_turns            Json     @default("{}")
 
   @@id([api_key, session_id, router_name])

@@ -495,6 +495,7 @@ public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
 agent_search_embedding_model: Optional[str] = None
 mcp_tool_search: Optional[Mapping[str, object]] = None
+skill_search_embedding_model: Optional[str] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
 # New format: { "displayName": { "url": "...", "index": 0 } }
 # Old format: { "displayName": "url" } (for backward compatibility)
@@ -2000,6 +2001,9 @@ if TYPE_CHECKING:
     )
     from .llms.hosted_vllm.responses.transformation import (
         HostedVLLMResponsesAPIConfig as HostedVLLMResponsesAPIConfig,
+    )
+    from .llms.fireworks_ai.responses.transformation import (
+        FireworksAIResponsesAPIConfig as FireworksAIResponsesAPIConfig,
     )
     from .llms.github_copilot.chat.transformation import (
         GithubCopilotConfig as GithubCopilotConfig,

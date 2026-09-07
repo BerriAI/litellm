@@ -195,6 +195,10 @@ class AutoRouterBenchmarkTotals(BaseModel):
     avg_session_seconds: float
     avg_tokens_per_session: float
     spend: float = Field(description="What the routed traffic actually cost")
+    classifier_cost: float | None = Field(
+        description="Recorded LLM classifier cost already included in spend; null when any session turns predate "
+        "subtotal recording, and zero for an empty window"
+    )
     saved_spend: float = Field(
         description="Signed dollars saved versus each router's savings baseline (derived from its hardest "
         "tier, or the configured override), from the same per-request savings record the usage tab reads"

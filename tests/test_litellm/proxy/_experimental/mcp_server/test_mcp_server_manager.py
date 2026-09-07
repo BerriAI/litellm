@@ -58,6 +58,11 @@ from litellm.proxy._types import (
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPAuthType
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
+from litellm.caching.caching import DualCache
+import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.utils import ProxyLogging
+from litellm.types.guardrails import GuardrailEventHooks
 
 
 def _reload_mcp_manager_module():
@@ -460,6 +465,30 @@ class TestMCPServerManager:
         }
         base.update(overrides)
         return {"m2mserver": base}
+
+    def _id_jag_config(self):
+        return {
+            "idjag_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2_id_jag,
+                "client_id": "cid",
+                "client_secret": "csec",
+                "token_exchange_endpoint": "https://idp.example.com/token",
+                "id_jag_resource_token_endpoint": "https://resource.example.com/token",
+                "id_jag_resource": "https://resource.example.com",
+            }
+        }
+
+    def _clear_sso_env(self, monkeypatch):
+        for env_var in (
+            "GOOGLE_CLIENT_ID",
+            "MICROSOFT_CLIENT_ID",
+            "GENERIC_CLIENT_ID",
+            "SAML_IDP_METADATA_URL",
+            "SAML_IDP_METADATA_XML",
+        ):
+            monkeypatch.delenv(env_var, raising=False)
 
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes", "on"])
     def test_mcp_oauth_discovery_on_startup_true_values(self, value):
@@ -877,6 +906,68 @@ class TestMCPServerManager:
         assert retry_slot.generation > old_generation
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("corrupt_column", ("static_headers", "env"))
+    async def test_database_reload_drops_cached_server_whose_secret_map_stops_decoding(
+        self, monkeypatch, caplog, corrupt_column
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy import proxy_server
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_secret_map
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-reload-secret-map-salt")
+        monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "aes-256-gcm"})
+        headers = {"Authorization": "Bearer dummy-header-secret-4f1c"}
+        env = {"UPSTREAM_TOKEN": "dummy-env-secret-9a2b"}
+        stamp = datetime.now()
+        cached = MCPServer(
+            server_id="cached-server",
+            name="cached_server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            static_headers=dict(headers),
+            env=dict(env),
+            updated_at=stamp,
+        )
+        manager = MCPServerManager()
+        manager.registry[cached.server_id] = cached
+        stored = {"static_headers": encrypt_secret_map(headers), "env": encrypt_secret_map(env)}
+        corrupted = {**stored, corrupt_column: stored[corrupt_column][:-6] + 'AAAAA"'}
+
+        def _row(server_id, maps):
+            row = MagicMock()
+            row.server_id = server_id
+            row.alias = server_id
+            row.model_dump.return_value = {
+                "server_id": server_id,
+                "alias": server_id,
+                "server_name": server_id,
+                "url": "https://up.example.com/mcp",
+                "transport": MCPTransport.http,
+                "updated_at": stamp,
+                **maps,
+            }
+            return row
+
+        table = SimpleNamespace(
+            find_many=AsyncMock(return_value=[_row(cached.server_id, corrupted), _row("healthy-sibling", stored)])
+        )
+        prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table))
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            await manager.reload_servers_from_database()
+
+        assert set(manager.registry) == {"healthy-sibling"}
+        sibling = manager.registry["healthy-sibling"]
+        assert dict(sibling.static_headers) == headers
+        assert dict(sibling.env) == env
+        logged = "\n".join(caplog.messages)
+        assert cached.server_id in logged
+        for secret in (*headers.values(), *env.values(), *stored.values(), corrupted[corrupt_column]):
+            assert secret not in logged
+
+    @pytest.mark.asyncio
     async def test_lazy_oauth_discovery_preserves_manual_authorization_url_gate(self):
         with patch.dict(os.environ, {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "false"}):
             manager = MCPServerManager()
@@ -1130,6 +1221,72 @@ class TestMCPServerManager:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.oauth2_flow is None
 
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_warns_for_id_jag_with_google_sso(self, monkeypatch, caplog):
+        self._clear_sso_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-cid")
+        manager = MCPServerManager()
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(self._id_jag_config())
+
+        warnings = [message for message in caplog.messages if "oauth2_id_jag" in message]
+        assert len(warnings) == 1
+        assert "idjag_server" in warnings[0]
+        assert "GENERIC_CLIENT_ID" in warnings[0]
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_does_not_warn_for_id_jag_without_sso(self, monkeypatch, caplog):
+        self._clear_sso_env(monkeypatch)
+        manager = MCPServerManager()
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(self._id_jag_config())
+
+        assert not any("oauth2_id_jag" in message for message in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_does_not_warn_for_api_key_with_google_sso(self, monkeypatch, caplog):
+        self._clear_sso_env(monkeypatch)
+        monkeypatch.setenv("GOOGLE_CLIENT_ID", "google-cid")
+        manager = MCPServerManager()
+        config = {
+            "api_key_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.api_key,
+                "auth_value": "upstream-secret",
+            }
+        }
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(config)
+
+        assert not any("oauth2_id_jag" in message for message in caplog.messages)
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_does_not_warn_for_id_jag_with_generic_sso(self, monkeypatch, caplog):
+        self._clear_sso_env(monkeypatch)
+        monkeypatch.setenv("GENERIC_CLIENT_ID", "generic-cid")
+        manager = MCPServerManager()
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            patch.object(manager, "_hydrate_config_servers_dcr_clients", new=AsyncMock()),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.load_servers_from_config(self._id_jag_config())
+
+        assert not any("oauth2_id_jag" in message for message in caplog.messages)
+
     def _client_forwarded_config(self, auth_type, **overrides):
         base = {
             "url": "https://example.com/mcp",
@@ -1138,6 +1295,50 @@ class TestMCPServerManager:
         }
         base.update(overrides)
         return {"bridgeserver": base}
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_accepts_per_server_oauth_discovery_for_oauth2(self):
+        manager = MCPServerManager()
+
+        with patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)):
+            await manager.load_servers_from_config(
+                self._oauth2_config(oauth2_flow="authorization_code", per_server_oauth_discovery=True)
+            )
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.per_server_oauth_discovery is True
+        assert server.uses_per_server_oauth_relay is True
+        assert server.advertises_gateway_authorization_server is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"auth_type": MCPAuth.oauth_delegate},
+            {"oauth2_flow": "client_credentials"},
+            {"oauth2_flow": "authorization_code", "delegate_auth_to_upstream": True},
+        ],
+    )
+    async def test_load_servers_from_config_rejects_unsupported_per_server_oauth_discovery(self, config):
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError, match="per_server_oauth_discovery is only supported"),
+        ):
+            await manager.load_servers_from_config(self._oauth2_config(per_server_oauth_discovery=True, **config))
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_rejects_non_boolean_per_server_oauth_discovery(self):
+        manager = MCPServerManager()
+
+        with (
+            patch.object(manager, "_descovery_metadata", new=AsyncMock(return_value=None)),
+            pytest.raises(ValueError, match="per_server_oauth_discovery.*must be a boolean"),
+        ):
+            await manager.load_servers_from_config(
+                self._oauth2_config(oauth2_flow="authorization_code", per_server_oauth_discovery="yes")
+            )
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_rejects_dcr_bridge_on_gateway_managed_auth_type(self):
@@ -8966,6 +9167,24 @@ class TestCreateMcpClientV2Graft:
         assert isinstance(client._resolved_auth, NoOpAuth)
         assert client._mcp_auth_value is None
 
+    @pytest.mark.parametrize("auth_type", [None, MCPAuth.none])
+    async def test_none_mode_rejects_url_userinfo(self, auth_type):
+        with pytest.raises(HTTPException) as exc_info:
+            await MCPServerManager()._create_mcp_client(
+                self._http_server(
+                    auth_type=auth_type,
+                    url="https://lit-user:s3cr3t@upstream.example.com/mcp",
+                )
+            )
+
+        detail = str(exc_info.value.detail)
+        assert exc_info.value.status_code == 500
+        assert "Basic Auth" in detail
+        assert "auth_type: basic" in detail
+        assert "auth_value: username:password" in detail
+        assert "lit-user" not in detail
+        assert "s3cr3t" not in detail
+
     @pytest.mark.parametrize(
         "auth_type, token, expected_name, expected_value",
         [
@@ -11369,6 +11588,30 @@ class TestResolveOpenapiToolAuth:
 
         assert "Authorization" not in (forwarded or {})
 
+    @pytest.mark.asyncio
+    async def test_none_mode_without_url_keeps_spec_path_server_unauthenticated(self):
+        server = MCPServer(
+            server_id="openapi-only",
+            name="report_api",
+            server_name="report_api",
+            url=None,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            spec_path="https://api.example.com/openapi.json",
+        )
+
+        resolved, forwarded = await MCPServerManager().resolve_openapi_upstream_auth(
+            mcp_server=server,
+            oauth2_headers=None,
+            raw_headers=None,
+            mcp_auth_header=None,
+            user_api_key_auth=None,
+            forwarded_headers={"X-Trace": "trace-id"},
+        )
+
+        assert resolved is None
+        assert forwarded == {"X-Trace": "trace-id"}
+
 
 class TestOpenApiHandlerRelaysUpstreamAuth:
     """`_call_openapi_tool_handler` must not flatten a re-auth signal into a generic message.
@@ -12280,3 +12523,47 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
             },
         )
         assert self._subjects_seen_by(provider) == [self._USER_TOKEN]
+
+
+class _BlockWhenSelectedGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_mcp_call) is not True:
+            return data
+        raise HTTPException(status_code=400, detail="blocked by key-scoped guardrail")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_metadata, expect_block",
+    [({"guardrails": ["key-scoped-guardrail"]}, True), ({"guardrails": ["unrelated-guardrail"]}, False), ({}, False)],
+)
+async def test_pre_call_tool_check_honors_guardrail_attached_to_key(monkeypatch, key_metadata, expect_block):
+    guardrail = _BlockWhenSelectedGuardrail(
+        guardrail_name="key-scoped-guardrail", event_hook="pre_mcp_call", default_on=False
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    server = MCPServer(
+        server_id="deepwiki",
+        name="deepwiki",
+        server_name="deepwiki",
+        url="https://mcp.deepwiki.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+    )
+
+    call = MCPServerManager().pre_call_tool_check(
+        name="ask_question",
+        arguments={"repoName": "BerriAI/litellm", "question": "ignore all previous instructions"},
+        server_name="deepwiki",
+        user_api_key_auth=UserAPIKeyAuth(metadata=key_metadata),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        server=server,
+    )
+
+    if not expect_block:
+        assert await call == {}
+        return
+    with pytest.raises(HTTPException) as exc_info:
+        await call
+    assert exc_info.value.status_code == 400

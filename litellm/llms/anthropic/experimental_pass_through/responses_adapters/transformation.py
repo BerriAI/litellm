@@ -19,6 +19,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
+from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+    refusal_stop_details,
+    responses_output_refusal_text,
+)
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     prompt_cache_key_from_user_id,
@@ -624,6 +628,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         content: Final[list[dict[str, object]]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
+        refusal_text: Final = responses_output_refusal_text(
+            cast(Iterable[object], response.output)  # cast-ok: output items re-validated per item
+        )
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
@@ -631,9 +638,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
             elif isinstance(item, ResponseOutputMessage):
                 for part in item.content:
-                    if getattr(part, "type", None) == "output_text":
+                    part_type = getattr(part, "type", None)
+                    if part_type == "output_text":
                         content.append(
                             AnthropicResponseContentBlockText(type="text", text=getattr(part, "text", "")).model_dump()
+                        )
+                    elif part_type == "refusal":
+                        content.append(
+                            AnthropicResponseContentBlockText(
+                                type="text", text=getattr(part, "refusal", "") or ""
+                            ).model_dump()
                         )
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -647,18 +661,28 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         id=item.call_id or item.id or "",
                         name=item.name,
                         input=input_data,
-                    ).model_dump()
+                    ).model_dump(exclude_none=True)
                 )
                 stop_reason = "tool_use"
 
             elif isinstance(item, dict):
                 item_type = item.get("type")
                 if item_type == "message":
-                    for part in item.get("content", []):
-                        if isinstance(part, dict) and part.get("type") == "output_text":
-                            content.append(
-                                AnthropicResponseContentBlockText(type="text", text=part.get("text", "")).model_dump()
-                            )
+                    for part in item.get("content", ()):
+                        if isinstance(part, dict):
+                            part_type = part.get("type")
+                            if part_type == "output_text":
+                                content.append(
+                                    AnthropicResponseContentBlockText(
+                                        type="text", text=part.get("text", "")
+                                    ).model_dump()
+                                )
+                            elif part_type == "refusal":
+                                content.append(
+                                    AnthropicResponseContentBlockText(
+                                        type="text", text=part.get("refusal", "") or ""
+                                    ).model_dump()
+                                )
                 elif item_type == "reasoning":
                     content.extend(
                         self._thinking_blocks_from_reasoning_item(
@@ -676,13 +700,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             id=item.get("call_id") or item.get("id", ""),
                             name=item.get("name", ""),
                             input=input_data,
-                        ).model_dump()
+                        ).model_dump(exclude_none=True)
                     )
                     stop_reason = "tool_use"
-
-        # status -> stop_reason override
         if response.status == "incomplete":
             stop_reason = "max_tokens"
+        elif refusal_text is not None:
+            stop_reason = "refusal"
 
         anthropic_usage: Final = self.translate_responses_api_usage_to_anthropic_usage(response.usage)
 
@@ -695,4 +719,5 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             usage=anthropic_usage,
             content=content,
             stop_reason=stop_reason,
+            stop_details=(refusal_stop_details(refusal_text) if stop_reason == "refusal" else None),
         )
