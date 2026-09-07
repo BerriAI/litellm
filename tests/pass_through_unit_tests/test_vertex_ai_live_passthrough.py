@@ -201,88 +201,247 @@ class TestVertexAILivePassthroughLoggingHandler:
         assert text_prompt["tokenCount"] == 10
         assert audio_prompt["tokenCount"] == 10
 
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.get_model_info"
-    )
-    def test_calculate_cost_basic(self, mock_get_model_info, handler):
-        """Test basic cost calculation"""
-        mock_get_model_info.return_value = {
-            "input_cost_per_token": 0.000001,
-            "output_cost_per_token": 0.000002,
-        }
+    def test_usage_carries_every_modality(self, handler):
+        """Regression: the Usage object reported only TEXT, so audio and image billed as nothing.
 
+        prompt_tokens must be the full count and the details must name each modality,
+        because the cost calculator prices audio and image from *_tokens_details.
+        """
         usage_metadata = {
-            "promptTokenCount": 100,
-            "candidatesTokenCount": 50,
-            "totalTokenCount": 150,
-        }
-
-        cost = handler._calculate_live_api_cost("gemini-1.5-pro", usage_metadata)
-
-        # The cost calculation may include additional factors, so we check it's reasonable
-        expected_min_cost = (100 * 0.000001) + (50 * 0.000002)
-        assert cost >= expected_min_cost
-        assert cost > 0
-
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.get_model_info"
-    )
-    def test_calculate_cost_with_audio(self, mock_get_model_info, handler):
-        """Test cost calculation with audio tokens"""
-        mock_get_model_info.return_value = {
-            "input_cost_per_token": 0.000001,
-            "output_cost_per_token": 0.000002,
-            "input_cost_per_audio_token": 0.0001,
-            "output_cost_per_audio_token": 0.0002,
-        }
-
-        usage_metadata = {
-            "promptTokenCount": 100,
-            "candidatesTokenCount": 50,
-            "totalTokenCount": 150,
+            "promptTokenCount": 1300,
+            "candidatesTokenCount": 124,
+            "totalTokenCount": 1424,
             "promptTokensDetails": [
-                {"modality": "TEXT", "tokenCount": 80},
-                {"modality": "AUDIO", "tokenCount": 20},
+                {"modality": "TEXT", "tokenCount": 13},
+                {"modality": "AUDIO", "tokenCount": 127},
+                {"modality": "IMAGE", "tokenCount": 1160},
             ],
             "candidatesTokensDetails": [
-                {"modality": "TEXT", "tokenCount": 30},
-                {"modality": "AUDIO", "tokenCount": 20},
+                {"modality": "TEXT", "tokenCount": 29},
+                {"modality": "AUDIO", "tokenCount": 95},
             ],
         }
 
-        cost = handler._calculate_live_api_cost("gemini-1.5-pro", usage_metadata)
+        usage = handler._create_usage_object_from_metadata(
+            usage_metadata=usage_metadata, model="gemini-live-2.5-flash"
+        )
 
-        # Should include both text and audio costs
-        assert cost > 0
-        assert cost > (100 * 0.000001) + (
-            50 * 0.000002
-        )  # Should be higher due to audio
+        assert usage.prompt_tokens == 1300, "the full prompt count must survive, not just its text share"
+        assert usage.completion_tokens == 124
+        assert usage.prompt_tokens_details.text_tokens == 13
+        assert usage.prompt_tokens_details.audio_tokens == 127
+        assert usage.prompt_tokens_details.image_tokens == 1160
+        assert usage.completion_tokens_details.text_tokens == 29
+        assert usage.completion_tokens_details.audio_tokens == 95
 
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.get_model_info"
+    def test_usage_sums_repeated_modality_entries(self, handler):
+        """A modality can appear more than once across aggregated turns; sum, don't overwrite."""
+        usage = handler._create_usage_object_from_metadata(
+            usage_metadata={
+                "promptTokenCount": 40,
+                "candidatesTokenCount": 0,
+                "promptTokensDetails": [
+                    {"modality": "IMAGE", "tokenCount": 10},
+                    {"modality": "IMAGE", "tokenCount": 25},
+                    {"modality": "TEXT", "tokenCount": 5},
+                ],
+            },
+            model="gemini-live-2.5-flash",
+        )
+        assert usage.prompt_tokens_details.image_tokens == 35
+        assert usage.prompt_tokens_details.text_tokens == 5
+
+    NATIVE_AUDIO_MODEL = "gemini-live-2.5-flash-preview-native-audio-09-2025"
+
+    # A four-turn native-audio session. Google charges per turn for the whole session context
+    # window, so the prompt side repeats the accumulated audio while the candidates side reports
+    # only that turn's own response. The last turn names AUDIO and omits its tokenCount, which is
+    # the shape Live really emits at the end of a spoken answer.
+    AUDIO_SESSION = (
+        {"prompt": (14, 122), "candidates": (8, 20)},
+        {"prompt": (21, 182), "candidates": (5, 50)},
+        {"prompt": (24, 203), "candidates": (13, 27)},
+        {"prompt": (24, 203), "candidates": (0, 3), "candidate_audio_token_count_missing": True},
     )
-    def test_calculate_cost_with_web_search(self, mock_get_model_info, handler):
-        """Test cost calculation with web search (tool use)"""
-        mock_get_model_info.return_value = {
-            "input_cost_per_token": 0.000001,
-            "output_cost_per_token": 0.000002,
-            "web_search_cost_per_request": 0.01,
-        }
 
-        usage_metadata = {
-            "promptTokenCount": 100,
-            "candidatesTokenCount": 50,
-            "totalTokenCount": 150,
-            "toolUsePromptTokenCount": 10,
-        }
+    @staticmethod
+    def _live_messages(turns):
+        """Wrap (text, audio) prompt/candidate pairs as the server messages a Live session emits."""
+        return [{"type": "session.created", "session": {"id": "s"}}] + [
+            {
+                "type": "response.done",
+                "usageMetadata": {
+                    "promptTokenCount": sum(turn["prompt"]),
+                    "candidatesTokenCount": sum(turn["candidates"]),
+                    "totalTokenCount": sum(turn["prompt"]) + sum(turn["candidates"]),
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": turn["prompt"][0]},
+                        {"modality": "AUDIO", "tokenCount": turn["prompt"][1]},
+                    ],
+                    "candidatesTokensDetails": (
+                        [{"modality": "AUDIO"}]
+                        if turn.get("candidate_audio_token_count_missing")
+                        else [
+                            {"modality": "TEXT", "tokenCount": turn["candidates"][0]},
+                            {"modality": "AUDIO", "tokenCount": turn["candidates"][1]},
+                        ]
+                    ),
+                },
+            }
+            for turn in turns
+        ]
 
-        cost = handler._calculate_live_api_cost("gemini-1.5-pro", usage_metadata)
+    @staticmethod
+    def _session_usage(handler, mock_logging_obj, messages, model):
+        result = handler.vertex_ai_live_passthrough_handler(
+            websocket_messages=messages,
+            logging_obj=mock_logging_obj,
+            url_route="/vertex_ai/live",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            request_body={},
+            model=model,
+        )
+        assert result["result"] is not None, "the handler must produce a usage-bearing response to bill"
+        return result["result"].usage
 
-        # Should include web search cost
-        expected_base_cost = (100 * 0.000001) + (50 * 0.000002)
-        # The web search cost might be handled differently, so just check it's reasonable
-        assert cost >= expected_base_cost
-        assert cost > 0
+    @classmethod
+    def _session_cost(cls, handler, mock_logging_obj, messages, model):
+        from litellm.cost_calculator import completion_cost
+        from litellm.types.utils import ModelResponse
+
+        usage = cls._session_usage(handler, mock_logging_obj, messages, model)
+        return completion_cost(
+            completion_response=ModelResponse(
+                id="x", object="chat.completion", created=0, model=model, usage=usage, choices=[]
+            ),
+            model=f"vertex_ai/{model}",
+            custom_llm_provider="vertex_ai",
+            call_type="acompletion",
+        )
+
+    @classmethod
+    def _expected_session_cost(cls, turns):
+        from litellm.utils import get_model_info
+
+        info = get_model_info(model=cls.NATIVE_AUDIO_MODEL, custom_llm_provider="vertex_ai")
+        return (
+            sum(turn["prompt"][0] for turn in turns) * info["input_cost_per_token"]
+            + sum(turn["prompt"][1] for turn in turns) * info["input_cost_per_audio_token"]
+            + sum(turn["candidates"][0] for turn in turns) * info["output_cost_per_token"]
+            + sum(turn["candidates"][1] for turn in turns) * info["output_cost_per_audio_token"]
+        )
+
+    def test_every_turn_of_a_session_is_billed(self, handler, mock_logging_obj):
+        """Google charges per turn for the whole context window, so every turn adds to the bill.
+
+        Billing one snapshot instead gives away all the other turns: on this session the
+        largest single turn is well under the session total, and its share of the audio is
+        priced 6x the text rate, so the gap is money rather than rounding.
+        """
+        turns = self.AUDIO_SESSION[:3]
+        cost = self._session_cost(handler, mock_logging_obj, self._live_messages(turns), self.NATIVE_AUDIO_MODEL)
+
+        assert cost == pytest.approx(self._expected_session_cost(turns), rel=1e-9)
+        widest_single_turn = max(self._expected_session_cost([turn]) for turn in turns)
+        assert cost > widest_single_turn, "billing one snapshot drops every other turn of the session"
+
+    def test_audio_named_without_a_token_count_bills_at_the_audio_rate(self, handler, mock_logging_obj):
+        """Live can name the modality carrying the rest of a turn and omit its tokenCount.
+
+        Reading the absent key as zero left those tokens inside candidatesTokenCount but outside
+        the breakdown, so the calculator charged real speech at the text output rate. At this
+        entry's rates the last turn's 3 audio tokens are $0.0000360 rather than $0.0000060.
+        """
+        turns = self.AUDIO_SESSION
+        usage = self._session_usage(handler, mock_logging_obj, self._live_messages(turns), self.NATIVE_AUDIO_MODEL)
+
+        assert usage.completion_tokens_details.audio_tokens == 100, "the unpriced entry takes the turn's residual"
+        assert usage.completion_tokens_details.text_tokens == 26
+        assert usage.completion_tokens == 126
+
+        cost = self._session_cost(handler, mock_logging_obj, self._live_messages(turns), self.NATIVE_AUDIO_MODEL)
+        assert cost == pytest.approx(self._expected_session_cost(turns), rel=1e-9)
+
+    def test_server_side_tool_use_prompt_tokens_are_reported(self, handler, mock_logging_obj):
+        """toolUsePromptTokenCount was dropped, so a grounded session logged fewer tokens than it used.
+
+        It is reported, not billed. Nothing in the shared Gemini input-cost path prices
+        tool-use tokens, and folding them into prompt_tokens here would suppress that
+        path's cache-overlap correction and raise the bill instead.
+        """
+        messages = self._live_messages(self.AUDIO_SESSION[:1])
+        grounded = [dict(message) for message in messages]
+        grounded[-1]["usageMetadata"] = {**grounded[-1]["usageMetadata"], "toolUsePromptTokenCount": 500}
+
+        usage = self._session_usage(handler, mock_logging_obj, grounded, self.NATIVE_AUDIO_MODEL)
+        assert usage.prompt_tokens_details.tool_use_tokens == 500
+
+        plain_cost = self._session_cost(handler, mock_logging_obj, messages, self.NATIVE_AUDIO_MODEL)
+        grounded_cost = self._session_cost(handler, mock_logging_obj, grounded, self.NATIVE_AUDIO_MODEL)
+        assert grounded_cost == pytest.approx(plain_cost, rel=1e-9), "reporting tool use must not move the bill"
+
+    @pytest.mark.parametrize(
+        "label,prompt_details,candidate_details",
+        [
+            ("text only", [("TEXT", 6)], [("TEXT", 2)]),
+            ("audio in", [("TEXT", 13), ("AUDIO", 127)], [("TEXT", 18)]),
+            ("image in", [("TEXT", 10), ("IMAGE", 258)], [("TEXT", 24)]),
+            ("frames in", [("TEXT", 11), ("IMAGE", 1032)], [("TEXT", 26)]),
+            ("audio both ways", [("TEXT", 13), ("AUDIO", 127)], [("TEXT", 29), ("AUDIO", 95)]),
+        ],
+    )
+    def test_live_session_bills_each_modality_at_its_own_rate(self, handler, label, prompt_details, candidate_details):
+        """Every payload here is a real Vertex Live session's usageMetadata.
+
+        Before the fix these billed the text share only, from 1x (text) to 55x under.
+        The expected amount is derived from the entry's own rates rather than hardcoded,
+        so this stays correct as prices move, and it is asserted exactly, so dropping a
+        modality and double-charging one both fail.
+        """
+        from litellm.cost_calculator import completion_cost
+        from litellm.types.utils import ModelResponse
+        from litellm.utils import get_model_info
+
+        model = self.NATIVE_AUDIO_MODEL
+        info = get_model_info(model=model, custom_llm_provider="vertex_ai")
+
+        text_in = info["input_cost_per_token"]
+        audio_in = info.get("input_cost_per_audio_token") or text_in
+        image_in = info.get("input_cost_per_image_token") or text_in
+        text_out = info["output_cost_per_token"]
+        audio_out = info.get("output_cost_per_audio_token") or text_out
+        rate_in = {"TEXT": text_in, "AUDIO": audio_in, "IMAGE": image_in}
+        rate_out = {"TEXT": text_out, "AUDIO": audio_out}
+
+        expected = sum(c * rate_in[m] for m, c in prompt_details) + sum(c * rate_out[m] for m, c in candidate_details)
+
+        usage = handler._create_usage_object_from_metadata(
+            usage_metadata={
+                "promptTokenCount": sum(c for _, c in prompt_details),
+                "candidatesTokenCount": sum(c for _, c in candidate_details),
+                "promptTokensDetails": [{"modality": m, "tokenCount": c} for m, c in prompt_details],
+                "candidatesTokensDetails": [{"modality": m, "tokenCount": c} for m, c in candidate_details],
+            },
+            model=model,
+        )
+
+        cost = completion_cost(
+            completion_response=ModelResponse(
+                id="x", object="chat.completion", created=0, model=model, usage=usage, choices=[]
+            ),
+            model=f"vertex_ai/{model}",
+            custom_llm_provider="vertex_ai",
+            call_type="acompletion",
+        )
+
+        assert cost == pytest.approx(expected, rel=1e-9), label
+
+        text_only = sum(c for m, c in prompt_details if m == "TEXT") * text_in + sum(
+            c for m, c in candidate_details if m == "TEXT"
+        ) * text_out
+        if any(m != "TEXT" for m, _ in prompt_details + candidate_details) and audio_in != text_in:
+            assert cost > text_only, f"{label}: non-text modalities must add cost"
 
     def test_vertex_ai_live_passthrough_handler_integration(
         self, handler, mock_logging_obj, sample_websocket_messages
@@ -540,25 +699,24 @@ class TestVertexAILivePassthroughErrorHandling:
         result = handler._extract_usage_metadata_from_websocket_messages(messages)
         assert result is None
 
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_ai_live_passthrough_logging_handler.get_model_info"
-    )
-    def test_cost_calculation_with_missing_model_info(self, mock_get_model_info):
-        """Test cost calculation when model info is missing"""
+    def test_usage_without_modality_details(self):
+        """Older payloads carry only the totals; fall back to them rather than reporting zero."""
         handler = VertexAILivePassthroughLoggingHandler()
 
-        # Mock missing model info
-        mock_get_model_info.return_value = {}
+        usage = handler._create_usage_object_from_metadata(
+            usage_metadata={
+                "promptTokenCount": 100,
+                "candidatesTokenCount": 50,
+                "totalTokenCount": 150,
+            },
+            model="unknown-model",
+        )
 
-        usage_metadata = {
-            "promptTokenCount": 100,
-            "candidatesTokenCount": 50,
-            "totalTokenCount": 150,
-        }
-
-        # Should not raise an exception, should return 0 or handle gracefully
-        cost = handler._calculate_live_api_cost("unknown-model", usage_metadata)
-        assert cost == 0.0
+        assert usage.prompt_tokens == 100
+        assert usage.completion_tokens == 50
+        assert usage.total_tokens == 150
+        assert usage.prompt_tokens_details.audio_tokens is None
+        assert usage.prompt_tokens_details.image_tokens is None
 
     def test_handler_with_none_websocket_messages(self, mock_logging_obj):
         """Test handler with None websocket messages"""
