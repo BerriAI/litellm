@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from itertools import count
 from time import monotonic, sleep
 from typing import Final, Protocol
 
@@ -84,11 +85,13 @@ def cleanup_batch(
             if not needs_terminal_state:
                 return
     deadline: Final = clock() + BATCH_CANCEL_TIMEOUT_SECONDS
-    while True:
-        current = _require_cleanup_success(
+    for current in (
+        _require_cleanup_success(
             cleanup_result(lambda: client.retrieve_batch(batch_id, key=key, provider=provider)),
             f"Retrieve batch {batch_id} after cancellation",
         )
+        for _ in count()
+    ):
         if current.status in BATCH_TERMINAL_STATUSES:
             return
         assert current.status == "cancelling", f"Cancel batch {batch_id} left status {current.status}"

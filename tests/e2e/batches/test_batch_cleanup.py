@@ -16,33 +16,44 @@ MANAGED_FILE_ID: Final = "bGl0ZWxsbV9wcm94eTtmaWxlLTE="
 MANAGED_BATCH_ID: Final = "bGl0ZWxsbV9wcm94eTtiYXRjaC0x"
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
+class ExpectedCalls[T]:
+    values: Iterator[T]
+
+    def __call__(self, value: T) -> None:
+        assert next(self.values, None) == value
+
+    def assert_done(self) -> None:
+        assert tuple(self.values) == ()
+
+
+@dataclass(frozen=True, slots=True)
 class CleanupClient:
+    calls: ExpectedCalls[str]
     files: Iterator[Result[FileDeleteResponse]] = field(default_factory=lambda: iter(()))
     batches: Iterator[Result[BatchObject]] = field(default_factory=lambda: iter(()))
     cancellations: Iterator[Result[BatchObject]] = field(default_factory=lambda: iter(()))
-    calls: list[str] = field(default_factory=list)
 
     def delete_file(self, file_id: str, *, key: str, provider: str | None = None) -> Result[FileDeleteResponse]:
-        self.calls.append(f"delete {provider} {file_id}")
+        self.calls(f"delete {provider} {file_id}")
         return next(self.files)
 
     def retrieve_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]:
-        self.calls.append(f"retrieve {provider} {batch_id}")
+        self.calls(f"retrieve {provider} {batch_id}")
         return next(self.batches)
 
     def cancel_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]:
-        self.calls.append(f"cancel {provider} {batch_id}")
+        self.calls(f"cancel {provider} {batch_id}")
         return next(self.cancellations)
 
     def generate_key(self, body: KeyGenerateBody) -> str:
         return "test-key"
 
     def delete_key(self, key: str) -> None:
-        self.calls.append(f"delete key {key}")
+        self.calls(f"delete key {key}")
 
     def delete_customers(self, user_ids: list[str]) -> None:
-        self.calls.append(f"delete customers {user_ids}")
+        self.calls(f"delete customers {user_ids}")
 
 
 def batch(status: str) -> Success[BatchObject]:
@@ -58,51 +69,71 @@ class TestFileCleanup:
         response: Final = Success(
             status_code=200, data=FileDeleteResponse.model_validate({"id": MANAGED_FILE_ID, "object": "file"})
         )
-        client: Final = CleanupClient(files=iter((response,)))
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(iter((f"delete None {MANAGED_FILE_ID}",))), files=iter((response,))
+        )
         cleanup_file(client, MANAGED_FILE_ID, key="test-key")
-        assert client.calls == [f"delete None {MANAGED_FILE_ID}"]
+        client.calls.assert_done()
 
     @pytest.mark.parametrize("file_id", ["file-1", MANAGED_FILE_ID])
     def test_a_success_status_without_a_deletion_confirmation_is_rejected(self, file_id: str) -> None:
-        client: Final = CleanupClient(files=iter((Success(status_code=200, data=FileDeleteResponse(id=file_id)),)))
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(iter((f"delete None {file_id}",))),
+            files=iter((Success(status_code=200, data=FileDeleteResponse(id=file_id)),)),
+        )
         with pytest.raises(AssertionError, match="did not confirm deletion"):
             cleanup_file(client, file_id, key="test-key")
+        client.calls.assert_done()
 
     @pytest.mark.parametrize("cap", CAPABILITIES, ids=[cap.id for cap in CAPABILITIES])
     def test_deletes_raw_files_through_the_upload_provider(self, cap: Capability) -> None:
-        client: Final = CleanupClient(files=iter((deleted_file(),)))
-        cleanup_file(client, "file-1", key="test-key", provider=cap.file_provider)
         expected_provider: Final = cap.provider if cap.scenario in {"model_param", "provider_fallback"} else None
-        assert client.calls == [f"delete {expected_provider} file-1"]
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(iter((f"delete {expected_provider} file-1",))), files=iter((deleted_file(),))
+        )
+        cleanup_file(client, "file-1", key="test-key", provider=cap.file_provider)
+        client.calls.assert_done()
 
     def test_failed_delete_is_reported_after_remaining_resources_are_cleaned(self) -> None:
-        client: Final = CleanupClient(files=iter((UnknownApiError(status_code=403, body="secret response"),)))
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(iter(("delete azure file-1", "delete key test-key"))),
+            files=iter((UnknownApiError(status_code=403, body="secret response"),)),
+        )
         manager: Final = ResourceManager(client=client, strict_cleanup=True)
         key: Final = manager.key()
         manager.defer(lambda: cleanup_file(client, "file-1", key=key, provider="azure"))
         with pytest.raises(ExceptionGroup) as caught:
             manager.teardown()
-        assert client.calls == ["delete azure file-1", "delete key test-key"]
+        client.calls.assert_done()
         assert len(caught.value.exceptions) == 1
         assert str(caught.value.exceptions[0]) == "Delete file file-1 failed: HTTP 403"
 
     def test_success_response_must_confirm_deletion(self) -> None:
-        client: Final = CleanupClient(files=iter((deleted_file(deleted=False),)))
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(iter(("delete None file-1",))), files=iter((deleted_file(deleted=False),))
+        )
         with pytest.raises(AssertionError, match="did not confirm deletion"):
             cleanup_file(client, "file-1", key="test-key")
+        client.calls.assert_done()
 
     def test_cleanup_is_idempotent_when_file_is_already_deleted(self) -> None:
-        client: Final = CleanupClient(files=iter((UnknownApiError(status_code=404, body="missing"),)))
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(iter(("delete azure file-1",))),
+            files=iter((UnknownApiError(status_code=404, body="missing"),)),
+        )
         cleanup_file(client, "file-1", key="test-key", provider="azure")
-        assert client.calls == ["delete azure file-1"]
+        client.calls.assert_done()
 
     def test_default_resource_cleanup_keeps_existing_best_effort_behavior(self) -> None:
-        client: Final = CleanupClient(files=iter((UnknownApiError(status_code=403, body="forbidden"),)))
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(iter(("delete None file-1", "delete key test-key"))),
+            files=iter((UnknownApiError(status_code=403, body="forbidden"),)),
+        )
         manager: Final = ResourceManager(client=client)
         key: Final = manager.key()
         manager.defer(lambda: cleanup_file(client, "file-1", key=key))
         manager.teardown()
-        assert client.calls == ["delete None file-1", "delete key test-key"]
+        client.calls.assert_done()
 
 
 class TestCleanupRetries:
@@ -112,40 +143,54 @@ class TestCleanupRetries:
     )
     def test_transient_error_retries_and_returns_success(self, failure: Result[FileDeleteResponse]) -> None:
         outcomes: Final = iter((failure, deleted_file()))
-        delays: Final[list[float]] = []
-        result: Final[Result[FileDeleteResponse]] = cleanup_result(lambda: next(outcomes), wait=delays.append)
+        delays: Final = ExpectedCalls(iter((1.0,)))
+        result: Final[Result[FileDeleteResponse]] = cleanup_result(lambda: next(outcomes), wait=delays)
         assert isinstance(result, Success) and result.data.deleted
-        assert delays == [1.0]
+        delays.assert_done()
 
     def test_persistent_error_has_bounded_retries(self) -> None:
         failure: Final = UnknownApiError(status_code=503, body="unavailable")
         outcomes: Final[Iterator[Result[FileDeleteResponse]]] = iter((failure,) * (len(CLEANUP_DELAYS) + 1))
-        delays: Final[list[float]] = []
-        result: Final[Result[FileDeleteResponse]] = cleanup_result(lambda: next(outcomes), wait=delays.append)
+        delays: Final = ExpectedCalls(iter(CLEANUP_DELAYS))
+        result: Final[Result[FileDeleteResponse]] = cleanup_result(lambda: next(outcomes), wait=delays)
         assert result is failure
-        assert tuple(delays) == CLEANUP_DELAYS
+        delays.assert_done()
         assert next(outcomes, None) is None
 
     def test_permanent_error_is_not_retried(self) -> None:
         failure: Final = UnknownApiError(status_code=403, body="forbidden")
         outcomes: Final = iter((failure, deleted_file()))
-        delays: Final[list[float]] = []
-        assert cleanup_result(lambda: next(outcomes), wait=delays.append) is failure
-        assert delays == []
+        delays: Final = ExpectedCalls[float](iter(()))
+        assert cleanup_result(lambda: next(outcomes), wait=delays) is failure
+        delays.assert_done()
         assert isinstance(next(outcomes), Success)
 
 
 class TestBatchCancellation:
     def test_cancelling_batch_is_polled_until_terminal_without_cancelling_again(self) -> None:
-        client: Final = CleanupClient(batches=iter((batch("cancelling"), batch("cancelling"), batch("cancelled"))))
-        delays: Final[list[float]] = []
-        cleanup_batch(client, MANAGED_BATCH_ID, key="test-key", wait=delays.append)
-        assert client.calls == [f"retrieve None {MANAGED_BATCH_ID}"] * 3
-        assert delays == [10.0]
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(iter((f"retrieve None {MANAGED_BATCH_ID}",) * 3)),
+            batches=iter((batch("cancelling"), batch("cancelling"), batch("cancelled"))),
+        )
+        delays: Final = ExpectedCalls(iter((10.0,)))
+        cleanup_batch(client, MANAGED_BATCH_ID, key="test-key", wait=delays)
+        client.calls.assert_done()
+        delays.assert_done()
 
     def test_cancellation_timeout_is_reported_but_file_and_key_cleanup_still_run(self) -> None:
         client: Final = CleanupClient(
-            batches=iter((batch("cancelling"), batch("cancelling"))), files=iter((deleted_file(),))
+            calls=ExpectedCalls(
+                iter(
+                    (
+                        f"retrieve None {MANAGED_BATCH_ID}",
+                        f"retrieve None {MANAGED_BATCH_ID}",
+                        "delete None file-1",
+                        "delete key test-key",
+                    )
+                )
+            ),
+            batches=iter((batch("cancelling"), batch("cancelling"))),
+            files=iter((deleted_file(),)),
         )
         ticks: Final = iter((0.0, BATCH_CANCEL_TIMEOUT_SECONDS))
         manager: Final = ResourceManager(client=client, strict_cleanup=True)
@@ -155,29 +200,29 @@ class TestBatchCancellation:
         with pytest.raises(ExceptionGroup) as caught:
             manager.teardown()
         assert "cancellation did not finish" in str(caught.value.exceptions[0])
-        assert client.calls == [
-            f"retrieve None {MANAGED_BATCH_ID}",
-            f"retrieve None {MANAGED_BATCH_ID}",
-            "delete None file-1",
-            "delete key test-key",
-        ]
+        client.calls.assert_done()
 
     @pytest.mark.parametrize("status", ["completed", "failed", "expired", "cancelled"])
     def test_inactive_batch_needs_no_cancellation(self, status: str) -> None:
-        client: Final = CleanupClient(batches=iter((batch(status),)))
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(iter(("retrieve None batch-1",))), batches=iter((batch(status),))
+        )
         cleanup_batch(client, "batch-1", key="test-key")
-        assert client.calls == ["retrieve None batch-1"]
+        client.calls.assert_done()
 
     def test_active_batch_is_cancelled_through_its_provider(self) -> None:
         client: Final = CleanupClient(
-            batches=iter((batch("in_progress"), batch("cancelled"))), cancellations=iter((batch("cancelling"),))
+            calls=ExpectedCalls(iter(("retrieve azure batch-1", "cancel azure batch-1"))),
+            batches=iter((batch("in_progress"), batch("cancelled"))),
+            cancellations=iter((batch("cancelling"),)),
         )
         cleanup_batch(client, "batch-1", key="test-key", provider="azure")
-        assert client.calls == ["retrieve azure batch-1", "cancel azure batch-1"]
+        client.calls.assert_done()
 
     @pytest.mark.parametrize("status", ["completed", "in_progress"])
     def test_cancellation_conflict_is_accepted_only_when_batch_became_inactive(self, status: str) -> None:
         client: Final = CleanupClient(
+            calls=ExpectedCalls(iter(("retrieve None batch-1", "cancel None batch-1", "retrieve None batch-1"))),
             batches=iter((batch("in_progress"), batch(status))),
             cancellations=iter((UnknownApiError(status_code=409, body="conflict"),)),
         )
@@ -186,7 +231,7 @@ class TestBatchCancellation:
         else:
             with pytest.raises(AssertionError, match="Cancel batch batch-1 left status in_progress"):
                 cleanup_batch(client, "batch-1", key="test-key")
-        assert client.calls == ["retrieve None batch-1", "cancel None batch-1", "retrieve None batch-1"]
+        client.calls.assert_done()
 
 
 class TestAzureFileExpiry:
