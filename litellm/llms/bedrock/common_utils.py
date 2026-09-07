@@ -37,7 +37,6 @@ _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 
 
 def error_response_text(response: httpx.Response) -> str:
-    """Return the error body, or the status line when the body was never read."""
     try:
         return response.text
     except httpx.ResponseNotRead:
@@ -47,7 +46,6 @@ def error_response_text(response: httpx.Response) -> str:
 def _synthesize_error_response(
     *, status_code: int, headers: dict[str, object] | httpx.Headers, request: httpx.Request | None
 ) -> tuple[httpx.Request, httpx.Response]:
-    """Build the request and response carrying the provider's headers, dropping values httpx rejects."""
     error_request: Final = request or httpx.Request(method="POST", url=_ERROR_REQUEST_URL)
     safe_headers: Final = (
         headers
@@ -58,8 +56,6 @@ def _synthesize_error_response(
 
 
 class BedrockError(BaseLLMException):
-    """Bedrock error whose response carries the provider's headers, synthesizing one if needed."""
-
     def __init__(
         self,
         status_code: int,
