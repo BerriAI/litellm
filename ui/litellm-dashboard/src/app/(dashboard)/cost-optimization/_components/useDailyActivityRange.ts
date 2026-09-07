@@ -37,13 +37,18 @@ export interface DailyActivityScope {
   apiKey?: string | null;
 }
 
+export const useActivityDateRange = (): Pick<DailyActivityRange, "dateValue" | "onDateChange"> => {
+  const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
+  const initialTo = useMemo(() => new Date(), []);
+  const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
+  return { dateValue, onDateChange: setDateValue };
+};
+
 export const useScopedDailyActivityRange = (
   accessToken: string | null,
   scope: DailyActivityScope,
 ): DailyActivityRange => {
-  const initialFrom = useMemo(() => new Date(new Date().getTime() - THIRTY_DAYS_MS), []);
-  const initialTo = useMemo(() => new Date(), []);
-  const [dateValue, setDateValue] = useState<DateRange>({ from: initialFrom, to: initialTo });
+  const { dateValue, onDateChange } = useActivityDateRange();
 
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
@@ -63,7 +68,7 @@ export const useScopedDailyActivityRange = (
 
   return {
     dateValue,
-    onDateChange: setDateValue,
+    onDateChange,
     results: data.results as DailyData[],
     loading,
     isFetchingMore,

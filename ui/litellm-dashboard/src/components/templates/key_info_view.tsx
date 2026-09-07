@@ -16,8 +16,14 @@ import { modelGroupHref, teamDetailHref } from "@/utils/entityLinks";
 import { BadgeLink } from "@/components/shared/BadgeLink";
 import { KeyInfoHeader } from "./KeyInfoHeader";
 import KeySavingsTab from "./KeySavingsTab";
+import KeyAutoRouterUsageTab from "./KeyAutoRouterUsageTab";
 import { useEffect, useState } from "react";
-import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
+import {
+  hasProxyWideSpendView,
+  isProxyAdminRole,
+  isUserTeamAdminForSingleTeam,
+  rolesWithWriteAccess,
+} from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -618,6 +624,11 @@ export default function KeyInfoView({
           <TabsTrigger value="savings" className="flex-none rounded-none px-4 py-2">
             Savings
           </TabsTrigger>
+          {hasProxyWideSpendView(userRole) && (
+            <TabsTrigger value="auto-router-usage" className="flex-none rounded-none px-4 py-2">
+              Auto-router usage
+            </TabsTrigger>
+          )}
           <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
             Settings
           </TabsTrigger>
@@ -763,6 +774,12 @@ export default function KeyInfoView({
               userRole={userRole}
             />
           </TabsContent>
+
+          {hasProxyWideSpendView(userRole) && (
+            <TabsContent value="auto-router-usage">
+              <KeyAutoRouterUsageTab accessToken={accessToken} keyToken={currentKeyData.token} />
+            </TabsContent>
+          )}
 
           {/* Settings Panel */}
           <TabsContent value="settings" keepMounted>

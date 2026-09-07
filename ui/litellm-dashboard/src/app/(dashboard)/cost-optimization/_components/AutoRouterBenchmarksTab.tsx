@@ -273,12 +273,13 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
 
 interface AutoRouterBenchmarksTabProps {
   accessToken: string | null;
-  activity: DailyActivityRange;
+  activity: Pick<DailyActivityRange, "dateValue" | "onDateChange">;
+  apiKey?: string;
 }
 
-const UsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity }) => {
+export const AutoRouterUsageView: React.FC<AutoRouterBenchmarksTabProps> = ({ accessToken, activity, apiKey }) => {
   const { dateValue, onDateChange } = activity;
-  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue);
+  const { data, isPending, error } = useAutoRouterBenchmarks(accessToken, dateValue, apiKey);
   const [selectedKey, setSelectedKey] = useState<string>(ALL_ROUTERS);
   const { data: autoRouters } = useAutoRouters();
 
@@ -347,7 +348,7 @@ const AutoRouterBenchmarksTab: React.FC<AutoRouterBenchmarksTabProps> = ({ acces
       </TabsList>
 
       <TabsContent value="usage" keepMounted={visitedTabs.includes("usage")}>
-        <UsageView accessToken={accessToken} activity={activity} />
+        <AutoRouterUsageView accessToken={accessToken} activity={activity} />
       </TabsContent>
       <TabsContent value="shadow-evals" keepMounted={visitedTabs.includes("shadow-evals")}>
         <ShadowEvalSection />
