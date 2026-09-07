@@ -1,19 +1,55 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use rstest::rstest;
 
-#[test]
+#[rstest]
+#[case::differential_callbacks_wire("differential_callbacks_wire")]
+#[case::negative_control_copied_caller_document("negative_control_copied_caller_document")]
+#[case::negative_control_rebound_logging_body("negative_control_rebound_logging_body")]
+#[case::negative_control_rebound_logging_headers("negative_control_rebound_logging_headers")]
+#[case::differential_callback_retained_mutation_after_post_received(
+    "differential_callback_retained_mutation_after_post_received"
+)]
+#[case::public_rust_dispatch_wire_fallback_and_escaping_base_exception(
+    "public_rust_dispatch_wire_fallback_and_escaping_base_exception"
+)]
+#[case::collection_after_success_encoding_failure_and_http_error(
+    "collection_after_success_encoding_failure_and_http_error"
+)]
+#[case::callback_retained_graph_remains_usable_then_collects(
+    "callback_retained_graph_remains_usable_then_collects"
+)]
+#[case::collection_after_cancellation_during_blocked_transport(
+    "collection_after_cancellation_during_blocked_transport"
+)]
 #[ignore = "requires repo Python"]
-fn retained_real_production_boundary_differential_and_lifecycle() -> PyResult<()> {
+fn retained_real_production_boundary_differential_and_lifecycle(
+    #[case] scenario: &str,
+) -> PyResult<()> {
     Python::initialize();
     Python::attach(|py| {
         let module = pyo3::wrap_pymodule!(_native::_native)(py).into_bound(py);
         let globals = PyDict::new(py);
         globals.set_item("native", module)?;
-        let fixture = std::ffi::CString::new(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../tests/test_litellm/ocr/retained_boundary_fixture.py"
-        )))?;
-        py.run(&fixture, Some(&globals), Some(&globals))
+        let builtins = py.import("builtins")?;
+        let code = builtins.call_method1(
+            "compile",
+            (
+                include_str!("fixtures/ocr_retained.py"),
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/ocr_retained.py"
+                ),
+                "exec",
+            ),
+        )?;
+        builtins.call_method1("exec", (code, &globals))?;
+        globals
+            .get_item("RealBoundaryTests")?
+            .unwrap()
+            .call1((format!("test_{scenario}"),))?
+            .call_method0("debug")?;
+        Ok(())
     })
 }
 

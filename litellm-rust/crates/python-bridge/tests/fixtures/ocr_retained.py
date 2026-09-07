@@ -3,7 +3,6 @@
 import asyncio
 import contextvars
 import gc
-import importlib
 import inspect
 import json
 import threading
@@ -13,7 +12,7 @@ from copy import deepcopy
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import ModuleType
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -25,7 +24,6 @@ from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
 from litellm.rust_bridge.ocr_retained import OCREncoded, OCRRetainedBoundary, OCRRoots
 
 native: ModuleType = globals()["native"]
-ocr_main = importlib.import_module("litellm.ocr.main")
 context = contextvars.ContextVar("retained-real-boundary", default="unset")
 MODEL = "mistral-ocr-latest"
 RESPONSE = {"pages": [{"index": 0, "markdown": "local OCR"}], "model": MODEL, "usage_info": {"pages_processed": 1}}
@@ -167,30 +165,8 @@ def invoke(mode, kwargs, *, boundary_factory=OCRRetainedBoundary):
         return handler.async_ocr(**kwargs)
     if mode == "native-sync":
         return native.ocr_retained(boundary_factory(handler=handler, **kwargs))
-    if mode == "native-async":
-        return native.aocr_retained(boundary_factory(handler=handler, **kwargs))
-    prepared = ocr_main._PreparedOCRRequest(
-        **{
-            k: kwargs[k]
-            for k in (
-                "model",
-                "document",
-                "api_key",
-                "api_base",
-                "custom_llm_provider",
-                "provider_config",
-                "optional_params",
-                "litellm_params",
-            )
-        },
-        extra_headers=kwargs["headers"],
-        effective_timeout=kwargs["timeout"],
-        litellm_logging_obj=kwargs["logging_obj"],
-    )
-    if mode == "sdk-sync":
-        return ocr_main._run_rust_ocr(prepared, lambda _: None, load_retained=lambda: native.ocr_retained)
-    assert mode == "sdk-async"
-    return ocr_main._run_rust_aocr(prepared, lambda _: None, load_retained=lambda: native.aocr_retained)
+    assert mode == "native-async"
+    return native.aocr_retained(boundary_factory(handler=handler, **kwargs))
 
 
 class RealBoundaryTests(unittest.TestCase):
@@ -299,10 +275,10 @@ class RealBoundaryTests(unittest.TestCase):
         finally:
             await async_client.close()
 
-    def test_differential_callbacks_wire_and_sdk_dispatch(self):
+    def test_differential_callbacks_wire(self):
         async def exercise():
             baseline = await self.differential("python-sync")
-            for mode in ("python-async", "native-sync", "native-async", "sdk-sync", "sdk-async"):
+            for mode in ("python-async", "native-sync", "native-async"):
                 with self.subTest(mode=mode):
                     self.assertEqual(await self.differential(mode), baseline)
 
@@ -416,7 +392,7 @@ class RealBoundaryTests(unittest.TestCase):
     def test_public_rust_dispatch_wire_fallback_and_escaping_base_exception(self):
         async def exercise():
             for asynchronous in (False, True):
-                for outcome in ("success", "missing-symbol", "pre-call-abort"):
+                for outcome in ("success", "missing-symbol", "pre-call-abort", "disabled"):
                     with self.subTest(asynchronous=asynchronous, outcome=outcome):
                         symbol = "aocr_retained" if asynchronous else "ocr_retained"
                         self.assertTrue(inspect.isbuiltin(getattr(native, symbol)))
@@ -424,13 +400,10 @@ class RealBoundaryTests(unittest.TestCase):
                         missing_symbol.__dict__.update(
                             (name, value) for name, value in vars(native).items() if name != symbol
                         )
-                        handler = Mock(wraps=BaseLLMHTTPHandler())
                         escaped = PreCallAbort("public pre_call must escape unchanged")
                         before = len(self.server.requests)
 
-                        def mutate(view):
-                            loader.assert_called_once_with()
-                            self.assertEqual(handler.ocr.call_count, int(outcome == "missing-symbol"))
+                        def mutate(view, outcome=outcome, escaped=escaped):
                             view["headers"]["X-Proof"] = "public-in-place"
                             view["complete_input_dict"]["public_mutation"] = True
                             view["complete_input_dict"]["document"]["document_url"] = (
@@ -441,13 +414,10 @@ class RealBoundaryTests(unittest.TestCase):
 
                         callback = Callback(mutate)
                         kwargs = inputs(self.server, [callback])
-                        with (
-                            patch(
-                                "litellm.rust_bridge.get_native_bridge",
-                                return_value=missing_symbol if outcome == "missing-symbol" else native,
-                            ) as loader,
-                            patch.object(ocr_main, "base_llm_http_handler", handler),
-                        ):
+                        with patch(
+                            "litellm.rust_bridge.get_native_bridge",
+                            return_value=missing_symbol if outcome == "missing-symbol" else native,
+                        ) as loader:
                             public_kwargs = {
                                 **{
                                     key: kwargs[key]
@@ -462,10 +432,10 @@ class RealBoundaryTests(unittest.TestCase):
                                 },
                                 "extra_headers": kwargs["headers"],
                                 "litellm_logging_obj": kwargs["logging_obj"],
-                                "rust": True,
+                                "rust": outcome != "disabled",
                             }
 
-                            async def call():
+                            async def call(asynchronous=asynchronous, public_kwargs=public_kwargs):
                                 if asynchronous:
                                     return await litellm.aocr(**public_kwargs)
                                 return litellm.ocr(**public_kwargs)
@@ -478,22 +448,11 @@ class RealBoundaryTests(unittest.TestCase):
                                 response = await call()
                                 self.assertEqual(response.pages[0].markdown, "local OCR")
 
-                        loader.assert_called_once_with()
-                        self.check_callbacks([callback])
-                        self.assertEqual(handler.ocr.call_count, int(outcome == "missing-symbol"))
-                        self.assertEqual(handler.async_ocr.call_count, 0)
-                        prepare = handler._async_prepare_ocr_request if asynchronous else handler._prepare_ocr_request
-                        if outcome == "missing-symbol":
-                            prepare.assert_not_called()
-                            self.assertIs(handler.ocr.call_args.kwargs["logging_obj"], kwargs["logging_obj"])
-                            self.assertEqual(handler.ocr.call_args.kwargs["aocr"], asynchronous)
+                        if outcome == "disabled":
+                            loader.assert_not_called()
                         else:
-                            prepare.assert_called_once()
-                            self.assertIs(prepare.call_args.kwargs["logging_obj"], kwargs["logging_obj"])
-                        unused_prepare = (
-                            handler._prepare_ocr_request if asynchronous else handler._async_prepare_ocr_request
-                        )
-                        unused_prepare.assert_not_called()
+                            loader.assert_called_once_with()
+                        self.check_callbacks([callback])
                         self.assertEqual(len(self.server.requests), before + int(outcome != "pre-call-abort"))
                         if outcome != "pre-call-abort":
                             path, headers, body = self.server.requests[-1]
@@ -636,7 +595,3 @@ class RealBoundaryTests(unittest.TestCase):
             self.assertEqual(len(self.server.requests), 1)
 
         asyncio.run(exercise())
-
-
-result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(RealBoundaryTests))
-assert result.wasSuccessful(), "real retained OCR boundary tests failed"

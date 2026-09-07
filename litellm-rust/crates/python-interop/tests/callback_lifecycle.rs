@@ -1,5 +1,3 @@
-use std::ffi::CString;
-
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rstest::{fixture, rstest};
@@ -8,6 +6,18 @@ use rstest::{fixture, rstest};
 mod callback_owner;
 
 struct InitializedPython;
+
+fn run_fixture(
+    py: Python<'_>,
+    globals: &Bound<'_, PyDict>,
+    source: &str,
+    filename: &str,
+) -> PyResult<()> {
+    let builtins = py.import("builtins")?;
+    let code = builtins.call_method1("compile", (source, filename, "exec"))?;
+    builtins.call_method1("exec", (code, globals))?;
+    Ok(())
+}
 
 #[fixture]
 #[once]
@@ -27,8 +37,16 @@ fn scenario_scope(initialized_python: &InitializedPython) -> Py<PyDict> {
                 Py::new(py, callback_owner::OwnerFactory::default()).unwrap(),
             )
             .unwrap();
-        let source = CString::new(include_str!("fixtures/callback_lifecycle.py")).unwrap();
-        py.run(&source, Some(&globals), None).unwrap();
+        run_fixture(
+            py,
+            &globals,
+            include_str!("fixtures/callback_lifecycle.py"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/callback_lifecycle.py"
+            ),
+        )
+        .unwrap();
         globals.unbind()
     })
 }
@@ -79,8 +97,15 @@ fn component_contract(
 ) -> PyResult<()> {
     Python::attach(|py| {
         let globals = scenario_scope.bind(py);
-        let source = CString::new(include_str!("fixtures/callback_components.py")).unwrap();
-        py.run(&source, Some(globals), None)?;
+        run_fixture(
+            py,
+            globals,
+            include_str!("fixtures/callback_components.py"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/callback_components.py"
+            ),
+        )?;
         globals.get_item("run_scenario")?.unwrap().call1((
             scenario,
             retained,

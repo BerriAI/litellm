@@ -11,7 +11,7 @@
 	lint-test-quality lint-test-quality-budget-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
 	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
-	lint-install lint-fetch-base bootstrap
+	lint-install lint-fetch-base bootstrap install-rust-python-test-deps test-rust-python lint-rust-python-fixtures
 
 # Default target
 help:
@@ -55,7 +55,12 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
+<<<<<<< HEAD
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
+=======
+	@echo "  make test-rust-python   - Run ignored Python-integrated Cargo tests (optional TEST_FILTER=substring)"
+	@echo "  make lint-rust-python-fixtures - Check Rust test Python fixtures with Ruff"
+>>>>>>> 1f18773bf2 (wip)
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -114,6 +119,9 @@ install-proxy-dev-ci:
 install-test-deps: install-proxy-dev
 	$(UV) sync --frozen --all-groups --all-extras
 	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
+
+install-rust-python-test-deps:
+	$(UV) sync --inexact --frozen --no-default-groups --no-install-project
 
 install-helm-unittest:
 	@helm plugin list | grep -qE '^unittest[[:space:]]+0\.8\.2([[:space:]]|$$)' || { \
@@ -301,6 +309,19 @@ test-rust-extension:
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
+
+test-rust-python: install-rust-python-test-deps
+	@python=$$($(UV_RUN) python -c 'import sys; print(sys.executable)') && \
+	site_packages=$$("$$python" -c 'import os, sysconfig; print(os.pathsep.join(dict.fromkeys(sysconfig.get_path(key) for key in ("purelib", "platlib"))))') && \
+	PYO3_PYTHON="$$python" \
+	PYTHONPATH="$(CURDIR):$$site_packages$${PYTHONPATH:+:$$PYTHONPATH}" \
+	LITELLM_LOCAL_MODEL_COST_MAP=True \
+	cargo test --manifest-path litellm-rust/Cargo.toml \
+		-p litellm-python-interop -p litellm-python-bridge --tests --locked -- --ignored $(if $(TEST_FILTER),"$(TEST_FILTER)")
+
+lint-rust-python-fixtures:
+	$(UV) tool run --from ruff==0.15.3 ruff check --config ruff-tests.toml litellm-rust/crates/python-interop/tests litellm-rust/crates/python-bridge/tests
+	$(UV) tool run --from ruff==0.15.3 ruff format --check --config ruff-tests.toml litellm-rust/crates/python-interop/tests litellm-rust/crates/python-bridge/tests
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/

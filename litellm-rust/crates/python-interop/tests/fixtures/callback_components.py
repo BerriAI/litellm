@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+from unittest import TestCase
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -30,8 +31,7 @@ async def real_async_logging(owners):
 
     class Retain(CustomLogger):
         async def async_logging_hook(self, kwargs, result, call_type):
-            observations.append(("retained", kwargs, result))
-            assert asyncio.current_task() is task
+            observations.append(("retained", kwargs, result, asyncio.current_task()))
             return kwargs, result
 
     class MutateThenFail(CustomLogger):
@@ -49,8 +49,7 @@ async def real_async_logging(owners):
 
     class Observe(CustomLogger):
         async def async_logging_hook(self, kwargs, result, call_type):
-            observations.append(("observe", kwargs, result))
-            assert asyncio.current_task() is task
+            observations.append(("observe", kwargs, result, asyncio.current_task()))
             return kwargs, result
 
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -62,6 +61,7 @@ async def real_async_logging(owners):
     await owner.invoke()
     owner.close()
     assert [entry[0] for entry in observations] == ["retained", "replace", "observe", "success"]
+    assert observations[0][3] is task and observations[2][3] is task
     assert observations[0][2] is result and observations[1][2] is result
     assert observations[2][2] is replacement and observations[3][2] is replacement
     assert observations[0][1]["retained_shared"] is shared and shared["changed"]
@@ -199,11 +199,8 @@ async def real_stream_cancellation(owners):
     pull.close()
     await entered.wait()
     task.cancel()
-    try:
+    with TestCase().assertRaises(asyncio.CancelledError):
         await task
-        assert False, "pull ignored cancellation"
-    except asyncio.CancelledError:
-        pass
     close = owners.prepare(wrapper.aclose, (), awaited=True)
     await close.invoke()
     close.close()
