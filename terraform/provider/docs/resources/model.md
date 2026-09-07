@@ -237,6 +237,9 @@ terraform import litellm_model.gpt4 <model-id>
 ```
 
 Note: The model ID is generated when the model is created and is different from the `model_name`.
+Import refresh uses LiteLLM's v2 model-info endpoint and requires exactly one
+response whose `model_info.id` matches the imported ID. Missing, mismatched, or
+ambiguous records are never accepted as model state.
 
 ## Security Note
 

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -52,10 +54,72 @@ func retryModelRead(d *schema.ResourceData, m interface{}, maxRetries int) error
 
 const (
 	endpointModelNew    = "/model/new"
-	endpointModelUpdate = "/model/update"
-	endpointModelInfo   = "/model/info"
+	endpointModelUpdate = "/model/%s/update"
+	endpointModelInfo   = "/v2/model/info"
 	endpointModelDelete = "/model/delete"
 )
+
+func modelFieldConfigured(d *schema.ResourceData, name string) bool {
+	if _, configured := d.GetOkExists(name); configured {
+		return true
+	}
+	if d.HasChange(name) {
+		return true
+	}
+	raw := d.GetRawConfig()
+	if !raw.IsKnown() || raw.IsNull() || !raw.Type().HasAttribute(name) {
+		return false
+	}
+	return !raw.GetAttr(name).IsNull()
+}
+
+func configuredModelInt(d *schema.ResourceData, name string) *int {
+	if !modelFieldConfigured(d, name) {
+		return nil
+	}
+	value := d.Get(name).(int)
+	return &value
+}
+
+func configuredModelBool(d *schema.ResourceData, name string) *bool {
+	if !modelFieldConfigured(d, name) {
+		return nil
+	}
+	value := d.Get(name).(bool)
+	return &value
+}
+
+func configuredModelFloat(d *schema.ResourceData, name string) *float64 {
+	if !modelFieldConfigured(d, name) {
+		return nil
+	}
+	value := d.Get(name).(float64)
+	return &value
+}
+
+func configuredModelString(d *schema.ResourceData, name string) *string {
+	if !modelFieldConfigured(d, name) {
+		return nil
+	}
+	value := d.Get(name).(string)
+	return &value
+}
+
+func configuredModelStringList(d *schema.ResourceData, name string) *[]string {
+	if !modelFieldConfigured(d, name) {
+		return nil
+	}
+	value := expandStringList(d.Get(name).([]interface{}))
+	return &value
+}
+
+func modelRoutingBase(customLLMProvider, model string) string {
+	prefix := customLLMProvider + "/"
+	if customLLMProvider != "" && strings.HasPrefix(model, prefix) {
+		return strings.TrimPrefix(model, prefix)
+	}
+	return model
+}
 
 func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) error {
 	client, ok := m.(*Client)
@@ -241,28 +305,46 @@ func createOrUpdateModel(d *schema.ResourceData, m interface{}, isUpdate bool) e
 	if credentialName := d.Get("litellm_credential_name").(string); credentialName != "" {
 		litellmParams["litellm_credential_name"] = credentialName
 	}
+	cacheReadInputCost := configuredModelFloat(d, "cache_read_input_cost_per_million_tokens")
+	if cacheReadInputCost != nil {
+		*cacheReadInputCost /= 1000000.0
+	}
 
 	modelReq := ModelRequest{
 		ModelName:     d.Get("model_name").(string),
 		LiteLLMParams: litellmParams,
-		ModelInfo: ModelInfo{
+		ModelInfo: ModelInfoRequest{
 			ID:                      modelID,
 			DBModel:                 true,
 			BaseModel:               pricingBaseModel,
 			Tier:                    d.Get("tier").(string),
 			Mode:                    d.Get("mode").(string),
 			TeamID:                  d.Get("team_id").(string),
-			CacheReadInputTokenCost: d.Get("cache_read_input_cost_per_million_tokens").(float64) / 1000000.0,
+			MaxInputTokens:          configuredModelInt(d, "max_input_tokens"),
+			MaxOutputTokens:         configuredModelInt(d, "max_output_tokens"),
+			InputModalities:         configuredModelStringList(d, "input_modalities"),
+			OutputModalities:        configuredModelStringList(d, "output_modalities"),
+			SupportsReasoning:       configuredModelBool(d, "supports_reasoning"),
+			SupportsFunctionCalling: configuredModelBool(d, "supports_function_calling"),
+			SupportsVision:          configuredModelBool(d, "supports_vision"),
+			InputCostPerCharacter:   configuredModelFloat(d, "input_cost_per_character"),
+			CacheReadInputTokenCost: cacheReadInputCost,
+			DefaultVoice:            configuredModelString(d, "default_voice"),
+			ProbeLanguage:           configuredModelString(d, "probe_language"),
+			ProbeText:               configuredModelString(d, "probe_text"),
+			ProbeSkip:               configuredModelBool(d, "probe_skip"),
+			MaxTokens:               configuredModelInt(d, "max_tokens"),
 		},
 		Additional: make(map[string]interface{}),
 	}
 
-	endpoint := endpointModelNew
+	var resp *http.Response
+	var err error
 	if isUpdate {
-		endpoint = endpointModelUpdate
+		resp, err = MakeRequest(client, "PATCH", fmt.Sprintf(endpointModelUpdate, url.PathEscape(modelID)), modelReq)
+	} else {
+		resp, err = MakeRequest(client, "POST", endpointModelNew, modelReq)
 	}
-
-	resp, err := MakeRequest(client, "POST", endpoint, modelReq)
 	if err != nil {
 		return fmt.Errorf("failed to %s model: %w", map[bool]string{true: "update", false: "create"}[isUpdate], err)
 	}
@@ -293,13 +375,14 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 		return fmt.Errorf("invalid type assertion for client")
 	}
 
-	resp, err := MakeRequest(client, "GET", fmt.Sprintf("%s?litellm_model_id=%s", endpointModelInfo, d.Id()), nil)
+	query := url.Values{"modelId": []string{d.Id()}}
+	resp, err := MakeRequest(client, "GET", fmt.Sprintf("%s?%s", endpointModelInfo, query.Encode()), nil)
 	if err != nil {
 		return fmt.Errorf("failed to read model: %w", err)
 	}
 	defer resp.Body.Close()
 
-	modelResp, err := handleAPIResponse(resp, nil, client)
+	modelResp, err := handleModelInfoAPIResponse(resp, d.Id(), client)
 	if err != nil {
 		if err.Error() == "model_not_found" {
 			d.SetId("")
@@ -315,19 +398,109 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 	d.Set("rpm", GetIntValue(modelResp.LiteLLMParams.RPM, d.Get("rpm").(int)))
 	d.Set("model_api_base", GetStringValue(modelResp.LiteLLMParams.APIBase, d.Get("model_api_base").(string)))
 	d.Set("api_version", GetStringValue(modelResp.LiteLLMParams.APIVersion, d.Get("api_version").(string)))
-	// base_model / pricing_base_model read-back. When pricing_base_model is
-	// configured, model_info.base_model holds the PRICING key, so recover the
-	// routing base_model from state (not returned by the API) and read
-	// pricing_base_model from model_info.
-	if pbm, ok := d.GetOk("pricing_base_model"); ok && pbm.(string) != "" {
-		d.Set("base_model", d.Get("base_model").(string))
-		d.Set("pricing_base_model", GetStringValue(modelResp.ModelInfo.BaseModel, pbm.(string)))
-	} else {
-		d.Set("base_model", GetStringValue(modelResp.ModelInfo.BaseModel, d.Get("base_model").(string)))
+	// Routing and pricing keys are independent. For imports, reconstruct the
+	// routing base from litellm_params.model by stripping exactly one matching
+	// provider prefix. A model name containing further slashes stays intact.
+	routingBaseModel := modelRoutingBase(modelResp.LiteLLMParams.CustomLLMProvider, modelResp.LiteLLMParams.Model)
+	if routingBaseModel == "" {
+		routingBaseModel = d.Get("base_model").(string)
+	}
+	if err := d.Set("base_model", routingBaseModel); err != nil {
+		return fmt.Errorf("failed to set base_model: %w", err)
+	}
+
+	if modelResp.ModelInfo.BaseModel != nil {
+		pricingBaseModel := *modelResp.ModelInfo.BaseModel
+		if pricingBaseModel == routingBaseModel {
+			pricingBaseModel = ""
+		}
+		if err := d.Set("pricing_base_model", pricingBaseModel); err != nil {
+			return fmt.Errorf("failed to set pricing_base_model: %w", err)
+		}
 	}
 	d.Set("tier", GetStringValue(modelResp.ModelInfo.Tier, d.Get("tier").(string)))
 	d.Set("mode", GetStringValue(modelResp.ModelInfo.Mode, d.Get("mode").(string)))
 	d.Set("team_id", GetStringValue(modelResp.ModelInfo.TeamID, d.Get("team_id").(string)))
+	if modelResp.ModelInfo.MaxInputTokens != nil {
+		if err := d.Set("max_input_tokens", *modelResp.ModelInfo.MaxInputTokens); err != nil {
+			return fmt.Errorf("failed to set max_input_tokens: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.MaxOutputTokens != nil {
+		if err := d.Set("max_output_tokens", *modelResp.ModelInfo.MaxOutputTokens); err != nil {
+			return fmt.Errorf("failed to set max_output_tokens: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.InputModalities == nil {
+		if err := d.Set("input_modalities", d.Get("input_modalities")); err != nil {
+			return err
+		}
+	}
+	if modelResp.ModelInfo.InputModalities != nil {
+		if err := d.Set("input_modalities", *modelResp.ModelInfo.InputModalities); err != nil {
+			return fmt.Errorf("failed to set input_modalities: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.OutputModalities == nil {
+		if err := d.Set("output_modalities", d.Get("output_modalities")); err != nil {
+			return err
+		}
+	}
+	if modelResp.ModelInfo.OutputModalities != nil {
+		if err := d.Set("output_modalities", *modelResp.ModelInfo.OutputModalities); err != nil {
+			return fmt.Errorf("failed to set output_modalities: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.SupportsReasoning != nil {
+		if err := d.Set("supports_reasoning", *modelResp.ModelInfo.SupportsReasoning); err != nil {
+			return fmt.Errorf("failed to set supports_reasoning: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.SupportsFunctionCalling != nil {
+		if err := d.Set("supports_function_calling", *modelResp.ModelInfo.SupportsFunctionCalling); err != nil {
+			return fmt.Errorf("failed to set supports_function_calling: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.SupportsVision != nil {
+		if err := d.Set("supports_vision", *modelResp.ModelInfo.SupportsVision); err != nil {
+			return fmt.Errorf("failed to set supports_vision: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.InputCostPerCharacter != nil {
+		if err := d.Set("input_cost_per_character", *modelResp.ModelInfo.InputCostPerCharacter); err != nil {
+			return fmt.Errorf("failed to set input_cost_per_character: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.CacheReadInputTokenCost != nil {
+		if err := d.Set("cache_read_input_cost_per_million_tokens", *modelResp.ModelInfo.CacheReadInputTokenCost*1000000.0); err != nil {
+			return fmt.Errorf("failed to set cache_read_input_cost_per_million_tokens: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.DefaultVoice != nil {
+		if err := d.Set("default_voice", *modelResp.ModelInfo.DefaultVoice); err != nil {
+			return fmt.Errorf("failed to set default_voice: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.ProbeLanguage != nil {
+		if err := d.Set("probe_language", *modelResp.ModelInfo.ProbeLanguage); err != nil {
+			return fmt.Errorf("failed to set probe_language: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.ProbeText != nil {
+		if err := d.Set("probe_text", *modelResp.ModelInfo.ProbeText); err != nil {
+			return fmt.Errorf("failed to set probe_text: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.ProbeSkip != nil {
+		if err := d.Set("probe_skip", *modelResp.ModelInfo.ProbeSkip); err != nil {
+			return fmt.Errorf("failed to set probe_skip: %w", err)
+		}
+	}
+	if modelResp.ModelInfo.MaxTokens != nil {
+		if err := d.Set("max_tokens", *modelResp.ModelInfo.MaxTokens); err != nil {
+			return fmt.Errorf("failed to set max_tokens: %w", err)
+		}
+	}
 
 	// Preserve credential name from state since it might not be returned by API
 	d.Set("litellm_credential_name", d.Get("litellm_credential_name").(string))
@@ -342,7 +515,6 @@ func resourceLiteLLMModelRead(d *schema.ResourceData, m interface{}) error {
 
 	// Store cost information
 	d.Set("input_cost_per_million_tokens", d.Get("input_cost_per_million_tokens"))
-	d.Set("cache_read_input_cost_per_million_tokens", d.Get("cache_read_input_cost_per_million_tokens"))
 	d.Set("output_cost_per_million_tokens", d.Get("output_cost_per_million_tokens"))
 
 	// Handle thinking configuration

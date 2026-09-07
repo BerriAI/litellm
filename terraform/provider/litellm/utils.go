@@ -291,3 +291,37 @@ func handleVectorStoreAPIResponse(resp *http.Response, result interface{}, clien
 
 	return nil
 }
+
+func handleModelInfoAPIResponse(resp *http.Response, expectedID string, client *Client) (*ModelResponse, error) {
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read model info response body: %v", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &errResp); err == nil && isModelNotFoundError(errResp) {
+			return nil, fmt.Errorf("model_not_found")
+		}
+		return nil, fmt.Errorf("model info request failed: Status: %s, Response: %s",
+			resp.Status, client.redactSensitiveData(string(bodyBytes)))
+	}
+
+	var wrapper ModelInfoListResponse
+	if err := json.Unmarshal(bodyBytes, &wrapper); err != nil {
+		return nil, fmt.Errorf("failed to parse model info response: %v", err)
+	}
+	if len(wrapper.Data) == 0 {
+		return nil, fmt.Errorf("model_not_found")
+	}
+	if len(wrapper.Data) != 1 {
+		return nil, fmt.Errorf("model info returned %d records for id %q; expected exactly one", len(wrapper.Data), expectedID)
+	}
+	if wrapper.Data[0].ModelInfo.ID != expectedID {
+		return nil, fmt.Errorf("model info returned id %q for requested id %q", wrapper.Data[0].ModelInfo.ID, expectedID)
+	}
+
+	return &wrapper.Data[0], nil
+}
+
+// MakeRequest is a helper function to make HTTP requests

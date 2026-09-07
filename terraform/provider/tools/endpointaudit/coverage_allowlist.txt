@@ -92,7 +92,6 @@ GET /guardrails/{guardrail_id}
 GET /prompts/{prompt_id}
 GET /prompts/{prompt_id}/versions
 PATCH /guardrails/{guardrail_id}
-PATCH /model/{model_id}/update
 PATCH /prompts/{prompt_id}
 PATCH /team/{team_id}
 POST /team/model/add
@@ -130,3 +129,7 @@ DELETE /team/{team_id}/callback/{callback_name}   # known gap: team callback res
 GET /access_group/{access_group}/budget           # known gap: budget attributes on litellm_access_group
 PUT /access_group/{access_group}/budget           # known gap: budget attributes on litellm_access_group
 DELETE /access_group/{access_group}/budget        # known gap: budget attributes on litellm_access_group
+
+# Legacy model endpoints; resources use DB-backed reads and metadata-aware PATCH
+GET /model/info
+POST /model/update
