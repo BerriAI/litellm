@@ -22,7 +22,7 @@ vi.mock("@/components/shared/advanced_date_picker", () => ({
 
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
 
-import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
+import AutoRouterBenchmarksTab, { AutoRouterUsageView } from "./AutoRouterBenchmarksTab";
 import type {
   AutoRouterBenchmarkGroup,
   AutoRouterBenchmarksResponse,
@@ -359,11 +359,35 @@ describe("AutoRouterBenchmarksTab", () => {
     mockHook({ data: response([group()]) });
     const { dateValue, onDateChange } = renderTab();
 
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue);
+    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, undefined);
     expect(screen.getByText("Jul 6 – Aug 5 (UTC)")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("date-picker"));
     expect(onDateChange).toHaveBeenCalledWith({ from: new Date(2026, 7, 1), to: new Date(2026, 7, 5) });
+  });
+
+  it("scopes the query to one key when the usage view is mounted for a key", () => {
+    mockHook({ data: response([group()]) });
+    const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
+    const activity = {
+      dateValue,
+      onDateChange: vi.fn(),
+      results: [],
+      loading: false,
+      isFetchingMore: false,
+      progress: { currentPage: 1, totalPages: 1 },
+      cancelled: false,
+      cancel: vi.fn(),
+    };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AutoRouterUsageView accessToken="sk-test" activity={activity} apiKey="key-hash-1" />
+      </QueryClientProvider>,
+    );
+
+    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, "key-hash-1");
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Shadow Evals" })).not.toBeInTheDocument();
   });
 
   it("shows usage by default and mounts shadow evals only when its sub-tab is selected", () => {
