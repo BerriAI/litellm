@@ -283,6 +283,26 @@ def test_parse_diff_of_an_empty_diff_is_empty(risk_tier):
     assert risk_tier.parse_diff("") == ()
 
 
+def test_parse_diff_decodes_git_quoted_paths_instead_of_dropping_them(risk_tier):
+    diff = (
+        "diff --git a/docs/plain.md b/docs/plain.md\n"
+        "--- a/docs/plain.md\n"
+        "+++ b/docs/plain.md\n"
+        "@@ -0,0 +1 @@\n"
+        "+hello\n"
+        'diff --git "a/litellm/proxy/auth/we\\"ird\\ttab\\\\slash\\001.py" "b/litellm/proxy/auth/we\\"ird\\ttab\\\\slash\\001.py"\n'
+        "new file mode 100644\n"
+        '--- "a/litellm/proxy/auth/we\\"ird\\ttab\\\\slash\\001.py"\n'
+        '+++ "b/litellm/proxy/auth/we\\"ird\\ttab\\\\slash\\001.py"\n'
+        "@@ -0,0 +1,2 @@\n"
+        "+def f():\n"
+        "+    return 1\n"
+    )
+    changes = risk_tier.parse_diff(diff)
+    assert [change.path for change in changes] == ["docs/plain.md", 'litellm/proxy/auth/we"ird\ttab\\slash\x01.py']
+    assert [change.line_count for change in changes] == [1, 2]
+
+
 def test_config_rejects_unknown_keys(risk_tier, tmp_path):
     bad = tmp_path / "risk-tiers.yml"
     bad.write_text(CONFIG_PATH.read_text() + "\nprompt: judge.md\n")
@@ -349,3 +369,25 @@ def test_main_end_to_end_against_a_git_repo(risk_tier, tmp_path, capsys):
     printed = capsys.readouterr().out
     assert printed.startswith("risk: high (shadow mode, nothing is blocked)")
     assert payload["summary"] == printed
+
+
+def test_git_quoted_filename_still_reaches_the_paths_factor(risk_tier, rules, tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "litellm" / "proxy" / "auth").mkdir(parents=True)
+    _git(tmp_path, "init", "-q", "-b", "main", "repo")
+    (repo / "README.md").write_text("base\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    quoted_name = 'we"ird\ttab\\slash.py'
+    (repo / "litellm" / "proxy" / "auth" / quoted_name).write_text("def f():\n    return 1\n")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "head")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    changes = risk_tier.parse_diff(risk_tier.git_diff(repo, base, head))
+
+    assert [change.path for change in changes] == [f"litellm/proxy/auth/{quoted_name}"]
+    assert changes[0].added_lines == ("def f():", "    return 1")
+    verdict = risk_tier.classify(changes, DEVIN, False, rules)
+    assert _factor(verdict, "paths").tier == "high"

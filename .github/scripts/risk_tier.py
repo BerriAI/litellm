@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Literal
 
 import yaml
@@ -19,7 +20,11 @@ TEST_DEF_RE: Final = re.compile(r"^\s*(?:async\s+)?def\s+test_|^\s*(?:it|test)\(
 SKIP_RE: Final = re.compile(r"pytest\.(?:mark\.)?(?:skip|xfail)|unittest\.skip|\b(?:it|test|describe)\.skip\(|\bxit\(")
 ASSERT_RE: Final = re.compile(r"^\s*assert\b|\bexpect\(")
 GLOB_TOKEN_RE: Final = re.compile(r"(\*\*/|\*\*|\*|\?)")
-DIFF_BLOCK_SEPARATOR: Final = "\ndiff --git a/"
+DIFF_BLOCK_SEPARATOR: Final = "\ndiff --git "
+QUOTED_PATH_ESCAPE_RE: Final = re.compile(r'\\(?:([abfnrtv"\\])|([0-7]{3}))')
+QUOTED_PATH_ESCAPES: Final = MappingProxyType(
+    {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", '"': '"', "\\": "\\"}
+)
 MAX_LISTED_PATHS: Final = 5
 
 
@@ -171,9 +176,22 @@ def parse_diff(diff_text: str) -> tuple[FileChange, ...]:
     return tuple(_parse_block(block) for block in blocks)
 
 
+def _unquote_git_path(quoted: str) -> str:
+    def decode(match: re.Match[str]) -> str:
+        return QUOTED_PATH_ESCAPES[match[1]] if match[1] else chr(int(match[2], 8))
+
+    return QUOTED_PATH_ESCAPE_RE.sub(decode, quoted[1:-1])
+
+
+def _header_path(header: str) -> str:
+    one_side = header[: (len(header) - 1) // 2]
+    unquoted = _unquote_git_path(one_side) if one_side.startswith('"') else one_side
+    return unquoted.removeprefix("a/")
+
+
 def _parse_block(block: str) -> FileChange:
     header, _, body = block.partition("\n")
-    path = header[: (len(header) - 3) // 2]
+    path = _header_path(header)
     lines = body.split("\n")
     first_hunk = next((index for index, line in enumerate(lines) if line.startswith("@@")), len(lines))
     hunk_lines = lines[first_hunk:]
