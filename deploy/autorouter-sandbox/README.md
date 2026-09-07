@@ -22,4 +22,6 @@ Without Docker: `uv run --no-sync litellm --config deploy/autorouter-sandbox/con
 
 ## Deploy
 
+Render: New > Blueprint, pick this repo and branch. The root `render.yaml` builds this Dockerfile, prompts for `UPSTREAM_LITELLM_API_KEY`, and generates `LITELLM_MASTER_KEY` (read it from the service's Environment tab). To use the sandbox DB natively instead of proxying, add `DATABASE_URL`, `LITELLM_SALT_KEY` and `LITELLM_LICENSE` in the Environment tab
+
 `.github/workflows/deploy-autorouter-sandbox.yml` builds and pushes `ghcr.io/<owner>/litellm-autorouter-sandbox:{sha,latest}` on every push to `litellm_autorouter_sandbox_deploy`. If the repo secret `AUTOROUTER_SANDBOX_KUBECONFIG_B64` is set (base64 kubeconfig; optional repo variable `AUTOROUTER_SANDBOX_NAMESPACE`), it also applies `k8s.yaml` and rolls the deployment to the new image. Create the env secret once with the command at the top of `k8s.yaml`

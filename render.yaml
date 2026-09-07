@@ -1,12 +1,19 @@
 services:
   - type: web
-    name: openai-proxy
-    runtime: image
-    image:
-      url: ghcr.io/berriai/litellm:main-stable
+    name: litellm-autorouter-sandbox
+    runtime: docker
+    plan: standard
+    region: oregon
+    autoDeploy: true
+    dockerfilePath: ./deploy/autorouter-sandbox/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/liveliness
     envVars:
       - key: PORT
-        value: 4000
-    numInstances: 1
-    healthCheckPath: /health/liveliness
-    autoDeploy: true
+        value: "4000"
+      - key: UPSTREAM_LITELLM_BASE_URL
+        value: https://gateway.litellm-sandbox.ai
+      - key: UPSTREAM_LITELLM_API_KEY
+        sync: false
+      - key: LITELLM_MASTER_KEY
+        generateValue: true
