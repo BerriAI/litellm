@@ -10,6 +10,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
 )
@@ -654,6 +655,35 @@ async def test_on_fail_next_on_content_on_error_block_stops_api_fallback(monkeyp
     assert fallback.calls == 0
     assert result.step_results[0].outcome == "error"
     assert result.step_results[0].action_taken == "block"
+
+
+@pytest.mark.parametrize(
+    "openai_code,expected_action,expected_outcome",
+    [("content_policy_violation", "block", "fail"), (None, "allow", "error")],
+)
+@pytest.mark.asyncio
+async def test_aim_policy_verdict_uses_on_fail_and_technical_refusal_uses_on_error(
+    monkeypatch, openai_code, expected_action, expected_outcome
+):
+    rejection = AimGuardrail._rejection("refused", openai_code=openai_code)
+
+    class RejectingGuardrail(CustomGuardrail):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            raise rejection
+
+    monkeypatch.setattr(litellm, "callbacks", [RejectingGuardrail(guardrail_name="aim")])
+    result = await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="aim", on_fail="block", on_error="allow")],
+        mode="pre_call",
+        data={"messages": [{"role": "user", "content": "test"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="aim-failopen",
+    )
+
+    assert result.terminal_action == expected_action
+    assert result.step_results[0].outcome == expected_outcome
+    assert result.step_results[0].action_taken == expected_action
 
 
 @pytest.mark.asyncio

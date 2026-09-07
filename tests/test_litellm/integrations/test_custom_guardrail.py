@@ -4,13 +4,23 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
     log_guardrail_information,
 )
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
-from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
+from litellm.proxy.example_config_yaml.custom_guardrail import myCustomGuardrail as ExampleConfigGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.custom_guardrail import myCustomGuardrail
+from litellm.types.utils import (
+    Choices,
+    GenericGuardrailAPIInputs,
+    GuardrailTracingDetail,
+    Message,
+    ModelResponse,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1828,25 +1838,17 @@ class TestGuardrailInterventionClassification:
 
     def test_content_policy_violation_proxy_exception_is_intervention(self):
         """Aim signals a policy verdict with a ProxyException carrying OpenAI's content-policy code."""
-        from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
-
         exc = AimGuardrail._rejection("blocked by policy", openai_code="content_policy_violation")
         assert CustomGuardrail._is_guardrail_intervention(exc) is True
 
     def test_proxy_exception_without_content_policy_code_is_not_intervention(self):
         """Aim reuses the same factory to refuse a response it could not anonymize, which is a failure."""
-        from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
-
         exc = AimGuardrail._rejection("anonymize action returned malformed redacted messages")
         assert CustomGuardrail._is_guardrail_intervention(exc) is False
 
     @pytest.mark.asyncio
     async def test_example_guardrail_block_logged_as_intervened(self):
         """The in-tree example guardrail is the pattern custom guardrails are copied from."""
-        from litellm.exceptions import GuardrailRaisedException
-        from litellm.proxy.guardrails.guardrail_hooks.custom_guardrail import myCustomGuardrail
-        from litellm.proxy._types import UserAPIKeyAuth
-
         guardrail = myCustomGuardrail(guardrail_name="example-custom")
         request_data: dict = {
             "metadata": {},
@@ -1867,23 +1869,42 @@ class TestGuardrailInterventionClassification:
 
     @pytest.mark.asyncio
     async def test_example_guardrail_output_block_is_intervened(self):
-        from litellm.exceptions import GuardrailRaisedException
-        from litellm.proxy.guardrails.guardrail_hooks.custom_guardrail import myCustomGuardrail
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.types.utils import Choices, Message, ModelResponse
-
         guardrail = myCustomGuardrail(guardrail_name="example-custom-post")
         response = ModelResponse(choices=[Choices(message=Message(role="assistant", content="coffee"))])
+        request_data: dict = {"metadata": {}}
 
         with pytest.raises(GuardrailRaisedException) as exc_info:
             await guardrail.async_post_call_success_hook(
-                data={"metadata": {}},
+                data=request_data,
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=response,
             )
 
         assert exc_info.value.blocked_content is True
         assert str(exc_info.value) == "Guardrail failed Coffee Detected"
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
+    async def test_example_config_guardrail_blocks_with_blocked_content(self):
+        """The example_config_yaml copy is what otel_test_config.yaml loads; it must block the same way."""
+        guardrail = ExampleConfigGuardrail(guardrail_name="example-config")
+
+        with pytest.raises(GuardrailRaisedException) as input_block:
+            await guardrail.async_moderation_hook(
+                data={"messages": [{"role": "user", "content": "tell me about litellm"}]},
+                user_api_key_dict=UserAPIKeyAuth(),
+                call_type="completion",
+            )
+        assert input_block.value.blocked_content is True
+
+        with pytest.raises(GuardrailRaisedException) as output_block:
+            await guardrail.async_post_call_success_hook(
+                data={},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="coffee"))]),
+            )
+        assert output_block.value.blocked_content is True
 
 
 class _ApplyStyleGuardrail(CustomGuardrail):

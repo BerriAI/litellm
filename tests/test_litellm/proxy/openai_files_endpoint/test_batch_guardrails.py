@@ -7,7 +7,8 @@ from fastapi import HTTPException
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 
 from litellm.caching import DualCache
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.openai_files_endpoints.batch_guardrails import (
     BatchScanResult,
@@ -787,6 +788,25 @@ async def test_raising_a_native_block_exception_drops_whatever_status_it_carries
     result = await _scan_full(_jsonl(_record("b", content="tripwire")), FakeProxyLogging(_hook))
 
     assert result.changes == (RecordDropped(line_number=1, custom_id="b", guardrail="g"),)
+
+
+@pytest.mark.asyncio
+async def test_aim_policy_verdict_drops_only_the_blocked_record():
+    rejection = AimGuardrail._rejection("blocked", openai_code="content_policy_violation")
+    source = _jsonl(_record("a"), _record("b", content="tripwire"))
+    result = await _scan_full(source, FakeProxyLogging(_raise_on("tripwire", rejection)))
+
+    assert result.changes == (RecordDropped(line_number=2, custom_id="b", guardrail=None),)
+    assert result.submitted_records == 1
+
+
+@pytest.mark.asyncio
+async def test_aim_technical_refusal_aborts_instead_of_dropping_the_record():
+    rejection = AimGuardrail._rejection("anonymize action returned malformed redacted messages")
+    source = _jsonl(_record("a"), _record("b", content="tripwire"))
+    with pytest.raises(ProxyException) as exc_info:
+        await _scan_full(source, FakeProxyLogging(_raise_on("tripwire", rejection)))
+    assert exc_info.value is rejection
 
 
 @pytest.mark.asyncio

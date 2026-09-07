@@ -80,30 +80,10 @@ _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.Cont
 def is_guardrail_intervention(e: Exception) -> bool:
     """
     Returns True if the exception represents an intentional guardrail block
-    (this was logged previously as an API failure - guardrail_failed_to_respond).
+    rather than a technical failure
 
-    Guardrails signal intentional blocks by raising:
-    - GuardrailRaisedException (generic guardrail API, tool permission)
-    - BlockedPiiEntityError (Presidio PII detection)
-    - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
-    - HTTPException with a block-signalling status (400, 403, 422)
-    - ModifyResponseException (passthrough mode violation)
-    - an exception carrying OpenAI's ``content_policy_violation`` code (aim)
-
-    Only the statuses guardrails use in-tree to signal a deliberate rejection
-    count as an intervention: 400 (content policy), 403 (e.g. akto) and 422
-    (e.g. llm_as_a_judge). Other 4xx codes are commonly propagated from an
-    upstream guardrail provider response (401 bad key, 408 timeout, 429 rate
-    limit, or a raw upstream status), which are technical failures, not
-    blocks, so they stay guardrail_failed_to_respond.
-
-    ``openai_code`` is the OpenAI-standard error code and only ever set on
-    ``ProxyException``; a guardrail that sets it to ``content_policy_violation``
-    is stating that it judged the content, which is what this function asks.
-    Aim raises ``ProxyException`` for both a policy verdict and a fail-closed
-    refusal it could not apply (a malformed anonymize response), and only the
-    verdict carries that code, so keying on the code rather than on the class
-    keeps the refusals classified as failures.
+    Guardrails signal blocks with dedicated exceptions, block HTTP statuses,
+    or OpenAI's ``content_policy_violation`` code
     """
     if isinstance(e, ModifyResponseException):
         return True
