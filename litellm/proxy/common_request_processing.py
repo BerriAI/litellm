@@ -2158,13 +2158,13 @@ class ProxyBaseLLMRequestProcessing:
         return fallback_model_group
 
     @staticmethod
-    def _get_model_id_from_response(hidden_params: Mapping[str, object], data: dict) -> str:
+    def _get_model_id_from_response(hidden_params: Mapping[str, object], data: Mapping[str, object]) -> str:
         """Extract model_id from hidden_params with fallback to litellm_metadata."""
         model_id = hidden_params.get("model_id", None) or ""
         if not model_id:
-            litellm_metadata: Final = data.get("litellm_metadata", {}) or {}
-            model_info: Final = litellm_metadata.get("model_info", {}) or {}
-            model_id = model_info.get("id", "") or ""
+            litellm_metadata: Final = data.get("litellm_metadata")
+            model_info: Final = litellm_metadata.get("model_info") if isinstance(litellm_metadata, Mapping) else None
+            model_id = (model_info.get("id") or "") if isinstance(model_info, Mapping) else ""
         return str(model_id) if model_id else ""
 
     def _stream_response_headers(
