@@ -26,6 +26,12 @@ from .common_utils import (
     get_vertex_base_model_name,
     get_vertex_base_url,
 )
+from .credentials_source import (
+    VertexCredentialsJson,
+    is_inline_credentials_json,
+    load_vertex_credentials_source,
+    raise_vertex_credentials_failure,
+)
 
 
 def _graft_default_vertex_path(api_base: str, default_url: str) -> str:
@@ -127,27 +133,15 @@ class VertexBase:
     ) -> tuple[_VertexCredentialsObject | None, str]:
         if credentials is not None:
             if isinstance(credentials, str):
-                _is_path: Final = os.path.exists(
-                    credentials
-                )  # credentials is from server config (litellm_params), not user input
+                source: Final = load_vertex_credentials_source(credentials)
                 verbose_logger.debug(
                     "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s",
-                    _is_path,
+                    not is_inline_credentials_json(credentials),
                     os.getcwd(),
                 )
-
-                try:
-                    if _is_path:
-                        with open(credentials) as f:
-                            json_obj = json.load(f)
-                    else:
-                        json_obj = json.loads(credentials)
-                except Exception as e:
-                    raise Exception(
-                        "Unable to load vertex credentials from environment. "
-                        "Ensure the JSON is valid (check for unescaped newlines in private_key). "
-                        f"Parse error: {type(e).__name__}"
-                    )
+                if not isinstance(source, VertexCredentialsJson):
+                    raise_vertex_credentials_failure(source)
+                json_obj: Mapping[str, object] = source.value
             elif isinstance(credentials, dict):
                 json_obj = credentials
             else:

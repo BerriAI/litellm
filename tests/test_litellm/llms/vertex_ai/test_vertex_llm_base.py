@@ -2193,3 +2193,125 @@ class TestVertexBase:
 
             assert token == "cached-token"
             assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+
+class TestVertexCredentialsSource:
+    """A `vertex_credentials` path that cannot be read must not be reported as malformed JSON.
+
+    Regression for https://github.com/BerriAI/litellm/issues/40166: dispatching on
+    os.path.exists() sent a missing or unreadable path down the inline-JSON branch,
+    where the path string itself was parsed and every failure came back as a
+    JSONDecodeError blaming the key material.
+    """
+
+    def test_missing_credentials_file_names_the_path_not_the_json(self, tmp_path):
+        missing = tmp_path / "vertexai.json"
+
+        with pytest.raises(ValueError) as exc_info:
+            VertexBase().load_auth(credentials=str(missing), project_id="p")
+
+        message = str(exc_info.value)
+        assert str(missing) in message
+        assert "No such file or directory" in message
+        assert "not valid JSON" not in message
+
+    def test_unreadable_credentials_file_names_the_read_failure(self, tmp_path):
+        # Present but not openable as a file, the same shape as a path on a mount
+        # that has stopped serving reads.
+        unreadable = tmp_path / "vertexai.json"
+        unreadable.mkdir()
+
+        with pytest.raises(ValueError) as exc_info:
+            VertexBase().load_auth(credentials=str(unreadable), project_id="p")
+
+        message = str(exc_info.value)
+        assert str(unreadable) in message
+        assert "Unable to read the vertex credentials file" in message
+        assert "not valid JSON" not in message
+
+    def test_malformed_credentials_file_names_the_file_and_keeps_the_private_key_hint(self, tmp_path):
+        malformed = tmp_path / "vertexai.json"
+        malformed.write_text('{"type": "service_account", "private_key": "-----BEGIN\nPRIVATE KEY-----"}')
+
+        with pytest.raises(ValueError) as exc_info:
+            VertexBase().load_auth(credentials=str(malformed), project_id="p")
+
+        message = str(exc_info.value)
+        assert str(malformed) in message
+        assert "not valid JSON" in message
+        assert "private_key" in message
+
+    def test_malformed_inline_credentials_do_not_echo_the_credential(self):
+        inline = (
+            '{"type": "service_account", "private_key": '
+            '"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"}'
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            VertexBase().load_auth(credentials=inline, project_id="p")
+
+        message = str(exc_info.value)
+        assert "not valid JSON" in message
+        assert "MIIEvQIBADA" not in message
+        assert "BEGIN PRIVATE KEY" not in message
+
+    def test_readable_credentials_file_is_still_loaded(self, tmp_path):
+        creds_file = tmp_path / "vertexai.json"
+        creds_file.write_text(json.dumps({"type": "service_account", "project_id": "from-file"}))
+        vertex_base = VertexBase()
+        mock_creds = MagicMock()
+        mock_creds.project_id = "from-file"
+
+        with (
+            patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(credentials=str(creds_file), project_id=None)
+
+        assert creds is mock_creds
+        assert project_id == "from-file"
+        assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-file"}
+
+    def test_inline_credentials_json_is_still_parsed(self):
+        vertex_base = VertexBase()
+        mock_creds = MagicMock()
+        mock_creds.project_id = "from-inline"
+
+        with (
+            patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(
+                credentials=json.dumps({"type": "service_account", "project_id": "from-inline"}),
+                project_id=None,
+            )
+
+        assert creds is mock_creds
+        assert project_id == "from-inline"
+        assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-inline"}
+
+    def test_credentials_path_reaches_the_operator_log_but_not_the_api_caller(self, tmp_path):
+        """The path is the actionable detail, so it is in the message the proxy logs.
+        What the proxy hands back to the caller goes through redact_internal_details."""
+        from litellm.litellm_core_utils.secret_redaction import redact_internal_details
+
+        missing = tmp_path / "vertexai.json"
+
+        with pytest.raises(ValueError) as exc_info:
+            VertexBase().load_auth(credentials=str(missing), project_id="p")
+
+        logged = str(exc_info.value)
+        assert str(missing) in logged
+        assert str(missing) not in redact_internal_details(logged)
+
+    def test_a_credential_misconfigured_as_a_path_is_redacted_not_echoed(self):
+        """A value that is neither a path nor JSON still lands in the file branch,
+        so it is scrubbed before it reaches the message."""
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
+
+        with pytest.raises(ValueError) as exc_info:
+            VertexBase().load_auth(credentials=pem, project_id="p")
+
+        message = str(exc_info.value)
+        assert "MIIEvQIBADA" not in message
+        assert "BEGIN PRIVATE KEY" not in message
