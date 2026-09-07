@@ -1,6 +1,5 @@
 
 import json
-import os
 from pathlib import Path
 from typing import Final
 
@@ -3744,10 +3743,11 @@ def test_completion_cost_logs_reasoning_and_cache_breakdown(_local_model_cost_ma
         ("deepseek/deepseek-r1", "deepseek", 1.4e-07),
         ("deepseek/deepseek-v3.2", "deepseek", 2.8e-08),
         ("deepseek/deepseek-coder", "deepseek", 1.4e-08),
+        ("openrouter/deepseek/deepseek-r1", "openrouter", 1.4e-07),
     ],
 )
 def test_deepseek_cost_breakdown_includes_cache_read_cost(
-    model, custom_llm_provider, cache_read_rate
+    model, custom_llm_provider, cache_read_rate, _local_model_cost_map
 ):
     """
     DeepSeek reports cached tokens via prompt_cache_hit_tokens. The cost
@@ -3760,9 +3760,6 @@ def test_deepseek_cost_breakdown_includes_cache_read_cost(
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import Choices, Message
-
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     cache_hit_tokens = 64
 

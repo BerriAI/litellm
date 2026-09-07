@@ -1,5 +1,4 @@
 import json
-import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -3984,10 +3983,11 @@ def test_token_type_cost_breakdown_applies_regional_uplift(_local_model_cost_map
         ("deepseek/deepseek-r1", "deepseek", 1.4e-07),
         ("deepseek/deepseek-v3.2", "deepseek", 2.8e-08),
         ("deepseek/deepseek-coder", "deepseek", 1.4e-08),
+        ("openrouter/deepseek/deepseek-r1", "openrouter", 1.4e-07),
     ],
 )
 def test_deepseek_cache_read_cost_in_breakdown(
-    model, custom_llm_provider, expected_cache_read_rate
+    model, custom_llm_provider, expected_cache_read_rate, _local_model_cost_map
 ):
     """
     DeepSeek models report cached tokens via prompt_cache_hit_tokens. The
@@ -3996,9 +3996,6 @@ def test_deepseek_cache_read_cost_in_breakdown(
 
     Regression for https://github.com/BerriAI/litellm/issues/31594
     """
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-
     cache_hit_tokens = 64
     usage = Usage(
         prompt_tokens=100,
