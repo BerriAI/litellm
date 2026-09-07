@@ -1,5 +1,7 @@
+import json
 import os
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import pytest
 
@@ -11,8 +13,6 @@ from litellm.types.llms.openai import FileSearchTool, ResponsesAPIResponse, WebS
 from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
 
 
-
-
 def test_web_search_cost_low():
     web_search_options = WebSearchOptions(search_context_size="low")
     model_info = litellm.get_model_info("gpt-4o-search-preview")
@@ -21,9 +21,7 @@ def test_web_search_cost_low():
         web_search_options=web_search_options, model_info=model_info
     )
 
-    assert (
-        cost == model_info["search_context_cost_per_query"]["search_context_size_low"]
-    )
+    assert cost == model_info["search_context_cost_per_query"]["search_context_size_low"]
 
 
 def test_web_search_cost_medium():
@@ -34,10 +32,7 @@ def test_web_search_cost_medium():
         web_search_options=web_search_options, model_info=model_info
     )
 
-    assert (
-        cost
-        == model_info["search_context_cost_per_query"]["search_context_size_medium"]
-    )
+    assert cost == model_info["search_context_cost_per_query"]["search_context_size_medium"]
 
 
 def test_web_search_cost_high():
@@ -48,33 +43,21 @@ def test_web_search_cost_high():
         web_search_options=web_search_options, model_info=model_info
     )
 
-    assert (
-        cost == model_info["search_context_cost_per_query"]["search_context_size_high"]
-    )
+    assert cost == model_info["search_context_cost_per_query"]["search_context_size_high"]
 
 
 # Test file search cost calculation
 def test_file_search_cost():
     file_search = FileSearchTool(type="file_search")
-    cost = StandardBuiltInToolCostTracking.get_cost_for_file_search(
-        file_search=file_search
-    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_file_search(file_search=file_search)
     assert cost == 0.0025  # $2.50/1000 calls = 0.0025 per call
 
 
 # Test edge cases
 def test_none_inputs():
     # Test with None inputs
-    assert (
-        StandardBuiltInToolCostTracking.get_cost_for_web_search(
-            web_search_options=None, model_info=None
-        )
-        == 0.0
-    )
-    assert (
-        StandardBuiltInToolCostTracking.get_cost_for_file_search(file_search=None)
-        == 0.0
-    )
+    assert StandardBuiltInToolCostTracking.get_cost_for_web_search(web_search_options=None, model_info=None) == 0.0
+    assert StandardBuiltInToolCostTracking.get_cost_for_file_search(file_search=None) == 0.0
 
 
 # Test the main get_cost_for_built_in_tools method
@@ -99,9 +82,7 @@ def test_get_cost_for_built_in_tools_file_search():
     Test that the cost for a file search is 0.00 when no response object is provided
     """
     model = "gpt-4"
-    standard_built_in_tools_params = StandardBuiltInToolsParams(
-        file_search=FileSearchTool(type="file_search")
-    )
+    standard_built_in_tools_params = StandardBuiltInToolsParams(file_search=FileSearchTool(type="file_search"))
 
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=model,
@@ -144,9 +125,7 @@ def test_get_cost_for_anthropic_web_search_with_server_tool_use_dict():
     usage = Usage(server_tool_use={"web_search_requests": 1})
 
     assert isinstance(usage.server_tool_use, ServerToolUse)
-    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-        response_object=None, usage=usage
-    )
+    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(response_object=None, usage=usage)
 
 
 def test_anthropic_web_search_cost_from_raw_response_dict_when_usage_drops_server_tool_use():
@@ -185,9 +164,7 @@ def test_anthropic_web_search_cost_from_raw_response_dict_when_usage_drops_serve
         standard_built_in_tools_params=None,
     )
 
-    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"][
-        "search_context_size_medium"
-    ]
+    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
     assert cost == per_query_cost * web_search_requests
     assert cost > 0.0
     assert getattr(usage, "server_tool_use", None) is None
@@ -225,9 +202,7 @@ def test_anthropic_web_search_cost_from_raw_response_dict_when_usage_is_none():
         standard_built_in_tools_params=None,
     )
 
-    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"][
-        "search_context_size_medium"
-    ]
+    per_query_cost = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
     assert cost == per_query_cost * web_search_requests
 
 
@@ -291,18 +266,14 @@ def test_anthropic_response_usage_block_preserves_server_tool_use():
     assert dumped_usage["server_tool_use"] == {"web_search_requests": 2}
 
 
-@pytest.mark.parametrize(
-    "model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"]
-)
+@pytest.mark.parametrize("model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"])
 def test_get_cost_for_gemini_web_search(model):
     """
     Test that the cost for a web search is 0.00 when no response object is provided
     """
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    usage = Usage(
-        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1)
-    )
+    usage = Usage(prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1))
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
         model=model,
         usage=usage,
@@ -339,9 +310,7 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
             Choices(
                 finish_reason="stop",
                 index=0,
-                message=Message(
-                    content="Test response with grounding", role="assistant"
-                ),
+                message=Message(content="Test response with grounding", role="assistant"),
             )
         ],
         created=1234567890,
@@ -356,7 +325,8 @@ def test_get_cost_for_vertex_ai_gemini_web_search(model, custom_llm_provider):
         completion_tokens=100,
         total_tokens=111,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=11, web_search_requests=1  # This should trigger grounding cost
+            text_tokens=11,
+            web_search_requests=1,  # This should trigger grounding cost
         ),
     )
     response.usage = usage
@@ -456,9 +426,7 @@ def test_completion_cost_includes_web_search_without_standard_built_in_tools_par
     )
 
     assert web_search_cost > 0, "Web search cost should be non-zero"
-    assert (
-        cost >= web_search_cost
-    ), f"completion_cost ({cost}) should include web search cost ({web_search_cost})"
+    assert cost >= web_search_cost, f"completion_cost ({cost}) should include web search cost ({web_search_cost})"
 
 
 @pytest.mark.parametrize(
@@ -485,18 +453,14 @@ def test_gemini_3x_web_search_billed_per_query(model, local_model_cost_map):
     web_search_requests = 2
     model_info = litellm.get_model_info(model)
     assert model_info["web_search_billing_unit"] == "per_query"
-    per_query_cost = model_info["search_context_cost_per_query"][
-        "search_context_size_medium"
-    ]
+    per_query_cost = model_info["search_context_cost_per_query"]["search_context_size_medium"]
     expected_cost = per_query_cost * web_search_requests
 
     usage = Usage(
         prompt_tokens=11,
         completion_tokens=100,
         total_tokens=111,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=11, web_search_requests=web_search_requests
-        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=11, web_search_requests=web_search_requests),
     )
 
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -508,8 +472,7 @@ def test_gemini_3x_web_search_billed_per_query(model, local_model_cost_map):
     )
 
     assert cost == pytest.approx(expected_cost), (
-        f"Expected {web_search_requests} x ${per_query_cost} = ${expected_cost} "
-        f"per_query search fee, got ${cost}"
+        f"Expected {web_search_requests} x ${per_query_cost} = ${expected_cost} per_query search fee, got ${cost}"
     )
 
 
@@ -614,17 +577,13 @@ def test_gemini_2x_web_search_still_billed_per_prompt(local_model_cost_map):
     model = "vertex_ai/gemini-2.5-flash"
     model_info = litellm.get_model_info(model)
     assert not model_info.get("web_search_billing_unit")
-    expected_cost = model_info["search_context_cost_per_query"][
-        "search_context_size_medium"
-    ]
+    expected_cost = model_info["search_context_cost_per_query"]["search_context_size_medium"]
 
     usage = Usage(
         prompt_tokens=11,
         completion_tokens=100,
         total_tokens=111,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=11, web_search_requests=2
-        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=11, web_search_requests=2),
     )
 
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -636,8 +595,7 @@ def test_gemini_2x_web_search_still_billed_per_prompt(local_model_cost_map):
     )
 
     assert cost == pytest.approx(expected_cost), (
-        f"Expected flat ${expected_cost} per_prompt search fee (2 queries clamped to 1), "
-        f"got ${cost}"
+        f"Expected flat ${expected_cost} per_prompt search fee (2 queries clamped to 1), got ${cost}"
     )
 
 
@@ -663,9 +621,7 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
         prompt_tokens=11,
         completion_tokens=100,
         total_tokens=111,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=11, web_search_requests=2
-        ),
+        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=11, web_search_requests=2),
     )
 
     cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -683,11 +639,12 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
 
 
 def _openai_responses_with_web_search_calls(model, num_calls):
-    from litellm.types.llms.openai import ResponsesAPIResponse
     from openai.types.responses.response_function_web_search import (
         ActionSearch,
         ResponseFunctionWebSearch,
     )
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
 
     output = [
         ResponseFunctionWebSearch(
@@ -720,9 +677,7 @@ def test_openai_responses_web_search_priced_per_call(local_model_cost_map):
     from litellm.types.utils import Usage
 
     model = "gpt-5-nano"
-    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
-        "search_context_size_medium"
-    ]
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
     assert per_call == 0.01
 
     response = _openai_responses_with_web_search_calls(model, num_calls=2)
@@ -734,9 +689,7 @@ def test_openai_responses_web_search_priced_per_call(local_model_cost_map):
         standard_built_in_tools_params=None,
     )
 
-    assert cost == pytest.approx(2 * per_call), (
-        f"gpt-5-nano web search must bill 2 x ${per_call}, got ${cost}"
-    )
+    assert cost == pytest.approx(2 * per_call), f"gpt-5-nano web search must bill 2 x ${per_call}, got ${cost}"
 
 
 def test_openai_responses_web_search_multiplied_by_call_count(local_model_cost_map):
@@ -748,9 +701,7 @@ def test_openai_responses_web_search_multiplied_by_call_count(local_model_cost_m
     from litellm.types.utils import Usage
 
     model = "gpt-4o-search-preview"
-    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
-        "search_context_size_medium"
-    ]
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
     usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
 
     for num_calls in (1, 3):
@@ -778,9 +729,7 @@ def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
     from litellm.types.utils import Usage
 
     model = "gpt-4o-search-preview"
-    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
-        "search_context_size_medium"
-    ]
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
 
     response = ResponsesAPIResponse.model_validate(
         {
@@ -789,10 +738,7 @@ def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
             "model": model,
             "object": "response",
             "status": "completed",
-            "output": [
-                {"type": "web_search_call", "id": f"ws_{i}", "status": "completed"}
-                for i in range(3)
-            ],
+            "output": [{"type": "web_search_call", "id": f"ws_{i}", "status": "completed"} for i in range(3)],
         }
     )
     assert all(isinstance(item, dict) for item in response.output)
@@ -805,9 +751,7 @@ def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
         standard_built_in_tools_params=None,
     )
 
-    assert cost == pytest.approx(3 * per_call), (
-        f"3 dict-shaped web searches must bill 3 x ${per_call}, got ${cost}"
-    )
+    assert cost == pytest.approx(3 * per_call), f"3 dict-shaped web searches must bill 3 x ${per_call}, got ${cost}"
 
 
 def test_dated_search_preview_entries_carry_search_pricing(local_model_cost_map):
@@ -859,9 +803,66 @@ def test_dated_search_preview_entries_carry_search_pricing(local_model_cost_map)
         custom_llm_provider="openai",
         standard_built_in_tools_params=None,
     )
-    assert cost == pytest.approx(0.035), (
-        f"dated search-preview id must bill the $0.035 search fee, got ${cost}"
+    assert cost == pytest.approx(0.035), f"dated search-preview id must bill the $0.035 search fee, got ${cost}"
+
+
+@pytest.mark.parametrize(
+    "web_search_options",
+    [
+        None,
+        WebSearchOptions(search_context_size="low"),
+        WebSearchOptions(search_context_size="medium"),
+        WebSearchOptions(search_context_size="high"),
+    ],
+)
+def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(web_search_options, local_model_cost_map):
+    """
+    gpt-4o-mini-2024-07-18 is the dated snapshot of gpt-4o-mini and must bill web search
+    identically. It kept a search_context_cost_per_query from the March 2025 launch tiers that the
+    May 2025 cleanup missed, because that sweep selected on supports_web_search and the snapshot
+    never carried the flag. The result was $0.0275 per query on one name and nothing on the other
+    for the same underlying model. Neither entry declares web search support, so both resolve to $0
+    at every search context size.
+    """
+    alias_info = litellm.get_model_info("gpt-4o-mini")
+    snapshot_info = litellm.get_model_info("gpt-4o-mini-2024-07-18")
+
+    assert not alias_info.get("supports_web_search")
+    assert not snapshot_info.get("supports_web_search")
+    assert not snapshot_info.get("search_context_cost_per_query")
+
+    snapshot_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        web_search_options=web_search_options, model_info=snapshot_info
     )
+    alias_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        web_search_options=web_search_options, model_info=alias_info
+    )
+
+    assert snapshot_cost == alias_cost == 0.0, (
+        f"gpt-4o-mini-2024-07-18 must not carry a web search fee its alias does not: "
+        f"got ${snapshot_cost} vs ${alias_cost} on gpt-4o-mini"
+    )
+
+
+def test_gpt_4o_mini_snapshot_web_search_price_absent_from_both_cost_maps():
+    """
+    The fixture above only sees the bundled backup, but the map served to running deployments is
+    the canonical file fetched from the repo, so the removal has to hold in both. They already
+    differ in a handful of unrelated entries, which is how one name kept a price its alias had lost.
+    """
+    repo_root = Path(__file__).parents[4]
+    map_paths = (
+        "model_prices_and_context_window.json",
+        "litellm/model_prices_and_context_window_backup.json",
+    )
+    assert all(os.path.isfile(repo_root / path) for path in map_paths)
+    entries = tuple(
+        json.loads((repo_root / path).read_text(encoding="utf-8"))["gpt-4o-mini-2024-07-18"] for path in map_paths
+    )
+
+    canonical, backup = entries
+    assert "search_context_cost_per_query" not in canonical
+    assert canonical == backup, "gpt-4o-mini-2024-07-18 differs between the two cost maps"
 
 
 # Note: File search integration test removed due to complex annotation detection logic
@@ -956,9 +957,7 @@ def _responses_with_web_search(
             for i, action in enumerate(actions)
         ],
     }
-    return ResponsesAPIResponse.model_validate(
-        payload if tool_usage is None else {**payload, "tool_usage": tool_usage}
-    )
+    return ResponsesAPIResponse.model_validate(payload if tool_usage is None else {**payload, "tool_usage": tool_usage})
 
 
 def _web_search_cost(model: str, response: ResponsesAPIResponse, custom_llm_provider: str) -> float:
@@ -1050,4 +1049,6 @@ def test_web_search_call_count_reads_reported_count_beside_other_tool_usage_entr
 
     cost = _web_search_cost("gpt-5.6", response, "openai")
 
-    assert cost == pytest.approx(0.01), f"1 reported OpenAI web search must bill 1 x $0.01, not the 2 items, got ${cost}"
+    assert cost == pytest.approx(0.01), (
+        f"1 reported OpenAI web search must bill 1 x $0.01, not the 2 items, got ${cost}"
+    )

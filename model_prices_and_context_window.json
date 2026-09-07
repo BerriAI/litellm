@@ -14401,7 +14401,8 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_creation_input_token_cost": 0.0
     },
     "deepseek-reasoner": {
         "cache_read_input_token_cost": 2.8e-08,
@@ -14423,7 +14424,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "cache_creation_input_token_cost": 0.0
     },
     "dashscope/deepseek-v4-flash": {
         "cache_read_input_token_cost": 4e-08,
@@ -20265,7 +20267,9 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 1.4e-08
     },
     "deepseek/deepseek-r1": {
         "input_cost_per_token": 5.5e-07,
@@ -20280,7 +20284,9 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 1.4e-07
     },
     "deepseek/deepseek-reasoner": {
         "cache_read_input_token_cost": 2.8e-08,
@@ -20304,7 +20310,8 @@
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
-        "supports_tool_choice": false
+        "supports_tool_choice": false,
+        "cache_creation_input_token_cost": 0.0
     },
     "deepseek/deepseek-v3": {
         "cache_creation_input_token_cost": 0.0,
@@ -20335,7 +20342,9 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 2.8e-08
     },
     "deepseek.v3-v1:0": {
         "input_cost_per_token": 5.8e-07,
@@ -29097,11 +29106,6 @@
         "output_cost_per_token": 6e-07,
         "output_cost_per_token_priority": 1e-06,
         "output_cost_per_token_batches": 3e-07,
-        "search_context_cost_per_query": {
-            "search_context_size_high": 0.03,
-            "search_context_size_low": 0.025,
-            "search_context_size_medium": 0.0275
-        },
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -38734,7 +38738,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_read_input_token_cost": 2e-08
     },
     "openrouter/deepseek/deepseek-v3.2": {
         "input_cost_per_token": 2.69e-07,
@@ -38749,7 +38754,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_read_input_token_cost": 2.8e-08
     },
     "openrouter/deepseek/deepseek-v3.2-exp": {
         "input_cost_per_token": 2.7e-07,
@@ -38764,7 +38770,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": false,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_read_input_token_cost": 2e-08
     },
     "openrouter/deepseek/deepseek-r1": {
         "input_cost_per_token": 7e-07,
@@ -38779,7 +38786,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_read_input_token_cost": 1.4e-07
     },
     "openrouter/deepseek/deepseek-r1-0528": {
         "input_cost_per_token": 5e-07,
@@ -38794,7 +38802,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "cache_read_input_token_cost": 1.4e-07
     },
     "openrouter/deepseek/deepseek-v4-pro": {
         "input_cost_per_token": 1.32e-06,
@@ -56672,8 +56681,8 @@
         "rpm": 10
     },
     "vertex_ai/gemini-3.5-transcribe-preview": {
-        "input_cost_per_audio_token": 2.5e-06,
-        "input_cost_per_token": 2.5e-06,
+        "input_cost_per_audio_token": 2e-06,
+        "input_cost_per_token": 2e-06,
         "litellm_provider": "vertex_ai",
         "mode": "audio_transcription",
         "output_cost_per_token": 1.2e-05,
@@ -63784,5 +63793,26 @@
         "supports_tool_choice": false,
         "supports_response_schema": true,
         "supports_vision": false
+    },
+    "vertex_ai/gemini-3.5-live-translate-preview": {
+        "input_cost_per_audio_token": 3.5e-06,
+        "input_cost_per_token": 3.5e-06,
+        "litellm_provider": "vertex_ai",
+        "mode": "realtime",
+        "output_cost_per_audio_token": 2.1e-05,
+        "output_cost_per_token": 2.1e-05,
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "audio",
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true
     }
 }
