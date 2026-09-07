@@ -59,18 +59,7 @@ fn lifecycle_contract(
     #[case] scenario: &str,
     #[values(false, true)] retained: bool,
 ) -> PyResult<()> {
-    Python::attach(|py| {
-        scenario_scope
-            .bind(py)
-            .get_item("run_scenario")?
-            .unwrap()
-            .call1((
-                scenario,
-                retained,
-                scenario_scope.bind(py).get_item("factory")?.unwrap(),
-            ))?;
-        Ok(())
-    })
+    run_scenario_fixture(scenario_scope, scenario, retained, None)
 }
 
 #[rstest]
@@ -89,28 +78,23 @@ fn component_contract(
     #[case] scenario: &str,
     #[values(false, true)] retained: bool,
 ) -> PyResult<()> {
-    Python::attach(|py| {
-        let globals = scenario_scope.bind(py);
-        run_fixture(
-            py,
-            globals,
+    run_scenario_fixture(
+        scenario_scope,
+        scenario,
+        retained,
+        Some((
             include_str!("fixtures/callback_components.py"),
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/fixtures/callback_components.py"
             ),
-        )?;
-        globals.get_item("run_scenario")?.unwrap().call1((
-            scenario,
-            retained,
-            scenario_scope.bind(py).get_item("factory")?.unwrap(),
-        ))?;
-        Ok(())
-    })
+        )),
+    )
 }
 
 #[rstest]
 #[case::real_logging_queue_chain("real_logging_queue_chain")]
+#[case::real_logging_queue_copy_control("real_logging_queue_copy_control")]
 #[case::real_crowdstrike_translator_identity("real_crowdstrike_translator_identity")]
 #[case::real_rubrik_block_lifecycle("real_rubrik_block_lifecycle")]
 #[case::real_parallel_guardrail_snapshots("real_parallel_guardrail_snapshots")]
@@ -122,20 +106,108 @@ fn integration_contract(
     #[case] scenario: &str,
     #[values(false, true)] retained: bool,
 ) -> PyResult<()> {
-    Python::attach(|py| {
-        let globals = scenario_scope.bind(py);
-        run_fixture(
-            py,
-            globals,
+    run_scenario_fixture(
+        scenario_scope,
+        scenario,
+        retained,
+        Some((
             include_str!("fixtures/callback_integrations.py"),
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/tests/fixtures/callback_integrations.py"
             ),
-        )?;
+        )),
+    )
+}
+
+fn run_scenario_fixture(
+    scenario_scope: Py<PyDict>,
+    scenario: &str,
+    retained: bool,
+    fixture: Option<(&str, &str)>,
+) -> PyResult<()> {
+    Python::attach(|py| {
+        let globals = scenario_scope.bind(py);
+        if let Some((source, filename)) = fixture {
+            run_fixture(py, globals, source, filename)?;
+        }
         globals.get_item("run_scenario")?.unwrap().call1((
             scenario,
             retained,
+            globals.get_item("factory")?.unwrap(),
+        ))?;
+        Ok(())
+    })
+}
+
+#[rstest]
+#[case::original_arguments("argument_identity", "identity")]
+#[case::envelope_arguments("argument_identity", "envelope")]
+#[case::shallow_arguments("argument_identity", "shallow_payload")]
+#[case::copied_graph("argument_identity", "deep_graph")]
+#[case::independent_copies("argument_identity", "deep_separate")]
+#[case::original_read_timing("mutation_timing", "identity")]
+#[case::envelope_read_timing("mutation_timing", "envelope")]
+#[case::shallow_read_timing("mutation_timing", "shallow_payload")]
+#[case::deep_read_timing("mutation_timing", "deep_graph")]
+#[case::independent_read_timing("mutation_timing", "deep_separate")]
+#[case::original_result("result_identity", "identity")]
+#[case::passthrough_result("result_identity", "result_passthrough")]
+#[case::shallow_result("result_identity", "result_shallow")]
+#[case::deep_result("result_identity", "result_deep")]
+#[case::retained_lifetime("deferred_lifetime", "identity")]
+#[case::expired_borrow("deferred_lifetime", "weak")]
+#[case::prepared_ownership("deferred_lifetime", "missing_handoff")]
+#[case::externally_owned_retained("borrowed_lifetime", "identity")]
+#[case::externally_owned_borrow("borrowed_lifetime", "weak")]
+#[case::original_coroutine("direct_coroutine", "identity")]
+#[case::passthrough_coroutine("direct_coroutine", "result_passthrough")]
+#[serial(python_interpreter)]
+fn control_contract(
+    scenario_scope: Py<PyDict>,
+    #[case] witness: &str,
+    #[case] control: &str,
+    #[values(false, true)] retained: bool,
+    #[values(false, true)] awaited: bool,
+) -> PyResult<()> {
+    run_control_fixture(scenario_scope, witness, control, retained, awaited)
+}
+
+#[rstest]
+#[case::retained("identity")]
+#[case::missing_handoff("missing_handoff")]
+#[serial(python_interpreter)]
+fn pending_handoff_control(
+    scenario_scope: Py<PyDict>,
+    #[case] control: &str,
+    #[values(false, true)] retained: bool,
+) -> PyResult<()> {
+    run_control_fixture(scenario_scope, "pending_handoff", control, retained, true)
+}
+
+fn run_control_fixture(
+    scenario_scope: Py<PyDict>,
+    witness: &str,
+    control: &str,
+    retained: bool,
+    awaited: bool,
+) -> PyResult<()> {
+    Python::attach(|py| {
+        let globals = scenario_scope.bind(py);
+        run_fixture(
+            py,
+            globals,
+            include_str!("fixtures/callback_controls.py"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/callback_controls.py"
+            ),
+        )?;
+        globals.get_item("run_control")?.unwrap().call1((
+            witness,
+            control,
+            retained,
+            awaited,
             globals.get_item("factory")?.unwrap(),
         ))?;
         Ok(())

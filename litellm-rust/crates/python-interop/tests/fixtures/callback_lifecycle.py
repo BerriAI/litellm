@@ -594,15 +594,21 @@ async def detached_work_after_error(owners):
         assert reference() is None
 
 
-def run_scenario(name, retained, factory):
-    owners = factory if retained else ReferenceFactory()
+def run_checked(owners, scenario):
+    baseline = owners.live
 
     async def run():
-        await asyncio.wait_for(globals()[name](owners), timeout=15)
-        assert owners.live == 0
+        await asyncio.wait_for(scenario, timeout=15)
+        assert owners.live == baseline
         pending = asyncio.all_tasks() - {asyncio.current_task()}
         assert not pending, f"undrained tasks: {pending}"
 
     asyncio.run(run())
     gc.collect()
+    assert owners.live == baseline
+
+
+def run_scenario(name, retained, factory):
+    owners = factory if retained else ReferenceFactory()
     assert owners.live == 0
+    run_checked(owners, globals()[name](owners))

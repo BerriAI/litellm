@@ -70,15 +70,20 @@ fn prepare(boundary: &Bound<'_, PyAny>, asynchronous: bool) -> PyResult<Py<PyAny
     )
 }
 
-fn encode(boundary: &Bound<'_, PyAny>, roots: &Bound<'_, PyAny>) -> PyResult<Request> {
-    type ByteHeaders<'py> = Vec<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)>;
-    let encoded = invoke(
+#[pyfunction]
+fn encode(boundary: &Bound<'_, PyAny>, roots: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    invoke(
         boundary,
         BoundaryMethod::Encode.resolve(false),
         PyTuple::new(boundary.py(), [roots])?,
-    )?;
+    )
+}
+
+fn request(execution: &Bound<'_, PyAny>) -> PyResult<Request> {
+    type ByteHeaders<'py> = Vec<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)>;
+    let encoded = execution.call_method0("encode")?;
     let (url, headers, body, timeout_seconds): (String, ByteHeaders<'_>, Bound<'_, PyBytes>, f64) =
-        encoded.extract(boundary.py())?;
+        encoded.extract()?;
     Ok(Request {
         url,
         headers: headers
@@ -110,12 +115,9 @@ impl<'py> IntoPyObject<'py> for Wire {
 }
 
 #[pyfunction]
-fn send<'py>(
-    boundary: &Bound<'py, PyAny>,
-    roots: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyAny>> {
-    let request = encode(boundary, roots)?;
-    pyo3_async_runtimes::tokio::future_into_py(boundary.py(), async move {
+fn send<'py>(execution: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+    let request = request(execution)?;
+    pyo3_async_runtimes::tokio::future_into_py(execution.py(), async move {
         let response = run_async_value(buffered_post::send(request), core_error_to_pyerr).await?;
         Ok(Wire(response))
     })
@@ -136,37 +138,65 @@ fn finish(
 
 pub(crate) fn run_sync(boundary: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let py = boundary.py();
-    let roots = prepare(boundary, false)?;
-    let request = encode(boundary, roots.bind(py))?;
+    let execution = execution_module(py)?
+        .getattr("RetainedExecution")?
+        .call1((boundary,))?;
+    execution.call_method0("prepare")?;
+    let request = request(&execution)?;
     let response = run_sync_value(py, buffered_post::send(request), core_error_to_pyerr)?;
     let wire = Wire(response).into_pyobject(py)?;
-    finish(boundary, wire.as_any(), false)
+    execution.call_method1("finish", (wire,)).map(Bound::unbind)
 }
 
 pub(crate) fn run_async(boundary: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    static DRIVER: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
-    let py = boundary.py();
-    let driver = DRIVER.get_or_try_init(py, || {
-        PyModule::from_code(
-            py,
-            c"async def drive(boundary, prepare, send, finish):
-    roots = await prepare(boundary, True)
-    wire = await send(boundary, roots)
-    return await finish(boundary, wire, True)
-",
-            c"retained_http_driver.py",
-            c"_retained_http_driver",
-        )?
-        .getattr("drive")
+    let module = execution_module(boundary.py())?;
+    let execution = module.getattr("RetainedExecution")?.call1((boundary,))?;
+    module
+        .getattr("drive")?
+        .call1((execution,))
         .map(Bound::unbind)
+}
+
+fn execution_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+    static MODULE: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+    let module = MODULE.get_or_try_init(py, || {
+        let module = PyModule::from_code(
+            py,
+            c"class RetainedExecution:
+    __slots__ = ('binding', 'roots')
+
+    def __init__(self, binding):
+        self.binding = binding
+        self.roots = None
+
+    def prepare(self):
+        self.roots = _prepare(self.binding, False)
+
+    async def aprepare(self):
+        self.roots = await _prepare(self.binding, True)
+
+    def encode(self):
+        return _encode(self.binding, self.roots)
+
+    def finish(self, wire):
+        return _finish(self.binding, wire, False)
+
+    async def afinish(self, wire):
+        return await _finish(self.binding, wire, True)
+
+async def drive(execution):
+    await execution.aprepare()
+    wire = await _send(execution)
+    return await execution.afinish(wire)
+",
+            c"retained_execution.py",
+            c"_retained_execution",
+        )?;
+        module.add("_prepare", wrap_pyfunction!(prepare, &module)?)?;
+        module.add("_encode", wrap_pyfunction!(encode, &module)?)?;
+        module.add("_finish", wrap_pyfunction!(finish, &module)?)?;
+        module.add("_send", wrap_pyfunction!(send, &module)?)?;
+        Ok::<_, PyErr>(module.unbind())
     })?;
-    driver.call1(
-        py,
-        (
-            boundary,
-            wrap_pyfunction!(prepare, py)?,
-            wrap_pyfunction!(send, py)?,
-            wrap_pyfunction!(finish, py)?,
-        ),
-    )
+    Ok(module.bind(py).clone())
 }
