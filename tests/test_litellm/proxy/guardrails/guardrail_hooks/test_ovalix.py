@@ -1793,3 +1793,14 @@ async def test_tool_call_present_in_both_sources_is_scanned_once():
 def test_extract_application_name_tolerates_unmatched_optional_group():
     g = _static_guardrail()
     assert g._extract_application_name("app-", re.compile(r"app-(\w+)?")) is None
+
+
+def test_non_string_actor_metadata_does_not_crash_hashing():
+    g = _static_guardrail()
+    assert g._get_tracker_actor_id({"metadata": {"user_api_key_user_email": 12345}}) == g._get_tracker_actor_id({})
+
+
+def test_non_string_corrected_content_is_ignored():
+    g = _static_guardrail()
+    assert g._get_trackers_corrected_message({"modified_data": {"content": {"nested": "obj"}}}) is None
+    assert g._get_trackers_corrected_message({"modified_data": {"content": ""}}) == ""

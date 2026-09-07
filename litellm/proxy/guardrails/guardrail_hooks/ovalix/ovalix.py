@@ -57,7 +57,7 @@ _ROUTING_CACHE_TTL_SECONDS: Final = 3600
 _ROUTING_CACHE_NEGATIVE_TTL_SECONDS: Final = 300
 _ROUTING_CACHE_MAX_SIZE: Final = 1000
 _DEFAULT_FILE_SIZE_LIMIT: Final = 64 * 1024 * 1024
-_NO_METADATA: Final[Mapping[str, Any]] = MappingProxyType({})
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _FILE_BLOCK_ESCALATION_REASON: Final = (
     "This message was blocked by Ovalix because file content anonymization isn't possible via LiteLLM"
 )
@@ -105,6 +105,14 @@ class CheckpointTarget(NamedTuple):
     application_id: str
     input_type: str
     application_name: str | None = None
+
+
+def _mapping_or_empty(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else _NO_METADATA
+
+
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _coerce_bool(value: bool | str) -> bool:
@@ -245,16 +253,16 @@ class OvalixGuardrail(CustomGuardrail):
         )
         return [*requested, *auto_added]
 
-    def _get_actor(self, data: Mapping[str, Any]) -> str:
+    def _get_actor(self, data: Mapping[str, object]) -> str:
         """Return a stable actor identifier from request metadata (e.g. user email or id)."""
-        metadata: Final = data.get("metadata") or data.get("litellm_metadata") or _NO_METADATA
-        if metadata.get("user_api_key_user_email"):
-            return metadata["user_api_key_user_email"]
-        if metadata.get("user_api_key_user_id"):
-            return metadata["user_api_key_user_id"]
-        return ""
+        metadata: Final = _mapping_or_empty(data.get("metadata") or data.get("litellm_metadata"))
+        return (
+            _str_or_none(metadata.get("user_api_key_user_email"))
+            or _str_or_none(metadata.get("user_api_key_user_id"))
+            or ""
+        )
 
-    def _get_tracker_actor_id(self, data: Mapping[str, Any]) -> str:
+    def _get_tracker_actor_id(self, data: Mapping[str, object]) -> str:
         """Normalize the actor string into a short, stable id for Tracker API payloads."""
         # NOTE: this hash is purely for normalization — it collapses an arbitrary actor
         # string (email, user id, or empty) into a compact, fixed-length, consistent
@@ -264,19 +272,19 @@ class OvalixGuardrail(CustomGuardrail):
         normalized_actor_id: Final = hashlib.sha256(actor_id).hexdigest()[:8]
         return normalized_actor_id
 
-    def _get_session_id(self, data: Mapping[str, Any]) -> str:
+    def _get_session_id(self, data: Mapping[str, object]) -> str:
         """Return a unique identifier for the chat/session (actor + date + application_id)."""
         return self._get_session_id_for_application(data, self._application_id)
 
     async def _call_checkpoint(
         self,
         data_type: str,
-        data: Mapping[str, Any],
+        data: Mapping[str, object],
         checkpoint_id: str,
         actor: str,
         session_id: str,
         target: CheckpointTarget,
-    ) -> Mapping[str, Any]:
+    ) -> Mapping[str, object]:
         """Call the Ovalix Tracker checkpoint API and return the JSON response.
 
         Both routes live on the tracker's /beta litellm router, which accepts the api key this
@@ -307,13 +315,13 @@ class OvalixGuardrail(CustomGuardrail):
         response.raise_for_status()
         return response.json()
 
-    def _verdict(self, resp: Mapping[str, Any]) -> tuple[str, str | None]:
-        return (resp.get("action_type") or "").lower(), self._get_trackers_corrected_message(resp)
+    def _verdict(self, resp: Mapping[str, object]) -> tuple[str, str | None]:
+        return (_str_or_none(resp.get("action_type")) or "").lower(), self._get_trackers_corrected_message(resp)
 
     async def _block_reason_for_item(
         self,
         data_type: str,
-        data: Mapping[str, Any],
+        data: Mapping[str, object],
         checkpoint_id: str,
         actor: str,
         session_id: str,
@@ -338,7 +346,7 @@ class OvalixGuardrail(CustomGuardrail):
 
     async def _check_items_block_only(
         self,
-        items: Sequence[tuple[str, Mapping[str, Any]]],
+        items: Sequence[tuple[str, Mapping[str, object]]],
         checkpoint_id: str,
         actor: str,
         session_id: str,
@@ -374,7 +382,7 @@ class OvalixGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: Mapping[str, Any],
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
@@ -473,7 +481,7 @@ class OvalixGuardrail(CustomGuardrail):
             return inputs
         return {**inputs, "texts": output_texts}
 
-    async def _file_part_to_data(self, part: FilePart) -> Mapping[str, Any]:
+    async def _file_part_to_data(self, part: FilePart) -> Mapping[str, object]:
         extension: Final = mimetypes.guess_extension(part.mime_hint) if part.mime_hint else None
         name: Final = part.name or (f"file{extension}" if extension else "file")
         content: Final = (
@@ -523,7 +531,7 @@ class OvalixGuardrail(CustomGuardrail):
                 output[original_index] = corrected
         return output if tuple(output) != original else None
 
-    def _get_session_id_for_application(self, data: Mapping[str, Any], application_id: str | None) -> str:
+    def _get_session_id_for_application(self, data: Mapping[str, object], application_id: str | None) -> str:
         actor_hash: Final = self._get_tracker_actor_id(data)
         today: Final = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         return f"{actor_hash}_{today}_{application_id}"
@@ -536,16 +544,17 @@ class OvalixGuardrail(CustomGuardrail):
             should_wrap_with_default_message=False,
         )
 
-    def _get_trackers_corrected_message(self, resp: Mapping[str, Any]) -> str | None:
+    def _get_trackers_corrected_message(self, resp: Mapping[str, object]) -> str | None:
         """Extract corrected/blocking message content from Tracker checkpoint response."""
         modified: Final = resp.get("modified_data")
-        if isinstance(modified, dict) and "content" in modified:
-            return modified["content"]
-        return None
+        if not isinstance(modified, Mapping):
+            return None
+        content: Final = modified.get("content")
+        return content if isinstance(content, str) else None
 
-    def _get_key_alias(self, request_data: Mapping[str, Any]) -> str | None:
-        litellm_metadata: Final = request_data.get("litellm_metadata") or _NO_METADATA
-        metadata: Final = request_data.get("metadata") or _NO_METADATA
+    def _get_key_alias(self, request_data: Mapping[str, object]) -> str | None:
+        litellm_metadata: Final = _mapping_or_empty(request_data.get("litellm_metadata"))
+        metadata: Final = _mapping_or_empty(request_data.get("metadata"))
 
         def _merged(key: str) -> object:
             return litellm_metadata.get(key) if key in litellm_metadata else metadata.get(key)
@@ -615,7 +624,7 @@ class OvalixGuardrail(CustomGuardrail):
             should_wrap_with_default_message=False,
         )
 
-    async def _checkpoint_routing_name(self, request_data: Mapping[str, Any]) -> str | None:
+    async def _checkpoint_routing_name(self, request_data: Mapping[str, object]) -> str | None:
         """The application name to route checkpoints by, or None to route by resolved ids.
 
         None when the deployment pins an application in config, or when no name can be read from the
@@ -628,7 +637,7 @@ class OvalixGuardrail(CustomGuardrail):
             return None
         return self._extract_application_name(alias, await self._get_app_name_regex())
 
-    async def _resolve_routing(self, request_data: Mapping[str, Any]) -> ResolvedRouting | None:
+    async def _resolve_routing(self, request_data: Mapping[str, object]) -> ResolvedRouting | None:
         if self._application_id:
             return ResolvedRouting(
                 self._application_id,
