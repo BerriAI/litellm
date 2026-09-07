@@ -2,6 +2,7 @@
 Tests for Z.AI (Zhipu AI) provider - GLM models
 """
 
+import json
 import math
 
 import pytest
