@@ -6,6 +6,7 @@ and allows requests with only registered servers. Covers both /chat/completions
 and /responses API paths (same pre_call_hook logic, different call_type).
 """
 
+from typing import Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -189,9 +190,13 @@ class TestMCPSecurityGuardrailPreCall:
 class TestInitializeGuardrail:
     @pytest.mark.parametrize(
         "configured,expected",
-        [("block", "block"), ("alert", "alert"), (None, "block")],
+        [("block", "block"), ("alert", "alert"), (None, "alert"), ("warn", "alert"), ("end_session", "alert")],
     )
-    def test_on_violation_from_litellm_params(self, configured, expected):
+    def test_on_violation_from_litellm_params(
+        self,
+        configured: Literal["block", "alert", "warn", "end_session"] | None,
+        expected: Literal["block", "alert"],
+    ):
         litellm_params = LitellmParams(guardrail="mcp_security", mode="pre_call", on_violation=configured)
         guardrail = Guardrail(guardrail_name="mcp-security-block", litellm_params=litellm_params)
 

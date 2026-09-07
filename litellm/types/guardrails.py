@@ -778,6 +778,9 @@ class ContentFilterConfigModel(BaseModel):
     )
 
 
+MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
+
+
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
     api_key: str | None = Field(default=None, description="API key for the guardrail service")
     api_base: str | None = Field(default=None, description="Base URL for the guardrail service API")
@@ -891,7 +894,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "For /v1/realtime sessions: 'warn' speaks the violation message and continues; "
             "'end_session' speaks the message and closes the connection. "
-            "For guardrail='mcp_security': 'block' (default) rejects the request; 'alert' only logs a warning."
+            "For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning."
         ),
     )
     realtime_violation_message: str | None = Field(
@@ -1096,6 +1099,15 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             return float(v)
         except (TypeError, ValueError) as e:
             raise ValueError(f"timeout must be numeric, got {v!r}") from e
+
+    @model_validator(mode="after")
+    def validate_on_violation_for_guardrail(self) -> "LitellmParams":
+        if (
+            self.on_violation in MCP_SECURITY_ON_VIOLATION
+            and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
+        ):
+            raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
 
     def __init__(self, **kwargs) -> None:
         default_on: Final = kwargs.pop("default_on", None)

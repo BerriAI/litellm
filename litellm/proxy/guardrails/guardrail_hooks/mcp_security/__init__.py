@@ -20,7 +20,7 @@ def initialize_guardrail(
     if not guardrail_name:
         raise ValueError("MCP Security: guardrail_name is required")
 
-    on_violation: Final[Literal["block", "alert"]] = "alert" if litellm_params.on_violation == "alert" else "block"
+    on_violation: Final[Literal["block", "alert"]] = "block" if litellm_params.on_violation == "block" else "alert"
 
     mcp_security_guardrail: Final = MCPSecurityGuardrail(
         guardrail_name=guardrail_name,
