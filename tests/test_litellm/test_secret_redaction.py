@@ -469,7 +469,7 @@ def test_vertex_error_message_no_credential_leak():
     )
 
     for failure in failures:
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="vertex") as exc_info:
             raise_vertex_credentials_failure(failure)
         message = str(exc_info.value)
         assert _redact_string(message) == message  # nothing to redact

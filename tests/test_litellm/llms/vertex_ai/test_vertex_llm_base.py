@@ -2207,12 +2207,11 @@ class TestVertexCredentialsSource:
     def test_missing_credentials_file_names_the_path_not_the_json(self, tmp_path):
         missing = tmp_path / "vertexai.json"
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="No such file or directory") as exc_info:
             VertexBase().load_auth(credentials=str(missing), project_id="p")
 
         message = str(exc_info.value)
         assert str(missing) in message
-        assert "No such file or directory" in message
         assert "not valid JSON" not in message
 
     def test_unreadable_credentials_file_names_the_read_failure(self, tmp_path):
@@ -2221,24 +2220,22 @@ class TestVertexCredentialsSource:
         unreadable = tmp_path / "vertexai.json"
         unreadable.mkdir()
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
             VertexBase().load_auth(credentials=str(unreadable), project_id="p")
 
         message = str(exc_info.value)
         assert str(unreadable) in message
-        assert "Unable to read the vertex credentials file" in message
         assert "not valid JSON" not in message
 
     def test_malformed_credentials_file_names_the_file_and_keeps_the_private_key_hint(self, tmp_path):
         malformed = tmp_path / "vertexai.json"
         malformed.write_text('{"type": "service_account", "private_key": "-----BEGIN\nPRIVATE KEY-----"}')
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="is not valid JSON") as exc_info:
             VertexBase().load_auth(credentials=str(malformed), project_id="p")
 
         message = str(exc_info.value)
         assert str(malformed) in message
-        assert "not valid JSON" in message
         assert "private_key" in message
 
     def test_malformed_inline_credentials_do_not_echo_the_credential(self):
@@ -2247,11 +2244,12 @@ class TestVertexCredentialsSource:
             '"-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"}'
         )
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(
+            ValueError, match="The inline `vertex_credentials` value is not valid JSON"
+        ) as exc_info:
             VertexBase().load_auth(credentials=inline, project_id="p")
 
         message = str(exc_info.value)
-        assert "not valid JSON" in message
         assert "MIIEvQIBADA" not in message
         assert "BEGIN PRIVATE KEY" not in message
 
@@ -2297,7 +2295,7 @@ class TestVertexCredentialsSource:
 
         missing = tmp_path / "vertexai.json"
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
             VertexBase().load_auth(credentials=str(missing), project_id="p")
 
         logged = str(exc_info.value)
@@ -2309,7 +2307,7 @@ class TestVertexCredentialsSource:
         so it is scrubbed before it reaches the message."""
         pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
 
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
             VertexBase().load_auth(credentials=pem, project_id="p")
 
         message = str(exc_info.value)
