@@ -163,6 +163,7 @@ class OvalixGuardrail(CustomGuardrail):
         file_checkpoint_id: str | None = None,
         enable_routing_cache: bool | None = None,
         fail_if_no_application: bool | None = None,
+        supported_event_hooks: list[GuardrailEventHooks] | None = None,
         **kwargs: Any,
     ):
         self._tracker_api_base = tracker_api_base or os.environ.get("OVALIX_TRACKER_API_BASE")
@@ -188,9 +189,7 @@ class OvalixGuardrail(CustomGuardrail):
         self._routing_cache: OrderedDict[str, tuple[float, ResolvedRouting | None]] = OrderedDict()
         self._app_name_regex: re.Pattern[str] | None = None
 
-        supported_event_hooks: Final[list[GuardrailEventHooks]] = list(kwargs.get("supported_event_hooks") or ())
-
-        self._validate_config(supported_event_hooks)
+        event_hooks: Final = self._validated_event_hooks(supported_event_hooks or ())
 
         self._tracker_headers = dict(
             httpx.Headers(
@@ -207,7 +206,7 @@ class OvalixGuardrail(CustomGuardrail):
 
         self._async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 
-        super().__init__(**{**kwargs, "supported_event_hooks": supported_event_hooks})
+        super().__init__(supported_event_hooks=event_hooks, **kwargs)
         verbose_proxy_logger.debug(
             "Ovalix Guardrail initialized: tracker=%s, application_id=%s, pre_checkpoint_id=%s, post_checkpoint_id=%s",
             self._tracker_api_base,
@@ -216,8 +215,8 @@ class OvalixGuardrail(CustomGuardrail):
             self._post_checkpoint_id,
         )
 
-    def _validate_config(self, supported_event_hooks: list[GuardrailEventHooks]) -> None:
-        """Ensure required Tracker secrets are set; register the pre/post hooks this config can serve (both in discovery mode; only configured-checkpoint directions in static mode)."""
+    def _validated_event_hooks(self, requested: Sequence[GuardrailEventHooks]) -> list[GuardrailEventHooks]:
+        """Ensure required Tracker secrets are set; return the pre/post hooks this config can serve (both in discovery mode; only configured-checkpoint directions in static mode)."""
         errors: Final = tuple(
             message
             for present, message in (
@@ -236,10 +235,15 @@ class OvalixGuardrail(CustomGuardrail):
 
         supports_pre: Final = not self._application_id or bool(self._pre_checkpoint_id)
         supports_post: Final = not self._application_id or bool(self._post_checkpoint_id)
-        if supports_pre and GuardrailEventHooks.pre_call not in supported_event_hooks:
-            supported_event_hooks.append(GuardrailEventHooks.pre_call)
-        if supports_post and GuardrailEventHooks.post_call not in supported_event_hooks:
-            supported_event_hooks.append(GuardrailEventHooks.post_call)
+        auto_added: Final = tuple(
+            hook
+            for supported, hook in (
+                (supports_pre, GuardrailEventHooks.pre_call),
+                (supports_post, GuardrailEventHooks.post_call),
+            )
+            if supported and hook not in requested
+        )
+        return [*requested, *auto_added]
 
     def _get_actor(self, data: Mapping[str, Any]) -> str:
         """Return a stable actor identifier from request metadata (e.g. user email or id)."""
@@ -285,9 +289,9 @@ class OvalixGuardrail(CustomGuardrail):
 
         route: Final = "file_checkpoint" if data_type == "FILE" else "checkpoint"
         routing: Final = (
-            {"application_name": target.application_name, "input_type": target.input_type}
+            MappingProxyType({"application_name": target.application_name, "input_type": target.input_type})
             if target.application_name
-            else {"application_id": target.application_id, "checkpoint_id": checkpoint_id}
+            else MappingProxyType({"application_id": target.application_id, "checkpoint_id": checkpoint_id})
         )
         payload: Final = {
             "actor": actor,
@@ -426,9 +430,9 @@ class OvalixGuardrail(CustomGuardrail):
             *(inputs.get("tool_calls") or ()),
             *extract_tool_calls_from_messages(structured_messages),
         )
-        unique_tool_data: Final = {
-            tool_data_key(data): data for data in (tool_call_to_tool_data(tc) for tc in tool_calls) if data
-        }
+        unique_tool_data: Final = MappingProxyType(
+            {tool_data_key(data): data for data in (tool_call_to_tool_data(tc) for tc in tool_calls) if data}
+        )
         tool_call_items: Final = tuple(("TOOL", data) for data in unique_tool_data.values())
         tool_block: Final = await self._check_items_block_only(
             tool_call_items,

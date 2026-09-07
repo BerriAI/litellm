@@ -1261,7 +1261,7 @@ def test_enable_routing_cache_from_env_string(monkeypatch):
 @pytest.mark.asyncio
 async def test_call_checkpoint_requires_application_and_checkpoint():
     g = _static_guardrail()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="application_id or checkpoint_id not resolved"):
         await g._call_checkpoint("TEXT", {"content": "x"}, "", "actor", "sess", CheckpointTarget("app-1", "request"))
 
 
