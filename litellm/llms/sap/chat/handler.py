@@ -51,15 +51,6 @@ class _StreamParser:
     def _validate_chunk(
         payload: dict,  # mutable-ok: normalized in place (pops empty logprobs) before validation
     ) -> OpenAIChatCompletionChunk:
-        """
-        Validate an OpenAI-shaped dict into a chunk, normalizing fields that would
-        otherwise break downstream serialization:
-          - drop the empty `logprobs` ({}) the orchestration service sends on every choice
-          - replace the raw openai-SDK usage object (deferred-build pydantic model whose
-            serializer is still a MockValSer) with litellm's Usage, so nested
-            model_dump() calls in the streaming handler don't raise
-            "'MockValSer' object is not an instance of 'SchemaSerializer'"
-        """
         for choice in payload.get("choices") or []:  # mutable-ok: only iterated, never mutated
             if isinstance(choice, dict) and not choice.get("logprobs"):
                 choice.pop("logprobs", None)
