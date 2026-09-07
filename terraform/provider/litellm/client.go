@@ -79,7 +79,6 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 	// Create a new map with only the fields that can be updated
 	updateData := map[string]interface{}{
 		"key":              key.Key,
-		"team_id":          key.TeamID,
 		"metadata":         key.Metadata,
 		"key_alias":        key.KeyAlias,
 		"aliases":          key.Aliases,
@@ -92,6 +91,9 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 
 	// The proxy rejects an empty-string budget_duration with a 400, so only
 	// send it when set.
+	if key.TeamID != "" {
+		updateData["team_id"] = key.TeamID
+	}
 	if key.BudgetDuration != "" {
 		updateData["budget_duration"] = key.BudgetDuration
 	}

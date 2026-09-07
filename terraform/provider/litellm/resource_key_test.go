@@ -122,7 +122,7 @@ func TestUpdateKeyOmitsUnsetNewFields(t *testing.T) {
 	}
 
 	for _, k := range []string{
-		"budget_id", "enforced_params", "allowed_routes", "allowed_passthrough_routes",
+		"team_id", "budget_id", "enforced_params", "allowed_routes", "allowed_passthrough_routes",
 		"rpm_limit_type", "tpm_limit_type", "prompts", "organization_id",
 	} {
 		if _, present := captured[k]; present {
