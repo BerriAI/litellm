@@ -878,7 +878,7 @@ def test_dated_search_preview_entries_carry_search_pricing(local_model_cost_map)
 def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
     web_search_options, local_model_cost_map
 ):
-    """The snapshot and alias must bill web search identically. OpenAI lists web search preview on non-reasoning models at $25 per 1k calls."""
+    """Snapshot and alias must bill web search identically: OpenAI lists preview search at $25 per 1k calls."""
     alias_info = litellm.get_model_info("gpt-4o-mini")
     snapshot_info = litellm.get_model_info("gpt-4o-mini-2024-07-18")
 
