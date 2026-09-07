@@ -70,7 +70,7 @@ GATE_SLOT_LOCK := python3 scripts/gate_slot_lock.py
 
 LINT_DEP_INSTALL ?= install-dev
 LINT_E2E_DEP_INSTALL ?= lint-install
-LINT_DEP_BASE ?= lint-fetch-base
+LINT_DEP_BASE ?=
 LINT_JOBS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 LINT_OUTPUT_SYNC := $(if $(filter output-sync,$(.FEATURES)),--output-sync=target,)
 
@@ -133,8 +133,6 @@ format: install-dev
 format-check: install-dev
 	cd litellm && $(UV_RUN) ruff format --check --exclude '/enterprise/' . && cd ..
 
-# Single fetch of the PR base so the delta-based gates below share one network round
-# trip instead of each re-fetching when chained from `lint`.
 lint-fetch-base:
 	@$(RESOLVE_BASE)
 
@@ -222,7 +220,7 @@ lint-test-quality: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 
 # --update lowers each limit by what this branch fixed since its branch point, so
 # it needs the base ref fetched to resolve the merge-base.
-lint-basedpyright-budget-update: install-dev lint-fetch-base
+lint-basedpyright-budget-update: install-dev
 	$(UV_RUN) python scripts/type_check_gate.py --update --base "$(BASE_REF)"
 
 lint-format: format-check
@@ -235,13 +233,13 @@ lint-ruff-budget: install-dev
 lint-gate: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 	$(UV_RUN) python scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
-lint-ruff-budget-update: install-dev lint-fetch-base
+lint-ruff-budget-update: install-dev
 	$(UV_RUN) python scripts/ruff_strict_gate.py --update --base "$(BASE_REF)"
 
-lint-type-discipline-budget-update: install-dev lint-fetch-base
+lint-type-discipline-budget-update: install-dev
 	$(UV_RUN) python scripts/type_discipline_gate.py --update --base "$(BASE_REF)"
 
-lint-test-quality-budget-update: install-dev lint-fetch-base
+lint-test-quality-budget-update: install-dev
 	$(UV_RUN) python scripts/test_quality_gate.py --update --base "$(BASE_REF)"
 
 # Ratchet all budgets in one shot (ruff strict + type-discipline + test quality + basedpyright)

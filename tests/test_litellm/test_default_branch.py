@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -210,3 +211,30 @@ def test_each_gate_refuses_an_unverifiable_default(remote_and_clone: tuple[Path,
     )
     assert result.returncode != 0
     assert "Cannot verify the base branch against origin" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "target", ["lint-format-check-changed", "lint-test-quality", "lint-test-quality-budget-update"]
+)
+def test_direct_make_target_fetches_default_once(remote_and_clone: tuple[Path, Path], target: str) -> None:
+    _, repo = remote_and_clone
+    trace: Final = repo.parent / "git-trace.jsonl"
+    shutil.copyfile(ROOT / "scripts" / "check_test_quality.py", repo / "scripts" / "check_test_quality.py")
+    shutil.copyfile(ROOT / "test-quality-budget.json", repo / "test-quality-budget.json")
+    (repo / "tests").mkdir()
+    result: Final = subprocess.run(
+        ["make", "-o", "install-dev", target, "LINT_DEP_INSTALL=", "UV_RUN=env"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**{key: value for key, value in os.environ.items() if key != "BASE_REF"}, "GIT_TRACE2_EVENT": str(trace)},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    commands: Final = tuple(
+        event["argv"][1:]
+        for line in trace.read_text().splitlines()
+        if (event := json.loads(line)).get("event") == "start"
+    )
+    assert sum(command[0] == "ls-remote" for command in commands) == 1
+    assert sum(command[0] == "fetch" for command in commands) == 1
