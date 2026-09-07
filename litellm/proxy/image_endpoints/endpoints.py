@@ -207,6 +207,8 @@ async def image_generation(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
         )
         log_llm_api_exception(e, litellm_call_id)
+        if isinstance(e, ProxyException):
+            raise
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
