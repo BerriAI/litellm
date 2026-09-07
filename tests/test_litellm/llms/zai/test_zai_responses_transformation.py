@@ -83,17 +83,14 @@ def test_zai_responses_headers_fall_back_to_environment_key(monkeypatch):
 
 def test_zai_responses_headers_prefer_zai_key_over_global_key(monkeypatch):
     monkeypatch.setenv("ZAI_API_KEY", "sk-zai-env")
-    original_api_key = litellm.api_key
-    litellm.api_key = "sk-global-other-provider"
-    try:
-        config = ZAIResponsesAPIConfig()
+    monkeypatch.setattr(litellm, "api_key", "sk-global-other-provider", raising=False)
 
-        headers = config.validate_environment(
-            headers={},
-            model="glm-5.3",
-            litellm_params=GenericLiteLLMParams(),
-        )
-    finally:
-        litellm.api_key = original_api_key
+    config = ZAIResponsesAPIConfig()
+
+    headers = config.validate_environment(
+        headers={},
+        model="glm-5.3",
+        litellm_params=GenericLiteLLMParams(),
+    )
 
     assert headers["Authorization"] == "Bearer sk-zai-env"
