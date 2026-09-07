@@ -95,11 +95,11 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         unmodified client always gets audio back.
         """
         params: Final = (
-            dict(optional_params) if optional_params else {}
-        )  # mutable-ok: local working copy, keys popped below
+            dict(optional_params) if optional_params else {}  # mutable-ok: local working copy, keys popped below
+        )
         passthrough_kwargs: Final = (
-            dict(kwargs) if kwargs is not None else {}
-        )  # mutable-ok: local working copy, keys popped below
+            dict(kwargs) if kwargs is not None else {}  # mutable-ok: local working copy, keys popped below
+        )
 
         voice_override: Final = params.pop("voice_id", None)
         mapped_voice: Final = _resolve_voice(voice) or _as_voice_str(voice_override)
@@ -122,9 +122,9 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
             except (TypeError, ValueError):
                 params.pop("speed", None)
 
-        mapped_params: Final[dict[str, Any]] = {
+        mapped_params: Final[dict[str, Any]] = {  # mutable-ok: returned per the base contract
             k: v for k, v in params.items() if v is not None
-        }  # mutable-ok: returned per the base contract
+        }
 
         reserved_kwarg_keys: Final = frozenset(all_litellm_params) | frozenset(
             (
@@ -211,8 +211,8 @@ class GandrTextToSpeechConfig(BaseTextToSpeechConfig):
         `validate_environment`.
         """
         params: Final = (
-            dict(optional_params) if optional_params else {}
-        )  # mutable-ok: local working copy, keys popped below
+            dict(optional_params) if optional_params else {}  # mutable-ok: local working copy, keys popped below
+        )
         extra_body: Final = params.pop("extra_body", None)
 
         request_body: Final[dict[str, Any]] = {  # mutable-ok: JSON request body consumed by the HTTP handler
