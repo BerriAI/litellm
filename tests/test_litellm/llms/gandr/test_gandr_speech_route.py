@@ -8,10 +8,12 @@ wrapper, the provider config registry and the litellm.speech() route with
 the HTTP handler mocked.
 """
 
-from unittest.mock import MagicMock, patch
+import json
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import speech
@@ -200,43 +202,61 @@ def test_provider_config_registry_returns_gandr_config():
     assert litellm.LlmProviders("gandr") is litellm.LlmProviders.GANDR
 
 
-def test_speech_routes_to_gandr_handler():
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.text_to_speech_handler"
-    ) as mock_tts:
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.headers = {}
-        mock_response.content = b"fake wav bytes"
-        mock_tts.return_value = HttpxBinaryResponseContent(mock_response)
-
-        response = speech(
-            model="gandr/mia",
-            voice="gandr-mia",
-            input="Your order number is 4471.",
-            api_key="gnd_test_key",
-            api_base="https://tts.gandr.ai/v1",
-            response_format="pcm",
+def test_speech_routes_to_gandr_endpoint(respx_mock: respx.MockRouter):
+    route = respx_mock.post("https://tts.gandr.ai/v1/audio/speech").mock(
+        return_value=httpx.Response(
+            200, content=b"fake wav bytes", headers={"Content-Type": "audio/wav"}
         )
+    )
 
-        assert mock_tts.called
-        kwargs = mock_tts.call_args.kwargs
-        assert kwargs["custom_llm_provider"] == "gandr"
-        assert kwargs["voice"] == "gandr-mia"
-        assert kwargs["model"] == "mia"
-        assert isinstance(kwargs["text_to_speech_provider_config"], GandrTextToSpeechConfig)
-        assert kwargs["text_to_speech_optional_params"]["response_format"] == "pcm"
-        assert kwargs["litellm_params"]["api_key"] == "gnd_test_key"
-        assert kwargs["litellm_params"]["api_base"] == "https://tts.gandr.ai/v1"
-        assert response.content == b"fake wav bytes"
+    response = speech(
+        model="gandr/mia",
+        voice="gandr-mia",
+        input="Your order number is 4471.",
+        api_key="gnd_test_key",
+        response_format="wav",
+    )
+
+    assert route.called
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer gnd_test_key"
+    assert request.headers["Content-Type"] == "application/json"
+    body = json.loads(request.content)
+    assert body == {
+        "input": "Your order number is 4471.",
+        "model": "mia",
+        "voice": "gandr-mia",
+        "response_format": "wav",
+        "speed": 1.0,
+    }
+    assert response.content == b"fake wav bytes"
 
 
-def test_speech_gandr_requires_a_voice():
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.text_to_speech_handler"
-    ) as mock_tts:
-        # The litellm client wrapper may re-raise inside its own exception
-        # types; the message is the stable contract.
-        with pytest.raises(Exception, match="Gandr voice is required"):
-            speech(model="gandr/mia", input="No voice given", api_key="gnd_test_key")
-        assert not mock_tts.called
+def test_speech_honours_caller_api_base_with_explicit_key(respx_mock: respx.MockRouter):
+    route = respx_mock.post("https://staging.example.com/v1/audio/speech").mock(
+        return_value=httpx.Response(200, content=b"pcm", headers={"Content-Type": "audio/pcm"})
+    )
+
+    response = speech(
+        model="gandr/mia",
+        voice="gandr-ava",
+        input="Hello.",
+        api_key="gnd_caller_key",
+        api_base="https://staging.example.com/v1",
+        response_format="pcm",
+    )
+
+    assert route.called
+    assert route.calls.last.request.headers["Authorization"] == "Bearer gnd_caller_key"
+    assert json.loads(route.calls.last.request.content)["response_format"] == "pcm"
+    assert response.content == b"pcm"
+
+
+def test_speech_gandr_requires_a_voice(respx_mock: respx.MockRouter):
+    route = respx_mock.post("https://tts.gandr.ai/v1/audio/speech")
+
+    # The litellm client wrapper may re-raise inside its own exception
+    # types; the message is the stable contract.
+    with pytest.raises(Exception, match="Gandr voice is required"):
+        speech(model="gandr/mia", input="No voice given", api_key="gnd_test_key")
+    assert not route.called
