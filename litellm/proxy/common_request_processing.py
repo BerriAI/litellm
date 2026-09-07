@@ -1542,7 +1542,7 @@ class ProxyBaseLLMRequestProcessing:
         route_type: ProxyRouteType,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> dict[str, object]:
-        if route_type not in {"acompletion", "aresponses"}:
+        if route_type not in ("acompletion", "aresponses"):
             return data
         if str_to_bool(os.getenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER")) is not True:
             return data
@@ -1550,7 +1550,10 @@ class ProxyBaseLLMRequestProcessing:
         if not user_id:
             return data
         safety_identifier: Final = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
-        return {**data, "safety_identifier": safety_identifier}
+        return {  # mutable-ok: downstream request processing mutates payloads
+            **data,
+            "safety_identifier": safety_identifier,
+        }
 
     @staticmethod
     def _merge_passthrough_streaming_headers(

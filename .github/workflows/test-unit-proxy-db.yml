@@ -195,6 +195,7 @@ jobs:
               tests/proxy_unit_tests/test_check_responses_cost.py
               tests/proxy_unit_tests/test_response_polling_handler.py
               tests/proxy_unit_tests/test_response_polling_pre_call_checks.py
+              tests/proxy_unit_tests/test_safety_identifier.py
               tests/proxy_unit_tests/test_realtime_cache.py
               tests/proxy_unit_tests/test_proxy_exception_mapping.py
               tests/proxy_unit_tests/test_custom_tokenizer_bug.py
