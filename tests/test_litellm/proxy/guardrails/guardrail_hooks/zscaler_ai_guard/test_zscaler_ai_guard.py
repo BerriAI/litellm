@@ -10,13 +10,13 @@ Tests covering:
 - resolve-and-execute-policy endpoint (policyId omission)
 """
 
-from typing import Mapping
+from collections.abc import Mapping
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi import HTTPException
+
 from litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import ZscalerAIGuard
-import asyncio
 
 
 @pytest.mark.asyncio

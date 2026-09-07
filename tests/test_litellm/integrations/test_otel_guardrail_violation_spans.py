@@ -97,6 +97,7 @@ def _slg_entry(
     end=2.0,
     violation_categories=None,
     guardrail_action=None,
+    guardrail_transaction_id=None,
 ):
     """Build a StandardLoggingGuardrailInformation entry the way
     ``add_standard_logging_guardrail_information_to_request_data`` does."""
@@ -114,6 +115,8 @@ def _slg_entry(
         entry["violation_categories"] = violation_categories
     if guardrail_action is not None:
         entry["guardrail_action"] = guardrail_action
+    if guardrail_transaction_id is not None:
+        entry["guardrail_transaction_id"] = guardrail_transaction_id
     return entry
 
 
@@ -513,6 +516,21 @@ class TestGuardrailSpanAttributesOnViolation(unittest.TestCase):
         entry = _slg_entry("success", {"action": "NONE", "assessments": []})
         span = self._emit_and_get_guardrail_span(entry)
         self.assertIsNone(_attr(span, "guardrail_action"))
+
+    def test_guardrail_transaction_id_surfaced_when_provider_populates_it(self):
+        entry = _slg_entry(
+            "guardrail_flagged",
+            {"action": "DETECT", "flagged": True},
+            guardrail_action="DETECT",
+            guardrail_transaction_id="zg-detect-8f21",
+        )
+        span = self._emit_and_get_guardrail_span(entry)
+        self.assertEqual(_attr(span, "guardrail_transaction_id"), "zg-detect-8f21")
+
+    def test_no_guardrail_transaction_id_when_field_absent(self):
+        entry = _slg_entry("success", {"action": "NONE", "assessments": []})
+        span = self._emit_and_get_guardrail_span(entry)
+        self.assertIsNone(_attr(span, "guardrail_transaction_id"))
 
 
 class TestMultipleGuardrailsOneBlocks(unittest.TestCase):
