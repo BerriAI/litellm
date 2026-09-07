@@ -152,7 +152,7 @@ export const deploymentRefsFromModelInfo = (
     return row.model_name && underlyingModels.length > 0 ? [{ modelGroup: row.model_name, underlyingModels }] : [];
   });
 
-const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
+export const resolveAvailableModel = (requiredModel: string, availability: ModelAvailability): string | undefined => {
   const { modelGroups, underlyingIndex } = availability;
   if (modelGroups.has(requiredModel)) return requiredModel;
   const normalized = normalizeModelName(requiredModel);
@@ -284,6 +284,7 @@ export const buildPresetPrefill = (
       classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
       classification_mode: config.classification_mode ?? DEFAULT_CLASSIFICATION_MODE,
       session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
+      session_affinity_ttl_seconds: config.session_affinity_ttl_seconds,
       deployment_affinity: config.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
       modality_routing: config.modality_routing ?? false,
       modality_pin_override: config.modality_pin_override ?? false,

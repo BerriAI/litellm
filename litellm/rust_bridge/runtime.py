@@ -116,28 +116,6 @@ async def aattempt(
     return RustHandled(adapt(value))
 
 
-def call(operation: Callable[[], ResultT], context: BridgeErrorContext) -> ResultT:
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
-        return operation()
-    upstream: Final = exceptions[1]
-    try:
-        return operation()
-    except upstream as error:
-        _raise_upstream(error, context)
-
-
-async def acall(operation: Callable[[], Awaitable[ResultT]], context: BridgeErrorContext) -> ResultT:
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
-        return await operation()
-    upstream: Final = exceptions[1]
-    try:
-        return await operation()
-    except upstream as error:
-        _raise_upstream(error, context)
-
-
 def _decline_reason(error: BaseException) -> str:
     reason: Final[object] = error.args[0] if error.args else str(error)
     return reason if isinstance(reason, str) else str(reason)
@@ -170,11 +148,3 @@ def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoRetu
         llm_provider=context.provider,
         model=context.model,
     ) from error
-
-
-def identity(value: ResultT) -> ResultT:
-    return value
-
-
-async def async_none() -> None:
-    return None

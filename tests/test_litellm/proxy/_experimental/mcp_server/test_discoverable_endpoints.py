@@ -3342,12 +3342,13 @@ async def test_oauth_protected_resource_gateway_managed_oauth2_advertises_gatewa
     mock_request.headers = {}
 
     interactive = _oauth2_server("github_mcp")
+    relay = _oauth2_server("relay_mcp", per_server_oauth_discovery=True)
     m2m = _oauth2_server("m2m_mcp", oauth2_flow="client_credentials", client_id="cid", client_secret="cs")
     delegated = _oauth2_server("delegated_mcp", delegate_auth_to_upstream=True)
 
     global_mcp_server_manager.registry.clear()
     try:
-        for server in (interactive, m2m, delegated):
+        for server in (interactive, relay, m2m, delegated):
             global_mcp_server_manager.registry[server.server_id] = server
 
         for name in ("github_mcp", "m2m_mcp"):
@@ -3362,6 +3363,15 @@ async def test_oauth_protected_resource_gateway_managed_oauth2_advertises_gatewa
             )
             assert legacy["authorization_servers"] == ["https://litellm.example.com/mcp"], name
             assert legacy["resource"] == f"https://litellm.example.com/{name}/mcp"
+
+        relay_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name="relay_mcp", use_standard_pattern=True
+        )
+        assert relay_response["authorization_servers"] == ["https://litellm.example.com/relay_mcp"]
+        relay_legacy_response = await _build_oauth_protected_resource_response(
+            request=mock_request, mcp_server_name="relay_mcp", use_standard_pattern=False
+        )
+        assert relay_legacy_response["authorization_servers"] == ["https://litellm.example.com/relay_mcp"]
 
         delegated_response = await _build_oauth_protected_resource_response(
             request=mock_request, mcp_server_name="delegated_mcp", use_standard_pattern=True
@@ -3506,6 +3516,169 @@ def _create_oauth2_server(
         available_on_public_internet=available_on_public_internet,
         delegate_auth_to_upstream=delegate_auth_to_upstream,
     )
+
+
+def _create_id_lookup_oauth2_server():
+    return _create_oauth2_server(
+        server_id="oauth-server-id",
+        name="oauth-server-name",
+        server_name="oauth-server-name",
+        alias="oauth-server-alias",
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorize_resolves_server_by_id_when_name_lookup_fails():
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _create_id_lookup_oauth2_server()
+    request = MagicMock(spec=Request)
+    request.base_url = "https://llm.example.com/"
+    request.headers = {}
+
+    with (
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=None) as by_name,  # test-quality-ok: resolver seam
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server) as by_id,  # test-quality-ok: resolver seam
+        patch.object(discoverable_endpoints, "encrypt_value_helper", return_value="encrypted-state"),  # test-quality-ok: flow seam
+    ):
+        response = await discoverable_endpoints.authorize(
+            request=request,
+            client_id=server.client_id,
+            mcp_server_name=server.server_id,
+            redirect_uri="http://localhost:62646/callback",
+            state="test_state",
+        )
+
+    assert response.status_code == 307
+    assert "https://provider.com/oauth/authorize" in response.headers["location"]
+    by_name.assert_called_once_with(server.server_id, client_ip=None)
+    by_id.assert_called_once_with(server.server_id, client_ip=None)
+
+
+@pytest.mark.asyncio
+async def test_token_endpoint_resolves_server_by_id_when_name_lookup_fails():
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _create_id_lookup_oauth2_server()
+    request = MagicMock(spec=Request)
+    request.base_url = "https://llm.example.com/"
+    request.headers = {}
+    response = MagicMock()
+    response.json.return_value = {"access_token": "token", "token_type": "Bearer"}
+    response.raise_for_status = MagicMock()
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+
+    with (
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=None) as by_name,  # test-quality-ok: resolver seam
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server) as by_id,  # test-quality-ok: resolver seam
+        patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=client),  # test-quality-ok: HTTP seam
+    ):
+        result = await discoverable_endpoints.token_endpoint(
+            request=request,
+            grant_type="authorization_code",
+            code="test_code",
+            redirect_uri="http://localhost:62646/callback",
+            client_id=server.client_id,
+            mcp_server_name=server.server_id,
+            client_secret=server.client_secret,
+        )
+
+    assert json.loads(result.body)["access_token"] == "token"
+    by_name.assert_called_once_with(server.server_id, client_ip=None)
+    by_id.assert_called_once_with(server.server_id, client_ip=None)
+
+
+@pytest.mark.asyncio
+async def test_register_client_resolves_server_by_id_when_name_lookup_fails():
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _create_id_lookup_oauth2_server().model_copy(
+        update={"client_id": None, "client_secret": None, "registration_url": "https://provider.com/oauth/register"}
+    )
+    request = MagicMock(spec=Request)
+    request.base_url = "https://llm.example.com/"
+    request.headers = {}
+    response = MagicMock()
+    response.json.return_value = {"client_id": "registered-client", "client_secret": "registered-secret"}
+    response.raise_for_status = MagicMock()
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+
+    with (
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=None) as by_name,  # test-quality-ok: resolver seam
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server) as by_id,  # test-quality-ok: resolver seam
+        patch.object(discoverable_endpoints, "_read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: request seam
+        patch.object(discoverable_endpoints, "get_async_httpx_client", return_value=client),  # test-quality-ok: HTTP seam
+    ):
+        result = await discoverable_endpoints.register_client(request=request, mcp_server_name=server.server_id)
+
+    assert json.loads(result.body)["client_id"] == "registered-client"
+    by_name.assert_called_once_with(server.server_id, client_ip=None)
+    by_id.assert_called_once_with(server.server_id, client_ip=None)
+
+
+@pytest.mark.asyncio
+async def test_protected_resource_metadata_resolves_server_by_id_when_name_lookup_fails():
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _create_id_lookup_oauth2_server()
+    request = MagicMock(spec=Request)
+    request.base_url = "https://llm.example.com/"
+    request.headers = {}
+
+    with (
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=None) as by_name,  # test-quality-ok: resolver seam
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server) as by_id,  # test-quality-ok: resolver seam
+    ):
+        result = await discoverable_endpoints._build_oauth_protected_resource_response(
+            request=request,
+            mcp_server_name=server.server_id,
+            use_standard_pattern=True,
+        )
+
+    assert result["authorization_servers"] == ["https://llm.example.com/mcp"]
+    assert result["resource"] == f"https://llm.example.com/mcp/{server.server_id}"
+    by_name.assert_called_once_with(server.server_id, client_ip=None)
+    by_id.assert_called_once_with(server.server_id, client_ip=None)
+
+
+def test_authorization_server_metadata_resolves_server_by_id_when_name_lookup_fails():
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    server = _create_id_lookup_oauth2_server()
+    request = MagicMock(spec=Request)
+    request.base_url = "https://llm.example.com/"
+    request.headers = {}
+
+    with (
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=None) as by_name,  # test-quality-ok: resolver seam
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=server) as by_id,  # test-quality-ok: resolver seam
+    ):
+        result = discoverable_endpoints._build_oauth_authorization_server_response(
+            request=request,
+            mcp_server_name=server.server_id,
+        )
+
+    assert result["scopes_supported"] == server.scopes
+    assert result["issuer"] == f"https://llm.example.com/{server.server_id}"
+    by_name.assert_called_once_with(server.server_id, client_ip=None)
+    by_id.assert_called_once_with(server.server_id, client_ip=None)
 
 
 @pytest.mark.asyncio

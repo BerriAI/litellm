@@ -11,7 +11,7 @@ from litellm.rust_bridge import configuration as _configuration
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
 
 rust_ocr_enabled = _configuration.rust_ocr_enabled
-use_litellm_rust = _configuration.use_litellm_rust
+rust = _configuration.rust
 
 
 class RustOcr(Protocol):

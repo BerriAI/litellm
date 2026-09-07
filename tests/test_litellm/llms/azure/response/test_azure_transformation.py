@@ -1,11 +1,10 @@
 from copy import deepcopy
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-
-from unittest.mock import MagicMock
-
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.azure.responses.o_series_transformation import (
     AzureOpenAIOSeriesResponsesAPIConfig,
 )
@@ -613,3 +612,39 @@ class TestAzureResponsesAPIConfig:
 
         assert result["tools"][0] is tool
         assert "anyOf" in result["tools"][0]["parameters"]
+
+
+@pytest.fixture()
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the bundled cost map: the published map lags a key added in this repo."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url))
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
+
+
+def test_azure_responses_gpt6_astra_reasoning_effort_none_unlocks_temperature(local_model_cost_map: None):
+    """Foundry's gpt-6-astra accepts reasoning.effort='none' with a non-default temperature
+    while OpenAI's gpt-6-astra does not, so the gate must read the azure/ cost-map entry
+    for the bare deployment name rather than OpenAI's."""
+    params = AzureOpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.2,
+            reasoning={"effort": "none"},
+        ),
+        model="gpt-6-astra",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.2
+    assert params["reasoning"] == {"effort": "none"}
+
+
+def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_model_cost_map: None):
+    with pytest.raises(litellm.UnsupportedParamsError):
+        AzureOpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                temperature=0.2,
+                reasoning={"effort": "low"},
+            ),
+            model="gpt-6-astra",
+            drop_params=False,
+        )

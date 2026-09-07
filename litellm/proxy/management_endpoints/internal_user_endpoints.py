@@ -17,6 +17,7 @@ import json
 import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
@@ -77,6 +78,7 @@ from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
     UserListResponse,
+    UserSearchWhere,
     UserUpdateResult,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
@@ -2080,6 +2082,22 @@ async def _authorize_user_list_request(
     return ",".join(allowed_org_ids)
 
 
+_NO_SEARCH_WHERE: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _user_search_where(search: str | None) -> Mapping[str, object]:
+    """Prisma predicate for `/user/list?search=`: user_id or user_email contains it, case-insensitive."""
+    if not search:
+        return _NO_SEARCH_WHERE
+    search_where: Final[UserSearchWhere] = {
+        "OR": (
+            {"user_id": {"contains": search, "mode": "insensitive"}},
+            {"user_email": {"contains": search, "mode": "insensitive"}},
+        )
+    }
+    return search_where
+
+
 @router.get(
     "/user/list",
     tags=["Internal User management"],
@@ -2091,6 +2109,10 @@ async def get_users(
     user_ids: str | None = fastapi.Query(default=None, description="Get list of users by user_ids"),
     sso_user_ids: str | None = fastapi.Query(default=None, description="Get list of users by sso_user_id"),
     user_email: str | None = fastapi.Query(default=None, description="Filter users by partial email match"),
+    search: str | None = fastapi.Query(
+        default=None,
+        description="Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive).",
+    ),
     team: str | None = fastapi.Query(default=None, description="Filter users by team id"),
     page: int = fastapi.Query(default=1, ge=1, description="Page number"),
     page_size: int = fastapi.Query(default=25, ge=1, le=100, description="Number of items per page"),
@@ -2121,6 +2143,8 @@ async def get_users(
             Get list of users by sso_ids. Comma separated list of sso_ids.
         user_email: Optional[str]
             Filter users by partial email match
+        search: Optional[str]
+            Combined search: matches users whose user_id or user_email contains the value (case-insensitive)
         team: Optional[str]
             Filter users by team id. Will match if user has this team in their teams array.
         page: int
@@ -2197,7 +2221,11 @@ async def get_users(
             where_conditions["organization_memberships"] = {"some": {"organization_id": {"in": org_id_list}}}
 
     ## Filter any none fastapi.Query params - e.g. where_conditions: {'user_email': {'contains': Query(None), 'mode': 'insensitive'}, 'teams': {'has': Query(None)}}
-    where_conditions = {k: v for k, v in where_conditions.items() if v is not None}
+    where: Final[Mapping[str, object]] = {
+        key: value
+        for key, value in (*where_conditions.items(), *_user_search_where(search).items())
+        if value is not None
+    }
 
     # Build order_by conditions
 
@@ -2206,14 +2234,14 @@ async def get_users(
     )
 
     users: Final[Sequence[prisma_models.LiteLLM_UserTable]] = await UserRepository(prisma_client).table.find_many(
-        where=where_conditions,
+        where=where,
         skip=skip,
         take=page_size,
         order=(order_by if order_by else {"created_at": "desc"}),  # Default to created_at desc if no sort specified
     )
 
     # Get total count of user rows
-    total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where_conditions)
+    total_count: Final[int] = await UserRepository(prisma_client).table.count(where=where)
 
     # Get key count for each user
     user_key_counts: Final = await get_user_key_counts(prisma_client, [user.user_id for user in users])

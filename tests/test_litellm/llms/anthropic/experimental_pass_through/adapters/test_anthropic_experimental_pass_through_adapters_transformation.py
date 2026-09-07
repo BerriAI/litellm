@@ -1,5 +1,5 @@
 import base64
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import pytest
 
@@ -38,6 +38,51 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+
+
+def test_translate_chat_refusal_to_anthropic_response():
+    response = ModelResponse(
+        id="chatcmpl-refusal",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="stop",
+                message=Message(content=None, role="assistant", refusal="I cannot fulfill this request."),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["content"] == [{"type": "text", "text": "I cannot fulfill this request."}]
+    assert result["stop_reason"] == "refusal"
+    assert result.get("stop_details") == {
+        "type": "refusal",
+        "category": None,
+        "explanation": "I cannot fulfill this request.",
+    }
+
+
+def test_translate_chat_length_takes_precedence_over_refusal():
+    response = ModelResponse(
+        id="chatcmpl-partial-refusal",
+        model="openai-model",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="length",
+                message=Message(content=None, role="assistant", refusal="Partial refusal"),
+            )
+        ],
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["stop_reason"] == "max_tokens"
+    assert result.get("stop_details") is None
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_content_block():
@@ -798,6 +843,7 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert (
         result[0]["input"] == {}
     ), "Empty function arguments should result in empty dict"
+    assert "provider_specific_fields" not in result[0]
 
 
 def test_translate_openai_content_to_anthropic_text_and_tool_calls():
@@ -843,6 +889,11 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     base = "call_3e9417b7925e49aca9a71dc1885e"
     sig = "CiIBDDnWx+/a=="
     combined = f"{base}{THOUGHT_SIGNATURE_SEPARATOR}{sig}"
+    function = Function(
+        name="get_weather",
+        arguments='{"location": "Boston"}',
+    )
+    function.provider_specific_fields = {"thought_signature": sig}
     openai_choices = [
         Choices(
             message=Message(
@@ -852,10 +903,7 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
                     ChatCompletionAssistantToolCall(
                         id=combined,
                         type="function",
-                        function=Function(
-                            name="get_weather",
-                            arguments='{"location": "Boston"}',
-                        ),
+                        function=function,
                     )
                 ],
             )
@@ -871,6 +919,7 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     assert THOUGHT_SIGNATURE_SEPARATOR not in result[0]["id"]
     assert result[0]["name"] == "get_weather"
     assert result[0]["input"] == {"location": "Boston"}
+    assert result[0]["provider_specific_fields"] == {"signature": sig}
 
 
 def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():
@@ -4630,3 +4679,87 @@ def test_a_bedrock_target_still_takes_output_config_not_the_declared_gate():
     assert openai_request["output_config"] == {"effort": "max"}
     assert "reasoning_effort" not in openai_request
     assert openai_request["thinking"] == {"type": "adaptive", "display": "omitted"}
+
+
+@pytest.mark.parametrize(
+    "client_cache_control",
+    [
+        pytest.param(None, id="client_sent_none"),
+        pytest.param({"type": "ephemeral"}, id="client_sent_one"),
+    ],
+)
+def test_thinking_blocks_never_carry_cache_control_back_to_anthropic(client_cache_control):
+    """A cache_control surviving the round trip is a `messages.N.content.0.thinking.
+    cache_control: Extra inputs are not permitted` 400 from Anthropic, whether the client
+    sent one or the adapter invented an empty one."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    thinking_block: Final = {
+        "type": "thinking",
+        "thinking": "let me think",
+        "signature": "sig_abc",
+        **({"cache_control": client_cache_control} if client_cache_control is not None else {}),
+    }
+
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        {
+            "model": "claude-sonnet-5",
+            "max_tokens": 4096,
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {"role": "assistant", "content": [thinking_block, {"type": "text", "text": "hello"}]},
+                {"role": "user", "content": [{"type": "text", "text": "and now?"}]},
+            ],
+        }
+    )
+
+    translated_blocks = openai_request["messages"][1]["thinking_blocks"]
+    assert [b["type"] for b in translated_blocks] == ["thinking"]
+    assert "cache_control" not in translated_blocks[0]
+
+    outbound = AnthropicConfig().transform_request(
+        model="claude-sonnet-5",
+        messages=openai_request["messages"],
+        optional_params={"max_tokens": 4096},
+        litellm_params={},
+        headers={},
+    )
+
+    replayed = outbound["messages"][1]["content"][0]
+    assert replayed["type"] == "thinking"
+    assert "cache_control" not in replayed
+
+
+def test_redacted_thinking_blocks_never_carry_cache_control():
+    """`redacted_thinking` carries no signature and is always replayed, so it hits the
+    same Anthropic 400 as `thinking` if it picks up a cache_control on the way through."""
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        {
+            "model": "claude-sonnet-5",
+            "max_tokens": 4096,
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "redacted_thinking", "data": "abc", "cache_control": {"type": "ephemeral"}},
+                        {"type": "text", "text": "hello"},
+                    ],
+                },
+            ],
+        }
+    )
+
+    outbound: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-5",
+        messages=openai_request["messages"],
+        optional_params={"max_tokens": 4096},
+        litellm_params={},
+        headers={},
+    )
+
+    replayed: Final = outbound["messages"][1]["content"][0]
+    assert replayed["type"] == "redacted_thinking"
+    assert "cache_control" not in replayed

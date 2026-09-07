@@ -1,45 +1,39 @@
 from __future__ import annotations
 
-import os
-import shlex
-import sys
+import logging
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
-from pathlib import Path
-from typing import Any
+from textwrap import indent
+from types import TracebackType
+from typing import TYPE_CHECKING, Final
 
-from .models import (
-    Coverage,
-    HarnessRun,
-    RunStatus,
-    Strategy,
-    section_confidence,
-)
+from litellm._logging import handler as litellm_log_handler
 
-STATUS_GLYPHS = {
-    RunStatus.NOT_RUN: "·",
-    RunStatus.QUEUED: "○",
-    RunStatus.RUNNING: "◉",
-    RunStatus.PASSED: "✓",
-    RunStatus.FAILED: "✗",
-    RunStatus.SKIPPED: "↷",
-    RunStatus.ERROR: "!",
-    RunStatus.MISSING: "?",
-    RunStatus.PLANNED: "—",
-    RunStatus.NOT_APPLICABLE: "n/a",
-}
+from .models import HarnessRun, RunStatus, Strategy
+from .rendering import ReportSection
 
-STATUS_STYLES = {
-    RunStatus.QUEUED: "dim",
-    RunStatus.RUNNING: "bold cyan",
-    RunStatus.PASSED: "bold green",
-    RunStatus.FAILED: "bold red",
-    RunStatus.SKIPPED: "yellow",
-    RunStatus.ERROR: "bold red",
-    RunStatus.MISSING: "magenta",
-    RunStatus.PLANNED: "dim",
-    RunStatus.NOT_APPLICABLE: "dim",
-}
+if TYPE_CHECKING:
+    from rich.live import Live
+
+
+class HarnessOutputFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        noisy_prefixes: Final = (
+            "OCR cost:",
+            "LoggingWorker: event loop changed;",
+        )
+        return not (record.name == "LiteLLM" and record.getMessage().startswith(noisy_prefixes))
+
+
+_HARNESS_OUTPUT_FILTER: Final = HarnessOutputFilter()
+
+
+def _start_output_filtering() -> None:
+    litellm_log_handler.addFilter(_HARNESS_OUTPUT_FILTER)
+
+
+def _stop_output_filtering() -> None:
+    litellm_log_handler.removeFilter(_HARNESS_OUTPUT_FILTER)
 
 
 def _format_duration(seconds: float) -> str:
@@ -50,250 +44,221 @@ def _format_duration(seconds: float) -> str:
     return f"{int(seconds // 60)}m {seconds % 60:.0f}s"
 
 
-def _rerun_command(nodeid: str) -> str:
-    if nodeid.startswith("unit-suite:"):
-        return "uv run python -m tests.rust-python-harness.strategies.unit_tests.runner --plain"
-    return f"poetry run pytest {shlex.quote(nodeid)} -q -o consider_namespace_packages=true"
-
-
 def _summary(run: HarnessRun) -> tuple[int, int, int, int]:
     outcomes: dict[str, RunStatus] = {}
     for result in run.results.values():
         outcomes.update(result.outcomes)
+    values: Final = tuple(outcomes.values())
     return (
-        list(outcomes.values()).count(RunStatus.PASSED),
-        list(outcomes.values()).count(RunStatus.FAILED),
-        list(outcomes.values()).count(RunStatus.ERROR),
-        list(outcomes.values()).count(RunStatus.SKIPPED),
+        values.count(RunStatus.PASSED),
+        values.count(RunStatus.FAILED),
+        values.count(RunStatus.ERROR),
+        values.count(RunStatus.SKIPPED),
     )
 
 
-def _cell_text(run: HarnessRun, strategy_id: str, sdk_function: str, surface: str = "sdk") -> tuple[str, str]:
-    key = f"{strategy_id}:{sdk_function}" if surface == "sdk" else f"{strategy_id}:gateway:{sdk_function}"
-    result = run.results.get(key)
-    if result is None:
-        return "", ""
-    counts = ""
-    if result.total:
-        counts = f" {len(result.completed)}/{result.total}"
-    coverage = " ◐" if result.case.coverage is Coverage.PARTIAL else ""
-    return f"{STATUS_GLYPHS[result.status]}{counts}{coverage}", STATUS_STYLES.get(
-        result.status, ""
+def _strategy_state(statuses: tuple[RunStatus, ...], outcomes: tuple[RunStatus, ...]) -> str:
+    for status in (
+        RunStatus.ERROR,
+        RunStatus.FAILED,
+        RunStatus.MISSING,
+        RunStatus.RUNNING,
+        RunStatus.QUEUED,
+    ):
+        if status in statuses:
+            return status.value
+    if RunStatus.NOT_IMPLEMENTED in statuses:
+        return RunStatus.NOT_IMPLEMENTED.value
+    if outcomes and all(outcome is RunStatus.SKIPPED for outcome in outcomes):
+        return RunStatus.SKIPPED.value
+    if statuses and all(status is RunStatus.SKIPPED for status in statuses):
+        return RunStatus.SKIPPED.value
+    for status in (RunStatus.PASSED, RunStatus.SKIPPED):
+        if status in statuses:
+            return status.value
+    return RunStatus.NOT_RUN.value
+
+
+def _strategy_line(strategy: Strategy, run: HarnessRun) -> str:
+    results: Final = tuple(run.results[case.key] for case in strategy.cases if case.key in run.results)
+    outcomes: dict[str, RunStatus] = {}
+    collected: set[str] = set()
+    for result in results:
+        outcomes.update(result.outcomes)
+        collected.update(result.collected)
+    values: Final = tuple(outcomes.values())
+    statuses: Final = tuple(result.status for result in results)
+    state: Final = _strategy_state(statuses, values)
+    completed: Final = len(outcomes)
+    total: Final = len(collected)
+    progress: Final = f", {completed}/{total} checks" if total else ""
+    counts: Final = (
+        f", {values.count(RunStatus.PASSED)} passed, "
+        f"{values.count(RunStatus.FAILED) + values.count(RunStatus.ERROR)} failed, "
+        f"{values.count(RunStatus.SKIPPED)} skipped"
+        if total
+        else ""
     )
+    duration: Final = run.strategy_durations.get(strategy.id, 0.0)
+    return f"- {strategy.label}: {state}{progress}{counts}, {_format_duration(duration)}"
+
+
+def _rendered_sections(run: HarnessRun, strategies: Sequence[Strategy]) -> tuple[ReportSection, ...]:
+    return tuple(
+        section
+        for strategy in strategies
+        if any(case.key in run.results for case in strategy.cases)
+        for section in strategy.definition.render(
+            tuple(run.results[case.key] for case in strategy.cases if case.key in run.results)
+        )
+    )
+
+
+def _format_section(section: ReportSection) -> str:
+    return f"{section.title}\n" + ("\n\n".join(section.blocks) or "- No results")
+
+
+def _run_result(run: HarnessRun, exit_code: int) -> str:
+    statuses: Final = tuple(result.status for result in run.results.values())
+    if exit_code:
+        return "FAILED"
+    if not statuses or all(status is RunStatus.NOT_IMPLEMENTED for status in statuses):
+        return "NOT RUN"
+    if all(status is RunStatus.SKIPPED for status in statuses):
+        return "SKIPPED"
+    return "PASSED"
+
+
+def final_report(run: HarnessRun, exit_code: int, strategies: Sequence[Strategy]) -> str:
+    passed, failed, errors, skipped = _summary(run)
+    run_result: Final = _run_result(run, exit_code)
+    statuses: Final = tuple(case_result.status for case_result in run.results.values())
+    not_implemented: Final = statuses.count(RunStatus.NOT_IMPLEMENTED)
+    implemented: Final = len(statuses) - not_implemented
+    skipped_cells: Final = statuses.count(RunStatus.SKIPPED)
+    failure_lines: Final = tuple(
+        f"{index}. {nodeid}\n{indent(detail.strip(), '    ')}"
+        for index, (nodeid, detail) in enumerate(run.failures[:5], start=1)
+    )
+    rendered: Final = tuple(_format_section(section) for section in _rendered_sections(run, strategies))
+    summary: Final = (
+        "Rust <-> Python parity report\n\n"
+        f"Result: {run_result}\n"
+        f"Harness support: {implemented}/{len(statuses)} cases implemented\n"
+        f"Cases: {len(statuses)} selected, {not_implemented} not implemented, {skipped_cells} skipped\n"
+        f"Checks: {run.completed_checks}/{run.unique_checks} completed, {passed} passed, "
+        f"{failed} failed, {errors} errors, {skipped} skipped\n"
+        f"Duration: {_format_duration(run.duration)}\n"
+        f"Exit code: {exit_code}"
+    )
+    failures: Final = (
+        (f"Failures (showing {len(failure_lines)} of {len(run.failures)})\n" + "\n\n".join(failure_lines))
+        if failure_lines
+        else ""
+    )
+    return "\n\n".join((summary, *rendered, *((failures,) if failures else ())))
 
 
 class RichDashboard(AbstractContextManager["RichDashboard"]):
-    def __init__(
-        self,
-        strategies: Sequence[Strategy],
-        confidence_strategies: Sequence[Strategy],
-    ) -> None:
+    def __init__(self, strategies: Sequence[Strategy]) -> None:
         from rich.console import Console
         from rich.live import Live
 
         self.strategies = strategies
-        self.confidence_strategies = confidence_strategies
         self.console = Console()
-        self.live: Any = Live(
-            console=self.console, refresh_per_second=12, transient=False
-        )
+        self.live: Live = Live(console=self.console, refresh_per_second=12, transient=True)
+        self._live_active = False
 
-    def _table(self, run: HarnessRun) -> Any:
-        from rich import box
-        from rich.table import Table
-        from rich.text import Text
-
-        columns = tuple(dict.fromkeys((case.surface, case.sdk_function) for strategy in self.strategies for case in strategy.cases))
-        narrow = self.console.width < 96
-        if narrow:
-            table = Table(box=box.SIMPLE_HEAVY, expand=True, show_header=False)
-            table.add_column("Strategy", ratio=3)
-            table.add_column("Results", ratio=5)
-            for strategy in self.strategies:
-                values = []
-                for surface, sdk_function in columns:
-                    value, style = _cell_text(run, strategy.id, sdk_function, surface)
-                    if value:
-                        values.append(
-                            Text.assemble((f"{surface}/{sdk_function} ", "dim"), (value, style))
-                        )
-                table.add_row(strategy.label, Text("  ").join(values))
-            return table
-
-        table = Table(box=box.ROUNDED, expand=True, title="Strategy × API")
-        table.add_column("Strategy", ratio=3)
-        for surface, label in columns:
-            table.add_column(label if surface == "sdk" else f"gateway/{label}", justify="center", ratio=1)
-        for strategy in self.strategies:
-            cells = []
-            for surface, sdk_function in columns:
-                value, style = _cell_text(run, strategy.id, sdk_function, surface)
-                cells.append(Text(value, style=style))
-            table.add_row(strategy.label, *cells)
-        return table
-
-    def __enter__(self) -> "RichDashboard":
+    def __enter__(self) -> RichDashboard:
+        _start_output_filtering()
         self.live.__enter__()
+        self._live_active = True
         return self
 
-    def __exit__(self, *args: object) -> None:
-        self.live.__exit__(*args)
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        _stop_output_filtering()
+        if self._live_active:
+            self.live.__exit__(exc_type, exc_value, traceback)
+            self._live_active = False
 
     def update(self, run: HarnessRun) -> None:
         from rich.markup import escape
-        from rich.panel import Panel
 
-        active = run.current_nodeid or "Waiting for test events…"
-        if len(active) > max(40, self.console.width - 16):
-            active = f"…{active[-(self.console.width - 17):]}"
+        active: Final = run.current_nodeid or "Waiting for test events..."
+        available_width: Final = max(40, self.console.width - 10)
+        visible_active: Final = active if len(active) <= available_width else f"...{active[-(available_width - 3) :]}"
         passed, failed, errors, skipped = _summary(run)
-        progress = (
-            f"[bold]{run.completed_tests}/{run.unique_tests}[/bold] tests  "
-            f"[green]{passed} passed[/green]  [red]{failed + errors} failed[/red]  "
-            f"[yellow]{skipped} skipped[/yellow]  [dim]{_format_duration(run.duration)}[/dim]"
-        )
-        legend = "✓ pass  ✗ fail  ! error  ↷ skip\n? configured test missing  — planned  ◐ partial coverage"
+        total: Final = run.unique_checks
+        percentage: Final = round(100 * run.completed_checks / total) if total else 0
+        strategy_lines: Final = "\n".join(escape(_strategy_line(strategy, run)) for strategy in self.strategies)
         self.live.update(
-            Panel(
-                self._table(run),
-                title="⚡ Rust ↔ Python parity lab",
-                subtitle=f"{progress}\n[dim]{escape(active)}[/dim]\n{legend}",
-                border_style="cyan",
-            )
+            "[bold]Running Rust <-> Python parity[/bold]\n"
+            f"Progress: [bold]{run.completed_checks}/{total} ({percentage}%)[/bold] | "
+            f"[green]{passed} passed[/green] | [red]{failed + errors} failed[/red] | "
+            f"[yellow]{skipped} skipped[/yellow] | [dim]{_format_duration(run.duration)}[/dim]\n"
+            f"Strategies:\n{strategy_lines}\n"
+            f"Current: [dim]{escape(visible_active)}[/dim]"
         )
 
     def finish(self, run: HarnessRun, exit_code: int) -> None:
-        self.update(run)
-        if run.failures:
-            from rich.markup import escape
-            from rich.panel import Panel
-
-            for nodeid, detail in run.failures[:5]:
-                rerun = _rerun_command(nodeid)
-                self.console.print(
-                    Panel(
-                        f"{escape(detail)}\n\n[bold]Rerun just this test[/bold]\n"
-                        f"[cyan]{escape(rerun)}[/cyan]",
-                        title=f"✗ {escape(nodeid)}",
-                        border_style="red",
-                    )
-                )
-        durations: dict[str, float] = {}
-        for result in run.results.values():
-            for nodeid, duration in result.durations.items():
-                durations[nodeid] = max(duration, durations.get(nodeid, 0.0))
-        if durations:
-            slow = sorted(durations.items(), key=lambda item: item[1], reverse=True)[:3]
-            self.console.print(
-                "[bold]Slowest tests[/bold]  "
-                + "  •  ".join(
-                    f"{Path(nodeid).name} [dim]{_format_duration(duration)}[/dim]"
-                    for nodeid, duration in slow
-                )
-            )
-        from rich import box
-        from rich.table import Table
-
-        confidence_table = Table(
-            title="Port confidence by API", box=box.ROUNDED, expand=True
-        )
-        confidence_table.add_column("SDK section")
-        confidence_table.add_column("Score", justify="right")
-        confidence_table.add_column("Confidence")
-        confidence_table.add_column("Strategy evidence", ratio=4)
-        confidence_styles = {"HIGH": "green", "MEDIUM": "yellow", "LOW": "red"}
-        for score in section_confidence(run, self.confidence_strategies):
-            confidence_table.add_row(
-                score.sdk_function,
-                f"{score.verified_strategies}/{score.required_strategies}  {score.percentage}%",
-                f"[{confidence_styles[score.level.value]}]{score.level.value}[/]",
-                "  ".join(score.details),
-            )
-        self.console.print(confidence_table)
-        self.console.print(
-            "[dim]Score = required strategies with passing evidence. "
-            "LOC coverage remains a separate report.[/dim]"
-        )
-        style = "green" if exit_code == 0 else "red"
-        self.console.print(
-            f"[{style}]Harness finished in {_format_duration(run.duration)} "
-            f"(exit {exit_code})[/{style}]"
-        )
+        if self._live_active:
+            self.live.stop()
+            self._live_active = False
+        print(final_report(run, exit_code, self.strategies), flush=True)  # noqa: T201  # CLI output
 
 
 class PlainDashboard(AbstractContextManager["PlainDashboard"]):
-    def __init__(
-        self,
-        strategies: Sequence[Strategy],
-        confidence_strategies: Sequence[Strategy],
-    ) -> None:
+    def __init__(self, strategies: Sequence[Strategy]) -> None:
         self.strategies = strategies
-        self.confidence_strategies = confidence_strategies
         self._seen: dict[str, tuple[RunStatus, int]] = {}
 
-    def __enter__(self) -> "PlainDashboard":
-        print("Rust <-> Python SDK parity harness", flush=True)
+    def __enter__(self) -> PlainDashboard:
+        _start_output_filtering()
+        print("Running Rust <-> Python parity", flush=True)  # noqa: T201  # CLI output
         return self
 
-    def __exit__(self, *args: object) -> None:
-        return None
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc_value, traceback
+        _stop_output_filtering()
 
     def update(self, run: HarnessRun) -> None:
         for key, result in run.results.items():
-            state = (result.status, len(result.completed))
-            if self._seen.get(key) != state:
-                self._seen[key] = state
-                progress = (
-                    f" {len(result.completed)}/{result.total}" if result.total else ""
-                )
-                print(
-                    f"{STATUS_GLYPHS[result.status]} {key}: {result.status.value}{progress}",
-                    flush=True,
-                )
+            self._update_result(key, result.case.display_name, result.status, len(result.completed), result.total)
+
+    def _update_result(self, key: str, label: str, status: RunStatus, completed: int, total: int) -> None:
+        state: Final = (status, completed)
+        previous: Final = self._seen.get(key)
+        self._seen[key] = state
+        visible: Final = status not in {
+            RunStatus.NOT_RUN,
+            RunStatus.QUEUED,
+            RunStatus.NOT_IMPLEMENTED,
+            RunStatus.SKIPPED,
+        }
+        should_print: Final = visible and (
+            previous is None or previous[0] is not status or (completed > 0 and completed % 25 == 0)
+        )
+        if should_print:
+            progress: Final = f" {completed}/{total}" if total else ""
+            print(  # noqa: T201  # CLI output
+                f"{label}: {status.value}{progress}", flush=True
+            )
 
     def finish(self, run: HarnessRun, exit_code: int) -> None:
-        self.update(run)
-        passed, failed, errors, skipped = _summary(run)
-        print(
-            f"Summary: {passed} passed, {failed} failed, {errors} errors, "
-            f"{skipped} skipped in {_format_duration(run.duration)}",
-            flush=True,
+        print(  # noqa: T201  # CLI output
+            f"\n{final_report(run, exit_code, self.strategies)}", flush=True
         )
-        for nodeid, detail in run.failures[:5]:
-            print(f"{nodeid}: {detail}", flush=True)
-            print(f"Rerun: {_rerun_command(nodeid)}", flush=True)
-        print("Port confidence by API", flush=True)
-        for score in section_confidence(run, self.confidence_strategies):
-            print(
-                f"  {score.sdk_function:12} "
-                f"{score.verified_strategies}/{score.required_strategies} "
-                f"{score.percentage:3}% {score.level.value:6}  "
-                f"{' | '.join(score.details)}",
-                flush=True,
-            )
-        print(
-            "  Score = required strategies with passing evidence; LOC is reported separately.",
-            flush=True,
-        )
-        print(f"Harness finished with exit code {exit_code}", flush=True)
 
 
-def make_dashboard(
-    strategies: Sequence[Strategy],
-    plain: bool = False,
-    confidence_strategies: Sequence[Strategy] | None = None,
-) -> RichDashboard | PlainDashboard:
-    confidence_strategies = confidence_strategies or strategies
-    interactive_terminal = (
-        sys.stdout.isatty()
-        and not os.environ.get("CI")
-        and os.environ.get("TERM") != "dumb"
-    )
-    if not plain and interactive_terminal:
-        try:
-            import rich  # noqa: F401
-
-            return RichDashboard(strategies, confidence_strategies)
-        except ImportError:
-            pass
-    return PlainDashboard(strategies, confidence_strategies)
+def make_dashboard(strategies: Sequence[Strategy]) -> PlainDashboard:
+    return PlainDashboard(strategies)

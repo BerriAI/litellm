@@ -32,6 +32,11 @@ import ComplexityRouterConfig, {
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
+import {
+  type AutoRouterCompressionState,
+  buildAutoRouterCompressionParams,
+  DEFAULT_AUTO_ROUTER_COMPRESSION,
+} from "./buildAutoRouterCompression";
 import { DEFAULT_MATCH_THRESHOLD } from "./SemanticKeywordMatching";
 import {
   BuildComplexityRouterConfigParams,
@@ -64,6 +69,7 @@ import {
 } from "@/lib/autorouter_presets";
 import { useAutoRouterPresets } from "@/app/(dashboard)/hooks/autoRouter/useAutoRouterPresets";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { buildAutomaticRouterConfig, buildPreferredTierModels } from "./auto_setup";
 
 interface AddAutoRouterTabProps {
   handleOk: () => void;
@@ -193,6 +199,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [embeddingModel, setEmbeddingModel] = useState<string | undefined>(undefined);
   const [matchThreshold, setMatchThreshold] = useState<number>(DEFAULT_MATCH_THRESHOLD);
   const [escalationKeywords, setEscalationKeywords] = useState<string[]>(DEFAULT_ESCALATION_KEYWORDS);
+  const [autoRouterCompression, setAutoRouterCompression] = useState<AutoRouterCompressionState>(
+    DEFAULT_AUTO_ROUTER_COMPRESSION,
+  );
   const [showValidationErrors, setShowValidationErrors] = useState<boolean>(false);
   const [editingTiers, setEditingTiers] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -242,6 +251,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     refetch: refetchPresets,
   } = useAutoRouterPresets();
   const presets = presetsData ?? NO_PRESETS;
+  const automaticSetupLoading = modelsLoading || presetsPending;
   const presetsUnavailable = presetsError && presetsData === undefined;
   // react-query keeps the last successful list around when a later refetch fails, so isError alone
   // can't tell "never loaded" apart from "loaded, then a background refetch errored" - only the
@@ -265,6 +275,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         [],
       ),
     [modelInfo],
+  );
+  const preferredTierModels = React.useMemo(
+    () => buildPreferredTierModels(presets, availability),
+    [presets, availability],
+  );
+  const automaticRouterConfig = React.useMemo(
+    () => buildAutomaticRouterConfig(modelInfo, deployments ?? [], preferredTierModels),
+    [modelInfo, deployments, preferredTierModels],
   );
 
   // A preset's models can only be trusted against a successfully loaded list. Selection and the
@@ -313,6 +331,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     setEscalationKeywords(prefill.escalationKeywords);
   };
 
+  const handleAutomaticSetup = () => {
+    if (automaticRouterConfig === null) return;
+    setSelectedPreset(undefined);
+    applyPrefill({ ...buildEmptyPrefill(), complexityRouterConfig: automaticRouterConfig });
+    setDetailsExpanded(false);
+    toast.success("Automatic setup created", { description: tierConfigSummary(automaticRouterConfig) });
+  };
+
   const handlePresetChange = (presetKey: string | undefined) => {
     if (!presetKey || presetKey === "custom") {
       setSelectedPreset(presetKey);
@@ -356,6 +382,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
     classificationPrompt: complexityRouterConfig.classification_prompt,
+    classificationExamples: complexityRouterConfig.classification_examples,
     heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
     hybridBoundaryMargin: complexityRouterConfig.hybrid_boundary_margin,
     classificationMode: complexityRouterConfig.classification_mode,
@@ -376,6 +403,9 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     embeddingModel,
     matchThreshold,
     escalationKeywords,
+    stallEscalationEnabled: complexityRouterConfig.stall_escalation_enabled,
+    stallEscalationWindow: complexityRouterConfig.stall_escalation_window,
+    stallEscalationRepeatThreshold: complexityRouterConfig.stall_escalation_repeat_threshold,
     adaptive: complexityRouterConfig.adaptive ?? false,
     adaptiveWeights: complexityRouterConfig.adaptive_weights ?? DEFAULT_ADAPTIVE_WEIGHTS,
     tierDistancePenalty: complexityRouterConfig.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
@@ -388,6 +418,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
     enableContextWindowEscalation: complexityRouterConfig.enable_context_window_escalation,
     contextWindowEscalationBuffer: complexityRouterConfig.context_window_escalation_buffer,
+    sessionAffinityTtlSeconds: complexityRouterConfig.session_affinity_ttl_seconds,
   };
 
   const submitRecommendedRouter = async (name: string) => {
@@ -442,6 +473,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
       model_type: "complexity_router",
       complexity_router_config: complexityRouterConfigPayload,
       model_access_group: form.getValues("model_access_group"),
+      ...buildAutoRouterCompressionParams(autoRouterCompression),
     };
 
     await handleAddAutoRouterSubmit(submitValues, accessToken, () => form.reset(EMPTY_FORM_VALUES), handleOk);
@@ -499,77 +531,92 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         <CardContent>
           <form onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
             <FieldGroup>
-              <FormField
-                control={form.control}
-                name="auto_router_name"
-                label={labelWithHint("Auto Router Name", "Unique name for this auto router configuration")}
-              >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />}
-              </FormField>
-
               <div>
-                <label className="block text-sm font-medium text-foreground mb-2">Template</label>
-                <Select
-                  items={templateItems}
-                  value={selectedPreset ?? null}
-                  onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
+                <FormField
+                  control={form.control}
+                  name="auto_router_name"
+                  label={labelWithHint("Auto Router Name", "Unique name for this auto router configuration")}
                 >
-                  <SelectTrigger data-testid="template-selector" className="w-full">
-                    <SelectValue placeholder="Choose a template or select Custom to define your own" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {sortedPresetOptions.map(({ preset, availability: presetState }) => {
-                      const disabledHint = presetDisabledHint(presetState);
-                      const hintClass = isPresetHintAlarming(presetState)
-                        ? "text-destructive"
-                        : "text-muted-foreground";
-                      const matchedHint =
-                        presetState.kind === "available" && presetState.viaDeployments
-                          ? "Matches your deployments"
-                          : null;
+                  {({ ref, ...field }) => (
+                    <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />
+                  )}
+                </FormField>
 
-                      return (
-                        <SelectItem
-                          key={preset.key}
-                          value={preset.key}
-                          label={preset.label}
-                          disabled={disabledHint !== null}
-                          title={disabledHint ?? preset.description}
-                        >
-                          <div>
-                            <div className="font-medium">{preset.label}</div>
-                            <div className="text-xs text-muted-foreground">{preset.description}</div>
-                            {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
-                            {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
-                          </div>
-                        </SelectItem>
-                      );
-                    })}
-                    <SelectItem value="custom" label="Custom Configuration">
-                      <div>
-                        <div className="font-medium">Custom Configuration</div>
-                        <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                {modelsUnverifiable && (
-                  <div className="text-xs mt-1 text-destructive">
-                    Could not load available models.{" "}
-                    <button type="button" className="underline" onClick={() => refetchModels()}>
-                      Retry
-                    </button>
-                  </div>
+                {!automaticSetupLoading && automaticRouterConfig && (
+                  <button
+                    type="button"
+                    className="mt-3 rounded-sm text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                    data-testid="configure-automatically-button"
+                    onClick={handleAutomaticSetup}
+                  >
+                    Configure automatically
+                  </button>
                 )}
-                {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
-                {presetsUnavailable && (
-                  <div className="text-xs mt-1 text-destructive">
-                    Could not load templates, so only Custom Configuration is shown.{" "}
-                    <button type="button" className="underline" onClick={() => void refetchPresets()}>
-                      Retry
-                    </button>
-                  </div>
-                )}
+
+                <div className="mt-5">
+                  <label className="block text-sm font-medium text-foreground mb-2">Template</label>
+                  <Select
+                    items={templateItems}
+                    value={selectedPreset ?? null}
+                    onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
+                  >
+                    <SelectTrigger data-testid="template-selector" className="w-full">
+                      <SelectValue placeholder="Choose a template or select Custom to define your own" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {sortedPresetOptions.map(({ preset, availability: presetState }) => {
+                        const disabledHint = presetDisabledHint(presetState);
+                        const hintClass = isPresetHintAlarming(presetState)
+                          ? "text-destructive"
+                          : "text-muted-foreground";
+                        const matchedHint =
+                          presetState.kind === "available" && presetState.viaDeployments
+                            ? "Matches your deployments"
+                            : null;
+
+                        return (
+                          <SelectItem
+                            key={preset.key}
+                            value={preset.key}
+                            label={preset.label}
+                            disabled={disabledHint !== null}
+                            title={disabledHint ?? preset.description}
+                          >
+                            <div>
+                              <div className="font-medium">{preset.label}</div>
+                              <div className="text-xs text-muted-foreground">{preset.description}</div>
+                              {disabledHint && <div className={`text-xs mt-1 ${hintClass}`}>{disabledHint}</div>}
+                              {matchedHint && <div className="text-xs mt-1 text-success">{matchedHint}</div>}
+                            </div>
+                          </SelectItem>
+                        );
+                      })}
+                      <SelectItem value="custom" label="Custom Configuration">
+                        <div>
+                          <div className="font-medium">Custom Configuration</div>
+                          <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {modelsUnverifiable && (
+                    <div className="text-xs mt-1 text-destructive">
+                      Could not load available models.{" "}
+                      <button type="button" className="underline" onClick={() => refetchModels()}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                  {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
+                  {presetsUnavailable && (
+                    <div className="text-xs mt-1 text-destructive">
+                      Could not load templates, so only Custom Configuration is shown.{" "}
+                      <button type="button" className="underline" onClick={() => void refetchPresets()}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {requiresTeamScope && (
@@ -632,6 +679,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                       onMatchThresholdChange={setMatchThreshold}
                       escalationKeywords={escalationKeywords}
                       onEscalationKeywordsChange={setEscalationKeywords}
+                      autoRouterCompression={autoRouterCompression}
+                      onAutoRouterCompressionChange={setAutoRouterCompression}
                       showValidationErrors={showValidationErrors}
                     />
                   </div>

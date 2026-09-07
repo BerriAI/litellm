@@ -670,6 +670,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_bulk_update",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
             # model
@@ -737,6 +738,9 @@ class LiteLLMRoutes(enum.Enum):
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
             "/public/v1/model_hub",
+            "/public/v1/model_hub/providers",
+            "/public/v1/model_hub/modes",
+            "/public/v1/model_hub/features",
             "/public/model_hub/info",
             "/public/agent_hub",
             "/public/mcp_hub",
@@ -829,6 +833,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
+        "/team/spend/by_user",
         "/team/{team_id}/members/me",
         "/model/new",
         "/model/update",
@@ -1374,6 +1379,35 @@ def _dcr_bridge_auth_type_error(auth_type: object) -> ValueError:
     )
 
 
+def _per_server_oauth_discovery_error() -> ValueError:
+    return ValueError(
+        "per_server_oauth_discovery is only supported for auth_type oauth2 with oauth2_flow "
+        "authorization_code and without delegate_auth_to_upstream."
+    )
+
+
+def is_per_server_oauth_discovery_eligible(
+    auth_type: object, oauth2_flow: object, delegate_auth_to_upstream: object
+) -> bool:
+    return auth_type == MCPAuth.oauth2 and oauth2_flow == "authorization_code" and not delegate_auth_to_upstream
+
+
+def _reject_unsupported_per_server_oauth_discovery(values: object, require_auth_type: bool) -> None:
+    """Partial updates may omit eligibility fields; those are checked against the stored row by the
+    update endpoint. Every field the payload does carry must be eligible on its own."""
+    if not isinstance(values, dict) or not values.get("per_server_oauth_discovery"):
+        return
+    auth_type_ok: Final = values.get("auth_type") == MCPAuth.oauth2 or (
+        not require_auth_type and "auth_type" not in values
+    )
+    oauth2_flow_ok: Final = values.get("oauth2_flow") == "authorization_code" or (
+        not require_auth_type and "oauth2_flow" not in values
+    )
+    if auth_type_ok and oauth2_flow_ok and not values.get("delegate_auth_to_upstream"):
+        return
+    raise _per_server_oauth_discovery_error()
+
+
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str | None = None
     server_name: str | None = None
@@ -1415,6 +1449,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None
@@ -1479,6 +1514,12 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
             return values
         raise _dcr_bridge_auth_type_error(auth_type)
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_per_server_oauth_discovery_auth_type(cls, values: object) -> object:
+        _reject_unsupported_per_server_oauth_discovery(values, require_auth_type=True)
+        return values
+
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
@@ -1521,6 +1562,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     delegate_auth_to_upstream: bool = False
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = Field(default_factory=list)
     byok_api_key_help_url: str | None = None
@@ -1564,6 +1606,12 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
         if auth_type in (MCPAuth.true_passthrough, MCPAuth.oauth_delegate):
             return values
         raise _dcr_bridge_auth_type_error(auth_type)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_per_server_oauth_discovery_auth_type(cls, values: object) -> object:
+        _reject_unsupported_per_server_oauth_discovery(values, require_auth_type=False)
+        return values
 
 
 from litellm.models.mcp_server import (  # noqa: E402
@@ -2404,6 +2452,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
 
     completion_model: str | None = Field(None, description="proxy level default model for all chat completion calls")
+    max_in_flight_requests_per_worker: int | None = Field(
+        None, gt=0, description="maximum concurrent requests handled by each worker"
+    )
+    max_queued_requests_per_worker: int | None = Field(
+        None, ge=0, description="maximum requests waiting for a worker slot"
+    )
+    admission_queue_timeout_seconds: float = Field(
+        1.0, gt=0, description="maximum time a request waits for a worker slot"
+    )
     plugins: list[PluginConfig] | None = Field(
         None, description="external services registered as embeddable UI plugins"
     )
@@ -2623,6 +2680,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     pass_through_endpoints: list[PassThroughGenericEndpoint] | None = Field(
         default=None,
         description="Set-up pass-through endpoints for provider-specific endpoints. Docs - https://docs.litellm.ai/docs/proxy/pass_through",
+    )
+    enable_openai_websocket_passthrough: bool | None = Field(
+        default=None,
+        description="Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.",
     )
     user_header_name: str | None = Field(
         None,

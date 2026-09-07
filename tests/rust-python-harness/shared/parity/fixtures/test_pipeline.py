@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Final, Literal
 
@@ -14,6 +12,8 @@ import pytest
 from hypothesis import strategies as st
 from pydantic import BaseModel, ConfigDict
 
+from ..local_server import LocalHttpHandler, LocalHttpServer, serve_in_thread
+from ..recorded_http import RecordedResponse
 from .pipeline import (
     RecordingInvocation,
     RecordingTarget,
@@ -22,7 +22,6 @@ from .pipeline import (
 )
 from .recording import UpstreamEndpoint
 from .store import fixture_path
-from ..recorded_http import RecordedResponse
 
 
 class _FixtureInput(BaseModel):
@@ -41,20 +40,12 @@ class _ParityCase(BaseModel):
     provider_responses: tuple[RecordedResponse, ...]
 
 
-class _Upstream(ThreadingHTTPServer):
-    daemon_threads = True
-
+class _Upstream(LocalHttpServer):
     def __init__(self, status: int = 200) -> None:
         super().__init__(("127.0.0.1", 0), _UpstreamHandler)
         self.response_status: Final = status
 
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.server_address[1]}"
-
-
-class _UpstreamHandler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
+class _UpstreamHandler(LocalHttpHandler):
 
     def do_POST(self) -> None:
         length: Final = int(self.headers.get("content-length") or "0")
@@ -68,21 +59,8 @@ class _UpstreamHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, format: str, *args: object) -> None:
-        return
-
-
-@contextmanager
-def _upstream(status: int = 200) -> Generator[_Upstream]:
-    server: Final = _Upstream(status)
-    thread: Final = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield server
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+def _upstream(status: int = 200) -> AbstractContextManager[_Upstream]:
+    return serve_in_thread(_Upstream(status))
 
 
 @dataclass(frozen=True, slots=True)
