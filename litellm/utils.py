@@ -4423,6 +4423,7 @@ def get_optional_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 drop_params=(drop_params if drop_params is not None and isinstance(drop_params, bool) else False),
+                base_model=base_model,
             )
         elif bedrock_route == "openai":
             optional_params = litellm.AmazonBedrockOpenAIConfig().map_openai_params(
