@@ -448,6 +448,6 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         json_mode: bool | None = False,
     ):
         if sync_stream:
-            return SAPStreamIterator(response=streaming_response)  # pyright: ignore[reportArgumentType]
+            return SAPStreamIterator(response=streaming_response)  # pyright: ignore[reportArgumentType]  # streaming_response type matches at runtime
         else:
-            return AsyncSAPStreamIterator(response=streaming_response)  # pyright: ignore[reportArgumentType]
+            return AsyncSAPStreamIterator(response=streaming_response)  # pyright: ignore[reportArgumentType]  # streaming_response type matches at runtime
