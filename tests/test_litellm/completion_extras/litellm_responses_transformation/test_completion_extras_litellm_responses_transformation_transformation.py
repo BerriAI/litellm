@@ -21,6 +21,59 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponse
 
 
+@pytest.mark.parametrize(
+    ("content", "expected_content"),
+    [
+        (
+            "ok",
+            [{"type": "output_text", "text": "ok", "annotations": []}],
+        ),
+        (
+            [{"type": "text", "text": "ok"}],
+            [{"type": "output_text", "text": "ok", "annotations": []}],
+        ),
+        (
+            [{"type": "input_text", "text": "ok"}],
+            [{"type": "input_text", "text": "ok"}],
+        ),
+        (
+            [{"type": "output_text", "text": "ok"}],
+            [{"type": "output_text", "text": "ok", "annotations": []}],
+        ),
+        (
+            [
+                {
+                    "type": "output_text",
+                    "text": "ok",
+                    "annotations": [{"type": "url_citation", "url": "https://example.com"}],
+                }
+            ],
+            [
+                {
+                    "type": "output_text",
+                    "text": "ok",
+                    "annotations": [{"type": "url_citation", "url": "https://example.com"}],
+                }
+            ],
+        ),
+    ],
+)
+def test_assistant_output_text_includes_required_annotations(content, expected_content):
+    handler = LiteLLMResponsesTransformationHandler()
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(
+        [{"role": "assistant", "content": content}]
+    )
+
+    assert response == [
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": expected_content,
+        }
+    ]
+
+
 def test_convert_chat_completion_messages_to_responses_api_image_input():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
