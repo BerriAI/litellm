@@ -49,6 +49,44 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
 
+@pytest.mark.parametrize("prompt_tokens", [100, 200000, 200001])
+@pytest.mark.parametrize("read_rate", [None, 0.0, 0.25e-6])
+@pytest.mark.parametrize("service_tier", [None, "priority"])
+def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, service_tier):
+    info = {
+        "input_cost_per_token": 3e-6,
+        "input_cost_per_token_priority": 4e-6,
+        "input_cost_per_token_above_200k_tokens": 6e-6,
+        "input_cost_per_token_above_200k_tokens_priority": 8e-6,
+        "output_cost_per_token": 1e-6,
+        "cache_read_input_token_cost": read_rate,
+    }
+    usage = Usage(prompt_tokens=prompt_tokens, prompt_tokens_details={"cached_tokens": 100})
+    billed = _get_token_base_cost(info, usage, service_tier=service_tier)
+    savings = _get_token_base_cost(info, usage, service_tier=service_tier, missing_cache_read_uses_input=True)
+    prompt_cost, _ = generic_cost_per_token("policy-fixture", usage, "openai", service_tier=service_tier, model_info=info)
+    assert billed[4] == pytest.approx(read_rate or 0.0)
+    assert savings[:4] == billed[:4]
+    assert savings[4] == pytest.approx(billed[0] if read_rate is None else read_rate)
+    assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[4])
+
+
+def test_missing_cache_read_uses_off_peak_input_rate():
+    from datetime import datetime, timezone
+
+    info = {
+        "input_cost_per_token": 3e-6,
+        "off_peak_pricing": {"hours_utc": "00:00-23:59", "input_cost_per_token": 5e-6},
+    }
+    when = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+    billed = _get_token_base_cost(info, Usage(prompt_tokens=100), current_time=when)
+    savings = _get_token_base_cost(
+        info, Usage(prompt_tokens=100), current_time=when, missing_cache_read_uses_input=True
+    )
+    assert billed[4] == 0.0
+    assert savings[0] == savings[4] == 5e-6
+
+
 def test_reasoning_tokens_no_price_set(_local_model_cost_map):
     # Use o1 - o1-mini was deprecated/renamed; o1 has same reasoning-token semantics
     # (no separate output_cost_per_reasoning_token, so all completion tokens use output_cost_per_token)
