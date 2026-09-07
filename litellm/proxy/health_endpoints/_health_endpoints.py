@@ -1582,6 +1582,23 @@ async def _show_no_redis_warning() -> bool:
     return await count_live_proxy_workers(prisma_client) != 1
 
 
+def _show_env_credential_login_warning() -> bool:
+    """
+    Whether the UI should warn admins that env-credential login is still enabled.
+
+    UI_USERNAME/UI_PASSWORD (or the master key, when UI_PASSWORD is unset) grant
+    proxy-admin access with a shared static secret: no per-person identity, no
+    audit trail, no password policy, and it stays valid until the env var or
+    master key rotates. That is fine for first-time setup, so it is on by
+    default, but once real admin accounts exist it should be turned off with
+    `general_settings.disable_env_credential_login`.
+    """
+    from litellm.proxy.auth.login_utils import is_env_credential_login_enabled
+    from litellm.proxy.proxy_server import general_settings
+
+    return is_env_credential_login_enabled(general_settings)
+
+
 async def _get_health_readiness_details(
     response: Response | None = None,
 ) -> dict[str, Any]:
@@ -1623,6 +1640,7 @@ async def _get_health_readiness_details(
         log_level_name: Final = logging.getLevelName(verbose_logger.getEffectiveLevel())
         is_detailed_debug: Final = verbose_logger.isEnabledFor(logging.DEBUG)
         show_no_redis_warning: Final = await _show_no_redis_warning()
+        show_env_credential_login_warning: Final = _show_env_credential_login_warning()
 
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
@@ -1650,6 +1668,7 @@ async def _get_health_readiness_details(
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
+                "show_env_credential_login_warning": show_env_credential_login_warning,
             }
         else:
             return {
@@ -1662,6 +1681,7 @@ async def _get_health_readiness_details(
                 "log_level": log_level_name,
                 "is_detailed_debug": is_detailed_debug,
                 "show_no_redis_warning": show_no_redis_warning,
+                "show_env_credential_login_warning": show_env_credential_login_warning,
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({e})")
