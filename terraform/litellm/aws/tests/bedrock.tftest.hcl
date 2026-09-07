@@ -180,6 +180,37 @@ run "an_all_segments_wildcard_bedrock_arn_is_rejected" {
   ]
 }
 
+# A wildcard in the account segment reads like a scoped ARN but matches every
+# account the identity can reach, which is why the variable documents the account
+# as "empty or a concrete id". The resource-type slug clause above does not catch
+# it, so it needs its own guard and its own case.
+run "an_account_wildcard_bedrock_arn_is_rejected" {
+  command = plan
+
+  variables {
+    bedrock_model_arns = ["arn:aws:bedrock:us-east-1:*:imported-model/*"]
+  }
+
+  expect_failures = [
+    var.bedrock_model_arns,
+  ]
+}
+
+# The mirror of the case above: tightening the account segment must not cost the
+# ARN form operators actually paste for a cross-region inference profile.
+run "a_concrete_account_inference_profile_arn_is_accepted" {
+  command = plan
+
+  variables {
+    bedrock_model_arns = ["arn:aws:bedrock:*:111122223333:inference-profile/us.anthropic.*"]
+  }
+
+  assert {
+    condition     = length(aws_iam_policy.bedrock_invoke) == 1
+    error_message = "A 12-digit account in an inference-profile ARN must stay valid."
+  }
+}
+
 run "a_china_partition_bedrock_arn_is_accepted" {
   command = plan
 

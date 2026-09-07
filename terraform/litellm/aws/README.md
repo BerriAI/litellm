@@ -220,9 +220,13 @@ foundation model in whichever region has capacity, so it needs both ARNs above:
 the profile itself, and the foundation model wildcarded across every region the
 profile can route to
 
-Every entry must be a Bedrock ARN. A bare `"*"` is rejected at plan time, since
-it would let the proxy's task role invoke every Bedrock resource in the account,
-including other teams' provisioned throughput and private imported models
+Every entry must be a Bedrock ARN naming a resource type, with the account
+segment either empty (foundation models, which AWS owns) or a literal 12-digit
+account id. A bare `"*"`, and any wildcard in the account or resource-type
+segment, is rejected at plan time, since it would let the proxy's task role
+invoke every Bedrock resource in the account, including other teams'
+provisioned throughput and private imported models. Wildcards inside the
+resource segment are what scope a family of models, and stay allowed
 
 Two adjacent flags cover the rest of the Bedrock surface. `enable_bedrock_mantle`
 grants `bedrock-mantle:CreateInference`, which the `bedrock_mantle/...` models

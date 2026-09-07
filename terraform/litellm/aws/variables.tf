@@ -591,8 +591,8 @@ variable "bedrock_model_arns" {
   default     = []
 
   validation {
-    condition     = alltrue([for a in var.bedrock_model_arns : can(regex("^arn:aws[a-z-]*:bedrock:[^:]*:[^:]*:[a-z-]+/", a))])
-    error_message = "Every bedrock_model_arns entry must be a Bedrock ARN with a real resource type, e.g. arn:aws:bedrock:*::foundation-model/anthropic.*. Bare wildcards on the account or resource-type segment (\"*\", \"arn:aws:bedrock:*\", \"arn:aws:bedrock:*:*:*\") are rejected, because they would let the task role invoke every Bedrock resource in the account, including other teams' provisioned throughput and private imported models."
+    condition     = alltrue([for a in var.bedrock_model_arns : can(regex("^arn:aws[a-z-]*:bedrock:[^:]*:([0-9]{12})?:[a-z-]+/", a))])
+    error_message = "Every bedrock_model_arns entry must be a Bedrock ARN with a real resource type, e.g. arn:aws:bedrock:*::foundation-model/anthropic.*. The account segment must be empty (foundation models) or a literal 12-digit account id; wildcards on the account or resource-type segment (\"*\", \"arn:aws:bedrock:*\", \"arn:aws:bedrock:*:*:*\", \"arn:aws:bedrock:*:*:imported-model/*\") are rejected, because they would let the task role invoke every Bedrock resource in the account, including other teams' provisioned throughput and private imported models."
   }
 }
 

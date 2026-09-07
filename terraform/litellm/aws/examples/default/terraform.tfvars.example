@@ -139,8 +139,10 @@ env    = "stage"
 # reference them in proxy_config as `bedrock/<model id>`. A cross-region
 # inference profile needs both the profile ARN and the foundation-model ARN.
 # Every entry must name a Bedrock resource type ("foundation-model/...",
-# "inference-profile/...", "imported-model/..."); "*", "arn:aws:bedrock:*",
-# and "arn:aws:bedrock:*:*:*" are rejected at plan time.
+# "inference-profile/...", "imported-model/...") and carry either an empty
+# account segment or a literal 12-digit account id; "*", "arn:aws:bedrock:*",
+# "arn:aws:bedrock:*:*:*" and "arn:aws:bedrock:*:*:imported-model/*" are
+# rejected at plan time.
 # bedrock_model_arns = [
 #   "arn:aws:bedrock:*:111122223333:inference-profile/us.anthropic.*",
 #   "arn:aws:bedrock:*::foundation-model/anthropic.*",
