@@ -3188,7 +3188,7 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     risk_score: float | None
     """Risk score 0-10 indicating how risky the request was (higher = riskier). Computed by the guardrail provider."""
 
-    violation_categories: Sequence[str] | None
+    violation_categories: ReadOnly[Sequence[str] | None]
     """Names of the policy items that intervened on this request (e.g. Bedrock
     topic-policy topic names, content-policy filter types, PII entity types).
     Populated by the provider hook before redaction so downstream loggers
@@ -3266,7 +3266,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     patterns_checked: int | None
     alert_recipients: list[str] | None
     risk_score: float | None
-    violation_categories: Sequence[str] | None
+    violation_categories: ReadOnly[Sequence[str] | None]
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]

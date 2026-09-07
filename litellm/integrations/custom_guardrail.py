@@ -1288,18 +1288,19 @@ class CustomGuardrail(CustomLogger):
         verdict: Final = _guardrail_verdict.get()
 
         # Convert None to empty dict to satisfy type requirements
-        guardrail_response: dict[str, object] | str = {} if response is None else response
-
-        if verdict is not None:
-            guardrail_response = dict(verdict)  # mutable-ok: a TypedDict is not assignable to dict[str, object]
-        elif original_inputs is not None and isinstance(response, dict):
-            # For apply_guardrail functions in custom_code_guardrail scenario,
-            # simplify the logged response to "allow", "deny", or "mask"
-            # Check if inputs were modified by comparing them
-            if self._inputs_were_modified(original_inputs, response):
-                guardrail_response = "mask"
-            else:
-                guardrail_response = "allow"
+        guardrail_response: dict[str, object] | str = (
+            dict(verdict)  # mutable-ok: a TypedDict is not assignable to dict[str, object]
+            if verdict is not None
+            else (
+                "mask"
+                if original_inputs is not None
+                and isinstance(response, dict)
+                and self._inputs_were_modified(original_inputs, response)
+                else "allow"
+                if original_inputs is not None and isinstance(response, dict)
+                else {} if response is None else response
+            )
+        )  # mutable-ok: the logging payload requires a mutable response mapping
 
         verbose_logger.debug("Guardrail response: %s", response)
 
