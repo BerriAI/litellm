@@ -34,6 +34,7 @@ tokio.workspace = true
 
 [dev-dependencies]
 criterion = "0.8.2"
+rstest.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
 

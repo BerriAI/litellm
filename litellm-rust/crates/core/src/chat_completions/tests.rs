@@ -202,7 +202,7 @@ fn declines_an_unsupported_request_before_resolving_credentials() {
     call.api_key = None;
     // No api_key is set and no env is consulted: the gate must run first, so the
     // error is the decline rather than a missing-credential error.
-    assert_eq!(decline(call), Error::Unsupported("streaming"));
+    assert_eq!(decline(call), Error::Declined("streaming"));
 }
 
 #[test]
@@ -214,21 +214,21 @@ fn rejects_an_unknown_provider() {
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        Error::InvalidProvider("openai".to_string())
+        Error::Declined("provider is not on the rust chat completions path")
     );
 }
 
 #[test]
 fn rejects_a_model_with_no_resolvable_provider() {
-    assert!(matches!(
+    assert_eq!(
         decline(request(
             "claude-sonnet-4-5",
             None,
             json!([{"role": "user", "content": "hi"}]),
             json!({}),
         )),
-        Error::InvalidProvider(_)
-    ));
+        Error::Declined("provider is not on the rust chat completions path")
+    );
 }
 
 #[test]
@@ -240,17 +240,17 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!([]),
             json!({}),
         )),
-        Error::InvalidRequest("chat completions requires at least one message".to_string())
+        Error::Declined("empty message list")
     );
-    assert!(matches!(
+    assert_eq!(
         decline(request(
             "anthropic/claude-sonnet-4-5",
             None,
             json!("not a list"),
             json!({}),
         )),
-        Error::InvalidRequest(_)
-    ));
+        Error::Declined("unreadable message list")
+    );
 }
 
 #[test]
@@ -775,11 +775,7 @@ mod round_trip {
     }
 
     #[tokio::test]
-    async fn a_connection_that_is_never_established_declines_instead_of_failing() {
-        // Nothing was sent, so nothing was billed and the host can still serve
-        // the request. Classing this with the post-send failures would turn a
-        // recoverable fallback into a user-facing error on exactly the
-        // deployments whose transport is configured only on the Python client.
+    async fn a_connection_that_is_never_established_is_terminal() {
         let port = {
             let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
             listener.local_addr().expect("has an address").port()
@@ -814,7 +810,6 @@ mod round_trip {
                 "{label} must not stay retryable once the provider has answered"
             );
         }
-        // An upstream status is already unambiguous, so it survives intact.
         assert!(matches!(
             as_response_error(Error::Http {
                 status: 500,
