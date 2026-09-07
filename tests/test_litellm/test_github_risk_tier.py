@@ -159,9 +159,40 @@ def test_removed_test_function_is_high(risk_tier, rules):
     assert _factor(verdict, "tests").reason == "1 test(s) removed"
 
 
-def test_added_skip_marker_is_high(risk_tier, rules):
-    diff = _file_diff("tests/test_litellm/test_a.py", added=('@pytest.mark.skip(reason="flaky")',))
-    assert _factor(_verdict(risk_tier, rules, diff), "tests").tier == "high"
+@pytest.mark.parametrize(
+    "marker",
+    [
+        '@pytest.mark.skip(reason="flaky")',
+        "@pytest.mark.skip",
+        'pytestmark = pytest.mark.skip("whole module is flaky")',
+        '@pytest.mark.xfail(reason="broken since the refactor")',
+        '@unittest.skip("flaky")',
+    ],
+)
+def test_unconditional_skip_marker_is_high(risk_tier, rules, marker):
+    diff = _file_diff("tests/test_litellm/test_a.py", added=(marker, *NEW_TEST))
+    factor = _factor(_verdict(risk_tier, rules, diff), "tests")
+    assert factor.tier == "high"
+    assert factor.reason == "1 skip marker(s) added"
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        '@pytest.mark.skipif(not os.getenv("OPENAI_API_KEY"), reason="needs a real key")',
+        '    if not os.getenv("OPENAI_API_KEY"):',
+        '        pytest.skip("needs a real key")',
+        '@unittest.skipIf(sys.platform == "win32", "posix only")',
+        '@unittest.skipUnless(HAS_REDIS, "needs redis")',
+    ],
+)
+def test_conditional_skip_is_not_a_silenced_test(risk_tier, rules, guard):
+    diff = _file_diff("tests/test_litellm/test_a.py", added=(guard, *NEW_TEST)) + _file_diff(
+        "litellm/llms/anthropic/chat/x.py", added=("x = 1",)
+    )
+    factor = _factor(_verdict(risk_tier, rules, diff), "tests")
+    assert factor.tier == "low"
+    assert factor.reason == "1 test(s) added"
 
 
 def test_weakened_assertions_are_high(risk_tier, rules):
@@ -199,6 +230,20 @@ def test_production_change_without_any_test_is_medium(risk_tier, rules):
     [
         (('it("hides the notice", () => {', "  expect(screen.queryByText(notice)).toBeNull();", "});"), "low"),
         (('it.skip("hides the notice", () => {', "});"), "high"),
+        (("test.skip('hides the notice', async () => {", "});"), "high"),
+        (('xit("hides the notice", () => {', "});"), "high"),
+        (
+            (
+                'test("hides the notice", async ({ page }) => {',
+                "  test.skip(!process.env.UI_BASE_URL, 'needs a UI');",
+                "});",
+            ),
+            "low",
+        ),
+        (
+            ('test("hides the notice", async ({ page }) => {', "  if (!process.env.UI_BASE_URL) test.skip();", "});"),
+            "low",
+        ),
     ],
 )
 def test_typescript_tests_count_like_python_ones(risk_tier, rules, added, expected):
@@ -212,7 +257,7 @@ def test_typescript_tests_count_like_python_ones(risk_tier, rules, added, expect
     ("author", "from_fork", "expected"),
     [
         (DEVIN, False, "low"),
-        ("mateo-berri", False, "medium"),
+        ("mateo-berri", False, "low"),
         (DEVIN, True, "high"),
         ("jairandresdiazp", True, "high"),
     ],
@@ -235,12 +280,19 @@ def test_author_factor(risk_tier, rules, author, from_fork, expected):
         ("scripts/type_check_gate.py", "high"),
         (".github/risk-tiers.yml", "high"),
         ("enterprise/litellm_enterprise/proxy/hooks/x.py", "high"),
+        ("enterprise/litellm_enterprise/proxy/auth/x.py", "high"),
+        ("enterprise/litellm_enterprise/proxy/management_endpoints/x.py", "high"),
         ("litellm/proxy/pass_through_endpoints/x.py", "high"),
         ("litellm/llms/bedrock/passthrough/x.py", "medium"),
         ("ui/litellm-dashboard/src/components/networking.tsx", "medium"),
         ("litellm/types/proxy/x.py", "medium"),
         ("ui/litellm-dashboard/src/app/login/LoginPage.test.tsx", "low"),
         ("tests/e2e/x.py", "low"),
+        ("litellm-proxy-extras/tests/test_x.py", "low"),
+        ("helm/litellm-helm/tests/x.yaml", "low"),
+        ("ui/litellm-dashboard/tests/x.spec.ts", "low"),
+        ("litellm-rust/crates/core/tests/x.rs", "low"),
+        ("enterprise/litellm_enterprise/proxy/common_utils/x.py", "medium"),
         ("cookbook/x.ipynb", "low"),
         ("model_prices_and_context_window.json", "low"),
         ("litellm/model_prices_and_context_window_backup.json", "low"),

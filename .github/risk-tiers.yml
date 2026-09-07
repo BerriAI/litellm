@@ -17,6 +17,8 @@ paths:
     - "litellm/proxy/custom_hooks/**"
     - "enterprise/enterprise_hooks/**"
     - "enterprise/litellm_enterprise/proxy/hooks/**"
+    - "enterprise/litellm_enterprise/proxy/auth/**"
+    - "enterprise/litellm_enterprise/proxy/management_endpoints/**"
     - "litellm/secret_managers/**"
     - "litellm/proxy/pass_through_endpoints/**"
     - "litellm/passthrough/**"
@@ -52,11 +54,7 @@ size:
 
 tests:
   files:
-    - "tests/**"
+    - "**/tests/**"
     - "**/*.test.*"
     - "**/*.spec.*"
     - "**/__tests__/**"
-
-authors:
-  low:
-    - "devin-ai-integration[bot]"

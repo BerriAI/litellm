@@ -17,7 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field
 Tier = Literal["low", "medium", "high"]
 
 TEST_DEF_RE: Final = re.compile(r"^\s*(?:async\s+)?def\s+test_|^\s*(?:it|test)\(")
-SKIP_RE: Final = re.compile(r"pytest\.(?:mark\.)?(?:skip|xfail)|unittest\.skip|\b(?:it|test|describe)\.skip\(|\bxit\(")
+SKIP_RE: Final = re.compile(
+    r"pytest\.mark\.(?:skip(?!if)|xfail)|unittest\.skip\b|\b(?:it|test|describe)\.skip\(\s*[\"'`]|\bx(?:it|test|describe)\("
+)
 ASSERT_RE: Final = re.compile(r"^\s*assert\b|\bexpect\(")
 GLOB_TOKEN_RE: Final = re.compile(r"(\*\*/|\*\*|\*|\?)")
 DIFF_BLOCK_SEPARATOR: Final = "\ndiff --git "
@@ -58,18 +60,12 @@ class TestRules(BaseModel):
     files: tuple[str, ...]
 
 
-class AuthorRules(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-    low: tuple[str, ...]
-
-
 class RiskConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     paths: PathRules
     modules: ModuleRules
     size: SizeRules
     tests: TestRules
-    authors: AuthorRules
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,12 +287,10 @@ def tests_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
     return Factor("tests", "medium", "production code changed with no test touched")
 
 
-def author_factor(author: str, from_fork: bool, rules: Rules) -> Factor:
+def author_factor(author: str, from_fork: bool) -> Factor:
     if from_fork:
         return Factor("author", "high", f"`{author}` from a fork")
-    if author in rules.config.authors.low:
-        return Factor("author", "low", f"`{author}` on an internal branch")
-    return Factor("author", "medium", f"`{author}` on an internal branch, human-opened")
+    return Factor("author", "low", f"`{author}` on an internal branch")
 
 
 def classify(changes: Sequence[FileChange], author: str, from_fork: bool, rules: Rules) -> Verdict:
@@ -305,7 +299,7 @@ def classify(changes: Sequence[FileChange], author: str, from_fork: bool, rules:
         modules_factor(changes, rules),
         size_factor(changes, rules),
         tests_factor(changes, rules),
-        author_factor(author, from_fork, rules),
+        author_factor(author, from_fork),
     )
     return Verdict(highest([factor.tier for factor in factors]), factors)
 
