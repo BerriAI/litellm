@@ -432,3 +432,55 @@ class TestCorrectedActiveCooldown:
 
         after_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
         assert after_expiry == original_expiry
+
+
+class TestCooldownExtension:
+    """A second failure asking for a longer cooldown must move the deadline out."""
+
+    @staticmethod
+    def _cache() -> CooldownCache:
+        return CooldownCache(cache=DualCache(), default_cooldown_time=60.0)
+
+    def test_longer_cooldown_extends_the_deadline(self):
+        cc = self._cache()
+        key = CooldownCache.get_cooldown_cache_key("dep-a")
+
+        cc.add_deployment_to_cooldown(
+            model_id="dep-a", original_exception=Exception("429"), exception_status=429, cooldown_time=2.0
+        )
+        first_expiry = cc.cache.in_memory_cache.ttl_dict[key]
+
+        started = time.time()
+        cc.add_deployment_to_cooldown(
+            model_id="dep-a", original_exception=Exception("429"), exception_status=429, cooldown_time=60.0
+        )
+        second_expiry = cc.cache.in_memory_cache.ttl_dict[key]
+
+        assert second_expiry > first_expiry, "the longer cooldown was dropped"
+        assert second_expiry - started == pytest.approx(60.0, abs=2.0)
+
+    def test_shorter_cooldown_does_not_cut_an_active_one_short(self):
+        cc = self._cache()
+        key = CooldownCache.get_cooldown_cache_key("dep-b")
+
+        cc.add_deployment_to_cooldown(
+            model_id="dep-b", original_exception=Exception("429"), exception_status=429, cooldown_time=60.0
+        )
+        long_expiry = cc.cache.in_memory_cache.ttl_dict[key]
+
+        cc.add_deployment_to_cooldown(
+            model_id="dep-b", original_exception=Exception("500"), exception_status=500, cooldown_time=1.0
+        )
+
+        assert cc.cache.in_memory_cache.ttl_dict[key] == long_expiry, "a brief cooldown shortened a long one"
+
+    def test_first_cooldown_is_unaffected(self):
+        cc = self._cache()
+        key = CooldownCache.get_cooldown_cache_key("dep-c")
+
+        started = time.time()
+        cc.add_deployment_to_cooldown(
+            model_id="dep-c", original_exception=Exception("429"), exception_status=429, cooldown_time=30.0
+        )
+
+        assert cc.cache.in_memory_cache.ttl_dict[key] - started == pytest.approx(30.0, abs=2.0)

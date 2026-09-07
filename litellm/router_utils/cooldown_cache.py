@@ -92,7 +92,13 @@ class CooldownCache:
                 cooldown_time=_cooldown_time,
             )
 
-            # Set the cache with a TTL equal to the cooldown time
+            # Set the cache with a TTL equal to the cooldown time.
+            # InMemoryCache refuses to overwrite the TTL of a key that is still live
+            # (allow_ttl_override), so a second failure that asks for a LONGER cooldown
+            # would otherwise keep the first, shorter deadline and return the deployment
+            # to rotation early. Drop the in-memory entry first when the new deadline is
+            # later than the one already recorded. Never shorten an active cooldown.
+            self._drop_in_memory_entry_if_extending(cooldown_key, _cooldown_time)
             self.cache.set_cache(
                 value=cooldown_data,
                 key=cooldown_key,
@@ -101,6 +107,23 @@ class CooldownCache:
         except Exception as e:
             verbose_logger.error("CooldownCache::add_deployment_to_cooldown - Exception occurred - %s", e)
             raise e
+
+    def _drop_in_memory_entry_if_extending(self, cooldown_key: str, new_cooldown_time: float) -> None:
+        """Clear the in-memory entry when the incoming cooldown outlasts the recorded one.
+
+        InMemoryCache.allow_ttl_override returns False while a key's TTL is still in the
+        future, so set_cache silently keeps the older, shorter expiry. Deleting first lets
+        the longer cooldown take effect; an equal or shorter one is left alone so a brief
+        cooldown cannot cut a long one short.
+        """
+        in_memory: Final = getattr(self.cache, "in_memory_cache", None)
+        if in_memory is None:
+            return
+        current_expiry: Final = in_memory.ttl_dict.get(cooldown_key)
+        if current_expiry is None:
+            return
+        if float(current_expiry) < time.time() + float(new_cooldown_time):
+            in_memory.delete_cache(cooldown_key)
 
     @staticmethod
     @functools.lru_cache(maxsize=1024)
