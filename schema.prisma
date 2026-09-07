@@ -1509,6 +1509,8 @@ model LiteLLM_AutoRouterSession {
   total_tokens          BigInt   @default(0)
   spend                 Float    @default(0)
   saved_spend           Float    @default(0)
+  classifier_cost       Float    @default(0)
+  classifier_cost_recorded_turns Int @default(0)
   tier_turns            Json     @default("{}")
 
   @@id([api_key, session_id, router_name])
