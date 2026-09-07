@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -37,6 +38,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import (
     CallTypes,
+    LiteLLMBatch,
     StandardLoggingPayload,
     StandardLoggingPayloadErrorInformation,
 )
@@ -248,6 +250,18 @@ class _ProxyDBLogger(CustomLogger):
                 )
                 _write_spend_metadata_to_kwargs(kwargs=kwargs, metadata=metadata)
             budget_reservation: Final = _get_budget_reservation_from_metadata(metadata=metadata)
+            if (
+                isinstance(completion_response, LiteLLMBatch)
+                and kwargs.get("call_type") == CallTypes.aretrieve_batch.value
+                and not batch_cost_is_final(completion_response)
+            ):
+                verbose_proxy_logger.debug(
+                    "Cost tracking deferred for batch %s still in status %s",
+                    completion_response.id,
+                    completion_response.status,
+                )
+                await _release_budget_reservation(budget_reservation=budget_reservation)
+                return
             user_id: Final = cast(str | None, metadata.get("user_api_key_user_id", None))
             team_id: Final = cast(str | None, metadata.get("user_api_key_team_id", None))
             org_id: Final = cast(str | None, metadata.get("user_api_key_org_id", None))
@@ -285,7 +299,7 @@ class _ProxyDBLogger(CustomLogger):
                     call_type=call_type,
                 ):
                     ## UPDATE DATABASE
-                    await _update_database_and_spend_counters(
+                    charged: Final = await _update_database_and_spend_counters(
                         proxy_logging_obj=proxy_logging_obj,
                         increment_spend_counters=increment_spend_counters,
                         user_api_key=user_api_key,
@@ -302,6 +316,8 @@ class _ProxyDBLogger(CustomLogger):
                         request_tags=tags,
                         model_access_groups=model_access_groups,
                     )
+                    if not charged:
+                        return
 
                     # update cache (fire-and-forget for backward compat:
                     # cached object fields, soft budget alerts, etc.)
@@ -578,9 +594,9 @@ async def _update_database_and_spend_counters(
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
-) -> None:
+) -> bool:
     try:
-        await proxy_logging_obj.db_spend_update_writer.update_database(
+        charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
             response_cost=response_cost,
             user_id=user_id,
@@ -605,6 +621,9 @@ async def _update_database_and_spend_counters(
                         "Failed to invalidate budget reservation counters after release failed"
                     )
         raise
+    if not charged:
+        await _release_budget_reservation(budget_reservation=budget_reservation)
+        return False
 
     try:
         await increment_spend_counters(
@@ -630,6 +649,7 @@ async def _update_database_and_spend_counters(
             finally:
                 budget_reservation["finalized"] = True
         raise
+    return True
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:

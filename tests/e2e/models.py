@@ -291,6 +291,7 @@ class RouterSettingsOverride(BaseModel):
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    model_group_retry_policy: dict[str, dict[str, int]] | None = None
     enable_tag_filtering: bool | None = None
 
 
