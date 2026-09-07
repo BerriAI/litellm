@@ -705,7 +705,7 @@ async def test_private_native_callback_lifecycle(
     )
     try:
         if failure:
-            with pytest.raises(litellm.RateLimitError) as caught:
+            with pytest.raises(litellm.RateLimitError) as caught:  # noqa: PT012  # parametrized sync and async calls require distinct statements
                 if asynchronous:
                     await litellm.aocr(**arguments)
                 else:
@@ -839,7 +839,7 @@ async def test_private_native_callable_terminal_callback(
     }
     try:
         if failure:
-            with pytest.raises(litellm.RateLimitError) as caught:
+            with pytest.raises(litellm.RateLimitError) as caught:  # noqa: PT012  # parametrized sync and async calls require distinct statements
                 if asynchronous:
                     await litellm.aocr(**arguments)
                 else:
@@ -983,7 +983,7 @@ async def test_native_unsupported_requests_never_prepare_or_send(
         "num_retries": 0,
         **options,
     }
-    with pytest.raises(NotImplementedError, match=message):
+    with pytest.raises(NotImplementedError, match=message):  # noqa: PT012  # parametrized native and public entry points differ
         function = litellm.aocr if asynchronous else litellm.ocr
         result = (function if public else inspect.unwrap(function))(**arguments)
         if asynchronous:
@@ -1127,7 +1127,7 @@ async def test_native_callback_escape_never_sends_or_replays(
 
     monkeypatch.setattr(litellm, "input_callback", [Abort()])
     arguments = dict(model=MODEL, document=document, api_key="sk-test", api_base=wire_recorder.api_base, num_retries=0)
-    with pytest.raises(PreCallAbort) as caught:
+    with pytest.raises(PreCallAbort) as caught:  # noqa: PT012  # parametrized sync and async calls require distinct statements
         if asynchronous:
             await litellm.aocr(**arguments)
         else:

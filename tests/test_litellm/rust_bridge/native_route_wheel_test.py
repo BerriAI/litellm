@@ -367,7 +367,7 @@ async def exercise_unsupported_ocr(native: object, api_base: str) -> None:
                 else:
                     native.ocr(arguments)
             except NotImplementedError as error:
-                assert operation in str(error)
+                assert operation in str(error)  # noqa: PT017  # the selected native entry point is parametrized at runtime
             else:
                 raise AssertionError(f"native OCR accepted unsupported operation: {operation}")
             assert arguments["litellm_logging_obj"].calls == ()

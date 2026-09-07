@@ -180,7 +180,7 @@ async def aocr(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
-    **kwargs: object,
+    **kwargs: object,  # kwargs-ok: public SDK forwards provider-specific OCR parameters
 ) -> OCRResponse:
     """
     Async OCR function.
@@ -251,7 +251,7 @@ async def _legacy_aocr(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, object] | None = None,
-    **kwargs: object,
+    **kwargs: object,  # kwargs-ok: public SDK forwards provider-specific OCR parameters
 ) -> OCRResponse:
     completion_kwargs: Final[dict[str, object]] = {
         "model": model,
