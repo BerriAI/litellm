@@ -3,6 +3,8 @@ package litellm
 import (
 	"context"
 	"encoding/json"
+	"github.com/hashicorp/go-cty/cty"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -252,5 +254,39 @@ func TestGetKeyUnwrapsInfoEnvelope(t *testing.T) {
 	}
 	if key.RPMLimit == nil || *key.RPMLimit != 100 {
 		t.Errorf("RPMLimit not parsed: %+v", key.RPMLimit)
+	}
+}
+
+func TestKeyCreateUsesWriteOnlyRawConfig(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/key/generate" {
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Error(err)
+			}
+			if payload["key"] != "sk-custom-test" {
+				t.Errorf("custom key dropped: %v", payload["key"])
+			}
+			w.Write([]byte(`{"key":"sk-custom-test","token_id":"hash-1"}`))
+			return
+		}
+		w.Write([]byte(`{"key":"hash-1","info":{"key_alias":"remote"}}`))
+	}))
+	defer srv.Close()
+	d, err := schema.InternalMap(resourceKey().Schema).Data(nil, &terraform.InstanceDiff{
+		RawConfig: cty.ObjectVal(map[string]cty.Value{"key": cty.StringVal("sk-custom-test")}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Get("key") != "" {
+		t.Fatal("test must exercise a write-only key absent from d.Get")
+	}
+	if diags := resourceKeyCreate(context.Background(), d, NewClient(srv.URL, "test-key", false)); diags.HasError() {
+		t.Fatal(diags)
+	}
+	if d.Id() != "hash-1" || d.Get("generated_key") != "sk-custom-test" || d.Get("key_alias") != "remote" {
+		t.Fatal("create did not preserve generated key and refresh remote state")
 	}
 }

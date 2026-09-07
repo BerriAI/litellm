@@ -132,3 +132,7 @@ $ terraform import litellm_key.example 12345
 ```
 
 This allows you to import existing keys into your Terraform state, enabling management of keys that were created outside of Terraform.
+
+### Generated key output
+
+`generated_key` is a sensitive computed string containing the key returned at creation. It remains in Terraform state across refreshes so dependent resources can use it. Protect state as secret material. Importing an existing token hash cannot recover the original key; `generated_key` is null after import. The optional write-only `key` argument still supplies a custom key at creation

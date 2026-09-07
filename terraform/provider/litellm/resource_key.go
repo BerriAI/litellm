@@ -25,6 +25,11 @@ func resourceKey() *schema.Resource {
 				WriteOnly: true,
 				Sensitive: true,
 			},
+			"generated_key": {
+				Type:      schema.TypeString,
+				Computed:  true,
+				Sensitive: true,
+			},
 			"token_id": {
 				Type:     schema.TypeString,
 				Computed: true,
@@ -192,7 +197,7 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 	// A config-supplied key value becomes the key itself; when absent the
 	// proxy generates one. Write-only attributes are invisible to d.Get in
 	// real Terraform runs, so read the raw config first.
-	if raw, err := d.GetRawConfigAt(cty.GetAttrPath("key")); err == nil && !raw.IsNull() && raw.Type() == cty.String && raw.AsString() != "" {
+	if raw, err := d.GetRawConfigAt(cty.GetAttrPath("key")); err == nil && raw.IsKnown() && !raw.IsNull() && raw.Type() == cty.String && raw.AsString() != "" {
 		key.Key = raw.AsString()
 	} else if v := d.Get("key").(string); v != "" {
 		key.Key = v
@@ -204,9 +209,9 @@ func resourceKeyCreate(ctx context.Context, d *schema.ResourceData, m interface{
 	}
 
 	d.SetId(createdKey.TokenID)
-	// Set the write-only key value so it's available during this apply
-	// but will not be persisted to state.
-	d.Set("key", createdKey.Key)
+	if err := d.Set("generated_key", createdKey.Key); err != nil {
+		return diag.FromErr(fmt.Errorf("error storing generated key: %w", err))
+	}
 	return resourceKeyRead(ctx, d, m)
 }
 
