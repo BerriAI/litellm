@@ -1309,3 +1309,31 @@ def test_responses_gpt54_allow_temperature_effort_none(
         drop_params=False,
     )
     assert params["temperature"] == 0.7
+
+
+def test_responses_gpt_6_astra_drops_temperature_with_reasoning(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.0,
+            reasoning={"effort": "low"},
+        ),
+        model="gpt-6-astra",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_gpt_6_astra_takes_the_reasoning_series_request_shape():
+    params = litellm.get_optional_params(
+        model="gpt-6-astra",
+        custom_llm_provider="openai",
+        max_tokens=100,
+        reasoning_effort="max",
+        verbosity="low",
+    )
+    assert params["max_completion_tokens"] == 100
+    assert "max_tokens" not in params
+    assert params["reasoning_effort"] == "max"
+    assert params["verbosity"] == "low"
