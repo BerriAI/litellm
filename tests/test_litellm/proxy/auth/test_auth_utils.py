@@ -107,7 +107,7 @@ class TestLogOnceIfBudgetReservationDisabled:
     @pytest.fixture(autouse=True)
     def _reset_sentinel(self, monkeypatch):
         monkeypatch.setattr(
-            "litellm.proxy.auth.auth_utils._budget_reservation_disabled_info_emitted",
+            "litellm.constants._budget_reservation_disabled_info_emitted",
             False,
         )
 

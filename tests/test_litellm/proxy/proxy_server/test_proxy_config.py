@@ -1645,7 +1645,7 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
-    monkeypatch.setattr("litellm.proxy.auth.auth_utils._budget_reservation_disabled_info_emitted", False)
+    monkeypatch.setattr("litellm.constants._budget_reservation_disabled_info_emitted", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     config = ProxyConfig()
 
