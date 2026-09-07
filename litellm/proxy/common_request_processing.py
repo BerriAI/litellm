@@ -1538,10 +1538,10 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     def _enforce_safety_identifier(
         *,
-        data: dict[str, object],
+        data: dict[str, Any],
         route_type: ProxyRouteType,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         if route_type not in ("acompletion", "aresponses"):
             return data
         if str_to_bool(os.getenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER")) is not True:
