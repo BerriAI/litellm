@@ -1,3 +1,6 @@
+use std::process::Command;
+use std::time::{Duration, Instant};
+
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rstest::{fixture, rstest};
@@ -10,6 +13,45 @@ mod callback_owner;
 mod support;
 
 use support::python::{InitializedPython, initialized_python, run_fixture};
+
+#[test]
+fn cold_awaited_adapter_initialization_allows_reentry() -> PyResult<()> {
+    let test = "cold_awaited_adapter_initialization_allows_reentry";
+    let child_env = "LITELLM_INTEROP_COLD_REENTRY_CHILD";
+    if std::env::var(child_env).as_deref() != Ok(test) {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env(child_env, test)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "awaited adapter reentry child failed: {status}"
+                );
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("awaited adapter reentry did not complete within 15 seconds");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    let globals = scenario_scope(&initialized_python());
+    Python::attach(|py| {
+        globals
+            .bind(py)
+            .get_item("cold_awaited_adapter_reentry")?
+            .unwrap()
+            .call1((globals.bind(py).get_item("factory")?.unwrap(),))?;
+        Ok(())
+    })
+}
 
 #[fixture]
 fn scenario_scope(initialized_python: &InitializedPython) -> Py<PyDict> {

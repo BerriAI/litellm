@@ -1,7 +1,5 @@
 //! Header and upstream-body helpers shared by every route module.
 
-pub mod buffered_post;
-
 use serde_json::{Map, Value};
 
 use crate::constants::UPSTREAM_ERROR_BODY_MAX_CHARS;

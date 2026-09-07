@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - "litellm-rust/**"
-      - "tests/test_litellm/**"
       - ".cargo/**"
       - "pyproject.toml"
       - "uv.lock"
@@ -12,6 +11,7 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -21,7 +21,6 @@ on:
       - "litellm_**"
     paths:
       - "litellm-rust/**"
-      - "tests/test_litellm/**"
       - ".cargo/**"
       - "pyproject.toml"
       - "uv.lock"
@@ -29,6 +28,7 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -102,7 +102,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ github.job }}-
 
-      - run: cargo test --workspace --locked --exclude litellm-python-interop --exclude litellm-python-bridge
+      - run: cargo test --workspace --locked
         working-directory: litellm-rust
 
       - run: cargo test -p litellm-core --features bedrock-auth --locked
@@ -131,5 +131,5 @@ jobs:
       - name: Check Python fixtures for Cargo tests
         run: make lint-rust-python-fixtures
 
-      - name: Test retained callbacks and OCR with repo Python
+      - name: Test retained callbacks with repo Python
         run: make test-rust-python

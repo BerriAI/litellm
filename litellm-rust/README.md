@@ -58,8 +58,8 @@ runs for changes under `litellm-rust/`.
 ### Python-Integrated Tests
 
 From the repository root, run the ignored Cargo tests that need the repository's
-Python dependencies and the pinned Ruff checks over both crates' `tests/`
-directories:
+Python dependencies and the pinned Ruff checks over the interop crate's Python
+test fixtures:
 
 ```bash
 make test-rust-python
@@ -68,10 +68,16 @@ make lint-rust-python-fixtures
 
 `test-rust-python` installs the locked SDK dependencies with uv, points
 `PYO3_PYTHON` at the project interpreter, and runs
-`cargo test -p litellm-python-interop -p litellm-python-bridge --tests --locked`.
-`lint-rust-python-fixtures` runs pinless linting only, no sync.
+`cargo test -p litellm-python-interop --tests --locked -- --include-ignored`.
+`lint-rust-python-fixtures` runs pinned Ruff lint and formatting checks without
+syncing the project environment
 
-The callback lifecycle and retained OCR scenarios use
+These tests validate retained callback identity, mutation, invocation context,
+and ownership against Python behavior, including existing LiteLLM components.
+They do not wire retained callbacks into production routes or change provider
+preparation, authentication, HTTP transport, or response transformation
+
+The callback lifecycle scenarios use
 `#[serial(python_interpreter)]` to isolate CPython GC and interpreter-wide
 LiteLLM settings under `cargo test`. Compatible tests in the same binary use
 `#[parallel(python_interpreter)]`: they may overlap each other, but not an

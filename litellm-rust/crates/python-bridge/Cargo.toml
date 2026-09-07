@@ -7,7 +7,7 @@ repository.workspace = true
 
 [lib]
 name = "_native"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 
 [features]
 default = ["abi3"]
@@ -34,8 +34,6 @@ tokio.workspace = true
 
 [dev-dependencies]
 criterion = "0.8.2"
-rstest.workspace = true
-serial_test.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
 
