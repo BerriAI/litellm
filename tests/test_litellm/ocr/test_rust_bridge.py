@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import configuration
 
@@ -36,6 +37,10 @@ FAKE_OCR_RESPONSE: dict[str, object] = {
 
 
 class CapturedException(Exception):
+    pass
+
+
+class RustUpstreamError(Exception):
     pass
 
 
@@ -182,6 +187,9 @@ class FakeOCRConfig:
         litellm_params: dict[str, object],
     ) -> str:
         return f"{api_base or 'https://api.mistral.ai/v1'}/ocr"
+
+    def get_error_class(self, error_message: str, status_code: int, headers: dict[str, str]) -> BaseLLMException:
+        return BaseLLMException(status_code=status_code, message=error_message, headers=headers)
 
 
 def build_prepared_request(
@@ -484,6 +492,20 @@ def test_run_rust_ocr_prepares_request_and_wraps_response():
         "optional_params": {"include_image_base64": True},
         "timeout_seconds": 12.5,
     }
+
+
+def test_rust_upstream_error_uses_ocr_provider_error_mapping():
+    error = RustUpstreamError(400, '{"message":"invalid model"}')
+
+    mapped = ocr_main._map_rust_ocr_error(
+        error,
+        build_prepared_request(),
+        (RuntimeError, RustUpstreamError),
+    )
+
+    assert isinstance(mapped, BaseLLMException)
+    assert mapped.status_code == 400
+    assert mapped.message == '{"message":"invalid model"}'
 
 
 def test_run_rust_ocr_resolves_key_via_secret_manager_when_missing():
