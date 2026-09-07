@@ -155,6 +155,7 @@ jobs:
               tests/test_litellm/proxy/vector_store_files_endpoints
               tests/test_litellm/proxy/video_endpoints
               tests/test_litellm/proxy/response_api_endpoints
+              tests/test_litellm/proxy/response_polling
               tests/test_litellm/proxy/image_endpoints
               tests/test_litellm/proxy/ocr_endpoints
               tests/test_litellm/proxy/vector_store_endpoints
