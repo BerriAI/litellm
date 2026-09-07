@@ -19,6 +19,12 @@ PRESIDIO_ANONYMIZER_API_BASE; missing env is a hard failure, never a skip.
 Each guardrail registers with an explicit presidio_filter_scope so only the
 configured hook's callback exists (the default "both" registers input masking
 AND a post_call output masker), and is deleted on teardown.
+
+The spend-log audit test requires general_settings.store_prompts_in_spend_logs:
+true in the proxy config, or STORE_PROMPTS_IN_SPEND_LOGS=true in the proxy
+process environment before startup. Setting it only on pytest has no effect.
+Without this opt-in, redacting guardrail_response is expected proxy behavior;
+this suite deliberately requires the detected-entity details to remain visible.
 """
 
 from __future__ import annotations
@@ -374,9 +380,10 @@ class TestPresidioSpendLogRecord:
         )
 
         assert not isinstance(record.guardrail_response, str), (
-            "guardrail_response must be the detected-entity list, but it is the string "
-            f"{record.guardrail_response!r}. A redaction marker here means the proxy is not storing "
-            "prompts in spend logs, which also strips the per-entity scores from the guardrail panel"
+            "This audit test requires general_settings.store_prompts_in_spend_logs: true in the proxy config "
+            "or STORE_PROMPTS_IN_SPEND_LOGS=true in the proxy process environment before startup "
+            "(not just the pytest environment). Default prompt redaction is valid proxy behavior, "
+            f"but prevents entity-detail assertions; got guardrail_response={record.guardrail_response!r}"
         )
         entities = _ENTITY_LIST_ADAPTER.validate_python(record.guardrail_response)
         assert entities, (
