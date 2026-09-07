@@ -843,15 +843,6 @@ def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
 
 
-def _bedrock_timeout_headers(original_exception: object) -> dict | None:
-    from litellm.litellm_core_utils.llm_response_utils.get_headers import get_response_headers
-
-    provider_headers = getattr(getattr(original_exception, "response", None), "headers", None)
-    if not provider_headers:
-        return None
-    return get_response_headers(provider_headers)
-
-
 def _map_bedrock_exception(
     *,
     model: str,
@@ -935,7 +926,7 @@ def _map_bedrock_exception(
             message=f"BedrockException: Timeout Error - {error_str}",
             model=model,
             llm_provider="bedrock",
-            headers=_bedrock_timeout_headers(original_exception),
+            response=getattr(original_exception, "response", None),
         )
     elif "Could not process image" in error_str:
         raise litellm.InternalServerError(
@@ -979,7 +970,7 @@ def _map_bedrock_exception(
                 model=model,
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
-                headers=_bedrock_timeout_headers(original_exception),
+                response=getattr(original_exception, "response", None),
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
@@ -1012,7 +1003,7 @@ def _map_bedrock_exception(
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
                 exception_status_code=original_exception.status_code,
-                headers=_bedrock_timeout_headers(original_exception),
+                response=getattr(original_exception, "response", None),
             )
 
 

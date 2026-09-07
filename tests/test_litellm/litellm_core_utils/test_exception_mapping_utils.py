@@ -9,6 +9,7 @@ import litellm
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
+    _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
 )
@@ -1349,10 +1350,10 @@ def test_bedrock_classified_errors_preserve_provider_response_headers(
     ],
 )
 def test_bedrock_timeout_mapping_preserves_provider_headers(status_code, provider_message):
-    """Timeout takes no response argument, so the headers have to ride on the exception itself.
+    """A mapped bedrock timeout keeps the upstream response, like every other mapped bedrock error.
 
-    The proxy reads e.headers before e.response.headers, so they arrive already
-    llm_provider-prefixed rather than as raw upstream names.
+    The proxy prefixes those headers on the way out, while retry and cooldown
+    logic still reads the raw retry-after off the response.
     """
     provider_response = httpx.Response(
         status_code=status_code,
@@ -1376,6 +1377,35 @@ def test_bedrock_timeout_mapping_preserves_provider_headers(status_code, provide
             extra_kwargs={},
         )
 
-    headers = exc_info.value.headers or {}
-    assert headers["llm_provider-x-amzn-requestid"] == "req-timeout"
-    assert "set-cookie" not in headers
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-timeout"
+    assert exc_info.value.headers is None
+
+
+@pytest.mark.parametrize("status_code", [504, 408])
+def test_bedrock_timeout_mapping_keeps_retry_after_readable(status_code):
+    """Cooldown and retry timing read retry-after through _get_response_headers."""
+    provider_response = httpx.Response(
+        status_code=status_code,
+        headers={"x-amzn-RequestId": "req-retry-after", "retry-after": "7"},
+        text='{"message":"Bedrock did not answer in time"}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+    original_exception = BedrockError(
+        status_code=status_code,
+        message='{"message":"Bedrock did not answer in time"}',
+        headers=provider_response.headers,
+        response=provider_response,
+    )
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        exception_type(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    exception_headers = _get_response_headers(original_exception=exc_info.value)
+    assert exception_headers is not None
+    assert litellm.utils._get_retry_after_from_exception_header(response_headers=exception_headers) == 7
