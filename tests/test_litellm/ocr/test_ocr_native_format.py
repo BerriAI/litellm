@@ -12,13 +12,13 @@ import pytest
 import litellm
 from litellm.llms.azure_ai.ocr.cohere_parse_transformation import AzureAICohereParseConfig
 from litellm.llms.cohere.ocr.transformation import CohereParseConfig
-from litellm.ocr.main import _PreparedOCRRequest, _rust_ocr_supported
+from litellm.rust_bridge.ocr import PreparedOCRRequest, _rust_ocr_supported
 
 DOCUMENT = {"type": "document_url", "document_url": "https://example.com/doc.pdf"}
 
 
-def _prepared(optional_params: dict[str, object]) -> _PreparedOCRRequest:
-    return _PreparedOCRRequest(
+def _prepared(optional_params: dict[str, object]) -> PreparedOCRRequest:
+    return PreparedOCRRequest(
         model="doc-intelligence/prebuilt-layout",
         document=dict(DOCUMENT),
         api_key="fake-key",

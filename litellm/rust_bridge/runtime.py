@@ -3,148 +3,93 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
+from typing import Final, Generic, TypeAlias, TypeVar
 
-from litellm.exceptions import APIError
-from litellm.rust_bridge.bindings import native_exception_types
-
+BindingT = TypeVar("BindingT")
 NativeT = TypeVar("NativeT")
+RequestT = TypeVar("RequestT")
 ResultT = TypeVar("ResultT")
 
 
-class FallbackMode(Enum):
-    PYTHON = "python"
-    RUST_REQUIRED = "rust_required"
+class NativeSkipReason(Enum):
+    DISABLED = "disabled"
+    INELIGIBLE = "ineligible"
+    UNAVAILABLE = "unavailable"
+    DECLINED = "declined"
+    FAILED = "failed"
 
 
 @dataclass(frozen=True, slots=True)
-class RustHandled(Generic[ResultT]):
+class Handled(Generic[ResultT]):
     value: ResultT
 
 
 @dataclass(frozen=True, slots=True)
-class RustDeclined:
-    reason: str
+class NativeSkipped:
+    reason: NativeSkipReason
+    detail: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class RustUnavailable:
-    pass
+class NativeFailed:
+    error: Exception
 
 
-RustAttempt: TypeAlias = RustHandled[ResultT] | RustDeclined | RustUnavailable
+DispatchResult: TypeAlias = Handled[ResultT] | NativeSkipped | NativeFailed
 
 
-@dataclass(frozen=True, slots=True)
-class BridgeErrorContext:
-    route: str
-    provider: str
-    model: str
-
-
-def invoke(
-    *,
-    native_call: Callable[[], NativeT] | None,
-    fallback: Callable[[], ResultT],
-    adapt: Callable[[NativeT], ResultT],
-    mode: FallbackMode,
-    context: BridgeErrorContext,
-) -> ResultT:
-    result: Final = attempt(native_call=native_call, adapt=adapt, context=context)
-    if isinstance(result, RustHandled):
-        return result.value
-    if mode is FallbackMode.PYTHON:
-        return fallback()
-    _raise_required(result, context)
-
-
-async def ainvoke(
-    *,
-    native_call: Callable[[], Awaitable[NativeT]] | None,
-    fallback: Callable[[], Awaitable[ResultT]],
-    adapt: Callable[[NativeT], ResultT],
-    mode: FallbackMode,
-    context: BridgeErrorContext,
-) -> ResultT:
-    result: Final = await aattempt(native_call=native_call, adapt=adapt, context=context)
-    if isinstance(result, RustHandled):
-        return result.value
-    if mode is FallbackMode.PYTHON:
-        return await fallback()
-    _raise_required(result, context)
+def _select(load: Callable[[], BindingT | None], enabled: bool, eligible: bool) -> BindingT | NativeSkipped:
+    if not enabled:
+        return NativeSkipped(NativeSkipReason.DISABLED)
+    if not eligible:
+        return NativeSkipped(NativeSkipReason.INELIGIBLE)
+    binding: Final = load()
+    return NativeSkipped(NativeSkipReason.UNAVAILABLE) if binding is None else binding
 
 
 def attempt(
     *,
-    native_call: Callable[[], NativeT] | None,
+    load: Callable[[], BindingT | None],
+    enabled: bool,
+    eligible: bool,
+    prepare: Callable[[], RequestT],
+    call: Callable[[BindingT, RequestT], NativeT],
     adapt: Callable[[NativeT], ResultT],
-    context: BridgeErrorContext,
-) -> RustAttempt[ResultT]:
-    if native_call is None:
-        return RustUnavailable()
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
-        return RustHandled(adapt(native_call()))
-    declined, upstream = exceptions
+) -> DispatchResult[ResultT]:
+    binding: Final = _select(load, enabled, eligible)
+    if isinstance(binding, NativeSkipped):
+        return binding
     try:
-        value: Final = native_call()
-    except declined as error:
-        return RustDeclined(reason=_decline_reason(error))
-    except upstream as error:
-        _raise_upstream(error, context)
-    return RustHandled(adapt(value))
+        value: Final = call(binding, prepare())
+    except Exception as error:  # noqa: BLE001  # orchestration applies the endpoint's declared error policy
+        return NativeFailed(error)
+    return Handled(adapt(value))
 
 
 async def aattempt(
     *,
-    native_call: Callable[[], Awaitable[NativeT]] | None,
+    load: Callable[[], BindingT | None],
+    enabled: bool,
+    eligible: bool,
+    prepare: Callable[[], RequestT],
+    call: Callable[[BindingT, RequestT], Awaitable[NativeT]],
     adapt: Callable[[NativeT], ResultT],
-    context: BridgeErrorContext,
-) -> RustAttempt[ResultT]:
-    if native_call is None:
-        return RustUnavailable()
-    exceptions: Final = native_exception_types()
-    if exceptions is None:
-        return RustHandled(adapt(await native_call()))
-    declined, upstream = exceptions
+) -> DispatchResult[ResultT]:
+    binding: Final = _select(load, enabled, eligible)
+    if isinstance(binding, NativeSkipped):
+        return binding
     try:
-        value: Final = await native_call()
-    except declined as error:
-        return RustDeclined(reason=_decline_reason(error))
-    except upstream as error:
-        _raise_upstream(error, context)
-    return RustHandled(adapt(value))
+        value: Final = await call(binding, prepare())
+    except Exception as error:  # noqa: BLE001  # orchestration applies the endpoint's declared error policy
+        return NativeFailed(error)
+    return Handled(adapt(value))
 
 
-def _decline_reason(error: BaseException) -> str:
-    reason: Final[object] = error.args[0] if error.args else str(error)
-    return reason if isinstance(reason, str) else str(reason)
+def identity(value: ResultT) -> ResultT:
+    return value
 
 
-def _raise_required(
-    result: RustDeclined | RustUnavailable,
-    context: BridgeErrorContext,
-) -> NoReturn:
-    raise RuntimeError(f"Rust {context.route} bridge {_required_reason(result)}")
-
-
-def _required_reason(result: RustDeclined | RustUnavailable) -> str:
-    match result:
-        case RustUnavailable():
-            return "is unavailable"
-        case RustDeclined(reason=reason):
-            return f"declined the request: {reason}"
-
-
-def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
-    args: Final[tuple[object, ...]] = error.args
-    status_value: Final = args[0] if args else 0
-    message_value: Final = args[1] if len(args) > 1 else str(error)
-    status: Final = status_value if isinstance(status_value, int) else 0
-    message: Final = message_value if isinstance(message_value, str) else str(message_value)
-    raise APIError(
-        status_code=status or 500,
-        message=f"litellm rust {context.route}: {message}",
-        llm_provider=context.provider,
-        model=context.model,
-    ) from error
+def adapt_result(result: DispatchResult[NativeT], adapt: Callable[[NativeT], ResultT]) -> DispatchResult[ResultT]:
+    if isinstance(result, Handled):
+        return Handled(adapt(result.value))
+    return result

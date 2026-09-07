@@ -12,7 +12,7 @@
     "limit": 1979
   },
   "ANN202": {
-    "limit": 831
+    "limit": 830
   },
   "ANN204": {
     "limit": 683
@@ -150,13 +150,13 @@
     "limit": 253
   },
   "PLW0127": {
-    "limit": 57
+    "limit": 55
   },
   "PLW0602": {
     "limit": 215
   },
   "PLW0603": {
-    "limit": 190
+    "limit": 184
   },
   "PLW1508": {
     "limit": 190
@@ -195,7 +195,7 @@
     "limit": 22
   },
   "SIM101": {
-    "limit": 56
+    "limit": 55
   },
   "SIM102": {
     "limit": 310
@@ -231,7 +231,7 @@
     "limit": 5
   },
   "TID251": {
-    "limit": 1035
+    "limit": 1029
   },
   "TRY002": {
     "limit": 524
@@ -246,7 +246,7 @@
     "limit": 109
   },
   "TRY300": {
-    "limit": 852
+    "limit": 846
   },
   "UP028": {
     "limit": 2
