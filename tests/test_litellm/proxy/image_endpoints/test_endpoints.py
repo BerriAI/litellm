@@ -130,14 +130,14 @@ async def test_image_generation__missing_required_param_is_400(monkeypatch):
     async def fake_add_litellm_data_to_request(**kwargs):
         return kwargs["data"]
 
-    async def fake_pre_call_hook(*, user_api_key_dict, data, call_type):  # type: ignore[override]
+    async def fake_pre_call_hook(*, user_api_key_dict, data, call_type):
         return data
 
     async def fake_post_call_failure_hook(**_: Any) -> None:
         return None
 
-    async def fake_route_request(*, data, **kwargs):  # type: ignore[override]
-        raise ProxyMissingRequiredParamError(route="/image/generations", param="prompt")
+    async def fake_route_request(*, data, **kwargs):
+        raise ProxyMissingRequiredParamError(route="/images/generations", param="prompt")
 
     fake_proxy_logger = SimpleNamespace(
         pre_call_hook=fake_pre_call_hook,
