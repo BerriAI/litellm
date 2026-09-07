@@ -5,7 +5,7 @@ completion_start_time = end_time."""
 
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import Mock, patch
 
 import httpx
@@ -256,6 +256,83 @@ async def test_completed_event_is_unwrapped_only_for_non_streaming_callers(strea
         assert logged.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     else:
         assert isinstance(logged, ResponsesAPIResponse)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_completed_response_builds_real_spend_log_payload(stream: bool):
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.llms.openai import ResponseAPIUsage
+
+    model: Final = "gpt-4o-mini"
+    request_id: Final = "resp_spend_regression"
+    prompt_tokens: Final = 11
+    completion_tokens: Final = 7
+    total_tokens: Final = prompt_tokens + completion_tokens
+    input_cost_per_token: Final = 0.00000015
+    output_cost_per_token: Final = 0.0000006
+    expected_cost: Final = prompt_tokens * input_cost_per_token + completion_tokens * output_cost_per_token
+    expected_status: Final = "success"
+    start_time: Final = datetime.now()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        stream=stream,
+        call_type="aresponses",
+        start_time=start_time,
+        litellm_call_id=request_id,
+        function_id=request_id,
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={
+            "aresponses": True,
+            "input_cost_per_token": input_cost_per_token,
+            "output_cost_per_token": output_cost_per_token,
+        },
+        optional_params={},
+        custom_llm_provider="openai",
+    )
+    logging_obj._on_deferred_stream_complete = lambda: None
+    response: Final = ResponsesAPIResponse(
+        id=request_id,
+        created_at=1,
+        model=model,
+        object="response",
+        status="completed",
+        output=[],
+        usage=ResponseAPIUsage(
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        ),
+    )
+    iterator: Final = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model=model,
+        responses_api_provider_config=Mock(spec=BaseResponsesAPIConfig),
+        logging_obj=logging_obj,
+    )
+    iterator.completed_response = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=response,
+    )
+    iterator._log_completed_response(is_async=True)
+    await logging_obj._deferred_stream_complete_args[0]
+
+    standard: Final = logging_obj.model_call_details["standard_logging_object"]
+    assert standard["prompt_tokens"] == prompt_tokens
+    assert standard["completion_tokens"] == completion_tokens
+    assert standard["total_tokens"] == total_tokens
+    assert standard["response_cost"] == pytest.approx(expected_cost)
+    assert standard["status"] == expected_status
+    payload: Final = get_logging_payload(
+        logging_obj.model_call_details, response, start_time, datetime.now()
+    )
+    assert payload["prompt_tokens"] == prompt_tokens
+    assert payload["completion_tokens"] == completion_tokens
+    assert payload["total_tokens"] == total_tokens
+    assert payload["spend"] == pytest.approx(expected_cost)
+    assert payload["status"] == expected_status
 
 
 def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypatch):
