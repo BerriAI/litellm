@@ -9652,7 +9652,9 @@
                 {
                   "enum": [
                     "warn",
-                    "end_session"
+                    "end_session",
+                    "block",
+                    "alert"
                   ],
                   "type": "string"
                 },
@@ -9660,7 +9662,7 @@
                   "type": "null"
                 }
               ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
               "title": "On Violation"
             },
             "only_scan_new_messages": {
@@ -11969,7 +11971,9 @@
                 {
                   "enum": [
                     "warn",
-                    "end_session"
+                    "end_session",
+                    "block",
+                    "alert"
                   ],
                   "type": "string"
                 },
@@ -11977,7 +11981,7 @@
                   "type": "null"
                 }
               ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
               "title": "On Violation"
             },
             "only_scan_new_messages": {

@@ -23759,9 +23759,9 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
-            on_violation?: ("warn" | "end_session") | null;
+            on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
              * Only Scan New Messages
              * @description When True, the guardrail only scans messages that have not already been scanned earlier in the same session (identified by litellm_session_id / session_id). Message content is hashed per session and cached; only the diff (new or edited messages) is sent to the guardrail provider on follow-up calls. Falls back to a full scan when the request has no session id or the cache is unavailable. Intended for blocking/detection guardrails; not applied when mask_request_content is set.
@@ -30801,9 +30801,9 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
-            on_violation?: ("warn" | "end_session") | null;
+            on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
              * Only Scan New Messages
              * @description When True, the guardrail only scans messages that have not already been scanned earlier in the same session (identified by litellm_session_id / session_id). Message content is hashed per session and cached; only the diff (new or edited messages) is sent to the guardrail provider on follow-up calls. Falls back to a full scan when the request has no session id or the cache is unavailable. Intended for blocking/detection guardrails; not applied when mask_request_content is set.
