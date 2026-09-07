@@ -8699,6 +8699,8 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
+        elif litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
             # Both decisions are data-driven from the model's price-map entry, with
             # no model-name logic. Capability (can it serve Responses?) comes from
