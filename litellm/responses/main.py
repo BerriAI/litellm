@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 from collections.abc import Coroutine, Generator, Iterable, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
@@ -23,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
@@ -327,8 +329,13 @@ async def aresponses_api_with_mcp(
             )
 
             if tool_results:
+                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(call_params)
+
                 follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
-                    response=response, tool_results=tool_results, original_input=input
+                    response=response,
+                    tool_results=tool_results,
+                    original_input=input,
+                    preserve_reasoning=persistence_disabled,
                 )
 
                 # Prepare parameters for follow-up call (restores original stream setting)
@@ -347,7 +354,7 @@ async def aresponses_api_with_mcp(
                     follow_up_input=follow_up_input,
                     model=model,
                     all_tools=all_tools,
-                    response_id=response.id,
+                    response_id=previous_response_id if persistence_disabled else response.id,
                     **follow_up_call_params,
                 )
 
@@ -398,8 +405,40 @@ def _bridges_to_chat_completions(
     return responses_api_provider_config is None or use_chat_completions_api is True
 
 
+def _deployment_passes_through_responses(model_info: object) -> bool:
+    """Whether ``model_info.supported_endpoints`` opts the deployment into native ``{api_base}/responses``."""
+    if not isinstance(model_info, dict):
+        return False
+    supported_endpoints: Final = model_info.get("supported_endpoints")
+    return isinstance(supported_endpoints, (list, tuple)) and "/v1/responses" in supported_endpoints
+
+
+def _deployment_model_info_after_prompt_swap(
+    requested_provider: str | None, resolved_provider: str | None, model_info: object
+) -> object:
+    """Deployment metadata only describes the upstream while the prompt manager keeps its provider."""
+    return model_info if resolved_provider == requested_provider else None
+
+
+@dataclass(frozen=True, slots=True)
+class _AsyncPromptManagementOutcome:
+    merged_optional_params: Mapping[str, object]
+    deployment_model_info: object
+
+
+def _resolve_responses_api_provider_config(
+    model: str, custom_llm_provider: str, model_info: object
+) -> BaseResponsesAPIConfig | None:
+    provider_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        model=model, provider=custom_llm_provider
+    )
+    if provider_config is not None or not _deployment_passes_through_responses(model_info):
+        return provider_config
+    return OpenAILikeResponsesConfig()
+
+
 def _will_bridge_to_chat_completions(
-    model: str, custom_llm_provider: str | None, use_chat_completions_api: bool
+    model: str, custom_llm_provider: str | None, use_chat_completions_api: bool, model_info: object
 ) -> bool:
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
@@ -413,9 +452,7 @@ def _will_bridge_to_chat_completions(
     if custom_llm_provider is None:
         return True
     return _bridges_to_chat_completions(
-        ProviderConfigManager.get_provider_responses_api_config(
-            model=normalized_model[0], provider=custom_llm_provider
-        ),
+        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info),
         use_chat_completions_api or normalized_model[1],
     )
 
@@ -522,7 +559,10 @@ async def aresponses(
             with _prompt_management_sees_a_provisional_message_list(
                 kwargs,
                 bridged=_will_bridge_to_chat_completions(
-                    model, custom_llm_provider, bool(kwargs.get("use_chat_completions_api"))
+                    model,
+                    custom_llm_provider,
+                    bool(kwargs.get("use_chat_completions_api")),
+                    kwargs.get("model_info"),
                 ),
             ):
                 (
@@ -547,6 +587,7 @@ async def aresponses(
                     merged_input=merged_input,
                 ),
             )
+            requested_provider: Final = custom_llm_provider
             if model != original_model:
                 custom_llm_provider = _resolve_prompt_swapped_provider(
                     original_model=original_model,
@@ -556,7 +597,12 @@ async def aresponses(
                     prompt_id=prompt_id,
                 )
             kwargs.pop("prompt_id", None)
-            kwargs["_async_prompt_merged_params"] = merged_optional_params
+            kwargs["_async_prompt_merged_params"] = _AsyncPromptManagementOutcome(
+                merged_optional_params=merged_optional_params,
+                deployment_model_info=_deployment_model_info_after_prompt_swap(
+                    requested_provider, custom_llm_provider, kwargs.get("model_info")
+                ),
+            )
 
         func: Final = partial(
             responses,
@@ -661,12 +707,14 @@ def _apply_prompt_management_to_responses_call(
     kwargs: dict[str, Any],
     local_vars: dict[str, object],
     use_chat_completions_api: bool,
-) -> tuple[str | ResponseInputParam, str, str | None]:
-    async_merged: Final[Mapping[str, object] | None] = kwargs.pop("_async_prompt_merged_params", None)
-    if async_merged is not None:
-        for key, value in async_merged.items():
+) -> tuple[str | ResponseInputParam, str, str | None, object]:
+    """Returns the prompt-managed input, model and provider, plus the deployment metadata that still
+    describes the upstream (``None`` once the prompt manager moved the request to another provider)."""
+    async_outcome: Final[_AsyncPromptManagementOutcome | None] = kwargs.pop("_async_prompt_merged_params", None)
+    if async_outcome is not None:
+        for key, value in async_outcome.merged_optional_params.items():
             local_vars[key] = value
-        return input, model, custom_llm_provider
+        return input, model, custom_llm_provider, async_outcome.deployment_model_info
 
     prompt_id: Final = cast(str | None, kwargs.get("prompt_id", None))
     prompt_variables: Final = cast(dict | None, kwargs.get("prompt_variables", None))
@@ -679,7 +727,9 @@ def _apply_prompt_management_to_responses_call(
     ):
         with _prompt_management_sees_a_provisional_message_list(
             kwargs,
-            bridged=_will_bridge_to_chat_completions(model, custom_llm_provider, use_chat_completions_api),
+            bridged=_will_bridge_to_chat_completions(
+                model, custom_llm_provider, use_chat_completions_api, kwargs.get("model_info")
+            ),
         ):
             (
                 model,
@@ -705,19 +755,28 @@ def _apply_prompt_management_to_responses_call(
         )
         local_vars["input"] = input
         local_vars["model"] = model
-        if model != original_model:
-            custom_llm_provider = _resolve_prompt_swapped_provider(
+        resolved_provider: Final = (
+            custom_llm_provider
+            if model == original_model
+            else _resolve_prompt_swapped_provider(
                 original_model=original_model,
                 swapped_model=model,
                 custom_llm_provider=custom_llm_provider,
                 kwargs=kwargs,
                 prompt_id=prompt_id,
             )
-            local_vars["custom_llm_provider"] = custom_llm_provider
+        )
+        local_vars["custom_llm_provider"] = resolved_provider
         for key, value in merged_optional_params.items():
             local_vars[key] = value
+        return (
+            input,
+            model,
+            resolved_provider,
+            _deployment_model_info_after_prompt_swap(custom_llm_provider, resolved_provider, kwargs.get("model_info")),
+        )
 
-    return input, model, custom_llm_provider
+    return input, model, custom_llm_provider, kwargs.get("model_info")
 
 
 # Opt-in via model id (mirrors the `responses/` prefix pattern on chat completions).
@@ -1047,7 +1106,7 @@ def responses(
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
 
-        input, model, custom_llm_provider = _apply_prompt_management_to_responses_call(
+        input, model, custom_llm_provider, deployment_model_info = _apply_prompt_management_to_responses_call(
             input=input,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -1118,9 +1177,8 @@ def responses(
         if custom_llm_provider is None:
             responses_api_provider_config = None
         else:
-            responses_api_provider_config = ProviderConfigManager.get_provider_responses_api_config(
-                model=model,
-                provider=custom_llm_provider,
+            responses_api_provider_config = _resolve_responses_api_provider_config(
+                model, custom_llm_provider, deployment_model_info
             )
 
         local_vars.update(kwargs)

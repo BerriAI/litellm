@@ -6,16 +6,35 @@ import asyncio
 import base64
 import os
 from collections.abc import Awaitable, Callable, Generator
+from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
+from functools import partial
 from importlib import metadata
-from typing import Any, Final, TypeVar
+from typing import Any, Final, Protocol, TypeAlias, TypeVar
 
 import httpx
+from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 from mcp import ClientSession, McpError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
+from mcp.shared.message import SessionMessage
+from typing_extensions import Unpack
 
-streamable_http_client: Any | None = None
+_TransportStreams: TypeAlias = tuple[
+    MemoryObjectReceiveStream[SessionMessage | Exception],
+    MemoryObjectSendStream[SessionMessage],
+    Unpack[tuple[object, ...]],
+]
+_TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
+
+
+class _StreamableHttpClientFactory(Protocol):
+    """The ``streamable_http_client`` entry point this module calls on the installed MCP SDK."""
+
+    def __call__(self, *, url: str, http_client: httpx.AsyncClient | None) -> _TransportContext: ...
+
+
+streamable_http_client: _StreamableHttpClientFactory | None = None
 try:
     import mcp.client.streamable_http as streamable_http_module
 
@@ -47,7 +66,8 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR
+from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
+from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
@@ -68,7 +88,7 @@ def to_basic_auth(auth_value: str) -> str:
 
 
 def strip_auth_scheme(auth_value: str, scheme: str) -> str:
-    """Return ``auth_value`` with a leading ``<scheme> `` removed, or unchanged when absent.
+    """Return ``auth_value`` with a leading ``<scheme>`` and separator removed, or unchanged when absent.
 
     Callers supply both a bare credential and a complete header value, so prefixing
     unconditionally yields ``Bearer Bearer <jwt>``. Scheme names are case-insensitive per
@@ -76,10 +96,9 @@ def strip_auth_scheme(auth_value: str, scheme: str) -> str:
     with the scheme text and a scheme with nothing behind it are returned untouched.
     Surrounding whitespace is left to ``_strip_header_whitespace`` at header-build time.
     """
-    scheme_name, _, remainder = auth_value.lstrip().partition(" ")
-    credential: Final = remainder.lstrip()
-    if credential and scheme_name.lower() == scheme.lower():
-        return credential
+    parts: Final = auth_value.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == scheme.lower():
+        return parts[1]
     return auth_value
 
 
@@ -215,10 +234,12 @@ class MCPSigV4Auth(httpx.Auth):
         aws_region_name: str,
     ):
         """Call STS AssumeRole and return temporary credentials."""
+        import time
+
         import boto3
         from botocore.credentials import Credentials
 
-        session_name: Final = aws_session_name or f"litellm-mcp-{int(__import__('time').time())}"
+        session_name: Final = aws_session_name or f"litellm-mcp-{int(time.time())}"
         sts_kwargs: Final[dict] = {"region_name": aws_region_name}
         if aws_access_key_id and aws_secret_access_key:
             sts_kwargs["aws_access_key_id"] = aws_access_key_id
@@ -314,7 +335,7 @@ class MCPClient:
 
     def _create_transport_context(
         self,
-    ) -> tuple[Any, httpx.AsyncClient | None]:
+    ) -> tuple[_TransportContext, httpx.AsyncClient | None]:
         """
         Create the appropriate transport context based on transport type.
         Returns:
@@ -407,7 +428,7 @@ class MCPClient:
 
     async def _execute_session_operation(
         self,
-        transport_ctx: Any,
+        transport_ctx: _TransportContext,
         operation: Callable[[ClientSession], Awaitable[TSessionResult]],
     ) -> TSessionResult:
         """
@@ -603,17 +624,19 @@ class MCPClient:
         """
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
 
-        async def _list_tools_operation(session: ClientSession):
-            return await session.list_tools()
-
         try:
-            result: Final = await self.run_with_session(_list_tools_operation, quiet_on_error=raise_on_error)
-            tool_count: Final = len(result.tools)
-            tool_names: Final = [tool.name for tool in result.tools]
+            # A per-server timeout above the global default extends the whole-walk deadline
+            listing_deadline: Final = max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)
+            tools: Final = await self.run_with_session(
+                partial(list_tools_with_pagination, listing_deadline=listing_deadline),
+                quiet_on_error=raise_on_error,
+            )
+            tool_count: Final = len(tools)
+            tool_names: Final = tuple(tool.name for tool in tools)
             verbose_logger.info(
                 "MCP client listed %s tools from %s: %s", tool_count, self.server_url or "stdio", tool_names
             )
-            return result.tools
+            return tools
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
             raise

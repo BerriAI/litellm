@@ -152,7 +152,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.sensitive_data_routing import (
     _PROXY_SensitiveDataRoutingHandler,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_guardrails_from_auth_metadata
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.repositories.budget_repository import BudgetRepository
@@ -645,7 +645,7 @@ class ProxyLogging:
         self.max_parallel_request_limiter = _PROXY_MaxParallelRequestsHandler(self.internal_usage_cache)
         self.max_budget_limiter = _PROXY_MaxBudgetLimiter()
         self.cache_control_check = _PROXY_CacheControlCheck()
-        self.alerting: list | None = None
+        self.alerting: list[str] | None = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
         self.alert_types: list[AlertType] = DEFAULT_ALERT_TYPES
         self.alert_to_webhook_url: dict | None = None
@@ -924,7 +924,13 @@ class ProxyLogging:
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
             "metadata": {"headers": kwargs.get("headers") or {}},
         }
-
+        user_api_key_auth: Final = kwargs.get("user_api_key_auth")
+        if isinstance(user_api_key_auth, UserAPIKeyAuth):
+            add_guardrails_from_auth_metadata(
+                user_api_key_dict=user_api_key_auth,
+                data=synthetic_data,
+                metadata_variable_name="metadata",
+            )
         return synthetic_data
 
     def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
@@ -1416,7 +1422,7 @@ class ProxyLogging:
         mutation is discarded and a warning is logged so the misconfiguration
         is visible instead of silently forwarding unredacted content.
         """
-        scans_raw_request: Final = getattr(callback, "scan_raw_request", False)
+        scans_raw_request: Final = callback.scan_raw_request
         should_use_raw_snapshot: Final = scans_raw_request and raw_request_snapshot is not None
         input_data: Final = (  # mutable-ok: same request-payload shape as data
             independent_snapshot(raw_request_snapshot) if should_use_raw_snapshot else data
@@ -1453,7 +1459,7 @@ class ProxyLogging:
                 "scan_raw_request is for block-only guardrails and this mutation is being "
                 "discarded. Remove scan_raw_request from this guardrail's config if it needs "
                 "to mask/rewrite content.",
-                getattr(callback, "guardrail_name", None) or callback.__class__.__name__,
+                callback.guardrail_name or callback.__class__.__name__,
             )
         if scans_raw_request:
             if result is not None:
@@ -1471,35 +1477,34 @@ class ProxyLogging:
     async def _process_prompt_template(
         self,
         data: dict,
-        litellm_logging_obj: Any,
+        litellm_logging_obj: "LiteLLMLoggingObj",
         prompt_id: str,
         prompt_version: int | None,
         call_type: CallTypesLiteral,
     ) -> None:
         """Process prompt template if applicable."""
 
-        from litellm.proxy.prompts.prompt_endpoints import (
-            construct_versioned_prompt_id,
-            get_latest_version_prompt_id,
-        )
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
         from litellm.responses.utils import ResponsesAPIRequestUtils
         from litellm.utils import get_non_default_completion_params
 
-        if prompt_version is None:
-            lookup_prompt_id = get_latest_version_prompt_id(
-                prompt_id=prompt_id,
-                all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
-            )
-        else:
-            lookup_prompt_id = construct_versioned_prompt_id(prompt_id=prompt_id, version=prompt_version)
-
-        custom_logger: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(lookup_prompt_id)
-        prompt_spec: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(lookup_prompt_id)
+        raw_prompt_environment: Final = data.get("prompt_environment", None)
+        prompt_environment: Final = raw_prompt_environment if isinstance(raw_prompt_environment, str) else None
+        prompt_spec: Final = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(
+            prompt_id,
+            version=prompt_version,
+            environment=prompt_environment,
+        )
+        custom_logger: Final = (
+            IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=prompt_spec)
+            if prompt_spec is not None
+            else None
+        )
         litellm_prompt_id: str | None = None
         if prompt_spec is not None:
             litellm_prompt_id = prompt_spec.litellm_params.prompt_id
             data.pop("prompt_id", None)
+            data.pop("prompt_environment", None)
 
         if custom_logger and prompt_spec is not None:
             is_responses_call: Final = call_type == "aresponses"
@@ -1524,6 +1529,7 @@ class ProxyLogging:
                 prompt_label=data.pop("prompt_label", None) or {},
                 prompt_version=data.pop("prompt_version", None) or {},
                 request_kwargs=data,
+                injected_for_every_deployment=True,
             )
 
             data.update(optional_params)
@@ -1541,6 +1547,7 @@ class ProxyLogging:
             data.pop("prompt_variables", None)
             data.pop("prompt_label", None)
             data.pop("prompt_version", None)
+            data.pop("prompt_environment", None)
 
     def _process_guardrail_metadata(self, data: dict) -> None:
         """Process guardrails from metadata and add to applied_guardrails."""
@@ -1749,7 +1756,6 @@ class ProxyLogging:
 
         litellm_logging_obj: Final = cast(Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None))
         prompt_id: Final[str | None] = data.get("prompt_id", None)
-        prompt_version: Final[int | None] = data.get("prompt_version", None)
 
         ## PROMPT TEMPLATE CHECK ##
 
@@ -1759,11 +1765,13 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion" or call_type == "aresponses")
         ):
+            from litellm.proxy.prompts.prompt_registry import parse_prompt_version
+
             await self._process_prompt_template(
                 data=data,
                 litellm_logging_obj=litellm_logging_obj,
                 prompt_id=prompt_id,
-                prompt_version=prompt_version,
+                prompt_version=parse_prompt_version(data.get("prompt_version", None)),
                 call_type=call_type,
             )
 
@@ -1778,7 +1786,7 @@ class ProxyLogging:
         # guarantee must hold even under litellm.safe_memory_mode, which
         # otherwise makes deep copies return the original object.
         needs_raw_request_snapshot: Final = any(
-            isinstance(cb, CustomGuardrail) and getattr(cb, "scan_raw_request", False)
+            isinstance(cb, CustomGuardrail) and cb.scan_raw_request
             for cb in ProxyLogging._callback_capabilities().resolved_callbacks
         )
         raw_request_snapshot: Final[dict | None] = (  # mutable-ok: same request-payload shape as data
@@ -1938,7 +1946,7 @@ class ProxyLogging:
         """
 
         def _input_for(callback: CustomGuardrail) -> dict:  # mutable-ok: same request-payload shape as data
-            if not getattr(callback, "scan_raw_request", False) or raw_request_snapshot is None:
+            if not callback.scan_raw_request or raw_request_snapshot is None:
                 return data
             return independent_snapshot(raw_request_snapshot)
 
@@ -1962,11 +1970,7 @@ class ProxyLogging:
             # deployment-level guardrail sharing this name would see no marker
             # via _pre_call_hook_already_ran and re-run it a second time on
             # live kwargs.
-            if (
-                getattr(callback, "scan_raw_request", False)
-                and not isinstance(result, BaseException)
-                and result is not None
-            ):
+            if callback.scan_raw_request and not isinstance(result, BaseException) and result is not None:
                 callback.mark_pre_call_hook_ran(data)
         raised: Final = tuple(result for result in results if isinstance(result, BaseException))
         blocking: Final = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
@@ -2368,7 +2372,9 @@ class ProxyLogging:
             # do nothing if alerting is not switched on (unless it's a soft_budget alert with team-specific emails)
             return
 
-        if self.alerting is not None and ("slack" in self.alerting or "ms_teams" in self.alerting):
+        if self.alerting is not None and (
+            "slack" in self.alerting or "ms_teams" in self.alerting or "webhook" in self.alerting
+        ):
             if self.slack_alerting_instance is not None:
                 await self.slack_alerting_instance.budget_alerts(
                     type=type,
@@ -2568,6 +2574,8 @@ class ProxyLogging:
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
 
+        redacted_traceback_str: Final = _redact_string(traceback_str) if traceback_str is not None else None
+
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: HTTPException | None = None
 
@@ -2586,7 +2594,7 @@ class ProxyLogging:
                             request_data=request_data,
                             user_api_key_dict=user_api_key_dict,
                             original_exception=original_exception,
-                            traceback_str=traceback_str,
+                            traceback_str=redacted_traceback_str,
                         )
                         # If callback returned an HTTPException, use it (first one wins)
                         if isinstance(hook_result, HTTPException) and transformed_exception is None:
@@ -5580,12 +5588,8 @@ class PrismaClient:
             return True
 
         acquire_task: Final = asyncio.create_task(_acquire_reconnect_lock())
-        done, _pending = await asyncio.wait(
-            {acquire_task},
-            timeout=lock_timeout_seconds,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if acquire_task not in done:
+
+        async def _abandon_acquire_task() -> None:
             acquire_task.cancel()
             try:
                 await acquire_task
@@ -5600,6 +5604,18 @@ class PrismaClient:
                     self._db_reconnect_lock.release()
                 except RuntimeError:
                     pass
+
+        try:
+            done, _pending = await asyncio.wait(
+                {acquire_task},
+                timeout=lock_timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            await asyncio.shield(_abandon_acquire_task())
+            raise
+        if acquire_task not in done:
+            await _abandon_acquire_task()
             verbose_proxy_logger.debug(
                 "Skipping DB reconnect attempt due to lock acquisition timeout. reason=%s timeout=%ss",
                 reason,
@@ -6027,10 +6043,42 @@ def _should_use_smtp_ssl(smtp_port: int) -> bool:
     return os.getenv("SMTP_USE_SSL", "False") == "True" or smtp_port == 465
 
 
-def _create_smtp_connection(smtp_host: str, smtp_port: int) -> smtplib.SMTP:
+def _create_smtp_connection(smtp_host: str, smtp_port: int, timeout: float) -> smtplib.SMTP:
     if _should_use_smtp_ssl(smtp_port=smtp_port):
-        return smtplib.SMTP_SSL(host=smtp_host, port=smtp_port, context=ssl.create_default_context())
-    return smtplib.SMTP(host=smtp_host, port=smtp_port)
+        return smtplib.SMTP_SSL(host=smtp_host, port=smtp_port, context=ssl.create_default_context(), timeout=timeout)
+    return smtplib.SMTP(host=smtp_host, port=smtp_port, timeout=timeout)
+
+
+def _send_smtp_message(
+    email_message: MIMEMultipart,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_username: str | None,
+    smtp_password: str | None,
+    sender_email: str,
+    receiver_email: str,
+    timeout: float,
+) -> None:
+    using_ssl: Final = _should_use_smtp_ssl(smtp_port=smtp_port)
+    with _create_smtp_connection(
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        timeout=timeout,
+    ) as server:
+        if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
+            server.starttls(context=ssl.create_default_context())
+
+        if smtp_username and smtp_password:
+            server.login(
+                user=smtp_username,
+                password=smtp_password,
+            )
+
+        server.send_message(
+            msg=email_message,
+            from_addr=sender_email,
+            to_addrs=receiver_email,
+        )
 
 
 async def send_email(
@@ -6076,27 +6124,18 @@ async def send_email(
     email_message.attach(MIMEText(html, "html"))
 
     try:
-        using_ssl: Final = _should_use_smtp_ssl(smtp_port=smtp_port)
-        with _create_smtp_connection(
+        smtp_timeout: Final = float(os.getenv("SMTP_TIMEOUT", "30"))
+        await asyncio.to_thread(
+            _send_smtp_message,
+            email_message=email_message,
             smtp_host=smtp_host,
             smtp_port=smtp_port,
-        ) as server:
-            if not using_ssl and os.getenv("SMTP_TLS", "True") != "False":
-                server.starttls(context=ssl.create_default_context())
-
-            # Login to your email account only if smtp_username and smtp_password are provided
-            if smtp_username and smtp_password:
-                server.login(
-                    user=smtp_username,
-                    password=smtp_password,
-                )
-
-            # Send the email
-            server.send_message(
-                msg=email_message,
-                from_addr=sender_email,
-                to_addrs=receiver_email,
-            )
+            smtp_username=smtp_username,
+            smtp_password=smtp_password,
+            sender_email=sender_email,
+            receiver_email=receiver_email,
+            timeout=smtp_timeout,
+        )
 
     except Exception as e:
         verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
@@ -6355,10 +6394,17 @@ class ProxyUpdateSpend:
                         )
                     break
                 except Exception as e:
-                    if not PrismaDBExceptionHandler.is_database_transport_error(e):
+                    if not _is_transient_spend_log_write_error(e):
+                        if PrismaDBExceptionHandler.is_prisma_error(e):
+                            await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
+                            verbose_proxy_logger.warning(
+                                "Spend tracking - DB error writing spend logs, requeued %d rows for the next flush. error=%s",
+                                len(logs_to_process),
+                                str(e),
+                            )
                         raise
                     verbose_proxy_logger.warning(
-                        "Spend tracking - DB connection error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
+                        "Spend tracking - transient DB error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
                         i + 1,
                         n_retry_times,
                         len(logs_to_process),
@@ -6701,6 +6747,10 @@ async def _monitor_spend_logs_queue(
 MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH: Final = 256
 
 
+def _is_transient_spend_log_write_error(e: Exception) -> bool:
+    return PrismaDBExceptionHandler.is_database_transport_error(e) or PrismaDBExceptionHandler.is_deadlock_error(e)
+
+
 async def _create_spend_logs_with_poison_isolation(
     repo: SpendLogsRepository,
     rows: Sequence[Mapping[str, object]],
@@ -6735,6 +6785,8 @@ async def _create_spend_logs_with_poison_isolation(
         if not PrismaDBExceptionHandler.is_prisma_data_error(e):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+            raise
+        if PrismaDBExceptionHandler.is_deadlock_error(e):
             raise
         budget_left: Final = max(failure_budget - 1, 0)
         if len(rows) == 1:
@@ -7160,7 +7212,19 @@ def get_custom_url(request_base_url: str, route: str | None = None) -> str:
     else:
         base_url = request_base_url
 
-    server_root_path: Final = get_server_root_path()
+    # get_request_root_path() returns the prefix the router is actually
+    # resolving this request under: the matched SERVER_ROOT_PATHS entry when
+    # PerRequestRootPathMiddleware ran, otherwise the SERVER_ROOT_PATH scalar.
+    # This keeps the emitted URL under one prefix — the one the client called —
+    # instead of stacking the scalar onto a request already living under a
+    # dynamic prefix (which would produce /tenant-a/legacy/... — a path that
+    # doesn't exist). join_paths()'s tail-dedup then collapses the append when
+    # base_url (i.e. request.base_url) already ends in the same prefix.
+    from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports utils
+        get_request_root_path,
+    )
+
+    server_root_path: Final = get_request_root_path()
     if route is not None:
         if server_root_path != "":
             # First join base_url with server_root_path, then with route
@@ -7501,6 +7565,9 @@ def create_model_info_response(
             max_input_tokens = configured_input
         if configured_output is not None:
             max_output_tokens = configured_output
+        configured_mode: Final = llm_router.get_configured_mode(model_id)
+        if isinstance(configured_mode, str):
+            base["mode"] = configured_mode
 
     if max_input_tokens is not None:
         base["max_input_tokens"] = max_input_tokens

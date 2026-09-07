@@ -14,7 +14,7 @@ import json
 from collections.abc import AsyncGenerator, Mapping
 from copy import deepcopy
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -215,11 +215,20 @@ def _enforce_inbound_trace_id(agent: "AgentResponse", request: Request) -> None:
         )
 
 
+class _JsonRpcResponse(Protocol):
+    def json(self) -> dict[str, object]: ...
+
+
+def _jsonrpc_body(response: _JsonRpcResponse) -> dict[str, object]:
+    """The decoded JSON-RPC body of ``response``."""
+    return response.json()
+
+
 async def _forward_jsonrpc(
     agent_url: str,
     body: dict[str, object],
     extra_headers: Mapping[str, str] | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -230,7 +239,7 @@ async def _forward_jsonrpc(
     )
     resp: Final = await handler.post(agent_url, json=body, headers=headers)
     try:
-        result: Final = resp.json()
+        result: Final = _jsonrpc_body(resp)
     except Exception:
         resp.raise_for_status()
         raise
@@ -940,8 +949,8 @@ async def invoke_agent_a2a(
             )
             result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=caller_headers)
             if method == "agent/getAuthenticatedExtendedCard":
-                if isinstance(result.get("result"), dict):
-                    card: Final = result["result"]
+                card: Final = result.get("result")
+                if isinstance(card, dict):
                     proxy_url: Final = get_custom_url(str(request.base_url), route=f"a2a/{agent_id}")
                     # Rewrite the upstream agent URL in both 0.3 (top-level `url`)
                     # and 1.0 (`supportedInterfaces[0].url`) wire formats so that
@@ -1010,4 +1019,6 @@ async def invoke_agent_a2a(
             )
         except Exception:
             pass
+        if isinstance(e, litellm.BadRequestError):
+            return _jsonrpc_error(body.get("id"), -32602, e.message, 400)
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {e}", 500)

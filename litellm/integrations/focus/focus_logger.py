@@ -102,7 +102,7 @@ class FocusLogger(CustomLogger):
             # No time bounds → export all available data
             await self._export_all(limit=limit)
 
-    async def dry_run_export_usage_data(self, limit: int | None = DEFAULT_DRY_RUN_LIMIT) -> dict[str, Any]:
+    async def dry_run_export_usage_data(self, limit: int | None = DEFAULT_DRY_RUN_LIMIT) -> dict[str, object]:
         """Return transformed data without uploading."""
         engine: Final = self._ensure_engine()
         return await engine.dry_run_export_usage_data(limit=limit)
@@ -153,7 +153,7 @@ class FocusLogger(CustomLogger):
             **trigger_kwargs,
         )
 
-    def _build_scheduler_trigger(self) -> dict[str, Any]:
+    def _build_scheduler_trigger(self) -> dict[str, str | int]:
         """Return scheduler configuration for the selected frequency."""
         if self.frequency == "interval":
             seconds: Final = self.interval_seconds or 60

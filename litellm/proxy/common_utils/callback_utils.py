@@ -1,6 +1,6 @@
 import copy
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias
 
@@ -525,16 +525,16 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
 
 
 def sanitize_openai_provider_metadata(
-    metadata: dict[str, Any] | None,
-) -> dict[str, str] | None:
+    metadata: Mapping[str, object] | None,
+) -> Mapping[str, object] | None:
     """
     Keep only provider-safe OpenAI metadata entries (string keys -> string values).
 
     Strips LiteLLM proxy-internal tracking fields that must not be forwarded to
     OpenAI batch/file APIs.
     """
-    if not metadata:
-        return metadata
+    if metadata is None:
+        return None
     sanitized: Final[dict[str, str]] = {}
     for key, value in metadata.items():
         if key in LITELLM_PROXY_INTERNAL_METADATA_KEYS:
@@ -547,7 +547,7 @@ def sanitize_openai_provider_metadata(
                 key,
                 type(value).__name__,
             )
-    return sanitized or None
+    return None if metadata and not sanitized else sanitized
 
 
 def add_guardrail_to_applied_guardrails_header(request_data: dict, guardrail_name: str | None):
@@ -644,13 +644,13 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
     return {"name": _callback, "variables": env_vars_dict, "type": callback_type}
 
 
-def normalize_callback_names(callbacks: Iterable[Any]) -> list[Any]:
+def normalize_callback_names(callbacks: Iterable[object] | None) -> list[object]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
 
 
-def strip_callback_config(metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+def strip_callback_config(metadata: dict[str, object] | None) -> dict[str, object] | None:
     """Return key/team metadata without the slots that carry callback credentials."""
     if not isinstance(metadata, dict):
         return metadata
@@ -674,7 +674,7 @@ def decrypt_callback_vars(metadata: Any) -> Any:
     return _transform_callback_vars(metadata, _decrypt_or_passthrough)
 
 
-def _transform_callback_vars(metadata: Any, transform: Callable[[str, Any], Any]) -> Any:
+def _transform_callback_vars(metadata: object, transform: Callable[[str, Any], Any]) -> object:
     if not isinstance(metadata, dict):
         return metadata
     out: Final = copy.deepcopy(metadata)
@@ -704,7 +704,7 @@ def is_sensitive_callback_key(
     return _CALLBACK_VAR_MASKER.is_sensitive_key(key)
 
 
-def _encrypt_if_plaintext(key: str, value: Any) -> Any:
+def _encrypt_if_plaintext(key: str, value: object) -> object:
     if not isinstance(value, str) or not value:
         return value
     if not is_sensitive_callback_key(key):
@@ -725,7 +725,7 @@ def _encrypt_if_plaintext(key: str, value: Any) -> Any:
         return value
 
 
-def _decrypt_or_passthrough(key: str, value: Any) -> Any:
+def _decrypt_or_passthrough(key: str, value: object) -> object:
     if not isinstance(value, str) or not value:
         return value
     if not value.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):

@@ -842,24 +842,37 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
 
     params_input = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="input")
     guardrail_dict = {"guardrail_name": "g1"}
-    cb = initialize_presidio(params_input, guardrail_dict)
-    assert cb is created[0]
+    callbacks = initialize_presidio(params_input, guardrail_dict)
+    assert callbacks == (created[0],)
     assert created[0].apply_to_output is False
 
     # output-only
     created.clear()
     params_output = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="output")
-    cb = initialize_presidio(params_output, guardrail_dict)
+    callbacks = initialize_presidio(params_output, guardrail_dict)
     assert len(created) == 1
+    assert callbacks == (created[0],)
     assert created[0].apply_to_output is True
 
-    # both -> expect two callbacks (input + output)
+    # both -> expect two callbacks (input + output), both returned, input first
     created.clear()
     params_both = LitellmParams(guardrail="presidio", mode="pre_call", presidio_filter_scope="both")
-    cb = initialize_presidio(params_both, guardrail_dict)
+    callbacks = initialize_presidio(params_both, guardrail_dict)
     assert len(created) == 2
-    assert any(not c.apply_to_output for c in created)
-    assert any(c.apply_to_output for c in created)
+    assert callbacks == tuple(created)
+    assert callbacks[0].apply_to_output is False
+    assert callbacks[1].apply_to_output is True
+
+    # both + output_parse_pii -> three callbacks, all returned, input first
+    created.clear()
+    params_all = LitellmParams(
+        guardrail="presidio", mode="pre_call", presidio_filter_scope="both", output_parse_pii=True
+    )
+    callbacks = initialize_presidio(params_all, guardrail_dict)
+    assert len(created) == 3
+    assert callbacks == tuple(created)
+    assert callbacks[0].apply_to_output is False
+    assert mgr.added[-3:] == list(created)
 
 
 @pytest.mark.asyncio
@@ -3114,6 +3127,18 @@ def test_update_in_memory_applies_analyze_chunk_size():
     )
     guardrail.update_in_memory_litellm_params(params)
     assert guardrail.presidio_analyze_chunk_size_bytes == 99_000
+
+
+def test_update_in_memory_keeps_output_masker_from_unmasking():
+    masker = _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True, output_parse_pii=False)
+    unmasker = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    params = LitellmParams(guardrail="presidio", mode="pre_call", output_parse_pii=True)
+
+    masker.update_in_memory_litellm_params(params)
+    unmasker.update_in_memory_litellm_params(params)
+
+    assert (masker.apply_to_output, masker.output_parse_pii) == (True, False)
+    assert (unmasker.apply_to_output, unmasker.output_parse_pii) == (False, True)
 
 
 def test_merge_drops_truncated_same_type_fragment_from_overlap():

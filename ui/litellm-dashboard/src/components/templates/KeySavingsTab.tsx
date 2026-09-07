@@ -22,7 +22,10 @@ import {
   usd,
   withStartAnchor,
 } from "@/app/(dashboard)/cost-optimization/_components/costOptimizationUtils";
-import { useScopedDailyActivityRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
+import {
+  useScopedDailyActivityRange,
+  type ActivityDateRange,
+} from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 
 interface KeySavingsTabProps {
   accessToken: string | null;
@@ -30,19 +33,19 @@ interface KeySavingsTabProps {
   keyToken: string;
   userId: string | null;
   userRole: string;
+  activity: ActivityDateRange;
 }
 
-const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, userId, userRole }) => {
+const KeySavingsTab: React.FC<KeySavingsTabProps> = ({ accessToken, keyToken, userId, userRole, activity }) => {
   // Proxy admins read the whole key. For anyone else the endpoint applies the caller's own user_id
   // alongside the key filter, so the figures cover only that viewer's requests on this key -- said
   // plainly in the scope note below rather than left to be misread as the key's total.
   const readsWholeKey = hasProxyWideSpendView(userRole);
-  const activity = useScopedDailyActivityRange(accessToken, {
-    userId: spendScopeUserId(userRole, userId),
-    apiKey: keyToken,
-  });
-
-  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+  const { dateValue, onDateChange, results, loading, isFetchingMore } = useScopedDailyActivityRange(
+    accessToken,
+    { userId: spendScopeUserId(userRole, userId), apiKey: keyToken },
+    activity,
+  );
   const startTime = dateValue.from ?? null;
   const endTime = dateValue.to ?? null;
 

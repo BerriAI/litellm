@@ -10,33 +10,37 @@ Covers:
 """
 
 import json
+from collections.abc import Sequence
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import Tool
 
+import litellm
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import AggregateToolListing
 from litellm.proxy._experimental.mcp_server.tool_search import (
     AGENT_SEARCH_TOOL_NAME,
     MCP_TOOL_CALL_TOOL_NAME,
     MCP_TOOL_SEARCH_TOOL_NAME,
+    SKILL_SEARCH_TOOL_NAME,
+    SemanticToolRanker,
+    ToolSearchResult,
     coerce_top_k,
     get_virtual_tool_definitions,
+    search_mcp_tools,
     search_tools,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.common_utils.semantic_text_index import EmbeddingFailed, SemanticTextIndex, Vector
+from litellm.types.mcp import MCPToolSearchSettings
 
 
-def _make_tools(specs: list[tuple[str, str]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "name": name,
-            "description": desc,
-            "inputSchema": {"type": "object", "properties": {}},
-        }
-        for name, desc in specs
-    ]
+def _make_tools(specs: list[tuple[str, str]]) -> tuple[Tool, ...]:
+    return tuple(
+        Tool(name=name, description=desc, inputSchema={"type": "object", "properties": {}}) for name, desc in specs
+    )
 
 
 def _make_perm(**kwargs: Any) -> LiteLLM_ObjectPermissionTable:
@@ -52,6 +56,160 @@ SAMPLE_TOOLS = _make_tools(
         ("notion-create_page", "Create a new page in Notion"),
     ]
 )
+
+
+FX_TOOL = Tool(
+    name="treasury-get_rates",
+    description="Get foreign exchange rates for a currency pair",
+    inputSchema={"type": "object", "properties": {}},
+)
+WEATHER_TOOL = Tool(
+    name="weather-forecast",
+    description="Get the weather forecast for a city",
+    inputSchema={"type": "object", "properties": {}},
+)
+CALENDAR_TOOL = Tool(
+    name="calendar-create_event",
+    description="Create a calendar event",
+    inputSchema={"type": "object", "properties": {}},
+)
+CATALOG = (FX_TOOL, WEATHER_TOOL, CALENDAR_TOOL)
+
+# A stand-in embedding space: "FX" sits next to the foreign-exchange tool and far from the rest.
+FAKE_VECTORS: dict[str, Vector] = {
+    "FX": (1.0, 0.0),
+    f"{FX_TOOL.name}\n{FX_TOOL.description}": (0.9, 0.1),
+    f"{WEATHER_TOOL.name}\n{WEATHER_TOOL.description}": (0.3, 1.0),
+    f"{CALENDAR_TOOL.name}\n{CALENDAR_TOOL.description}": (0.0, 1.0),
+}
+
+
+class RecordingEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []
+
+    async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
+        self.calls.append(tuple(texts))
+        return tuple(FAKE_VECTORS[text] for text in texts)
+
+
+def _ranker(embedder: RecordingEmbedder | None = None) -> SemanticToolRanker:
+    return SemanticToolRanker(embed=embedder or RecordingEmbedder(), embedding_model="emb", index=SemanticTextIndex())
+
+
+def _names(results: Sequence[ToolSearchResult] | EmbeddingFailed) -> list[str]:
+    assert not isinstance(results, EmbeddingFailed)
+    return [tool["name"] for tool in results]
+
+
+class TestSearchMcpTools:
+    @pytest.mark.asyncio
+    async def test_semantic_mode_finds_foreign_exchange_tool_for_fx(self) -> None:
+        keyword_only = await search_mcp_tools("FX", CATALOG, 5, MCPToolSearchSettings(), ranker=None)
+        assert _names(keyword_only) == []
+
+        results = await search_mcp_tools("FX", CATALOG, 5, MCPToolSearchSettings(embedding_model="emb"), _ranker())
+        assert _names(results) == [FX_TOOL.name, WEATHER_TOOL.name, CALENDAR_TOOL.name]
+        assert not isinstance(results, EmbeddingFailed)
+        assert results[0]["score"] > results[1]["score"] > results[2]["score"]
+        assert results[0]["inputSchema"] == FX_TOOL.inputSchema
+
+    @pytest.mark.asyncio
+    async def test_similarity_threshold_drops_weak_matches(self) -> None:
+        settings = MCPToolSearchSettings(embedding_model="emb", similarity_threshold=0.5)
+        results = await search_mcp_tools("FX", CATALOG, 5, settings, _ranker())
+        assert _names(results) == [FX_TOOL.name]
+
+    @pytest.mark.asyncio
+    async def test_request_top_k_limits_semantic_results(self) -> None:
+        results = await search_mcp_tools("FX", CATALOG, 2, MCPToolSearchSettings(embedding_model="emb"), _ranker())
+        assert _names(results) == [FX_TOOL.name, WEATHER_TOOL.name]
+
+    @pytest.mark.asyncio
+    async def test_configured_top_k_caps_request_top_k(self) -> None:
+        settings = MCPToolSearchSettings(embedding_model="emb", top_k=1)
+        assert _names(await search_mcp_tools("FX", CATALOG, 50, settings, _ranker())) == [FX_TOOL.name]
+        assert _names(await search_mcp_tools("weather", CATALOG, 50, MCPToolSearchSettings(top_k=1), None)) == [
+            WEATHER_TOOL.name
+        ]
+
+    @pytest.mark.asyncio
+    async def test_core_tools_lead_and_do_not_consume_top_k(self) -> None:
+        settings = MCPToolSearchSettings(embedding_model="emb", top_k=1, core_tools=(CALENDAR_TOOL.name,))
+        results = await search_mcp_tools("FX", CATALOG, 1, settings, _ranker())
+        assert _names(results) == [CALENDAR_TOOL.name, FX_TOOL.name]
+        assert not isinstance(results, EmbeddingFailed)
+        assert "score" not in results[0]
+
+    @pytest.mark.asyncio
+    async def test_core_tools_apply_in_keyword_mode_too(self) -> None:
+        settings = MCPToolSearchSettings(core_tools=(CALENDAR_TOOL.name,))
+        assert _names(await search_mcp_tools("weather", CATALOG, 5, settings, None)) == [
+            CALENDAR_TOOL.name,
+            WEATHER_TOOL.name,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_core_tools_outside_the_callers_catalog_are_not_returned(self) -> None:
+        settings = MCPToolSearchSettings(embedding_model="emb", core_tools=("payroll-run", CALENDAR_TOOL.name))
+        results = await search_mcp_tools("FX", (FX_TOOL, WEATHER_TOOL), 5, settings, _ranker())
+        assert _names(results) == [FX_TOOL.name, WEATHER_TOOL.name]
+
+    @pytest.mark.asyncio
+    async def test_core_tools_are_listed_once_and_never_embedded(self) -> None:
+        embedder = RecordingEmbedder()
+        settings = MCPToolSearchSettings(embedding_model="emb", core_tools=(FX_TOOL.name, FX_TOOL.name))
+        results = await search_mcp_tools("FX", CATALOG, 5, settings, _ranker(embedder))
+        assert _names(results) == [FX_TOOL.name, WEATHER_TOOL.name, CALENDAR_TOOL.name]
+        assert all(FX_TOOL.description not in text for call in embedder.calls for text in call)
+
+    @pytest.mark.asyncio
+    async def test_empty_query_returns_only_core_tools_without_embedding(self) -> None:
+        embedder = RecordingEmbedder()
+        settings = MCPToolSearchSettings(embedding_model="emb", core_tools=(CALENDAR_TOOL.name,))
+        assert _names(await search_mcp_tools("", CATALOG, 5, settings, _ranker(embedder))) == [CALENDAR_TOOL.name]
+        assert embedder.calls == []
+
+    @pytest.mark.asyncio
+    async def test_repeat_searches_only_embed_the_query(self) -> None:
+        embedder = RecordingEmbedder()
+        ranker = _ranker(embedder)
+        settings = MCPToolSearchSettings(embedding_model="emb")
+        await search_mcp_tools("FX", CATALOG, 5, settings, ranker)
+        await search_mcp_tools("FX", CATALOG, 5, settings, ranker)
+        assert [len(call) for call in embedder.calls] == [4, 1]
+
+    @pytest.mark.asyncio
+    async def test_embedding_failure_is_reported_not_raised(self) -> None:
+        async def failing(texts: Sequence[str]) -> Sequence[Vector]:
+            raise ValueError("embedding model is down")
+
+        ranker = SemanticToolRanker(embed=failing, embedding_model="emb", index=SemanticTextIndex())
+        result = await search_mcp_tools("FX", CATALOG, 5, MCPToolSearchSettings(embedding_model="emb"), ranker)
+        assert isinstance(result, EmbeddingFailed)
+        assert "embedding model is down" in result.reason
+
+
+class TestMcpToolSearchSettings:
+    def test_rejects_out_of_range_values(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            MCPToolSearchSettings(top_k=0)
+        with pytest.raises(ValidationError):
+            MCPToolSearchSettings(similarity_threshold=1.5)
+
+    def test_yaml_shape_round_trips(self) -> None:
+        settings = MCPToolSearchSettings.model_validate(
+            {"embedding_model": "emb", "top_k": 3, "similarity_threshold": 0.2, "core_tools": ["a", "b"]}
+        )
+        assert settings.core_tools == ("a", "b")
+        assert settings.model_dump() == {
+            "embedding_model": "emb",
+            "top_k": 3,
+            "similarity_threshold": 0.2,
+            "core_tools": ("a", "b"),
+        }
 
 
 class TestCoerceTopK:
@@ -92,10 +250,10 @@ class TestSearchTools:
         assert len(results) <= 2
 
     def test_empty_query_returns_empty(self) -> None:
-        assert search_tools("", SAMPLE_TOOLS) == []
+        assert search_tools("", SAMPLE_TOOLS) == ()
 
     def test_no_match_returns_empty(self) -> None:
-        assert search_tools("xyzzy_nonexistent_zzz", SAMPLE_TOOLS) == []
+        assert search_tools("xyzzy_nonexistent_zzz", SAMPLE_TOOLS) == ()
 
     def test_matches_description_not_just_name(self) -> None:
         results = search_tools("channel", SAMPLE_TOOLS)
@@ -115,8 +273,8 @@ class TestSearchTools:
 
 
 class TestGetVirtualToolDefinitions:
-    def test_returns_three_tools(self) -> None:
-        assert len(get_virtual_tool_definitions()) == 3
+    def test_returns_four_tools(self) -> None:
+        assert len(get_virtual_tool_definitions()) == 4
 
     def test_agent_search_schema_requires_query(self) -> None:
         tools = get_virtual_tool_definitions()
@@ -173,6 +331,7 @@ class TestGetVirtualToolDefinitions:
             MCP_TOOL_SEARCH_TOOL_NAME,
             MCP_TOOL_CALL_TOOL_NAME,
             AGENT_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
         }
 
 
@@ -207,7 +366,12 @@ class TestListToolRestApiWithToolSearch:
 
         assert result["error"] is None
         tool_names = [t["name"] for t in result["tools"]]
-        assert set(tool_names) == {MCP_TOOL_SEARCH_TOOL_NAME, MCP_TOOL_CALL_TOOL_NAME, AGENT_SEARCH_TOOL_NAME}
+        assert set(tool_names) == {
+            MCP_TOOL_SEARCH_TOOL_NAME,
+            MCP_TOOL_CALL_TOOL_NAME,
+            AGENT_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
+        }
 
     @pytest.mark.asyncio
     async def test_returns_full_catalog_when_flag_disabled(self) -> None:
@@ -581,6 +745,31 @@ class TestCallToolRestApiVirtualTools:
         assert mock_search.await_args.kwargs["agents"] == (translator,)
 
     @pytest.mark.asyncio
+    async def test_skill_search_call_tolerates_malformed_top_k(self) -> None:
+        """Regression: a caller-supplied non-numeric top_k must be coerced to the default,
+        the same as agent_search, instead of raising a pydantic ValidationError that the
+        endpoint's catch-all turns into an HTTP 500."""
+        from mcp.types import CallToolResult, TextContent
+
+        from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
+
+        user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        request = self._make_request(
+            {"name": SKILL_SEARCH_TOOL_NAME, "arguments": {"query": "translate a document", "top_k": "not-a-number"}}
+        )
+        fake_result = CallToolResult(content=[TextContent(type="text", text="[]")], isError=False)
+        with patch(  # test-quality-ok: the embedding router only resolves via proxy_server globals, no injection seam
+            "litellm.proxy._experimental.mcp_server.tool_search.handle_skill_search",
+            new_callable=AsyncMock,
+            return_value=fake_result,
+        ) as mock_search:
+            result = await self._get_call_fn()(request=request, user_api_key_dict=user_api_key_dict)
+
+        assert result.isError is False
+        assert mock_search.await_args.kwargs["top_k"] == DEFAULT_SKILL_SEARCH_TOP_K
+        assert mock_search.await_args.kwargs["query"] == "translate a document"
+
+    @pytest.mark.asyncio
     async def test_agent_search_call_reports_missing_embedding_model_as_tool_error(self) -> None:
         from litellm.proxy.agent_endpoints.agent_search import AgentSearchNotConfigured
 
@@ -602,6 +791,72 @@ class TestCallToolRestApiVirtualTools:
 
         assert result.isError is True
         assert result.content[0].text == "set agent_search_embedding_model"
+
+    def _semantic_request(self, query: str = "FX") -> MagicMock:
+        return self._make_request({"name": MCP_TOOL_SEARCH_TOOL_NAME, "arguments": {"query": query}})
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_search_ranks_the_callers_catalog_with_the_configured_embedding_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "mcp_tool_search", {"embedding_model": "emb", "similarity_threshold": 0.5})
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="k", team_id="team-1", object_permission=_make_perm(mcp_tool_search_enabled=True)
+        )
+
+        async def fake_aembedding(model: str, input: list[str], metadata: dict[str, Any]) -> MagicMock:
+            assert model == "emb"
+            assert metadata["user_api_key"] == "k"
+            assert metadata["user_api_key_team_id"] == "team-1"
+            response = MagicMock()
+            response.model_dump.return_value = {"data": [{"embedding": list(FAKE_VECTORS[t])} for t in input]}
+            return response
+
+        router = MagicMock()
+        router.aembedding = AsyncMock(side_effect=fake_aembedding)
+        key_limits = MagicMock()
+        key_limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+        with (
+            patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the proxy's key-limit hooks are a module global; the embedding call runs them like /embeddings does
+                "litellm.proxy.proxy_server.proxy_logging_obj", key_limits
+            ),
+            patch(  # test-quality-ok: the authorized catalog is the seam every virtual tool shares; the ranking under test stays real
+                "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+                new_callable=AsyncMock,
+                return_value=AggregateToolListing(tools=list(CATALOG), outcomes={}),
+            ) as mock_list,
+        ):
+            result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
+
+        assert mock_list.await_args.kwargs["user_api_key_auth"] is user_api_key_dict
+        assert key_limits.pre_call_hook.await_args.kwargs["call_type"] == "aembedding"
+        assert key_limits.pre_call_hook.await_args.kwargs["data"]["model"] == "emb"
+        assert result.isError is False
+        assert [t["name"] for t in json.loads(result.content[0].text)] == [FX_TOOL.name]
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_search_reports_missing_router_as_tool_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(litellm, "mcp_tool_search", {"embedding_model": "emb"})
+        user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        with patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
+            "litellm.proxy.proxy_server.llm_router", None
+        ):
+            result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
+        assert result.isError is True
+        assert "mcp_tool_search.embedding_model" in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_mcp_tool_search_reports_invalid_settings_as_tool_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(litellm, "mcp_tool_search", {"top_k": 0})
+        user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        result = await self._get_call_fn()(request=self._semantic_request(), user_api_key_dict=user_api_key_dict)
+        assert result.isError is True
+        assert "top_k" in result.content[0].text
 
     @pytest.mark.asyncio
     async def test_agent_search_requires_flag_enabled(self) -> None:
@@ -982,6 +1237,7 @@ class TestHandleListToolsVirtual:
             MCP_TOOL_SEARCH_TOOL_NAME,
             MCP_TOOL_CALL_TOOL_NAME,
             AGENT_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
         }
 
 

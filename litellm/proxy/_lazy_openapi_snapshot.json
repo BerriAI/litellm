@@ -461,6 +461,145 @@
   "access_groups": {
     "components": {
       "schemas": {
+        "AccessGroupBudget": {
+          "properties": {
+            "budget_duration": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Duration"
+            },
+            "budget_id": {
+              "title": "Budget Id",
+              "type": "string"
+            },
+            "budget_reset_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Reset At"
+            },
+            "max_budget": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Budget"
+            },
+            "soft_budget": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Soft Budget"
+            }
+          },
+          "required": [
+            "budget_id"
+          ],
+          "title": "AccessGroupBudget",
+          "type": "object"
+        },
+        "AccessGroupBudgetRequest": {
+          "additionalProperties": false,
+          "properties": {
+            "budget_duration": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Duration"
+            },
+            "budget_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget Id"
+            },
+            "max_budget": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Budget"
+            },
+            "soft_budget": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Soft Budget"
+            }
+          },
+          "title": "AccessGroupBudgetRequest",
+          "type": "object"
+        },
+        "AccessGroupBudgetResponse": {
+          "properties": {
+            "access_group": {
+              "title": "Access Group",
+              "type": "string"
+            },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AccessGroupBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "access_group",
+            "spend"
+          ],
+          "title": "AccessGroupBudgetResponse",
+          "type": "object"
+        },
         "AccessGroupCreateRequest": {
           "properties": {
             "access_agent_ids": {
@@ -561,6 +700,16 @@
               "title": "Access Group",
               "type": "string"
             },
+            "budget": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AccessGroupBudget"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "deployment_count": {
               "title": "Deployment Count",
               "type": "integer"
@@ -571,6 +720,17 @@
               },
               "title": "Model Names",
               "type": "array"
+            },
+            "spend": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Spend"
             }
           },
           "required": [
@@ -581,6 +741,32 @@
           "title": "AccessGroupInfo",
           "type": "object"
         },
+        "AccessGroupResource": {
+          "description": "A resource referenced by an access group. `name` is null when the id no longer resolves or has no alias.",
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          "required": [
+            "id",
+            "name"
+          ],
+          "title": "AccessGroupResource",
+          "type": "object"
+        },
         "AccessGroupResponse": {
           "properties": {
             "access_agent_ids": {
@@ -588,6 +774,13 @@
                 "type": "string"
               },
               "title": "Access Agent Ids",
+              "type": "array"
+            },
+            "access_agents": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Agents",
               "type": "array"
             },
             "access_group_id": {
@@ -605,6 +798,13 @@
               "title": "Access Mcp Server Ids",
               "type": "array"
             },
+            "access_mcp_servers": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Access Mcp Servers",
+              "type": "array"
+            },
             "access_model_names": {
               "items": {
                 "type": "string"
@@ -619,11 +819,25 @@
               "title": "Assigned Key Ids",
               "type": "array"
             },
+            "assigned_keys": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Assigned Keys",
+              "type": "array"
+            },
             "assigned_team_ids": {
               "items": {
                 "type": "string"
               },
               "title": "Assigned Team Ids",
+              "type": "array"
+            },
+            "assigned_teams": {
+              "items": {
+                "$ref": "#/components/schemas/AccessGroupResource"
+              },
+              "title": "Assigned Teams",
               "type": "array"
             },
             "created_at": {
@@ -678,6 +892,10 @@
             "access_agent_ids",
             "assigned_team_ids",
             "assigned_key_ids",
+            "access_mcp_servers",
+            "access_agents",
+            "assigned_teams",
+            "assigned_keys",
             "created_at",
             "updated_at"
           ],
@@ -780,6 +998,29 @@
             }
           },
           "title": "AccessGroupUpdateRequest",
+          "type": "object"
+        },
+        "DeleteAccessGroupBudgetResponse": {
+          "properties": {
+            "access_group": {
+              "title": "Access Group",
+              "type": "string"
+            },
+            "budget_deleted": {
+              "title": "Budget Deleted",
+              "type": "boolean"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            }
+          },
+          "required": [
+            "access_group",
+            "budget_deleted",
+            "message"
+          ],
+          "title": "DeleteAccessGroupBudgetResponse",
           "type": "object"
         },
         "DeleteModelGroupResponse": {
@@ -1000,7 +1241,7 @@
     "paths": {
       "/access_group/list": {
         "get": {
-          "description": "List all access groups.\n\nReturns a list of all access groups with their model names and deployment counts.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
+          "description": "List all access groups.\n\nReturns a list of all access groups with their model names, deployment counts, shared budget\nand the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
           "operationId": "list_access_groups_access_group_list_get",
           "responses": {
             "200": {
@@ -1072,6 +1313,156 @@
           ]
         }
       },
+      "/access_group/{access_group}/budget": {
+        "delete": {
+          "description": "Clear the shared budget of an access group, leaving the group itself in place.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear\n\nRaises:\n- HTTPException 404: If access group not found",
+          "operationId": "delete_access_group_budget_access_group__access_group__budget_delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group",
+              "required": true,
+              "schema": {
+                "title": "Access Group",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DeleteAccessGroupBudgetResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Access Group Budget",
+          "tags": [
+            "access_groups"
+          ]
+        },
+        "get": {
+          "description": "Get the shared budget of an access group, and the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupBudgetResponse; budget is null when the group has no budget set\n\nRaises:\n- HTTPException 404: If access group not found",
+          "operationId": "get_access_group_budget_access_group__access_group__budget_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group",
+              "required": true,
+              "schema": {
+                "title": "Access Group",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AccessGroupBudgetResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Access Group Budget",
+          "tags": [
+            "access_groups"
+          ]
+        },
+        "put": {
+          "description": "Set or replace the shared budget of an access group. Idempotent.\n\nEvery key that can reach a model in the group draws from this one budget.\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"max_budget\": 100.0,\n    \"budget_duration\": \"30d\"\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this\n- soft_budget: Optional[float] - Fires an alert when reached; requests still succeed\n- budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')\n- budget_id: Optional[str] - Link an existing budget instead of creating one\n\nReturns:\n- AccessGroupBudgetResponse with the stored budget and current spend\n\nRaises:\n- HTTPException 400: If no budget field is given, or budget_duration cannot be parsed\n- HTTPException 404: If access group not found",
+          "operationId": "set_access_group_budget_access_group__access_group__budget_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "access_group",
+              "required": true,
+              "schema": {
+                "title": "Access Group",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGroupBudgetRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/AccessGroupBudgetResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Set Access Group Budget",
+          "tags": [
+            "access_groups"
+          ]
+        }
+      },
       "/access_group/{access_group}/delete": {
         "delete": {
           "description": "Delete an access group.\n\nRemoves the access group from all deployments that have it.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteModelGroupResponse with deletion details\n\nRaises:\n- HTTPException 404: If access group not found",
@@ -1122,7 +1513,7 @@
       },
       "/access_group/{access_group}/info": {
         "get": {
-          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details, its shared budget and its spend\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "get_access_group_info_access_group__access_group__info_get",
           "parameters": [
             {
@@ -2818,6 +3209,17 @@
                 }
               ],
               "title": "Team Id"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
             }
           },
           "title": "KeyMetadata",
@@ -4285,6 +4687,17 @@
               "title": "Created At",
               "type": "string"
             },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
             "display_title": {
               "anyOf": [
                 {
@@ -4310,6 +4723,17 @@
                 }
               ],
               "title": "Latest Version"
+            },
+            "search_score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Search Score"
             },
             "source": {
               "title": "Source",
@@ -4379,7 +4803,7 @@
     "paths": {
       "/v1/skills": {
         "get": {
-          "description": "List skills on Anthropic.\n\nRequires `?beta=true` query parameter.\n\nModel-based routing (for multi-account support):\n- Pass model via header: `x-litellm-model: claude-account-1`\n- Pass model via query: `?model=claude-account-1`\n- Pass model via body: `{\"model\": \"claude-account-1\"}`\n\nExample usage:\n```bash\n# Basic usage\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"\n\n# With model-based routing\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"       -H \"x-litellm-model: claude-account-1\"\n```\n\nReturns: ListSkillsResponse with list of skills",
+          "description": "List skills on Anthropic.\n\nRequires `?beta=true` query parameter.\n\nModel-based routing (for multi-account support):\n- Pass model via header: `x-litellm-model: claude-account-1`\n- Pass model via query: `?model=claude-account-1`\n- Pass model via body: `{\"model\": \"claude-account-1\"}`\n\nExample usage:\n```bash\n# Basic usage\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"\n\n# With model-based routing\ncurl \"http://localhost:4000/v1/skills?beta=true&limit=10\"       -H \"Authorization: Bearer your-key\"       -H \"x-litellm-model: claude-account-1\"\n```\n\nPass `?custom_llm_provider=litellm_proxy&query=<task>` to rank the LiteLLM-hosted skills you can\naccess by semantic similarity instead of paging through the whole registry:\n```bash\ncurl \"http://localhost:4000/v1/skills?custom_llm_provider=litellm_proxy&query=summarize+a+pdf&top_k=5\"       -H \"Authorization: Bearer your-key\"\n```\n\nReturns: ListSkillsResponse with list of skills",
           "operationId": "list_skills_v1_skills_get",
           "parameters": [
             {
@@ -4446,6 +4870,39 @@
                 ],
                 "default": "anthropic",
                 "title": "Custom Llm Provider"
+              }
+            },
+            {
+              "description": "Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model.",
+              "in": "query",
+              "name": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model.",
+                "title": "Query"
+              }
+            },
+            {
+              "description": "With query: the maximum number of ranked skills to return.",
+              "in": "query",
+              "name": "top_k",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "description": "With query: the maximum number of ranked skills to return.",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Top K",
+                "type": "integer"
               }
             }
           ],
@@ -6459,6 +6916,109 @@
           "title": "ConfigOverrideSettingsResponse",
           "type": "object"
         },
+        "CyberArkConfig": {
+          "description": "Configuration for CyberArk Conjur secret manager integration.",
+          "properties": {
+            "client_cert": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Path to the client TLS certificate for certificate-based authentication",
+              "title": "Client Cert"
+            },
+            "client_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Path to the client TLS private key for certificate-based authentication",
+              "title": "Client Key"
+            },
+            "cyberark_account": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Conjur organization account name",
+              "title": "Cyberark Account"
+            },
+            "cyberark_api_base": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The address of the CyberArk Conjur server (e.g., https://conjur.example.com)",
+              "title": "Cyberark Api Base"
+            },
+            "cyberark_api_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "API key for Conjur API-key authentication",
+              "title": "Cyberark Api Key"
+            },
+            "cyberark_username": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The Conjur username (login) to authenticate as",
+              "title": "Cyberark Username"
+            },
+            "refresh_interval": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Auth token cache TTL in seconds (default: 300)",
+              "title": "Refresh Interval"
+            },
+            "ssl_verify": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Set to false to disable SSL verification (e.g., for self-signed certificates)",
+              "title": "Ssl Verify"
+            }
+          },
+          "title": "CyberArkConfig",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -6654,6 +7214,192 @@
       }
     },
     "paths": {
+      "/config_overrides/cyberark": {
+        "delete": {
+          "description": "Delete CyberArk Conjur configuration. Idempotent.",
+          "operationId": "delete_cyberark_config_config_overrides_cyberark_delete",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Delete Cyberark Config Config Overrides Cyberark Delete",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Cyberark Config",
+          "tags": [
+            "config_overrides"
+          ]
+        },
+        "get": {
+          "description": "Get current CyberArk Conjur configuration.\nReturns decrypted values from DB, or falls back to current env vars.\nSensitive fields are masked before leaving the server.",
+          "operationId": "get_cyberark_config_config_overrides_cyberark_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ConfigOverrideSettingsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Cyberark Config",
+          "tags": [
+            "config_overrides"
+          ]
+        },
+        "post": {
+          "description": "Update CyberArk Conjur secret manager configuration.\nSets environment variables, encrypts sensitive fields, and stores in DB.\nReinitializes the secret manager on this pod.",
+          "operationId": "update_cyberark_config_config_overrides_cyberark_post",
+          "parameters": [
+            {
+              "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+              "in": "header",
+              "name": "litellm-changed-by",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+                "title": "Litellm-Changed-By"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CyberArkConfig"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Update Cyberark Config Config Overrides Cyberark Post",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Cyberark Config",
+          "tags": [
+            "config_overrides"
+          ]
+        }
+      },
+      "/config_overrides/cyberark/test_connection": {
+        "post": {
+          "description": "Test the connection to the currently configured CyberArk Conjur server.\nUses the already-initialized secret manager client. Does not modify any state.",
+          "operationId": "test_cyberark_connection_config_overrides_cyberark_test_connection_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "title": "Response Test Cyberark Connection Config Overrides Cyberark Test Connection Post",
+                    "type": "object"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Test Cyberark Connection",
+          "tags": [
+            "config_overrides"
+          ]
+        }
+      },
       "/config_overrides/hashicorp_vault": {
         "delete": {
           "description": "Delete Hashicorp Vault configuration. Idempotent.",
@@ -8813,6 +9559,18 @@
               "description": "Name of the guardrail in guardrails.ai",
               "title": "Guard Name"
             },
+            "inspect_embeddings": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.",
+              "title": "Inspect Embeddings"
+            },
             "keyword_redaction_tag": {
               "anyOf": [
                 {
@@ -8894,7 +9652,9 @@
                 {
                   "enum": [
                     "warn",
-                    "end_session"
+                    "end_session",
+                    "block",
+                    "alert"
                   ],
                   "type": "string"
                 },
@@ -8902,7 +9662,7 @@
                   "type": "null"
                 }
               ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
               "title": "On Violation"
             },
             "only_scan_new_messages": {
@@ -10570,6 +11330,12 @@
               ],
               "description": "Threshold configuration for Lakera guardrail categories"
             },
+            "ccr_retrieval": {
+              "default": true,
+              "description": "Inject the Headroom retrieval tool for hashes declared by the compression service.",
+              "title": "Ccr Retrieval",
+              "type": "boolean"
+            },
             "checks": {
               "anyOf": [
                 {
@@ -10965,6 +11731,18 @@
               "description": "Include scanner category summaries in responses (sets `plr_scanners` header).",
               "title": "Include Scanners"
             },
+            "inspect_embeddings": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.",
+              "title": "Inspect Embeddings"
+            },
             "is_detector_server": {
               "anyOf": [
                 {
@@ -11193,7 +11971,9 @@
                 {
                   "enum": [
                     "warn",
-                    "end_session"
+                    "end_session",
+                    "block",
+                    "alert"
                   ],
                   "type": "string"
                 },
@@ -11201,7 +11981,7 @@
                   "type": "null"
                 }
               ],
-              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.",
+              "description": "For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.",
               "title": "On Violation"
             },
             "only_scan_new_messages": {
@@ -12417,6 +13197,59 @@
               ],
               "title": "Avgscore"
             },
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost"
+            },
+            "cost_by_key": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Cost By Key",
+              "type": "object"
+            },
+            "cost_by_team": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Cost By Team",
+              "type": "object"
+            },
+            "cost_by_unit": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "title": "Cost By Unit",
+              "type": "object"
+            },
             "description": {
               "anyOf": [
                 {
@@ -12466,6 +13299,33 @@
             "type": {
               "title": "Type",
               "type": "string"
+            },
+            "untracked_usage_units": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Untracked Usage Units",
+              "type": "object"
+            },
+            "untracked_usage_units_by_key": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Key",
+              "type": "object"
+            },
+            "untracked_usage_units_by_team": {
+              "additionalProperties": {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              "title": "Untracked Usage Units By Team",
+              "type": "object"
             },
             "usage_units": {
               "additionalProperties": {
@@ -12518,7 +13378,14 @@
             "usage_units",
             "usage_units_daily",
             "usage_units_by_team",
-            "usage_units_by_key"
+            "usage_units_by_key",
+            "cost",
+            "cost_by_unit",
+            "cost_by_team",
+            "cost_by_key",
+            "untracked_usage_units",
+            "untracked_usage_units_by_team",
+            "untracked_usage_units_by_key"
           ],
           "title": "UsageDetailResponse",
           "type": "object"
@@ -12673,9 +13540,27 @@
               "title": "Totalblocked",
               "type": "integer"
             },
+            "totalCost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Totalcost"
+            },
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUntrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totaluntrackedusageunits",
+              "type": "object"
             },
             "totalUsageUnits": {
               "additionalProperties": {
@@ -12691,7 +13576,9 @@
             "totalRequests",
             "totalBlocked",
             "passRate",
-            "totalUsageUnits"
+            "totalUsageUnits",
+            "totalCost",
+            "totalUntrackedUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -12719,6 +13606,18 @@
                 }
               ],
               "title": "Avgscore"
+            },
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "USD for the priced share of usageUnits over the window; null when no unit was priced",
+              "title": "Cost"
             },
             "failRate": {
               "title": "Failrate",
@@ -12752,6 +13651,14 @@
               "title": "Type",
               "type": "string"
             },
+            "untrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "description": "The share of usageUnits that cost leaves out: units recorded with no known price, per counter",
+              "title": "Untrackedusageunits",
+              "type": "object"
+            },
             "usageUnits": {
               "additionalProperties": {
                 "type": "integer"
@@ -12771,13 +13678,26 @@
             "avgLatency",
             "status",
             "trend",
-            "usageUnits"
+            "usageUnits",
+            "cost",
+            "untrackedUsageUnits"
           ],
           "title": "UsageOverviewRow",
           "type": "object"
         },
         "UsageUnitsDailyPoint": {
           "properties": {
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cost"
+            },
             "date": {
               "title": "Date",
               "type": "string"
@@ -12792,7 +13712,8 @@
           },
           "required": [
             "date",
-            "units"
+            "units",
+            "cost"
           ],
           "title": "UsageUnitsDailyPoint",
           "type": "object"
@@ -15493,6 +16414,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -16555,6 +17481,19 @@
           "title": "Body_authorize_complete_authorize_complete_post",
           "type": "object"
         },
+        "Body_introspect_endpoint_introspect_post": {
+          "properties": {
+            "token": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          "required": [
+            "token"
+          ],
+          "title": "Body_introspect_endpoint_introspect_post",
+          "type": "object"
+        },
         "Body_revoke_endpoint_revoke_post": {
           "properties": {
             "client_id": {
@@ -17101,6 +18040,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -17982,6 +18926,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -19134,6 +20083,51 @@
           ]
         }
       },
+      "/introspect": {
+        "post": {
+          "description": "RFC 7662 introspection for gateway-issued session tokens (``llm_session_`` /\n``llm_srefresh_``), so an external gateway can validate them without the signing\nsecret. The caller authenticates with a LiteLLM virtual key (section 2.1, enforced by\nthe route dependency); any token the gateway cannot vouch for answers\n``{\"active\": false}`` with no further detail.",
+          "operationId": "introspect_endpoint_introspect_post",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_introspect_endpoint_introspect_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Introspect Endpoint",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
       "/register": {
         "post": {
           "operationId": "register_client_register_post",
@@ -19948,6 +20942,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -20223,6 +21222,223 @@
             "transport"
           ],
           "title": "LiteLLM_MCPServerTable",
+          "type": "object"
+        },
+        "MCPConnectorEntry": {
+          "properties": {
+            "args": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Args",
+              "type": "array"
+            },
+            "authorization_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization Token"
+            },
+            "command": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Command"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Env",
+              "type": "object"
+            },
+            "headers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Headers"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Url"
+            }
+          },
+          "title": "MCPConnectorEntry",
+          "type": "object"
+        },
+        "MCPConnectorImportFailure": {
+          "properties": {
+            "error": {
+              "title": "Error",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "error"
+          ],
+          "title": "MCPConnectorImportFailure",
+          "type": "object"
+        },
+        "MCPConnectorImportRequest": {
+          "properties": {
+            "mcp_servers": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/MCPConnectorEntry"
+                  },
+                  "type": "object"
+                },
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/MCPConnectorEntry"
+                  },
+                  "type": "array"
+                }
+              ],
+              "title": "Mcp Servers"
+            }
+          },
+          "required": [
+            "mcp_servers"
+          ],
+          "title": "MCPConnectorImportRequest",
+          "type": "object"
+        },
+        "MCPConnectorImportResponse": {
+          "properties": {
+            "errors": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportFailure"
+              },
+              "title": "Errors",
+              "type": "array"
+            },
+            "imported": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportResult"
+              },
+              "title": "Imported",
+              "type": "array"
+            },
+            "skipped": {
+              "items": {
+                "$ref": "#/components/schemas/MCPConnectorImportSkipped"
+              },
+              "title": "Skipped",
+              "type": "array"
+            }
+          },
+          "required": [
+            "imported",
+            "skipped",
+            "errors"
+          ],
+          "title": "MCPConnectorImportResponse",
+          "type": "object"
+        },
+        "MCPConnectorImportResult": {
+          "properties": {
+            "alias": {
+              "title": "Alias",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "server_id",
+            "alias"
+          ],
+          "title": "MCPConnectorImportResult",
+          "type": "object"
+        },
+        "MCPConnectorImportSkipped": {
+          "properties": {
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "reason": {
+              "title": "Reason",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "reason"
+          ],
+          "title": "MCPConnectorImportSkipped",
           "type": "object"
         },
         "MCPCredentials": {
@@ -21205,6 +22421,11 @@
               "title": "Oauth Passthrough",
               "type": "boolean"
             },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -21723,6 +22944,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -22459,6 +23685,53 @@
             }
           ],
           "summary": "Health Check Servers",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/server/import": {
+        "post": {
+          "description": "Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON",
+          "operationId": "import_mcp_servers_v1_mcp_server_import_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MCPConnectorImportRequest"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/MCPConnectorImportResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Import Mcp Servers",
           "tags": [
             "mcp_management"
           ]
@@ -24185,6 +25458,11 @@
             "oauth_passthrough": {
               "default": false,
               "title": "Oauth Passthrough",
+              "type": "boolean"
+            },
+            "per_server_oauth_discovery": {
+              "default": false,
+              "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
             "registration_url": {
@@ -27829,9 +29107,27 @@
               "title": "Totalblocked",
               "type": "integer"
             },
+            "totalCost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Totalcost"
+            },
             "totalRequests": {
               "title": "Totalrequests",
               "type": "integer"
+            },
+            "totalUntrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "title": "Totaluntrackedusageunits",
+              "type": "object"
             },
             "totalUsageUnits": {
               "additionalProperties": {
@@ -27847,7 +29143,9 @@
             "totalRequests",
             "totalBlocked",
             "passRate",
-            "totalUsageUnits"
+            "totalUsageUnits",
+            "totalCost",
+            "totalUntrackedUsageUnits"
           ],
           "title": "UsageOverviewResponse",
           "type": "object"
@@ -27875,6 +29173,18 @@
                 }
               ],
               "title": "Avgscore"
+            },
+            "cost": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "USD for the priced share of usageUnits over the window; null when no unit was priced",
+              "title": "Cost"
             },
             "failRate": {
               "title": "Failrate",
@@ -27908,6 +29218,14 @@
               "title": "Type",
               "type": "string"
             },
+            "untrackedUsageUnits": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "description": "The share of usageUnits that cost leaves out: units recorded with no known price, per counter",
+              "title": "Untrackedusageunits",
+              "type": "object"
+            },
             "usageUnits": {
               "additionalProperties": {
                 "type": "integer"
@@ -27927,7 +29245,9 @@
             "avgLatency",
             "status",
             "trend",
-            "usageUnits"
+            "usageUnits",
+            "cost",
+            "untrackedUsageUnits"
           ],
           "title": "UsageOverviewRow",
           "type": "object"
@@ -31058,6 +32378,62 @@
           "title": "SCIMPatchOperation",
           "type": "object"
         },
+        "SCIMPlaceholder": {
+          "description": "A user row keyed by a value that names another account by SSO identity or email.",
+          "properties": {
+            "placeholder_user_id": {
+              "title": "Placeholder User Id",
+              "type": "string"
+            },
+            "resolved_user_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Resolved User Ids",
+              "type": "array"
+            },
+            "team_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Team Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "placeholder_user_id",
+            "resolved_user_ids",
+            "team_ids"
+          ],
+          "title": "SCIMPlaceholder",
+          "type": "object"
+        },
+        "SCIMPlaceholderMergeResult": {
+          "properties": {
+            "merged_into_user_id": {
+              "title": "Merged Into User Id",
+              "type": "string"
+            },
+            "placeholder_user_id": {
+              "title": "Placeholder User Id",
+              "type": "string"
+            },
+            "team_ids": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Team Ids",
+              "type": "array"
+            }
+          },
+          "required": [
+            "placeholder_user_id",
+            "merged_into_user_id",
+            "team_ids"
+          ],
+          "title": "SCIMPlaceholderMergeResult",
+          "type": "object"
+        },
         "SCIMServiceProviderConfig": {
           "properties": {
             "authenticationSchemes": {
@@ -32693,6 +34069,129 @@
             }
           ],
           "summary": "Update User",
+          "tags": [
+            "scim"
+          ]
+        }
+      },
+      "/scim/v2/placeholders": {
+        "get": {
+          "description": "List user rows whose id is another account's SSO identity or email.\n\nAn earlier release provisioned a group member it could not match as a user keyed\nby the raw member value, and that row now shadows the account the value really\nnames, so every push of that member is refused. This lists those rows so an\noperator can fold each one into the account it shadows with\n``POST /scim/v2/placeholders/{user_id}/merge``. A row that has an SSO identity of\nits own or owns virtual keys is left out: someone uses that account.",
+          "operationId": "list_placeholders_scim_v2_placeholders_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "feature",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Feature"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/SCIMPlaceholder"
+                    },
+                    "title": "Response List Placeholders Scim V2 Placeholders Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Placeholders",
+          "tags": [
+            "scim"
+          ]
+        }
+      },
+      "/scim/v2/placeholders/{user_id}/merge": {
+        "post": {
+          "description": "Fold a placeholder user into the one account its id names by SSO identity or email.\n\nThe account is added to every team the placeholder is on, then the placeholder is\ndeleted the way ``DELETE /scim/v2/Users/{id}`` deletes a user, so the next group\npush resolves the member value to the real account. Refused with 409 when the row\nhas an SSO identity of its own, owns virtual keys, or names no account or several.",
+          "operationId": "merge_placeholder_scim_v2_placeholders__user_id__merge_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "user_id",
+              "required": true,
+              "schema": {
+                "title": "User ID",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "feature",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Feature"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SCIMPlaceholderMergeResult"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Merge Placeholder",
           "tags": [
             "scim"
           ]

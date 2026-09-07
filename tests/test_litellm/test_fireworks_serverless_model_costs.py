@@ -84,3 +84,41 @@ def test_bare_fireworks_ids_resolve_through_prefixed_entries():
         assert info["output_cost_per_token"] == pytest.approx(expected["output_cost_per_token"])
         assert info["max_input_tokens"] == expected["max_input_tokens"]
         assert info["max_output_tokens"] == expected["max_output_tokens"]
+
+
+TWIN_PINNED_PRICES = {
+    "deepseek-v4-flash-0731": {
+        "input_cost_per_token": 2.2e-07,
+        "cache_read_input_token_cost": 7e-09,
+        "output_cost_per_token": 6.6e-07,
+    },
+}
+
+
+def test_deepseek_v4_flash_0731_twins_pin_published_pricing(model_data):
+    """Both 0731 entries carry the price published at docs.fireworks.ai/serverless/pricing."""
+    for bare_suffix, expected in TWIN_PINNED_PRICES.items():
+        for key in (
+            f"fireworks_ai/{bare_suffix}",
+            f"fireworks_ai/accounts/fireworks/models/{bare_suffix}",
+        ):
+            entry = model_data[key]
+            for field, value in expected.items():
+                assert entry[field] == pytest.approx(value), f"{key}.{field}"
+
+
+def test_fireworks_account_prefixed_twins_agree_on_price(model_data):
+    """Every accounts/fireworks/models/X entry prices identically to its bare fireworks_ai/X twin."""
+    prefix = "fireworks_ai/accounts/fireworks/models/"
+    pairs_checked = 0
+    for key, entry in model_data.items():
+        if not key.startswith(prefix):
+            continue
+        bare_key = f"fireworks_ai/{key[len(prefix):]}"
+        bare_entry = model_data.get(bare_key)
+        if bare_entry is None:
+            continue
+        pairs_checked += 1
+        for field in sorted({f for f in (*entry, *bare_entry) if "cost" in f}):
+            assert entry.get(field) == bare_entry.get(field), f"{key} vs {bare_key}: {field}"
+    assert pairs_checked >= 20

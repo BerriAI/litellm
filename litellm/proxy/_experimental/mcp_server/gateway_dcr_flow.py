@@ -65,17 +65,24 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     SessionRefreshOpened,
+    SessionSigningConfigError,
+    active_session_signing_keys,
     open_session_refresh_bearer,
-    session_keys_from_master_key,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
+    SESSION_ISSUER,
     SESSION_REFRESH_TTL_SECONDS,
     MintedSessionToken,
+    OpenedSessionToken,
     SessionAudience,
-    SessionKeys,
     SessionPrincipal,
+    SessionSigningKeys,
+    is_session_refresh_token,
+    is_session_token,
     mint_session_refresh_token,
     mint_session_token,
+    open_session_refresh_token,
+    open_session_token,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -143,11 +150,18 @@ _CLIENT_RECORD_DEBUG_KEY: Final = "gateway_dcr_client"
 _CONNECT_FLOW_DEBUG_KEY: Final = "gateway_connect_flow"
 _AUTH_CODE_DEBUG_KEY: Final = "gateway_authorization_code"
 
-ReloadUserFailure = Literal["unresolvable", "unavailable", "no_active_key"]
+ReloadUserFailure = Literal["unresolvable", "unavailable", "faulted", "no_active_key"]
 ReloadUser = Callable[[str], Awaitable[ReloadUserFailure | None]]
 """Injected live-user revalidation (the token endpoint's mirror of admission):
-``None`` means the user is active; ``unavailable`` is a retryable DB outage; anything
-else fails the grant closed."""
+``None`` means the user is active; ``unavailable`` is a retryable DB outage; ``faulted`` is
+a DB fault retrying will not clear (still 503, worded so nobody just waits); anything else
+fails the grant closed."""
+
+_DB_UNAVAILABLE_DESCRIPTION: Final = "the gateway database is unavailable; retry"
+_DB_FAULTED_DESCRIPTION: Final = (
+    "the gateway database reported a fault that is not a transient outage; "
+    "retrying will not help until the gateway deployment is repaired"
+)
 
 PROXY_API_AUDIENCE: Final[SessionAudience] = "proxy_api"
 """The audience a native client (``lite login --pkce``, a Go CLI) asks for by sending the
@@ -652,7 +666,9 @@ def _set_flow_cookie(response: Response, request: Request, handle: str, flow: _C
 def _consent_lookup_failure_response(failure: ReloadUserFailure) -> Response:
     match failure:
         case "unavailable":
-            return _oauth_error(503, "temporarily_unavailable", "the gateway database is unavailable; retry")
+            return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
+        case "faulted":
+            return _oauth_error(503, "temporarily_unavailable", _DB_FAULTED_DESCRIPTION)
         case "unresolvable":
             return _oauth_error(500, "server_error", "the gateway is not configured to resolve users")
         case "no_active_key":
@@ -884,8 +900,25 @@ class _SingleUseGuard:
         count = await self._cache.async_increment_cache(key, 1, ttl=ttl_seconds, local_only=True)
         return "first" if count == 1 else "replayed"
 
+    async def peek(self, key: str) -> Literal["unclaimed", "claimed", "unavailable"]:
+        """Read-only view of a single-use marker, resolved against the same shared authority as
+        :meth:`claim` so introspection observes exactly the record redemption and revocation wrote.
+        A backend fault is ``"unavailable"`` (fail closed) rather than a guess either way."""
+        from litellm.proxy.proxy_server import redis_usage_cache  # noqa: PLC0415  # circular import at module load
 
-def _session_token_pair(principal: SessionPrincipal, keys: SessionKeys, now: datetime) -> Response:
+        redis_cache: Final = redis_usage_cache or getattr(self._cache, "redis_cache", None)
+        if redis_cache is not None:
+            try:
+                value = await redis_cache.async_get_cache(key)
+            except Exception as e:  # noqa: BLE001  # ANY Redis fault fails the read closed
+                verbose_logger.warning("mcp gateway single-use peek: shared cache backend unavailable: %s", e)
+                return "unavailable"
+            return "unclaimed" if value is None else "claimed"
+        local: Final = await self._cache.async_get_cache(key, local_only=True)
+        return "unclaimed" if local is None else "claimed"
+
+
+def _session_token_pair(principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime) -> Response:
     access: Final = mint_session_token(principal, keys, now)
     refresh: Final = mint_session_refresh_token(principal, keys, now)
     if not isinstance(access, MintedSessionToken) or not isinstance(refresh, MintedSessionToken):
@@ -912,7 +945,7 @@ class _ProxyCredentialTokenResponse(TypedDict):
 
 
 def _proxy_credential_response(
-    minted: MintedProxyCredential, principal: SessionPrincipal, keys: SessionKeys, now: datetime
+    minted: MintedProxyCredential, principal: SessionPrincipal, keys: SessionSigningKeys, now: datetime
 ) -> Response:
     """The proxy-API token response: the access token is the very credential ``lite
     login`` stores (accepted on every proxy route with user and team attribution), and
@@ -938,7 +971,9 @@ def _reload_failure_response(failure: ReloadUserFailure) -> Response:
     ``ReloadUserFailure`` member is a type error here rather than silently 400ing."""
     match failure:
         case "unavailable":
-            return _oauth_error(503, "temporarily_unavailable", "the gateway database is unavailable; retry")
+            return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
+        case "faulted":
+            return _oauth_error(503, "temporarily_unavailable", _DB_FAULTED_DESCRIPTION)
         case "unresolvable":
             return _oauth_error(500, "server_error", "the gateway is not configured to resolve users")
         case "no_active_key":
@@ -957,7 +992,7 @@ def _mint_failure_response(failure: ProxyCredentialMintFailure) -> Response:
             return _oauth_error(
                 400, "invalid_grant", "this user belongs to a team; sign in again and pick the team for this credential"
             )
-        case "unavailable" | "unresolvable" | "no_active_key":
+        case "unavailable" | "faulted" | "unresolvable" | "no_active_key":
             return _reload_failure_response(failure)
         case _:
             assert_never(failure)
@@ -998,7 +1033,10 @@ async def aggregate_token(
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr token grant rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys: Final = session_keys_from_master_key(master_key)
+    keys: Final = active_session_signing_keys(master_key)
+    if isinstance(keys, SessionSigningConfigError):
+        verbose_logger.error("mcp_gateway_dcr token grant rejected: %s", keys.detail)
+        return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     now: Final = datetime.now(timezone.utc)
     issue: Final = _GrantIssuer(
         request=request,
@@ -1043,7 +1081,7 @@ class _GrantIssuer:
         self,
         request: Request,
         resource: str | None,
-        keys: SessionKeys,
+        keys: SessionSigningKeys,
         now: datetime,
         reload_user: ReloadUser,
         mint_proxy_credential: MintProxyCredential,
@@ -1146,7 +1184,7 @@ async def _refresh_token_grant(
     refresh_token: str | None,
     client_id: str,
     resource: str | None,
-    keys: SessionKeys,
+    keys: SessionSigningKeys,
     now: datetime,
     issue: _GrantIssuer,
 ) -> Response:
@@ -1182,7 +1220,10 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
     if master_key is None:
         verbose_logger.error("mcp_gateway_dcr revoke rejected: no master_key configured")
         return _oauth_error(500, "server_error", "the gateway has no master key configured")
-    keys: Final = session_keys_from_master_key(master_key)
+    keys: Final = active_session_signing_keys(master_key)
+    if isinstance(keys, SessionSigningConfigError):
+        verbose_logger.error("mcp_gateway_dcr revoke rejected: %s", keys.detail)
+        return _oauth_error(500, "server_error", "the gateway session signing configuration is invalid")
     now: Final = datetime.now(timezone.utc)
     opened: Final = open_session_refresh_bearer(token, keys, now, expected_client_id=client_id)
     if isinstance(opened, SessionRefreshOpened):
@@ -1192,3 +1233,83 @@ async def revoke_refresh_token(token: str, client_id: str, master_key: str | Non
         if burned == "unavailable":
             return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
     return Response(content="{}", media_type="application/json", headers=TOKEN_NO_CACHE_HEADERS)
+
+
+def _inactive_introspection_response() -> Response:
+    """RFC 7662 section 2.2: any token the gateway cannot vouch for, whatever the reason
+    (wrong family, bad signature, expired, revoked, or a deactivated user), answers 200
+    with ``active: false`` and nothing else, so introspection is not a token oracle."""
+    return JSONResponse(status_code=200, content={"active": False}, headers=TOKEN_NO_CACHE_HEADERS)
+
+
+def _active_introspection_response(opened: OpenedSessionToken) -> Response:
+    principal: Final = opened.principal
+    optional_claims: Final = {
+        key: value
+        for key, value in (
+            ("token_type", "Bearer" if opened.kind == "session" else None),
+            ("team_id", principal.team_id),
+            ("resource_server_id", principal.resource_server_id),
+            ("audience", principal.audience),
+        )
+        if value is not None
+    }
+    return JSONResponse(
+        status_code=200,
+        content={
+            "active": True,
+            "iss": SESSION_ISSUER,
+            "sub": principal.user_id,
+            "client_id": principal.client_id,
+            "jti": opened.jti,
+            "iat": opened.iat,
+            "exp": opened.exp,
+            "kind": opened.kind,
+            **optional_claims,
+        },
+        headers=TOKEN_NO_CACHE_HEADERS,
+    )
+
+
+async def introspect_gateway_token(
+    token: str,
+    master_key: str | None,
+    reload_user: ReloadUser,
+    cache: DualCache,
+) -> Response:
+    """RFC 7662 introspection for the gateway's session tokens, so an external gateway
+    (Kong, an API management layer) can validate a LiteLLM-issued MCP session credential
+    without holding the signing secret. The caller is already authenticated by the route
+    (section 2.1). Active means everything admission itself would require: valid signature
+    under the configured session signing keys, unexpired, not a revoked or rotated refresh
+    token, and a litellm user that is still live, so a deactivated user's outstanding
+    tokens introspect as inactive immediately. A shared-backend or DB outage answers 503
+    rather than guessing in either direction."""
+    if master_key is None:
+        verbose_logger.error("mcp_gateway_dcr introspect rejected: no master_key configured")
+        return _oauth_error(500, "server_error", "the gateway has no master key configured")
+    keys: Final = active_session_signing_keys(master_key)
+    if isinstance(keys, SessionSigningConfigError):
+        verbose_logger.error("mcp_gateway_dcr introspect rejected: %s", keys.detail)
+        return _oauth_error(500, "server_error", keys.detail)
+    now: Final = datetime.now(timezone.utc)
+    if is_session_token(token):
+        opened = open_session_token(token, keys, now)
+    elif is_session_refresh_token(token):
+        opened = open_session_refresh_token(token, keys, now)
+    else:
+        return _inactive_introspection_response()
+    if not isinstance(opened, OpenedSessionToken):
+        return _inactive_introspection_response()
+    if opened.kind == "session_refresh":
+        peeked: Final = await _SingleUseGuard(cache).peek(f"{_USED_REFRESH_CACHE_PREFIX}{opened.jti}")
+        if peeked == "unavailable":
+            return _oauth_error(503, "temporarily_unavailable", _CLAIM_UNAVAILABLE_DESCRIPTION)
+        if peeked == "claimed":
+            return _inactive_introspection_response()
+    failure: Final = await reload_user(opened.principal.user_id)
+    if failure == "unavailable" or failure == "faulted":
+        return _reload_failure_response(failure)
+    if failure is not None:
+        return _inactive_introspection_response()
+    return _active_introspection_response(opened)

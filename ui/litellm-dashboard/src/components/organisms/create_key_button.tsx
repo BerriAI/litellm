@@ -61,7 +61,6 @@ import {
 } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
 import {
@@ -119,14 +118,18 @@ interface McpToolPermissionsFieldProps {
 }
 
 const McpToolPermissionsField: React.FC<McpToolPermissionsFieldProps> = ({ accessToken, control, setValue }) => {
-  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as { servers?: string[] } | undefined;
+  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as
+    | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
+    | undefined;
   const toolPermissions = useWatch({ control, name: "mcp_tool_permissions" }) as Record<string, string[]> | undefined;
 
   return (
     <div className="mt-6">
       <MCPToolPermissions
         accessToken={accessToken}
-        selectedServers={(selection?.servers || []).filter((s: string) => s !== NO_MCP_SERVERS_SENTINEL)}
+        selectedServers={selection?.servers || []}
+        selectedAccessGroups={selection?.accessGroups || []}
+        selectedToolsets={selection?.toolsets || []}
         toolPermissions={toolPermissions || {}}
         onChange={(toolPerms) => setValue("mcp_tool_permissions", toolPerms)}
       />
@@ -334,7 +337,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     const fetchPrompts = async () => {
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }
@@ -587,9 +590,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const changeOrganization = (write: FieldWrite) => (orgId: string) => {
-    write(orgId);
-    setSelectedOrganizationId(orgId || null);
+  const changeOrganization = (write: FieldWrite) => (orgId: string | null) => {
+    write(orgId ?? undefined);
+    setSelectedOrganizationId(orgId);
     // Clear team and project when org changes
     setSelectedCreateKeyTeam(null);
     setSelectedProjectId(null);

@@ -188,6 +188,8 @@ class TestDeclaredAuthenticatingProvider:
             ("gpt-4o", "github_copilot", "github_copilot"),
             ("openai/gpt-4o", None, None),
             ("gpt-4o", "openai", None),
+            ("github_copilot", None, None),
+            ("chatgpt", None, None),
         ],
     )
     def test_names_only_the_providers_whose_resolution_authenticates(self, model, provider, expected):

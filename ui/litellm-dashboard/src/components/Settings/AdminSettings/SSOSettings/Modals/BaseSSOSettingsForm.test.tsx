@@ -9,6 +9,7 @@ import BaseSSOSettingsForm, {
   submitMountedSSOValues,
   useSSOSettingsForm,
 } from "./BaseSSOSettingsForm";
+import { expectControlBesideLabel } from "../../../../../../tests/fieldOrientation";
 
 const user = () => userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -232,6 +233,38 @@ describe("BaseSSOSettingsForm", () => {
     });
 
     expect(screen.queryByText("Use Team Mappings")).not.toBeInTheDocument();
+  });
+
+  it("lays a provider checkbox field out beside its label", async () => {
+    const TestWrapper = () => {
+      const form = useSSOSettingsForm("sso-settings");
+
+      return <BaseSSOSettingsForm form={form} onFormSubmit={vi.fn()} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    await openProviderDropdown();
+    await user().click(await screen.findByText(/saml sso/i));
+
+    expectControlBesideLabel(
+      await screen.findByRole("checkbox", { name: "Allow IdP-initiated (unsolicited) responses" }),
+    );
+  });
+
+  it.each(["Use Role Mappings", "Use Team Mappings"])("lays the %s toggle out beside its label", async (label) => {
+    const TestWrapper = () => {
+      const form = useSSOSettingsForm("sso-settings");
+
+      return <BaseSSOSettingsForm form={form} onFormSubmit={vi.fn()} />;
+    };
+
+    renderWithProviders(<TestWrapper />);
+
+    await openProviderDropdown();
+    await user().click(await screen.findByText(/okta/i));
+
+    expectControlBesideLabel(await screen.findByRole("checkbox", { name: label }));
   });
 });
 

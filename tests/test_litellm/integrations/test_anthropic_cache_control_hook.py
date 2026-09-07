@@ -1611,6 +1611,20 @@ class TestEnableAnthropicPromptCaching:
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         assert self._points(model="anthropic.claude-3-5-sonnet-20240620-v1:0", provider="bedrock") == []
 
+    @pytest.mark.parametrize("model", ["us.xai.grok-4.6", "global.xai.grok-4.6"])
+    def test_bedrock_grok_not_injected(self, monkeypatch, local_model_cost_map, model):
+        """Bedrock supports only implicit prompt caching for Grok: explicit cachePoint
+        breakpoints make it reject the whole request ("You invoked an unsupported model
+        or your request did not allow prompt caching"), so supports_prompt_caching stays
+        false, while implicit cache hits still bill at the cache-read rate."""
+        from litellm.utils import supports_prompt_caching
+
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        assert supports_prompt_caching(model=model, custom_llm_provider="bedrock") is False
+        assert self._points(model=model, provider="bedrock") == []
+        entry = litellm.model_cost[model]
+        assert 0 < entry["cache_read_input_token_cost"] < entry["input_cost_per_token"]
+
     def test_stands_down_when_client_sent_cache_control(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         messages = [
@@ -2842,6 +2856,27 @@ class TestRecordGatewayInjection:
         kwargs: dict = {"litellm_metadata": {"user_api_key": "k"}, "model_info": {"id": self.DEPLOYMENT}}
         AnthropicCacheControlHook.record_gateway_injection(kwargs, 2)
         AnthropicCacheControlHook.record_gateway_injection(kwargs, 0)
+        assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
+
+    def test_an_every_deployment_mark_survives_a_later_per_deployment_stamp(self):
+        """A per-leg stamp like the Bedrock converse tool_config one describes one leg of
+        a payload every leg sends, so narrowing an every-deployment mark to that leg's
+        deployment would uncredit whichever leg gets billed after a failover."""
+        kwargs: dict = {"litellm_metadata": {self.KEY: ""}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 1)
+        assert kwargs["litellm_metadata"][self.KEY] == ""
+
+    def test_a_pre_choice_pass_stamps_the_sentinel_over_a_provisional_deployment(self):
+        """The router's prompt-management factory stamps a provisional deployment's
+        model_info into kwargs before the prompt pass runs, and any other deployment can
+        end up billed, so the pass declares every-deployment scope explicitly."""
+        kwargs: dict = {"litellm_metadata": {}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 1, injected_for_every_deployment=True)
+        assert kwargs["litellm_metadata"][self.KEY] == ""
+
+    def test_a_per_deployment_mark_still_follows_the_latest_leg(self):
+        kwargs: dict = {"litellm_metadata": {self.KEY: "dep-old"}, "model_info": {"id": self.DEPLOYMENT}}
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, 1)
         assert kwargs["litellm_metadata"][self.KEY] == self.DEPLOYMENT
 
     def test_v1_messages_auto_injection_stamps_the_marker(self, monkeypatch):
