@@ -16,7 +16,12 @@ keeps the batched-DELETE path, so existing deployments are untouched.
 import re
 from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    TypeAlias,
+    cast,  # noqa: TID251  # db.tx is reached through untyped __getattr__ delegation
+)
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -127,7 +132,10 @@ def _bounded_tx(prisma_client: "PrismaClient", timeout_ms: int) -> "TransactionM
     carries. prisma's default 5s transaction timeout would close it mid
     lock-wait, after which the engine answers the next call with a 422.
     """
-    return prisma_client.tx(timeout=timedelta(milliseconds=timeout_ms) + _TX_COMMIT_SLACK)
+    return cast(  # cast-ok: PrismaWrapper delegates tx via __getattr__ (untyped)
+        "TransactionManager",
+        prisma_client.db.tx(timeout=timedelta(milliseconds=timeout_ms) + _TX_COMMIT_SLACK),
+    )
 
 
 class SpendLogsPartitionManager:
