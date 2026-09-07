@@ -12,6 +12,7 @@ from e2e_http import NetworkError, RateLimitedError, Result, Success, UnknownApi
 from lifecycle import ResourceManager
 from models import KeyGenerateBody
 
+MANAGED_FILE_ID: Final = "bGl0ZWxsbV9wcm94eTtmaWxlLTE="
 MANAGED_BATCH_ID: Final = "bGl0ZWxsbV9wcm94eTtiYXRjaC0x"
 
 
@@ -53,6 +54,20 @@ def deleted_file(*, deleted: bool = True) -> Success[FileDeleteResponse]:
 
 
 class TestFileCleanup:
+    def test_managed_delete_accepts_the_deleted_file_object(self) -> None:
+        response: Final = Success(
+            status_code=200, data=FileDeleteResponse.model_validate({"id": MANAGED_FILE_ID, "object": "file"})
+        )
+        client: Final = CleanupClient(files=iter((response,)))
+        cleanup_file(client, MANAGED_FILE_ID, key="test-key")
+        assert client.calls == [f"delete None {MANAGED_FILE_ID}"]
+
+    @pytest.mark.parametrize("file_id", ["file-1", MANAGED_FILE_ID])
+    def test_a_success_status_without_a_deletion_confirmation_is_rejected(self, file_id: str) -> None:
+        client: Final = CleanupClient(files=iter((Success(status_code=200, data=FileDeleteResponse(id=file_id)),)))
+        with pytest.raises(AssertionError, match="did not confirm deletion"):
+            cleanup_file(client, file_id, key="test-key")
+
     @pytest.mark.parametrize("cap", CAPABILITIES, ids=[cap.id for cap in CAPABILITIES])
     def test_deletes_raw_files_through_the_upload_provider(self, cap: Capability) -> None:
         client: Final = CleanupClient(files=iter((deleted_file(),)))

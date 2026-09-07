@@ -139,6 +139,9 @@ fallback for interrupted runs: immediate deletion remains the normal cleanup.
 Azure's minimum supported native expiry is 14 days, so a three-day expiry cannot
 be requested through its Files API
 
+The Azure entry in `files_settings` must use `api_version: 2025-04-01-preview`
+for raw uploads to honor expiry, matching the batch deployment's API version
+
 ## Terminal state + cost write-back (cross-run marker baton)
 
 The 24h completion window rules out submit-and-wait inside one run, so

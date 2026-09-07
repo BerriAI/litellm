@@ -99,7 +99,7 @@ class BatchList(BaseModel):
 class FileDeleteResponse(BaseModel):
     id: str
     object: str | None = None
-    deleted: bool
+    deleted: bool | None = None
 
 
 class BatchCreateBody(BaseModel):

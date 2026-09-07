@@ -51,7 +51,9 @@ def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider
     if isinstance(result, UnknownApiError) and result.status_code == 404:
         return
     deleted: Final = _require_cleanup_success(result, f"Delete file {file_id}")
-    assert deleted.deleted, f"Delete file {file_id} did not confirm deletion"
+    assert deleted.deleted is True or (
+        deleted.deleted is None and is_managed_id(file_id) and deleted.id == file_id and deleted.object == "file"
+    ), f"Delete file {file_id} did not confirm deletion"
 
 
 def cleanup_batch(
