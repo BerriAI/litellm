@@ -4371,7 +4371,6 @@ async def delete_verification_tokens(
 
     Args:
         tokens: List of tokens to delete
-        user_id: Optional user_id to filter by
 
     Returns:
         Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:

@@ -7861,7 +7861,6 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 
     Args:
         messages: List of message dictionaries
-        message_content_type: Type to validate content against
 
     Returns:
         List[dict]: The validated messages
