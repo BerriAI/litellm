@@ -63,6 +63,20 @@ def _object_mapping(value: object) -> Mapping[str, object] | None:
     return value if isinstance(value, dict) else None
 
 
+def _resolve_langfuse_trace_id(
+    metadata_trace_id: object,
+    standard_trace_id: object,
+    litellm_trace_id: object,
+    litellm_call_id: str | None,
+    session_id: object,
+) -> str | None:
+    """Resolve the Langfuse trace id; a session id never doubles as the trace id."""
+    resolved: Final = metadata_trace_id or standard_trace_id or litellm_trace_id or litellm_call_id
+    if session_id is not None and resolved == session_id:
+        return litellm_call_id
+    return str(resolved) if resolved is not None else None
+
+
 class _UsageObject(Protocol):
     """Token-count surface the Langfuse logger reads off a response usage payload."""
 
@@ -596,19 +610,26 @@ class LangFuseLogger:
 
             session_id: Final = clean_metadata.pop("session_id", None)
             trace_name = cast(str | None, clean_metadata.pop("trace_name", None))
-            trace_id = clean_metadata.pop("trace_id", None)
-            # Use standard_logging_object.trace_id if available (when trace_id from metadata is None)
-            # This allows standard trace_id to be used when provided in standard_logging_object
-            if trace_id is None and standard_logging_object is not None:
-                trace_id = cast(str | None, standard_logging_object.get("trace_id"))
-            # Fallback to litellm_call_id if no trace_id found
-            if trace_id is None:
-                trace_id = kwargs.get("litellm_trace_id") or litellm_call_id
+            metadata_trace_id: Final = clean_metadata.pop("trace_id", None)
+            standard_trace_id: Final = (
+                cast(str | None, standard_logging_object.get("trace_id"))
+                if standard_logging_object is not None
+                else None
+            )
             existing_trace_id: Final = clean_metadata.pop("existing_trace_id", None)
             # If existing_trace_id is provided, use it as the trace_id to return
             # This allows continuing an existing trace while still returning the correct trace_id
-            if existing_trace_id is not None:
-                trace_id = existing_trace_id
+            trace_id: Final = (
+                existing_trace_id
+                if existing_trace_id is not None
+                else _resolve_langfuse_trace_id(
+                    metadata_trace_id=metadata_trace_id,
+                    standard_trace_id=standard_trace_id,
+                    litellm_trace_id=kwargs.get("litellm_trace_id"),
+                    litellm_call_id=litellm_call_id,
+                    session_id=session_id,
+                )
+            )
             requested_trace_keys: Final = _as_steering_key_sequence(clean_metadata.pop("update_trace_keys", ()))
             update_trace_keys: Final = (
                 requested_trace_keys if _as_steering_flag(litellm.langfuse_enable_update_trace_keys) else ()

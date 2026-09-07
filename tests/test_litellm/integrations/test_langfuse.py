@@ -902,6 +902,69 @@ class TestLangfuseUsageDetails(unittest.TestCase):
         # session_id must still be set for session grouping
         assert self.last_trace_kwargs.get("session_id") == "session-999"
 
+    def _drive_session_call(self, litellm_call_id, metadata_trace_id="sess-abc"):
+        """One _log_langfuse_v2 call shaped like a proxied request that carries a session id."""
+        payload = self._build_standard_logging_payload(trace_id="sess-abc")
+        kwargs = self._build_langfuse_kwargs(payload)
+        kwargs["litellm_trace_id"] = "sess-abc"
+        self.last_trace_kwargs = {}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            self.logger._log_langfuse_v2(
+                user_id="user-1",
+                metadata={"session_id": "sess-abc", "trace_id": metadata_trace_id},
+                litellm_params={"metadata": {"session_id": "sess-abc", "trace_id": metadata_trace_id}},
+                output=None,
+                start_time=datetime.datetime.utcnow(),
+                end_time=datetime.datetime.utcnow(),
+                kwargs=kwargs,
+                optional_params={},
+                input=None,
+                response_obj=None,
+                level="INFO",
+                litellm_call_id=litellm_call_id,
+            )
+        return self.last_trace_kwargs
+
+    def test_log_langfuse_v2_session_header_trace_id_falls_back_to_call_id(self):
+        """
+        When the proxy stamps the session id into every trace_id slot
+        (metadata, standard_logging_object, litellm_trace_id), the Langfuse
+        trace id must be the per-call litellm_call_id so each call gets its
+        own trace inside the shared session.
+        """
+        trace_kwargs = self._drive_session_call(litellm_call_id="call-1")
+
+        assert trace_kwargs.get("id") == "call-1"
+        assert trace_kwargs.get("session_id") == "sess-abc"
+
+    def test_log_langfuse_v2_session_calls_produce_distinct_trace_ids(self):
+        """
+        Two calls in one session must land as two Langfuse traces. With the
+        session id used as the trace id, Langfuse upserts both calls onto a
+        single trace, which is the regression this guards.
+        """
+        first = self._drive_session_call(litellm_call_id="call-1")
+        second = self._drive_session_call(litellm_call_id="call-2")
+
+        assert first.get("id") == "call-1"
+        assert second.get("id") == "call-2"
+        assert first.get("id") != second.get("id")
+
+    def test_log_langfuse_v2_explicit_distinct_trace_id_kept_with_session_id(self):
+        """
+        An explicit metadata.trace_id that differs from the session id is a
+        real trace id and must be kept, with the session id still applied.
+        """
+        trace_kwargs = self._drive_session_call(litellm_call_id="call-1", metadata_trace_id="trace-xyz")
+
+        assert trace_kwargs.get("id") == "trace-xyz"
+        assert trace_kwargs.get("session_id") == "sess-abc"
+
 
 def test_failure_handler_langfuse_kwargs_excludes_original_response():
     """
