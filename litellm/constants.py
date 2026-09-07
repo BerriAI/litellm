@@ -1901,6 +1901,16 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
     }
 )
 
+PROVIDER_REQUEST_ID_HEADERS: Final[tuple[str, ...]] = (
+    "x-amzn-requestid",
+    "x-request-id",
+    "request-id",
+    "x-ms-request-id",
+    "apim-request-id",
+    "x-goog-request-id",
+    "cf-ray",
+)
+
 # Browser-facing security headers that a malicious or misconfigured upstream
 # provider must not be able to set on the proxy's own response.
 BROWSER_SECURITY_HEADERS: Final[frozenset[str]] = frozenset(

@@ -3064,6 +3064,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     llm_provider: str | None
     traceback: str | None
     error_message: str | None
+    error_provider_request_id: ReadOnly[str | None]
     # error_rate_limit_category:
     #   For 429 / rate-limit errors, the source of the rate limit. One of the
     #   string values defined by `litellm.exceptions.RateLimitErrorCategory`
