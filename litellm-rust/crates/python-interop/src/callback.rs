@@ -5,7 +5,7 @@ use pyo3::types::{PyDict, PyTuple};
 
 static AWAIT_CALL: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InvocationMode {
     Direct,
     Await,

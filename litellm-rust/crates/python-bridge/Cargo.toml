@@ -7,7 +7,7 @@ repository.workspace = true
 
 [lib]
 name = "_native"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["abi3"]
@@ -30,6 +30,7 @@ pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+strum.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

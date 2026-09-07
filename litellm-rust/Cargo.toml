@@ -31,6 +31,7 @@ rstest = "0.26.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 sha2 = "0.10"
+strum = { version = "0.26", features = ["derive"] }
 subtle = "2"
 thiserror = "2.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
