@@ -55,6 +55,11 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/v1/skills",
     "/v1/a2a/",
     "/a2a/",
+    # Shunt worker endpoints: both call a worker model, so they belong on the data plane
+    "/v1/bulk_read",
+    "/bulk_read",
+    "/v1/code_write",
+    "/code_write",
     # LiteLLM-native LLM surface
     "/v1/rerank",
     "/v2/rerank",

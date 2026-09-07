@@ -13,6 +13,7 @@ check, so it must never rewrite a command it isn't sure it parsed correctly — 
 """
 
 import re
+import shlex
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
@@ -74,12 +75,18 @@ class ShuntBashRewrite:
     note: str
 
 
-def _quote(value: str) -> str:
-    return value.replace('"', '\\"')
+# The generated command reads the client's own credential out of its environment at run time
+# instead of carrying it. Embedding the value would copy the caller's key into the model's
+# response, the conversation history, and the next upstream turn, which is exactly what keeping
+# it in `secret_fields` is meant to prevent. `${VAR:-$OTHER}` also covers both header styles:
+# Claude Code sets ANTHROPIC_AUTH_TOKEN, while an x-api-key client sets ANTHROPIC_API_KEY.
+_AUTH_ENV_EXPR: Final = "${ANTHROPIC_AUTH_TOKEN:-$ANTHROPIC_API_KEY}"
+# Deliberately double-quoted, not shlex.quote'd: this is shell syntax to evaluate, not data.
+_AUTH_FLAG: Final = f'-H "Authorization: Bearer {_AUTH_ENV_EXPR}"'
 
 
 def build_bounded_read_command(
-    *, path: str, question: str, min_lines: int, bulk_read_endpoint: str, auth_header: str
+    *, path: str, question: str, min_lines: int, bulk_read_endpoint: str
 ) -> ShuntBashRewrite:
     """The shunt conditional: read small files directly, delegate large ones.
 
@@ -87,16 +94,21 @@ def build_bounded_read_command(
     `cat`/`head`/`tail`/`less`/`more` command) since both made the identical decision in shunt.
     `-sS` on curl mirrors shunt's own `-s` plus fails loudly on a server error rather than
     silently returning an HTML error page as if it were the answer.
+
+    Every interpolated value goes through `shlex.quote`, and the path is reported with `printf`
+    rather than inside a double-quoted `echo`, because these values come from the model and the
+    command runs a shell on the developer's own machine: inside double quotes a `$(...)` in a
+    path would still be command-substituted. `min_lines` is an int, so it needs no quoting.
     """
-    quoted_path: Final = _quote(path)
-    quoted_question: Final = _quote(question)
+    quoted_path: Final = shlex.quote(path)
     command: Final = (
-        f'L=$(wc -l < "{quoted_path}" 2>/dev/null || echo 0); '
+        f"L=$(wc -l < {quoted_path} 2>/dev/null || echo 0); "
         f'if [ "$L" -gt {min_lines} ]; then '
-        f'echo "[shunt] {quoted_path}: $L lines, bounded read delegated" >&2; '
-        f'curl -sS -F question="{quoted_question}" -F "paths[]=@{quoted_path}" '
-        f'-H "Authorization: {auth_header}" "{bulk_read_endpoint}"; '
-        f'else cat "{quoted_path}"; fi'
+        f"printf '[shunt] %s: %s lines, bounded read delegated\\n' {quoted_path} \"$L\" >&2; "
+        f"curl -sS -F {shlex.quote(f'question={question}')} "
+        f"-F {shlex.quote(f'paths=@{path}')} "
+        f"{_AUTH_FLAG} {shlex.quote(bulk_read_endpoint)}; "
+        f"else cat {quoted_path}; fi"
     )
     return ShuntBashRewrite(
         command=command,
@@ -104,25 +116,21 @@ def build_bounded_read_command(
     )
 
 
-def build_bulk_read_command(
-    *, question: str, paths: Sequence[str], bulk_read_endpoint: str, auth_header: str
-) -> ShuntBashRewrite:
+def build_bulk_read_command(*, question: str, paths: Sequence[str], bulk_read_endpoint: str) -> ShuntBashRewrite:
     """The curl a model's own explicit `bulk_read(question, paths)` tool call becomes.
 
     Unconditional (no size check): the model chose to delegate, unlike the automatic bounding
     `build_bounded_read_command` applies to a plain `Read`/`cat`/`head`/`tail` call.
     """
-    quoted_question: Final = _quote(question)
-    path_flags: Final = " ".join(f'-F "paths[]=@{_quote(path)}"' for path in paths)
+    path_flags: Final = " ".join(f"-F {shlex.quote(f'paths=@{path}')}" for path in paths)
     command: Final = (
-        f'curl -sS -F question="{quoted_question}" {path_flags} '
-        f'-H "Authorization: {auth_header}" "{bulk_read_endpoint}"'
+        f"curl -sS -F {shlex.quote(f'question={question}')} {path_flags} {_AUTH_FLAG} {shlex.quote(bulk_read_endpoint)}"
     )
     return ShuntBashRewrite(command=command, note="Delegated to a cheaper model via bulk_read.")
 
 
 def build_code_write_command(
-    *, spec: str, reference: str, target: str | None, code_write_endpoint: str, auth_header: str
+    *, spec: str, reference: str, target: str | None, code_write_endpoint: str
 ) -> ShuntBashRewrite:
     """The curl a model's own explicit `code_write(spec, reference, target)` tool call becomes.
 
@@ -131,14 +139,12 @@ def build_code_write_command(
     itself when `target` is given. Either way the generated code enters the client's context
     only as a file write, never as text the routed model has to hold or repeat.
     """
-    quoted_spec: Final = _quote(spec)
-    quoted_reference: Final = _quote(reference)
     request: Final = (
-        f'curl -sS -F spec="{quoted_spec}" -F "reference=@{quoted_reference}" '
-        f'-H "Authorization: {auth_header}" "{code_write_endpoint}"'
+        f"curl -sS -F {shlex.quote(f'spec={spec}')} "
+        f"-F {shlex.quote(f'reference=@{reference}')} "
+        f"{_AUTH_FLAG} {shlex.quote(code_write_endpoint)}"
     )
     if target is None:
         return ShuntBashRewrite(command=request, note="Delegated to a cheaper model via code_write.")
-    quoted_target: Final = _quote(target)
-    command: Final = f'{request} > "{quoted_target}"'
+    command: Final = f"{request} > {shlex.quote(target)}"
     return ShuntBashRewrite(command=command, note=f"Delegated to a cheaper model via code_write, written to {target}.")

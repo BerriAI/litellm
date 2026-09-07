@@ -38,6 +38,44 @@ def _marker(shunt_fields: dict[str, Any], tags: list[str] | None = None) -> dict
     }
 
 
+def _tiered_marker(shunt_fields: dict[str, Any], simple: list[str] | None) -> dict[str, Any]:
+    """A marker with a SIMPLE tier and no default model, to isolate the tier fallback."""
+    return {
+        "model_name": "shunt",
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"tiers": {"SIMPLE": simple} if simple is not None else {}},
+            **shunt_fields,
+        },
+    }
+
+
+# Regression: an unset worker model fell through to "" when the marker had no default model, so
+# the delegated call ran against an empty model name. The UI and preset docs promise SIMPLE.
+class TestWorkerModelFallback:
+    def test_unset_worker_models_fall_back_to_the_simple_tier(self):
+        router = _FakeRouter([_tiered_marker({"auto_router_shunt_min_lines": 350}, ["claude-haiku-4-5"])])
+        config = shunt_config_for_model(llm_router=router, model_alias="shunt", team_id=None, request_tags=())
+        assert config.bulk_read_model == "claude-haiku-4-5"
+        assert config.code_write_model == "claude-haiku-4-5"
+
+    def test_simple_tier_wins_over_the_default_model(self):
+        marker = _marker({"auto_router_shunt_min_lines": 350})
+        marker["litellm_params"]["complexity_router_config"] = {"tiers": {"SIMPLE": ["gpt-5.6-luna"]}}
+        config = shunt_config_for_model(
+            llm_router=_FakeRouter([marker]), model_alias="shunt", team_id=None, request_tags=()
+        )
+        assert config.bulk_read_model == "gpt-5.6-luna"
+
+    def test_no_tier_and_no_default_model_is_unarmed_rather_than_empty(self):
+        router = _FakeRouter([_tiered_marker({"auto_router_shunt_min_lines": 350}, None)])
+        assert shunt_config_for_model(llm_router=router, model_alias="shunt", team_id=None, request_tags=()) is None
+
+    def test_empty_tier_list_and_no_default_model_is_unarmed(self):
+        router = _FakeRouter([_tiered_marker({"auto_router_shunt_min_lines": 350}, [])])
+        assert shunt_config_for_model(llm_router=router, model_alias="shunt", team_id=None, request_tags=()) is None
+
+
 class TestShuntConfigForModel:
     def test_no_router_returns_none(self):
         assert shunt_config_for_model(llm_router=None, model_alias="shunt", team_id=None, request_tags=()) is None
@@ -153,6 +191,68 @@ class TestAsyncPreCallHook:
         assert BULK_READ_TOOL_NAME in tool_names
 
 
+# Regression: a caller that already had its own `bulk_read`/`code_write` tool got a duplicate
+# definition injected, and its own tool calls silently rewritten into shunt's curl.
+class TestCallerOwnedToolNamesAreLeftAlone:
+    @pytest.mark.asyncio
+    async def test_pre_call_declines_to_inject_over_an_anthropic_shape_collision(self, monkeypatch):
+        import litellm.proxy.guardrails.auto_router_shunt as mod
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _FakeRouter([_marker({"auto_router_shunt_min_lines": 350})]))
+        caller_tool = {"name": BULK_READ_TOOL_NAME, "description": "the caller's own", "input_schema": {}}
+        data = {"model": "shunt", "tools": [caller_tool]}
+        result = await mod.ShuntGuardrail().async_pre_call_hook(
+            user_api_key_dict=None, cache=None, data=data, call_type="anthropic_messages"
+        )
+        assert result is None
+        assert data["tools"] == [caller_tool]
+
+    @pytest.mark.asyncio
+    async def test_pre_call_declines_to_inject_over_an_openai_shape_collision(self, monkeypatch):
+        import litellm.proxy.guardrails.auto_router_shunt as mod
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _FakeRouter([_marker({"auto_router_shunt_min_lines": 350})]))
+        caller_tool = {"type": "function", "function": {"name": CODE_WRITE_TOOL_NAME, "parameters": {}}}
+        data = {"model": "shunt", "tools": [caller_tool]}
+        result = await mod.ShuntGuardrail().async_pre_call_hook(
+            user_api_key_dict=None, cache=None, data=data, call_type="acompletion"
+        )
+        assert result is None
+        assert data["tools"] == [caller_tool]
+
+    @pytest.mark.asyncio
+    async def test_post_call_leaves_the_callers_own_tool_call_unrewritten(self, monkeypatch):
+        import litellm.proxy.guardrails.auto_router_shunt as mod
+
+        monkeypatch.setattr(mod, "_resolve_shunt_config", lambda data: self._config())
+        data = {
+            "model": "shunt",
+            "proxy_server_request": {"url": "http://localhost:4000/v1/messages"},
+            "tools": [{"name": BULK_READ_TOOL_NAME, "input_schema": {}}],
+        }
+        guardrail = mod.ShuntGuardrail()
+        await guardrail.async_pre_call_hook(
+            user_api_key_dict=None, cache=None, data=data, call_type="anthropic_messages"
+        )
+        response = {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "t1",
+                    "name": BULK_READ_TOOL_NAME,
+                    "input": {"question": "q", "paths": ["a.py"]},
+                }
+            ]
+        }
+        result = await guardrail.async_post_call_success_hook(
+            data=data, user_api_key_dict=None, response=response
+        )
+        assert result["content"][0]["name"] == BULK_READ_TOOL_NAME
+
+    def _config(self) -> ShuntConfig:
+        return ShuntConfig(min_lines=350, bulk_read_model="claude-haiku-4-5", code_write_model="claude-haiku-4-5")
+
+
 class TestAsyncPostCallSuccessHookAnthropicShape:
     def _config(self) -> ShuntConfig:
         return ShuntConfig(min_lines=350, bulk_read_model="claude-haiku-4-5", code_write_model="claude-haiku-4-5")
@@ -242,8 +342,8 @@ class TestAsyncPostCallSuccessHookAnthropicShape:
         )
         block = result["content"][0]
         assert block["name"] == "Bash"
-        assert "paths[]=@a.py" in block["input"]["command"]
-        assert "paths[]=@b.py" in block["input"]["command"]
+        assert "paths=@a.py" in block["input"]["command"]
+        assert "paths=@b.py" in block["input"]["command"]
 
     @pytest.mark.asyncio
     async def test_rewrites_explicit_code_write_call_with_target(self, monkeypatch):
@@ -266,7 +366,7 @@ class TestAsyncPostCallSuccessHookAnthropicShape:
         )
         block = result["content"][0]
         assert block["name"] == "Bash"
-        assert '> "tests/x_test.py"' in block["input"]["command"]
+        assert block["input"]["command"].endswith("> tests/x_test.py")
 
     @pytest.mark.asyncio
     async def test_rewrites_bare_bash_read_command(self, monkeypatch):

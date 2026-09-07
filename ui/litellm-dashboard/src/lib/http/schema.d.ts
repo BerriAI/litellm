@@ -42615,6 +42615,7 @@ export interface operations {
         parameters: {
             query: {
                 router: string;
+                tags?: string[] | null;
             };
             header?: never;
             path?: never;
@@ -43508,6 +43509,7 @@ export interface operations {
         parameters: {
             query: {
                 router: string;
+                tags?: string[] | null;
             };
             header?: never;
             path?: never;
@@ -61521,6 +61523,7 @@ export interface operations {
         parameters: {
             query: {
                 router: string;
+                tags?: string[] | null;
             };
             header?: never;
             path?: never;
@@ -61755,6 +61758,7 @@ export interface operations {
         parameters: {
             query: {
                 router: string;
+                tags?: string[] | null;
             };
             header?: never;
             path?: never;

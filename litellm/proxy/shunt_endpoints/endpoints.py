@@ -10,6 +10,7 @@ model chosen by the caller. The call goes through `llm_router.acompletion`, not
 caller's key/team exactly like any other request.
 """
 
+from collections.abc import Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
@@ -20,6 +21,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.auto_router_shunt import ShuntConfig, shunt_config_for_model
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.shunt_endpoints.worker import (
     BULK_READ_SYSTEM_PROMPT,
     CODE_WRITE_SYSTEM_PROMPT,
@@ -41,18 +43,22 @@ _AUTH_DEPENDENCIES: Final = [Depends(user_api_key_auth)]  # mutable-ok: FastAPI'
 _SHUNT_TAGS: Final[list[str | Enum]] = ["shunt"]  # mutable-ok: FastAPI's `tags=` takes an invariant list
 
 
-def _worker_config(model_alias: str, user_api_key_dict: UserAPIKeyAuth) -> tuple["Router", ShuntConfig]:
+def _worker_config(
+    model_alias: str, user_api_key_dict: UserAPIKeyAuth, request_tags: Sequence[str]
+) -> tuple["Router", ShuntConfig]:
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is None:
         raise ProxyException(
             message="LLM Router not found", type=ProxyErrorTypes.internal_server_error, param=None, code=500
         )
+    # `request_tags` comes from the query string the rewrite generated, so a marker armed only
+    # under a tag resolves here the same way it did when the original request was rewritten.
     config: Final = shunt_config_for_model(
         llm_router=llm_router,
         model_alias=model_alias,
         team_id=user_api_key_dict.team_id,
-        request_tags=(),
+        request_tags=request_tags,
     )
     if config is None:
         raise ProxyException(
@@ -65,21 +71,37 @@ def _worker_config(model_alias: str, user_api_key_dict: UserAPIKeyAuth) -> tuple
 
 
 async def _worker_text(
-    llm_router: "Router", *, model: str, system_prompt: str, message: str, team_id: str | None, label: str
+    llm_router: "Router",
+    *,
+    model: str,
+    system_prompt: str,
+    message: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    label: str,
 ) -> str:
     """The worker model's reply text, or a 502 if it produced none.
 
     One call site for both endpoints: they differ only in model, system prompt, and message, so
-    the `acompletion` shape (temperature, non-streaming, team metadata) lives here once.
+    the `acompletion` shape (temperature, non-streaming, caller attribution) lives here once.
+
+    Attribution reuses the proxy's own key-metadata builder rather than hand-picking a couple of
+    fields, so the worker call is billed and budgeted against the calling key, user, team, and
+    org exactly like a normal request instead of only carrying a team id.
     """
     system: Final = ChatCompletionSystemMessage(role="system", content=system_prompt)
     user: Final = ChatCompletionUserMessage(role="user", content=message)
+    key_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
     response: Final = await llm_router.acompletion(
         model=model,
         messages=[system, user],  # mutable-ok: acompletion's own signature takes a concrete list
         temperature=WORKER_TEMPERATURE,
         stream=False,
-        metadata={"user_api_key_team_id": team_id},  # mutable-ok: same
+        metadata={  # mutable-ok: same
+            **key_metadata,
+            "user_api_key": user_api_key_dict.api_key,
+        },
     )
     text: Final = response.choices[0].message.content
     if not isinstance(text, str):
@@ -116,13 +138,14 @@ async def bulk_read(
     question: Annotated[str, Form()],
     paths: Annotated[list[UploadFile], File()],  # mutable-ok: FastAPI requires a list for a repeated file field
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    tags: Annotated[list[str] | None, Query()] = None,
 ) -> str:
     """Summarize or answer a question about one or more files via a cheap worker model.
 
     The paths shunt's generated command uploads are read here as plain UTF-8 text and never
     written to disk; only the text and the question reach the worker model.
     """
-    llm_router, config = _worker_config(router_name, user_api_key_dict)
+    llm_router, config = _worker_config(router_name, user_api_key_dict, tags or ())
 
     files: Final = MappingProxyType({upload.filename or "unnamed": await _read_upload_text(upload) for upload in paths})
     message: Final = build_bulk_read_message(question=question, files=files)
@@ -133,7 +156,7 @@ async def bulk_read(
         model=config.bulk_read_model,
         system_prompt=BULK_READ_SYSTEM_PROMPT,
         message=message,
-        team_id=user_api_key_dict.team_id,
+        user_api_key_dict=user_api_key_dict,
         label="bulk_read",
     )
 
@@ -154,6 +177,7 @@ async def code_write(
     spec: Annotated[str, Form()],
     reference: Annotated[UploadFile, File()],
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    tags: Annotated[list[str] | None, Query()] = None,
 ) -> str:
     """Generate boilerplate code matching a reference file's patterns, via a cheap worker model.
 
@@ -161,7 +185,7 @@ async def code_write(
     it runs on the file's own machine; this has no local filesystem, so the client writes the
     returned text itself (the `Bash` rewrite this backs redirects the curl output to `target`).
     """
-    llm_router, config = _worker_config(router_name, user_api_key_dict)
+    llm_router, config = _worker_config(router_name, user_api_key_dict, tags or ())
 
     reference_content: Final = await _read_upload_text(reference)
     message: Final = build_code_write_message(
@@ -175,7 +199,7 @@ async def code_write(
             model=config.code_write_model,
             system_prompt=CODE_WRITE_SYSTEM_PROMPT,
             message=message,
-            team_id=user_api_key_dict.team_id,
+            user_api_key_dict=user_api_key_dict,
             label="code_write",
         )
     )

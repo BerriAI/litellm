@@ -41,19 +41,49 @@ class ShuntConfig:
     code_write_model: str
 
 
+def _simple_tier_model(litellm_params: Mapping[str, object]) -> str | None:
+    """The first model in the router's SIMPLE tier, or None.
+
+    The cheapest tier the router already has, which is what the UI and the preset docs promise
+    an unset worker model falls back to.
+    """
+    config: Final = litellm_params.get("complexity_router_config")
+    if not isinstance(config, Mapping):
+        return None
+    tiers: Final = config.get("tiers")
+    if not isinstance(tiers, Mapping):
+        return None
+    simple: Final = tiers.get("SIMPLE")
+    if isinstance(simple, str) and simple:
+        return simple
+    if not isinstance(simple, Sequence):
+        return None
+    return next((model for model in simple if isinstance(model, str) and model), None)
+
+
 def _config_from_litellm_params(
     litellm_params: Mapping[str, object], *, default_model: str | None
 ) -> ShuntConfig | None:
+    """The marker's shunt config, or None when `auto_router_shunt_min_lines` is absent.
+
+    An unset worker model falls back to the SIMPLE tier first, then the router's default model.
+    Returns None rather than a config naming no model at all: arming shunt with an empty worker
+    model would rewrite reads into calls that can only fail, which is worse than not arming.
+    """
     raw_min_lines: Final = litellm_params.get("auto_router_shunt_min_lines")
     if not isinstance(raw_min_lines, int):
         return None
-    fallback_model: Final = default_model or ""
+    fallback_model: Final = _simple_tier_model(litellm_params) or default_model
     raw_bulk_read: Final = litellm_params.get("auto_router_shunt_bulk_read_model")
     raw_code_write: Final = litellm_params.get("auto_router_shunt_code_write_model")
+    bulk_read_model: Final = raw_bulk_read if isinstance(raw_bulk_read, str) and raw_bulk_read else fallback_model
+    code_write_model: Final = raw_code_write if isinstance(raw_code_write, str) and raw_code_write else fallback_model
+    if not bulk_read_model or not code_write_model:
+        return None
     return ShuntConfig(
         min_lines=raw_min_lines,
-        bulk_read_model=raw_bulk_read if isinstance(raw_bulk_read, str) and raw_bulk_read else fallback_model,
-        code_write_model=raw_code_write if isinstance(raw_code_write, str) and raw_code_write else fallback_model,
+        bulk_read_model=bulk_read_model,
+        code_write_model=code_write_model,
     )
 
 
@@ -97,16 +127,14 @@ def _config_from_marker(litellm_params: Mapping[str, object]) -> ShuntConfig | N
     )
 
 
-# Tool descriptions carry shunt's own SKILL.md guidance: this is shunt's skills layer,
-# delivered as tool metadata instead of a bundled markdown file, since there is no client-side
-# plugin here for a skill file to live in.
+# Tool descriptions carry shunt's own SKILL.md guidance, delivered as tool metadata since there
+# is no client-side plugin here for a skill file to live in.
 BULK_READ_TOOL_NAME: Final = "bulk_read"
 CODE_WRITE_TOOL_NAME: Final = "code_write"
 
-# Held as JSON source, not dict literals: these are JSON Schema documents that go straight into
-# the outbound provider payload, so they must stay plain JSON-serializable dicts (a
-# MappingProxyType raises in the JSON encoder). Parsing the schema from the notation it is
-# written in keeps one construction site instead of a suppression on every nested literal.
+# JSON source, not dict literals: these go straight into the outbound payload, so they must stay
+# plain JSON-serializable dicts, and parsing keeps one construction site instead of a suppression
+# on every nested literal.
 _TOOL_DEFINITIONS_JSON: Final = """
 {
   "bulk_read": {
@@ -139,9 +167,7 @@ _TOOL_DEFINITIONS_JSON: Final = """
 def _anthropic_tool(name: str) -> Mapping[str, object]:
     """The Anthropic-shape tool definition for `name`, as a fresh plain dict.
 
-    Fresh per call, never a shared module-level dict: these go into the outbound payload, and
-    handing every request the same mutable object would let one request's downstream mutation
-    (a provider transform normalizing a schema in place, say) leak into every later request.
+    Fresh per call so one request's downstream mutation cannot leak into every later request.
     """
     definition: Final = json.loads(_TOOL_DEFINITIONS_JSON)[name]
     return {"name": name, **definition}  # mutable-ok: goes into the outbound provider payload as plain JSON
@@ -184,23 +210,6 @@ def _request_base_url(data: Mapping[str, object]) -> str | None:
     return f"{parts.scheme}://{parts.netloc}"
 
 
-def _request_auth_header(data: Mapping[str, object]) -> str | None:
-    """The client's own `authorization` header, or None.
-
-    Forwarded rather than a stored key: the generated curl authenticates to this proxy as the
-    same caller who sent the request, so it is billed and rate-limited the same way, and this
-    module never needs to hold or mint a credential of its own.
-    """
-    secret_fields: Final = data.get("secret_fields")
-    if not isinstance(secret_fields, Mapping):
-        return None
-    raw_headers: Final = secret_fields.get("raw_headers")
-    if not isinstance(raw_headers, Mapping):
-        return None
-    header: Final = raw_headers.get("authorization")
-    return header if isinstance(header, str) and header else None
-
-
 def _resolve_shunt_config(data: Mapping[str, object]) -> ShuntConfig | None:
     """The armed `ShuntConfig` for this request's resolved model, or None.
 
@@ -234,27 +243,33 @@ DEFAULT_BULK_READ_QUESTION: Final = "Summarize this file's exports and overall s
 class _ShuntEndpoints:
     bulk_read_url: str
     code_write_url: str
-    auth_header: str
 
 
 def _endpoints_for_request(data: Mapping[str, object], model_alias: str) -> "_ShuntEndpoints | None":
     """Where this request's generated curl commands should point, or None if unreachable.
 
-    None when the base URL or the caller's own auth header can't be recovered: without both,
-    a generated command could not reach this proxy as this caller, so the tool_use is left
-    unmodified rather than shipped with a broken command.
+    None when the base URL can't be recovered, since a generated command could then not reach
+    this proxy at all; the tool_use is left unmodified rather than shipped broken. The caller's
+    credential is deliberately not read here: the generated command picks it up from the
+    client's own environment at run time instead, so it never enters the model's response.
+
+    The request's own tags ride along in the query string, because the worker endpoints resolve
+    the marker again from scratch: a marker armed only under a tag would otherwise be invisible
+    to them and the delegated call would 400, even though this rewrite matched that marker.
     """
     base_url: Final = _request_base_url(data)
-    auth_header: Final = _request_auth_header(data)
-    if base_url is None or auth_header is None:
+    if base_url is None:
         return None
-    from urllib.parse import quote
+    from urllib.parse import urlencode
 
-    router_query: Final = f"router={quote(model_alias)}"
+    from litellm.router_strategy.tag_based_routing import (
+        _get_tags_from_request_kwargs,  # pyright: ignore[reportPrivateUsage]  # same helper router.py and auto_router_compression.py already use
+    )
+
+    query: Final = urlencode((("router", model_alias), *(("tags", tag) for tag in _get_tags_from_request_kwargs(data))))
     return _ShuntEndpoints(
-        bulk_read_url=f"{base_url}/v1/bulk_read?{router_query}",
-        code_write_url=f"{base_url}/v1/code_write?{router_query}",
-        auth_header=auth_header,
+        bulk_read_url=f"{base_url}/v1/bulk_read?{query}",
+        code_write_url=f"{base_url}/v1/code_write?{query}",
     )
 
 
@@ -291,7 +306,6 @@ def _bash_replacement_for_tool_use(
             question=question,
             paths=paths,
             bulk_read_endpoint=endpoints.bulk_read_url,
-            auth_header=endpoints.auth_header,
         )
 
     if name == CODE_WRITE_TOOL_NAME:
@@ -305,7 +319,6 @@ def _bash_replacement_for_tool_use(
             reference=reference,
             target=target if isinstance(target, str) and target else None,
             code_write_endpoint=endpoints.code_write_url,
-            auth_header=endpoints.auth_header,
         )
 
     if name == "Read":
@@ -319,7 +332,6 @@ def _bash_replacement_for_tool_use(
             question=DEFAULT_BULK_READ_QUESTION,
             min_lines=config.min_lines,
             bulk_read_endpoint=endpoints.bulk_read_url,
-            auth_header=endpoints.auth_header,
         )
 
     if name == "Bash":
@@ -334,7 +346,6 @@ def _bash_replacement_for_tool_use(
             question=DEFAULT_BULK_READ_QUESTION,
             min_lines=config.min_lines,
             bulk_read_endpoint=endpoints.bulk_read_url,
-            auth_header=endpoints.auth_header,
         )
 
     return None
@@ -421,6 +432,39 @@ def _rewrite_anthropic_response_in_place(
     return any(results)
 
 
+# Stamped on the request by the pre-call hook when it declined to inject, and read back by the
+# post-call hook. Post-call cannot re-inspect `data["tools"]` to make the same call: by then the
+# list holds whatever the pre-call hook added, so the name would always look taken.
+_CALLER_OWNS_TOOL_NAME_KEY: Final = "_shunt_caller_owns_tool_name"
+
+
+def _declared_tool_name(tool: object) -> str | None:
+    """A tool definition's name, in either the Anthropic or the OpenAI shape."""
+    if not isinstance(tool, Mapping):
+        return None
+    name: Final = tool.get("name")
+    if isinstance(name, str):
+        return name
+    function: Final = tool.get("function")
+    if not isinstance(function, Mapping):
+        return None
+    function_name: Final = function.get("name")
+    return function_name if isinstance(function_name, str) else None
+
+
+def caller_owns_shunt_tool_name(tools: object) -> bool:
+    """Whether the caller already declared a tool named `bulk_read` or `code_write`.
+
+    When it has, shunt stays out of the way entirely: injecting would hand the model two
+    different definitions of one name, and rewriting would silently turn the caller's own tool
+    call into shunt's unrelated curl. Leaving the request alone is the only safe read.
+    """
+    if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)):
+        return False
+    declared: Final = frozenset(name for name in (_declared_tool_name(tool) for tool in tools) if name is not None)
+    return not declared.isdisjoint({BULK_READ_TOOL_NAME, CODE_WRITE_TOOL_NAME})
+
+
 def _tools_payload(
     existing: Sequence[object], added: Sequence[Mapping[str, object]]
 ) -> list[object]:  # mutable-ok: outbound provider payload
@@ -447,6 +491,10 @@ class ShuntGuardrail(CustomLogger):
         if config is None:
             return None
 
+        if caller_owns_shunt_tool_name(data.get("tools")):
+            data[_CALLER_OWNS_TOOL_NAME_KEY] = True  # rebind-ok: read back by the post-call hook
+            return None
+
         use_anthropic_format: Final = call_type in ("anthropic_messages", "aanthropic_messages")
         anthropic_tools: Final = (_anthropic_tool(BULK_READ_TOOL_NAME), _anthropic_tool(CODE_WRITE_TOOL_NAME))
         new_tools: Final = (
@@ -469,7 +517,7 @@ class ShuntGuardrail(CustomLogger):
         from litellm.types.utils import ModelResponse
 
         config: Final = _resolve_shunt_config(data)
-        if config is None:
+        if config is None or data.get(_CALLER_OWNS_TOOL_NAME_KEY):
             return response
 
         model: Final = data.get("model")
@@ -522,7 +570,7 @@ class ShuntGuardrail(CustomLogger):
             chunk async for chunk in response
         ]
 
-        config: Final = _resolve_shunt_config(request_data)
+        config: Final = None if request_data.get(_CALLER_OWNS_TOOL_NAME_KEY) else _resolve_shunt_config(request_data)
         model: Final = request_data.get("model")
         endpoints: Final = (
             _endpoints_for_request(request_data, model)

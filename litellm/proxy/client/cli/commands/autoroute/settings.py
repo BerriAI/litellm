@@ -32,7 +32,12 @@ ANTHROPIC_DEFAULT_MODEL_ENV_KEYS: Final = (
 # matching, so a rule narrow enough to name "curl" at all cannot also pin the destination the
 # trailing "*" is free to name any URL. A real boundary needs a PreToolUse hook instead, which
 # is the docs' own recommendation for exactly this case.
+#
+# One rule per command shape the rewrite emits, matched on the literal prefix each one starts
+# with. The bounded read needs its own rule because it opens with the `wc -l` size check rather
+# than with `curl`, so a curl-prefixed rule would never match the main large-file path.
 SHUNT_BASH_ALLOW_RULES: Final = (
+    "Bash(L=$(wc -l < *)",
     "Bash(curl -sS -F question=*)",
     "Bash(curl -sS -F spec=*)",
 )
