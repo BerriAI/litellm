@@ -813,9 +813,7 @@ async def _estimate(mock_router: MagicMock | None, model: str = AN_ALIAS, **over
 
     request = CostEstimateRequest(
         model=model,
-        input_tokens=INPUT_TOKENS,
-        output_tokens=OUTPUT_TOKENS,
-        **overrides,
+        **{"input_tokens": INPUT_TOKENS, "output_tokens": OUTPUT_TOKENS, **overrides},
     )
     with patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
         "litellm.proxy.proxy_server.llm_router", mock_router
@@ -1061,6 +1059,54 @@ class TestEstimateCostCacheAndReasoningTokens:
         )
         assert response.cache_read_input_token_cost == pytest.approx(5e-7)
         assert response.cache_creation_input_token_cost == pytest.approx(6.25e-6)
+
+    @pytest.mark.asyncio
+    async def test_a_tiered_model_reports_the_rates_its_lines_were_billed_at(self, monkeypatch):
+        """Above a token tier the calculator bills every line at the tier's rate, so the reported
+        rates must be the tier's too: each line equals its token count times the rate next to it."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
+            {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "cache_read_input_token_cost": 3e-7,
+                "cache_creation_input_token_cost": 3.75e-6,
+                "input_cost_per_token_above_200k_tokens": 6e-6,
+                "output_cost_per_token_above_200k_tokens": 3e-5,
+                "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+                "cache_creation_input_token_cost_above_200k_tokens": 7.5e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        )
+
+        response = await _estimate(
+            None,
+            model=A_MAPPED_MODEL,
+            input_tokens=250_000,
+            cache_read_input_tokens=200_000,
+            cache_creation_input_tokens=10_000,
+            output_tokens=1_000,
+            reasoning_tokens=200,
+        )
+
+        assert response.input_cost_per_token == pytest.approx(6e-6)
+        assert response.output_cost_per_token == pytest.approx(3e-5)
+        assert response.cache_read_input_token_cost == pytest.approx(6e-7)
+        assert response.cache_creation_input_token_cost == pytest.approx(7.5e-6)
+        assert response.output_cost_per_reasoning_token == pytest.approx(3e-5)
+        assert response.cache_read_cost_per_request == pytest.approx(200_000 * response.cache_read_input_token_cost)
+        assert response.cache_creation_cost_per_request == pytest.approx(
+            10_000 * response.cache_creation_input_token_cost
+        )
+        assert response.reasoning_cost_per_request == pytest.approx(200 * response.output_cost_per_reasoning_token)
+        assert response.input_cost_per_request == pytest.approx(
+            40_000 * response.input_cost_per_token
+            + response.cache_read_cost_per_request
+            + response.cache_creation_cost_per_request
+        )
+        assert response.output_cost_per_request == pytest.approx(1_000 * response.output_cost_per_token)
 
 
 class TestCostEstimateRequestTokenSubsets:

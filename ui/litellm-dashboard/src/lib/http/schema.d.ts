@@ -26523,7 +26523,10 @@ export interface components {
              * @description Input token cost per request (before margin)
              */
             input_cost_per_request: number;
-            /** Input Cost Per Token */
+            /**
+             * Input Cost Per Token
+             * @description Rate billed per input token
+             */
             input_cost_per_token?: number | null;
             /** Input Tokens */
             input_tokens: number;
@@ -26584,7 +26587,10 @@ export interface components {
              * @description Output token cost per request (before margin)
              */
             output_cost_per_request: number;
-            /** Output Cost Per Token */
+            /**
+             * Output Cost Per Token
+             * @description Rate billed per output token
+             */
             output_cost_per_token?: number | null;
             /** Output Tokens */
             output_tokens: number;
