@@ -5,6 +5,7 @@ import gc
 import json
 import threading
 import weakref
+from unittest import TestCase
 
 
 async def checkpoint():
@@ -76,7 +77,7 @@ async def awaitable_kinds(owners):
             "async": coroutine,
             "sync_coroutine": lambda value, *, alias: coroutine(value, alias=alias),
             "custom": lambda value, *, alias: CustomAwaitable(),
-            "future": lambda value, *, alias: future,
+            "future": lambda value, *, alias, future=future: future,
         }[kind]
         owner = owners.prepare(callback, (payload,), {"alias": payload}, awaited=True)
         pending = owner.invoke()
@@ -86,11 +87,8 @@ async def awaitable_kinds(owners):
         assert len(calls) == before + (kind != "future")
 
     owner = owners.prepare(lambda: payload, (), awaited=True)
-    try:
+    with TestCase().assertRaises(TypeError):
         await owner.invoke()
-        assert False, "non-awaitable result accepted"
-    except TypeError:
-        pass
     owner.close()
 
     inner = coroutine(payload, alias=payload)
@@ -165,24 +163,25 @@ async def exceptions(owners):
         cause = ValueError("cause")
         payload = {}
 
-        async def callback():
+        async def callback(payload=payload, error=error, cause=cause):
             payload["changed"] = True
             raise error from cause
 
         owner = owners.prepare(callback, (), awaited=True)
+        caught_error = None
         try:
             await owner.invoke()
-            assert False, "exception lost"
         except BaseException as caught:
-            assert caught is error and caught.__cause__ is cause
-            frames = []
-            tb = caught.__traceback__
-            while tb:
-                frames.append(tb.tb_frame.f_code.co_name)
-                tb = tb.tb_next
-            assert "callback" in frames
+            caught_error = caught
         finally:
             owner.close()
+        assert caught_error is error and caught_error.__cause__ is cause
+        frames = []
+        tb = caught_error.__traceback__
+        while tb:
+            frames.append(tb.tb_frame.f_code.co_name)
+            tb = tb.tb_next
+        assert "callback" in frames
         assert payload["changed"] is True
 
 
@@ -201,14 +200,15 @@ async def exception_ownership(owners):
     value_ref, callback_ref = weakref.ref(value), weakref.ref(callback)
     owner = owners.prepare(callback, (value,), awaited=True)
     del value, callback
+    caught_error = None
     try:
         await owner.invoke()
-        assert False, "expected callback failure"
     except RuntimeError as caught:
-        assert caught is error
+        caught_error = caught
+    assert caught_error is error
     owner.close()
     assert value_ref().changed and callback_ref() is not None
-    del error
+    del error, caught_error
     gc.collect()
     assert value_ref() is None and callback_ref() is None
 
@@ -408,7 +408,7 @@ async def stream_lifecycle(owners):
         item = {"nested": nested}
         closed = []
 
-        async def source():
+        async def source(item=item, nested=nested, terminal=terminal, closed=closed):
             try:
                 yield item
                 nested["usage"] = 12
@@ -430,11 +430,8 @@ async def stream_lifecycle(owners):
             await close.invoke()
             close.close()
         else:
-            try:
+            with TestCase().assertRaises(ValueError if terminal == "failure" else StopAsyncIteration):
                 await pull.invoke()
-                assert False, "expected stream termination"
-            except (StopAsyncIteration, ValueError) as error:
-                assert isinstance(error, ValueError) == (terminal == "failure")
         pull.close()
         assert closed == [True]
         assert retained.invoke() is nested
@@ -448,7 +445,7 @@ async def sync_stream_lifecycle(owners):
         value = {"nested": {"usage": 0}}
         closed = []
 
-        def source():
+        def source(value=value, terminal=terminal, closed=closed):
             try:
                 yield value
                 value["nested"]["usage"] = 12
@@ -467,11 +464,8 @@ async def sync_stream_lifecycle(owners):
             close.invoke()
             close.close()
         else:
-            try:
+            with TestCase().assertRaises(ValueError if terminal == "failure" else StopIteration):
                 pull.invoke()
-                assert False, "stream did not terminate"
-            except (StopIteration, ValueError) as error:
-                assert isinstance(error, ValueError) == (terminal == "failure")
         pull.close()
         assert saved.invoke() is value
         assert value["nested"]["usage"] == (0 if terminal == "close" else 12)
@@ -484,7 +478,7 @@ async def repeated_ownership(owners):
     for batch in range(8):
         gate = asyncio.Event()
 
-        async def work(value):
+        async def work(value, gate=gate):
             await gate.wait()
             return None
 

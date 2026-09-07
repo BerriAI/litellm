@@ -10,14 +10,18 @@ import sys
 import tempfile
 import threading
 import zipfile
+from collections import Counter
 from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from queue import SimpleQueue
 from socket import socket as Socket
+from types import FrameType
 from typing import Final
 
 REQUEST_STARTED: Final = threading.Event()
 REQUEST_CANCELLED: Final = threading.Event()
+PUBLIC_OCR_REQUESTS: Final[SimpleQueue[str]] = SimpleQueue()
 
 ANTHROPIC_RESPONSE: Final = (
     b'{"id":"msg_native","type":"message","role":"assistant",'
@@ -35,6 +39,10 @@ class NativeRouteHandler(BaseHTTPRequestHandler):
         body: Final = json.loads(self.rfile.read(content_length))
         route: Final = self.headers.get("x-test-route")
         outcome: Final = self.headers.get("x-test-outcome")
+        public_case: Final = self.headers.get("x-test-public-case")
+        if public_case is not None:
+            PUBLIC_OCR_REQUESTS.put(public_case)
+            assert self.headers.get("x-test-callback") == public_case
         assert_native_request(route, outcome, self.path, self.headers, body)
         if outcome == "hang":
             REQUEST_STARTED.set()
@@ -227,12 +235,7 @@ async def exercise_async(native: object, api_base: str) -> None:
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:
     responses: Final = await asyncio.wait_for(
-        asyncio.gather(
-            *(
-                native.amessages(**route_kwargs("messages", api_base, "success"))
-                for _ in range(32)
-            )
-        ),
+        asyncio.gather(*(native.amessages(**route_kwargs("messages", api_base, "success")) for _ in range(32))),
         timeout=15,
     )
     for response in responses:
@@ -247,6 +250,92 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
     asyncio.run(exercise_async(native, api_base))
     asyncio.run(exercise_async_concurrency(native, api_base))
     return native
+
+
+def exercise_public_ocr(install_root: Path, api_base: str, case: str) -> int:
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.llms.base_llm.ocr.transformation import OCRResponse
+    from litellm.rust_bridge import get_native_bridge
+    from litellm.rust_bridge.ocr_retained import OCRRetainedBoundary
+
+    assert case in {"ocr", "aocr"}
+    assert Path(litellm.__file__).resolve().is_relative_to(install_root.resolve())
+    native: Final = get_native_bridge()
+    assert native is not None
+    assert Path(native.__file__).resolve().is_relative_to(install_root.resolve())
+    retained: Final = getattr(native, f"{case}_retained")
+    observed: Final[Counter[str]] = Counter()
+
+    def observe(frame: FrameType, event: str, arg: object) -> None:
+        if event == "c_call" and arg is retained:
+            observed["retained"] += 1
+        if event == "call" and frame.f_code is OCRRetainedBoundary.encode.__code__:
+            observed["encode"] += 1
+
+    class MutatingLogger(CustomLogger):
+        calls = 0
+
+        def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+            self.calls += 1
+            additional_args: Final = kwargs["additional_args"]
+            assert isinstance(additional_args, dict)
+            headers: Final = additional_args["headers"]
+            body: Final = additional_args["complete_input_dict"]
+            assert isinstance(headers, dict) and isinstance(body, dict)
+            assert body["model"] == "mistral-ocr-latest"
+            assert body["include_image_base64"] is False
+            assert headers["x-test-callback"] == "before-callback"
+            headers["x-test-callback"] = case
+            body["include_image_base64"] = True
+
+    callback: Final = MutatingLogger()
+    kwargs: Final = {
+        "model": "mistral/mistral-ocr-latest",
+        "document": {"type": "document_url", "document_url": "https://example.com/document.pdf"},
+        "api_base": api_base,
+        "api_key": "sk-native",
+        "extra_headers": {
+            "x-test-route": "ocr",
+            "x-test-outcome": "success",
+            "x-test-public-case": case,
+            "x-test-callback": "before-callback",
+        },
+        "include_image_base64": False,
+        "callbacks": [callback],
+        "rust": True,
+        "timeout": 3.0,
+        "num_retries": 0,
+    }
+    previous_profile: Final = sys.getprofile()
+    sys.setprofile(observe)
+    try:
+        response: Final = asyncio.run(litellm.aocr(**kwargs)) if case == "aocr" else litellm.ocr(**kwargs)
+    finally:
+        sys.setprofile(previous_profile)
+    assert isinstance(response, OCRResponse)
+    assert_success("ocr", response.model_dump())
+    assert response.model == "mistral-ocr-latest"
+    assert callback.calls == 1, callback.calls
+    assert observed == {"retained": 1, "encode": 1}, observed
+    return 0
+
+
+def verify_public_ocr(wheel: Path, wheel_root: Path, api_base: str) -> None:
+    install_root: Final = wheel_root / "sdk-venv"
+    python: Final = install_root / "bin" / "python"
+    subprocess.run(("uv", "venv", "--python", sys.executable, str(install_root)), check=True)
+    subprocess.run(("uv", "pip", "install", "--python", str(python), str(wheel.resolve())), check=True)
+    for case in ("ocr", "aocr"):
+        subprocess.run(
+            (str(python), "-I", str(Path(__file__).resolve()), "public-ocr", str(install_root), api_base, case),
+            cwd=install_root,
+            env=os.environ | {"LITELLM_LOCAL_MODEL_COST_MAP": "True", "NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"},
+            check=True,
+            timeout=60,
+        )
+        assert PUBLIC_OCR_REQUESTS.get_nowait() == case
+        assert PUBLIC_OCR_REQUESTS.empty(), f"{case} sent more than one upstream request"
 
 
 def exercise_signal(native: object, api_base: str) -> int:
@@ -320,6 +409,7 @@ def verify_wheel(wheel: Path) -> int:
         api_base: Final = f"http://127.0.0.1:{server.server_address[1]}"
         try:
             verify_sigint(native_path, api_base)
+            verify_public_ocr(wheel, wheel_root, api_base)
         finally:
             server.shutdown()
             server.server_close()
@@ -333,6 +423,8 @@ def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "child":
         native: Final = exercise_routes(Path(sys.argv[2]), sys.argv[3])
         return exercise_signal(native, sys.argv[3])
+    if len(sys.argv) == 5 and sys.argv[1] == "public-ocr":
+        return exercise_public_ocr(Path(sys.argv[2]), sys.argv[3], sys.argv[4])
     sys.stderr.write(f"usage: {Path(sys.argv[0]).name} WHEEL\n")
     return 2
 
