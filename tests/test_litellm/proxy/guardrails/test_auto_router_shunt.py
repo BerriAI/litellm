@@ -12,7 +12,20 @@ from litellm.proxy.guardrails.auto_router_shunt import (
     ShuntGuardrail,
     shunt_config_for_model,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Function, Message, ModelResponse
+
+# A real UserAPIKeyAuth is required once a request actually reaches the rewrite path: it mints a
+# capability token identifying the caller (auto_router_shunt.py's _mint_caller_capability_token),
+# which needs a real api_key hash to seal. `None` still works for every test that stays on the
+# unarmed/unchanged path, since that path returns before ever touching user_api_key_dict.
+_FAKE_USER_API_KEY_DICT = UserAPIKeyAuth(api_key="fakehash1234567890")
+
+
+@pytest.fixture(autouse=True)
+def _salt_key(monkeypatch):
+    """Minting a capability token needs a signing key; see shunt_capability_token.py."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234-test-salt-key")
 
 
 class _FakeRouter:
@@ -283,7 +296,7 @@ class TestAsyncPostCallSuccessHookAnthropicShape:
             "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "litellm/router.py"}}]
         }
         result = await guardrail.async_post_call_success_hook(
-            data=self._armed_request_data(), user_api_key_dict=None, response=response
+            data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         block = result["content"][0]
         assert block["name"] == "Bash"
@@ -302,7 +315,7 @@ class TestAsyncPostCallSuccessHookAnthropicShape:
             ]
         }
         result = await guardrail.async_post_call_success_hook(
-            data=self._armed_request_data(), user_api_key_dict=None, response=response
+            data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         assert result["content"][0]["name"] == "Read"
 
@@ -338,7 +351,7 @@ class TestAsyncPostCallSuccessHookAnthropicShape:
             ]
         }
         result = await guardrail.async_post_call_success_hook(
-            data=self._armed_request_data(), user_api_key_dict=None, response=response
+            data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         block = result["content"][0]
         assert block["name"] == "Bash"
@@ -362,7 +375,7 @@ class TestAsyncPostCallSuccessHookAnthropicShape:
             ]
         }
         result = await guardrail.async_post_call_success_hook(
-            data=self._armed_request_data(), user_api_key_dict=None, response=response
+            data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         block = result["content"][0]
         assert block["name"] == "Bash"
@@ -380,7 +393,7 @@ class TestAsyncPostCallSuccessHookAnthropicShape:
             ]
         }
         result = await guardrail.async_post_call_success_hook(
-            data=self._armed_request_data(), user_api_key_dict=None, response=response
+            data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         assert "wc -l" in result["content"][0]["input"]["command"]
 
@@ -393,7 +406,7 @@ class TestAsyncPostCallSuccessHookAnthropicShape:
         original_command = "cat litellm/router.py | grep foo"
         response = {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": original_command}}]}
         result = await guardrail.async_post_call_success_hook(
-            data=self._armed_request_data(), user_api_key_dict=None, response=response
+            data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         assert result["content"][0]["input"]["command"] == original_command
 
@@ -405,10 +418,84 @@ class TestAsyncPostCallSuccessHookAnthropicShape:
         guardrail = mod.ShuntGuardrail()
         response = {"content": [{"type": "text", "text": "hello"}]}
         result = await guardrail.async_post_call_success_hook(
-            data=self._armed_request_data(), user_api_key_dict=None, response=response
+            data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         assert result["content"][0]["type"] == "text"
         assert result["content"][0]["text"] == "hello"
+
+
+# Regression: the generated command used to embed the caller's raw Authorization header, which
+# put the real key in the model's response and conversation history. It now carries a sealed,
+# short-lived capability token that identifies the caller by reference instead.
+class TestRewriteNeverCarriesTheCallersRealCredential:
+    def _config(self) -> ShuntConfig:
+        return ShuntConfig(min_lines=350, bulk_read_model="claude-haiku-4-5", code_write_model="claude-haiku-4-5")
+
+    def _armed_request_data(self) -> dict:
+        return {
+            "model": "shunt",
+            "proxy_server_request": {"url": "http://localhost:4000/v1/messages"},
+            # A real caller's Authorization header may still be present on the request (secret_
+            # fields is populated regardless of shunt), but the rewrite must never read it now.
+            "secret_fields": {"raw_headers": {"authorization": "Bearer sk-the-callers-real-key"}},
+        }
+
+    @pytest.mark.asyncio
+    async def test_rewritten_command_never_contains_the_callers_real_key(self, monkeypatch):
+        import litellm.proxy.guardrails.auto_router_shunt as mod
+
+        monkeypatch.setattr(mod, "_resolve_shunt_config", lambda data: self._config())
+        guardrail = mod.ShuntGuardrail()
+        real_key_holder = UserAPIKeyAuth(api_key="fakehash1234567890")
+        response = {
+            "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "litellm/router.py"}}]
+        }
+        result = await guardrail.async_post_call_success_hook(
+            data=self._armed_request_data(), user_api_key_dict=real_key_holder, response=response
+        )
+        command = result["content"][0]["input"]["command"]
+        assert "sk-the-callers-real-key" not in command
+        assert "shunt_cap_v1:" in command
+
+    @pytest.mark.asyncio
+    async def test_master_key_caller_gets_a_token_too(self, monkeypatch):
+        """A master-key caller has no DB-backed key hash (LITELLM_PROXY_MASTER_KEY_ALIAS instead
+        of a real hash), so the mint path must handle it without raising."""
+        import litellm.proxy.guardrails.auto_router_shunt as mod
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+        monkeypatch.setattr(mod, "_resolve_shunt_config", lambda data: self._config())
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-the-real-master-key")
+        guardrail = mod.ShuntGuardrail()
+        master_key_holder = UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS)
+        response = {
+            "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "litellm/router.py"}}]
+        }
+        result = await guardrail.async_post_call_success_hook(
+            data=self._armed_request_data(), user_api_key_dict=master_key_holder, response=response
+        )
+        command = result["content"][0]["input"]["command"]
+        assert "sk-the-real-master-key" not in command
+        assert "shunt_cap_v1:" in command
+
+    @pytest.mark.asyncio
+    async def test_token_is_carried_in_the_authorization_header_not_a_query_string(self, monkeypatch):
+        import litellm.proxy.guardrails.auto_router_shunt as mod
+
+        monkeypatch.setattr(mod, "_resolve_shunt_config", lambda data: self._config())
+        guardrail = mod.ShuntGuardrail()
+        holder = UserAPIKeyAuth(api_key="fakehash1234567890")
+        response = {
+            "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "litellm/router.py"}}]
+        }
+        result = await guardrail.async_post_call_success_hook(
+            data=self._armed_request_data(), user_api_key_dict=holder, response=response
+        )
+        command = result["content"][0]["input"]["command"]
+        assert "-H " in command
+        before_header, _, after_header = command.partition("-H ")
+        assert "shunt_cap_v1:" not in before_header
+        assert "shunt_cap_v1:" in after_header
 
 
 class TestAsyncPostCallSuccessHookOpenAIShape:
@@ -435,7 +522,7 @@ class TestAsyncPostCallSuccessHookOpenAIShape:
             choices=[Choices(index=0, message=Message(role="assistant", tool_calls=[tool_call]))]
         )
         result = await guardrail.async_post_call_success_hook(
-            data=self._armed_request_data(), user_api_key_dict=None, response=response
+            data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         rewritten = result.choices[0].message.tool_calls[0]
         assert rewritten.function.name == "Bash"
@@ -450,6 +537,6 @@ class TestAsyncPostCallSuccessHookOpenAIShape:
         guardrail = mod.ShuntGuardrail()
         response = ModelResponse(choices=[Choices(index=0, message=Message(role="assistant", content="hi"))])
         result = await guardrail.async_post_call_success_hook(
-            data=self._armed_request_data(), user_api_key_dict=None, response=response
+            data=self._armed_request_data(), user_api_key_dict=_FAKE_USER_API_KEY_DICT, response=response
         )
         assert result.choices[0].message.content == "hi"

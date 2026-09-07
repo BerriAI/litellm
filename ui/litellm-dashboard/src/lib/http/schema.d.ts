@@ -42617,7 +42617,9 @@ export interface operations {
                 router: string;
                 tags?: string[] | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -43511,7 +43513,9 @@ export interface operations {
                 router: string;
                 tags?: string[] | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -61525,7 +61529,9 @@ export interface operations {
                 router: string;
                 tags?: string[] | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -61760,7 +61766,9 @@ export interface operations {
                 router: string;
                 tags?: string[] | null;
             };
-            header?: never;
+            header?: {
+                authorization?: string | null;
+            };
             path?: never;
             cookie?: never;
         };

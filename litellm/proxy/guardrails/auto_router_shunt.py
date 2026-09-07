@@ -243,15 +243,38 @@ DEFAULT_BULK_READ_QUESTION: Final = "Summarize this file's exports and overall s
 class _ShuntEndpoints:
     bulk_read_url: str
     code_write_url: str
+    capability_token: str
 
 
-def _endpoints_for_request(data: Mapping[str, object], model_alias: str) -> "_ShuntEndpoints | None":
+def _mint_caller_capability_token(user_api_key_dict: "UserAPIKeyAuth") -> str:
+    """Seal a short-lived grant identifying this request's caller.
+
+    ``UserAPIKeyAuth.api_key`` is already the hashed token for a DB-backed virtual key
+    (`_safe_hash_litellm_api_key` on the model itself), so the common case just carries that
+    hash forward. Master-key auth is the one caller with no such row: it stores a stable alias
+    there instead (`LITELLM_PROXY_MASTER_KEY_ALIAS`), so that case carries the real master key,
+    itself sealed rather than embedded in the clear, for the worker endpoint to compare directly.
+    """
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+    from litellm.proxy.guardrails.shunt_capability_token import mint_shunt_capability_token
+    from litellm.proxy.proxy_server import master_key
+
+    if user_api_key_dict.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS and master_key is not None:
+        return mint_shunt_capability_token(key_hash=None, master_key=master_key)
+    return mint_shunt_capability_token(key_hash=user_api_key_dict.api_key, master_key=None)
+
+
+def _endpoints_for_request(
+    data: Mapping[str, object], model_alias: str, user_api_key_dict: "UserAPIKeyAuth"
+) -> "_ShuntEndpoints | None":
     """Where this request's generated curl commands should point, or None if unreachable.
 
     None when the base URL can't be recovered, since a generated command could then not reach
     this proxy at all; the tool_use is left unmodified rather than shipped broken. The caller's
-    credential is deliberately not read here: the generated command picks it up from the
-    client's own environment at run time instead, so it never enters the model's response.
+    own credential never appears in the generated command: instead a short-lived capability
+    token identifying the caller is minted here and carried in the command's `Authorization`
+    header, so the worker call authenticates without the real key ever entering the model's
+    response, the conversation history, or (unlike a query-string token) an access log line.
 
     The request's own tags ride along in the query string, because the worker endpoints resolve
     the marker again from scratch: a marker armed only under a tag would otherwise be invisible
@@ -270,6 +293,7 @@ def _endpoints_for_request(data: Mapping[str, object], model_alias: str) -> "_Sh
     return _ShuntEndpoints(
         bulk_read_url=f"{base_url}/v1/bulk_read?{query}",
         code_write_url=f"{base_url}/v1/code_write?{query}",
+        capability_token=_mint_caller_capability_token(user_api_key_dict),
     )
 
 
@@ -306,6 +330,7 @@ def _bash_replacement_for_tool_use(
             question=question,
             paths=paths,
             bulk_read_endpoint=endpoints.bulk_read_url,
+            capability_token=endpoints.capability_token,
         )
 
     if name == CODE_WRITE_TOOL_NAME:
@@ -319,6 +344,7 @@ def _bash_replacement_for_tool_use(
             reference=reference,
             target=target if isinstance(target, str) and target else None,
             code_write_endpoint=endpoints.code_write_url,
+            capability_token=endpoints.capability_token,
         )
 
     if name == "Read":
@@ -332,6 +358,7 @@ def _bash_replacement_for_tool_use(
             question=DEFAULT_BULK_READ_QUESTION,
             min_lines=config.min_lines,
             bulk_read_endpoint=endpoints.bulk_read_url,
+            capability_token=endpoints.capability_token,
         )
 
     if name == "Bash":
@@ -346,6 +373,7 @@ def _bash_replacement_for_tool_use(
             question=DEFAULT_BULK_READ_QUESTION,
             min_lines=config.min_lines,
             bulk_read_endpoint=endpoints.bulk_read_url,
+            capability_token=endpoints.capability_token,
         )
 
     return None
@@ -521,7 +549,9 @@ class ShuntGuardrail(CustomLogger):
             return response
 
         model: Final = data.get("model")
-        endpoints: Final = _endpoints_for_request(data, model) if isinstance(model, str) and model else None
+        endpoints: Final = (
+            _endpoints_for_request(data, model, user_api_key_dict) if isinstance(model, str) and model else None
+        )
         if endpoints is None:
             return response
 
@@ -573,7 +603,7 @@ class ShuntGuardrail(CustomLogger):
         config: Final = None if request_data.get(_CALLER_OWNS_TOOL_NAME_KEY) else _resolve_shunt_config(request_data)
         model: Final = request_data.get("model")
         endpoints: Final = (
-            _endpoints_for_request(request_data, model)
+            _endpoints_for_request(request_data, model, user_api_key_dict)
             if config is not None and isinstance(model, str) and model
             else None
         )

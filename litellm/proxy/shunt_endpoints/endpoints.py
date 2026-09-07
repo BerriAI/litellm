@@ -8,6 +8,11 @@ marker's `auto_router_shunt_bulk_read_model` / `auto_router_shunt_code_write_mod
 model chosen by the caller. The call goes through `llm_router.acompletion`, not
 `litellm.acompletion` directly, so worker-model spend is tracked and budgeted against the
 caller's key/team exactly like any other request.
+
+Auth is the short-lived capability token minted at rewrite time
+(`shunt_capability_token.py`), not a normal virtual key: these routes exist only to be hit by
+a shunt-generated command, never called directly, so `user_api_key_auth`'s full DB-backed path
+is the wrong tool here and the token is the only credential accepted.
 """
 
 from collections.abc import Sequence
@@ -15,12 +20,12 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy._types import LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.guardrails.auto_router_shunt import ShuntConfig, shunt_config_for_model
+from litellm.proxy.guardrails.shunt_capability_token import open_shunt_capability_token
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.shunt_endpoints.worker import (
     BULK_READ_SYSTEM_PROMPT,
@@ -39,8 +44,51 @@ router: Final = APIRouter()
 
 # Both endpoints are registered twice, at the `/v1`-prefixed path the generated commands call
 # and at the bare path, matching how the rest of the proxy exposes its native routes.
-_AUTH_DEPENDENCIES: Final = [Depends(user_api_key_auth)]  # mutable-ok: FastAPI's `dependencies=` takes a list
 _SHUNT_TAGS: Final[list[str | Enum]] = ["shunt"]  # mutable-ok: FastAPI's `tags=` takes an invariant list
+
+_BEARER_PREFIX: Final = "Bearer "
+
+
+async def _caller_from_capability_token(authorization: Annotated[str | None, Header()] = None) -> UserAPIKeyAuth:
+    """Resolve the request's caller from its shunt capability token, or reject the request.
+
+    Never falls through to the proxy's own key/DB lookup: a request that reaches these routes
+    without a valid token is rejected outright, since a shunt-generated command is the only
+    thing that should ever call them.
+    """
+    if authorization is None or not authorization.startswith(_BEARER_PREFIX):
+        raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
+    grant: Final = open_shunt_capability_token(authorization[len(_BEARER_PREFIX) :])
+    if grant is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired shunt capability token")
+
+    if grant.master_key is not None:
+        from litellm.proxy.proxy_server import master_key
+
+        if master_key is None or grant.master_key != master_key:
+            raise HTTPException(status_code=401, detail="Invalid or expired shunt capability token")
+        return UserAPIKeyAuth(api_key=grant.master_key, user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    if grant.key_hash is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired shunt capability token")
+
+    from litellm.proxy.auth.auth_checks import get_key_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+
+    try:
+        return await get_key_object(
+            hashed_token=grant.key_hash,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid or expired shunt capability token") from e
+
+
+_AUTH_DEPENDENCIES: Final = [
+    Depends(_caller_from_capability_token)
+]  # mutable-ok: FastAPI's `dependencies=` takes a list
 
 
 def _worker_config(
@@ -137,7 +185,7 @@ async def bulk_read(
     router_name: Annotated[str, Query(alias="router")],
     question: Annotated[str, Form()],
     paths: Annotated[list[UploadFile], File()],  # mutable-ok: FastAPI requires a list for a repeated file field
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_caller_from_capability_token)],
     tags: Annotated[list[str] | None, Query()] = None,
 ) -> str:
     """Summarize or answer a question about one or more files via a cheap worker model.
@@ -176,7 +224,7 @@ async def code_write(
     router_name: Annotated[str, Query(alias="router")],
     spec: Annotated[str, Form()],
     reference: Annotated[UploadFile, File()],
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(_caller_from_capability_token)],
     tags: Annotated[list[str] | None, Query()] = None,
 ) -> str:
     """Generate boilerplate code matching a reference file's patterns, via a cheap worker model.

@@ -75,18 +75,19 @@ class ShuntBashRewrite:
     note: str
 
 
-# The generated command reads the client's own credential out of its environment at run time
-# instead of carrying it. Embedding the value would copy the caller's key into the model's
-# response, the conversation history, and the next upstream turn, which is exactly what keeping
-# it in `secret_fields` is meant to prevent. `${VAR:-$OTHER}` also covers both header styles:
-# Claude Code sets ANTHROPIC_AUTH_TOKEN, while an x-api-key client sets ANTHROPIC_API_KEY.
-_AUTH_ENV_EXPR: Final = "${ANTHROPIC_AUTH_TOKEN:-$ANTHROPIC_API_KEY}"
-# Deliberately double-quoted, not shlex.quote'd: this is shell syntax to evaluate, not data.
-_AUTH_FLAG: Final = f'-H "Authorization: Bearer {_AUTH_ENV_EXPR}"'
+def _auth_flag(capability_token: str) -> str:
+    """The `-H` flag carrying the caller's short-lived capability token.
+
+    Never the caller's real key: that would copy it into the model's response and the
+    conversation history, exactly what keeping it in `secret_fields` is meant to prevent. The
+    token is minted per request (see `auto_router_shunt.py`'s `_mint_caller_capability_token`)
+    and expires in minutes, so a copy left in a stale transcript is worthless shortly after.
+    """
+    return f"-H {shlex.quote(f'Authorization: Bearer {capability_token}')}"
 
 
 def build_bounded_read_command(
-    *, path: str, question: str, min_lines: int, bulk_read_endpoint: str
+    *, path: str, question: str, min_lines: int, bulk_read_endpoint: str, capability_token: str
 ) -> ShuntBashRewrite:
     """The shunt conditional: read small files directly, delegate large ones.
 
@@ -107,7 +108,7 @@ def build_bounded_read_command(
         f"printf '[shunt] %s: %s lines, bounded read delegated\\n' {quoted_path} \"$L\" >&2; "
         f"curl -sS -F {shlex.quote(f'question={question}')} "
         f"-F {shlex.quote(f'paths=@{path}')} "
-        f"{_AUTH_FLAG} {shlex.quote(bulk_read_endpoint)}; "
+        f"{_auth_flag(capability_token)} {shlex.quote(bulk_read_endpoint)}; "
         f"else cat {quoted_path}; fi"
     )
     return ShuntBashRewrite(
@@ -116,7 +117,9 @@ def build_bounded_read_command(
     )
 
 
-def build_bulk_read_command(*, question: str, paths: Sequence[str], bulk_read_endpoint: str) -> ShuntBashRewrite:
+def build_bulk_read_command(
+    *, question: str, paths: Sequence[str], bulk_read_endpoint: str, capability_token: str
+) -> ShuntBashRewrite:
     """The curl a model's own explicit `bulk_read(question, paths)` tool call becomes.
 
     Unconditional (no size check): the model chose to delegate, unlike the automatic bounding
@@ -124,13 +127,14 @@ def build_bulk_read_command(*, question: str, paths: Sequence[str], bulk_read_en
     """
     path_flags: Final = " ".join(f"-F {shlex.quote(f'paths=@{path}')}" for path in paths)
     command: Final = (
-        f"curl -sS -F {shlex.quote(f'question={question}')} {path_flags} {_AUTH_FLAG} {shlex.quote(bulk_read_endpoint)}"
+        f"curl -sS -F {shlex.quote(f'question={question}')} {path_flags} "
+        f"{_auth_flag(capability_token)} {shlex.quote(bulk_read_endpoint)}"
     )
     return ShuntBashRewrite(command=command, note="Delegated to a cheaper model via bulk_read.")
 
 
 def build_code_write_command(
-    *, spec: str, reference: str, target: str | None, code_write_endpoint: str
+    *, spec: str, reference: str, target: str | None, code_write_endpoint: str, capability_token: str
 ) -> ShuntBashRewrite:
     """The curl a model's own explicit `code_write(spec, reference, target)` tool call becomes.
 
@@ -142,7 +146,7 @@ def build_code_write_command(
     request: Final = (
         f"curl -sS -F {shlex.quote(f'spec={spec}')} "
         f"-F {shlex.quote(f'reference=@{reference}')} "
-        f"{_AUTH_FLAG} {shlex.quote(code_write_endpoint)}"
+        f"{_auth_flag(capability_token)} {shlex.quote(code_write_endpoint)}"
     )
     if target is None:
         return ShuntBashRewrite(command=request, note="Delegated to a cheaper model via code_write.")

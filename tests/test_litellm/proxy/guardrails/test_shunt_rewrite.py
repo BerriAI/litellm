@@ -77,12 +77,14 @@ def _bounded_read(
     question: str = "Summarize this file's structure.",
     min_lines: int = 350,
     bulk_read_endpoint: str = "http://localhost:4000/v1/bulk_read",
+    capability_token: str = "shunt_cap_v1:test-token",
 ) -> ShuntBashRewrite:
     return build_bounded_read_command(
         path=path,
         question=question,
         min_lines=min_lines,
         bulk_read_endpoint=bulk_read_endpoint,
+        capability_token=capability_token,
     )
 
 
@@ -160,6 +162,7 @@ class TestGeneratedCommandsResistShellInjection:
             question="q",
             paths=["ok.py", payload.format(marker=marker)],
             bulk_read_endpoint="http://127.0.0.1:9/v1/bulk_read",
+            capability_token="shunt_cap_v1:test-token",
         )
         _assert_runs_without_side_effect(rewrite.command, marker)
 
@@ -170,6 +173,7 @@ class TestGeneratedCommandsResistShellInjection:
             reference="r.py",
             target=payload.format(marker=marker),
             code_write_endpoint="http://127.0.0.1:9/v1/code_write",
+            capability_token="shunt_cap_v1:test-token",
         )
         _assert_runs_without_side_effect(rewrite.command, marker)
 
@@ -180,6 +184,7 @@ class TestGeneratedCommandsResistShellInjection:
             reference="r.py",
             target=None,
             code_write_endpoint="http://127.0.0.1:9/v1/code_write",
+            capability_token="shunt_cap_v1:test-token",
         )
         _assert_runs_without_side_effect(rewrite.command, marker)
 
@@ -187,46 +192,40 @@ class TestGeneratedCommandsResistShellInjection:
 # Regression: the caller's key was interpolated straight into the generated command, so it
 # landed in the model's response, the conversation history, and the next upstream turn.
 class TestGeneratedCommandsNeverCarryTheCallersCredential:
-    def test_bounded_read_references_the_env_var_instead_of_a_secret(self):
-        command = _bounded_read().command
-        assert "ANTHROPIC_AUTH_TOKEN" in command
-        assert "sk-" not in command
-
-    def test_bulk_read_references_the_env_var_instead_of_a_secret(self):
-        rewrite = build_bulk_read_command(
-            question="q", paths=["a.py"], bulk_read_endpoint="http://localhost:4000/v1/bulk_read"
-        )
-        assert "ANTHROPIC_AUTH_TOKEN" in rewrite.command
+    def test_bounded_read_carries_the_token_not_a_real_key(self):
+        rewrite = _bounded_read(capability_token="shunt_cap_v1:abc123")
+        assert "shunt_cap_v1:abc123" in rewrite.command
         assert "sk-" not in rewrite.command
 
-    def test_code_write_references_the_env_var_instead_of_a_secret(self):
+    def test_bulk_read_carries_the_token_not_a_real_key(self):
+        rewrite = build_bulk_read_command(
+            question="q",
+            paths=["a.py"],
+            bulk_read_endpoint="http://localhost:4000/v1/bulk_read",
+            capability_token="shunt_cap_v1:abc123",
+        )
+        assert "shunt_cap_v1:abc123" in rewrite.command
+        assert "sk-" not in rewrite.command
+
+    def test_code_write_carries_the_token_not_a_real_key(self):
         rewrite = build_code_write_command(
-            spec="s", reference="r.py", target=None, code_write_endpoint="http://localhost:4000/v1/code_write"
+            spec="s",
+            reference="r.py",
+            target=None,
+            code_write_endpoint="http://localhost:4000/v1/code_write",
+            capability_token="shunt_cap_v1:abc123",
         )
-        assert "ANTHROPIC_AUTH_TOKEN" in rewrite.command
+        assert "shunt_cap_v1:abc123" in rewrite.command
         assert "sk-" not in rewrite.command
 
-    def test_the_env_var_expands_at_run_time(self, tmp_path: Path):
-        """The header must carry the client's real token once bash evaluates the command."""
+    def test_the_token_is_carried_as_a_bearer_authorization_header(self, tmp_path: Path):
+        """A generated command must send the token in the header, never a URL query string."""
         out = tmp_path / "seen_header.txt"
         rewrite = build_bulk_read_command(
-            question="q", paths=["a.py"], bulk_read_endpoint="http://127.0.0.1:9/v1/bulk_read"
-        )
-        # Echo the expanded header rather than sending it, so the assertion needs no server.
-        header_only = rewrite.command.split(" -H ", 1)[1].rsplit(" ", 1)[0]
-        subprocess.run(
-            ["bash", "-c", f"printf '%s' {header_only} > {out}"],
-            capture_output=True,
-            text=True,
-            check=False,
-            env={"ANTHROPIC_AUTH_TOKEN": "sk-real-token", "PATH": "/usr/bin:/bin"},
-        )
-        assert out.read_text() == "Authorization: Bearer sk-real-token"
-
-    def test_falls_back_to_the_api_key_env_var_for_x_api_key_clients(self, tmp_path: Path):
-        out = tmp_path / "seen_header.txt"
-        rewrite = build_bulk_read_command(
-            question="q", paths=["a.py"], bulk_read_endpoint="http://127.0.0.1:9/v1/bulk_read"
+            question="q",
+            paths=["a.py"],
+            bulk_read_endpoint="http://127.0.0.1:9/v1/bulk_read",
+            capability_token="shunt_cap_v1:abc123",
         )
         header_only = rewrite.command.split(" -H ", 1)[1].rsplit(" ", 1)[0]
         subprocess.run(
@@ -234,9 +233,9 @@ class TestGeneratedCommandsNeverCarryTheCallersCredential:
             capture_output=True,
             text=True,
             check=False,
-            env={"ANTHROPIC_API_KEY": "sk-from-api-key", "PATH": "/usr/bin:/bin"},
+            env={"PATH": "/usr/bin:/bin"},
         )
-        assert out.read_text() == "Authorization: Bearer sk-from-api-key"
+        assert out.read_text() == "Authorization: Bearer shunt_cap_v1:abc123"
 
 
 # Regression: the commands uploaded files as `paths[]`, but the endpoint binds them under
@@ -249,7 +248,7 @@ class TestUploadFieldNameMatchesTheEndpoint:
 
     def test_bulk_read_uses_the_bare_paths_field_name(self):
         rewrite = build_bulk_read_command(
-            question="q", paths=["a.py", "b.py"], bulk_read_endpoint="http://localhost:4000/v1/bulk_read"
+            question="q", paths=["a.py", "b.py"], bulk_read_endpoint="http://localhost:4000/v1/bulk_read", capability_token="shunt_cap_v1:test-token"
         )
         assert "paths[]=@" not in rewrite.command
         for path in ("a.py", "b.py"):
@@ -279,6 +278,7 @@ class TestBuildBulkReadCommand:
             question="what does this do",
             paths=["a.py", "b.py"],
             bulk_read_endpoint="http://localhost:4000/v1/bulk_read",
+            capability_token="shunt_cap_v1:test-token",
         )
         assert "wc -l" not in rewrite.command
         assert "if [" not in rewrite.command
@@ -288,13 +288,14 @@ class TestBuildBulkReadCommand:
             question="q",
             paths=["a.py", "b.py", "c.py"],
             bulk_read_endpoint="http://localhost:4000/v1/bulk_read",
+            capability_token="shunt_cap_v1:test-token",
         )
         for path in ("a.py", "b.py", "c.py"):
             assert f"paths=@{path}" in rewrite.command
 
     def test_command_is_valid_bash(self):
         rewrite = build_bulk_read_command(
-            question="q", paths=["a.py"], bulk_read_endpoint="http://localhost:4000/v1/bulk_read"
+            question="q", paths=["a.py"], bulk_read_endpoint="http://localhost:4000/v1/bulk_read", capability_token="shunt_cap_v1:test-token"
         )
         _assert_valid_bash(rewrite.command)
 
@@ -306,6 +307,7 @@ class TestBuildCodeWriteCommand:
             reference="tests/y_test.py",
             target=None,
             code_write_endpoint="http://localhost:4000/v1/code_write",
+            capability_token="shunt_cap_v1:test-token",
         )
         assert ">" not in rewrite.command
 
@@ -315,12 +317,13 @@ class TestBuildCodeWriteCommand:
             reference="tests/y_test.py",
             target="tests/x_test.py",
             code_write_endpoint="http://localhost:4000/v1/code_write",
+            capability_token="shunt_cap_v1:test-token",
         )
         assert rewrite.command.endswith("> tests/x_test.py")
 
     @pytest.mark.parametrize("target", [None, "tests/x_test.py"])
     def test_command_is_valid_bash_with_and_without_target(self, target: str | None):
         rewrite = build_code_write_command(
-            spec="s", reference="r.py", target=target, code_write_endpoint="http://x/v1/code_write"
+            spec="s", reference="r.py", target=target, code_write_endpoint="http://x/v1/code_write", capability_token="shunt_cap_v1:test-token"
         )
         _assert_valid_bash(rewrite.command)
