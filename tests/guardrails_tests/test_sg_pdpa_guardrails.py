@@ -576,12 +576,13 @@ class TestSGPDPAEdgeCases:
         monkeypatch.setattr(httpx.AsyncClient, "send", _no_network)
         monkeypatch.setattr(httpx.Client, "send", _no_network)
 
-        with pytest.raises(HTTPException, match="Content blocked: sg_pdpa_personal_identifiers"):
+        with pytest.raises(HTTPException, match="Content blocked: sg_pdpa_personal_identifiers") as exc_info:
             await personal_identifiers_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
                 input_type="request",
             )
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_multiple_violations(self, personal_identifiers_guardrail):

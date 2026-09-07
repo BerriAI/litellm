@@ -540,12 +540,13 @@ class TestMASEdgeCases:
         monkeypatch.setattr(httpx.AsyncClient, "send", _no_network)
         monkeypatch.setattr(httpx.Client, "send", _no_network)
 
-        with pytest.raises(HTTPException, match="Content blocked: sg_mas_human_oversight"):
+        with pytest.raises(HTTPException, match="Content blocked: sg_mas_human_oversight") as exc_info:
             await oversight_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
                 input_type="request",
             )
+        assert exc_info.value.status_code == 400
 
 
 class TestMASPerformance:

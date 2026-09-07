@@ -307,12 +307,13 @@ class TestEUAIActPerformance:
         monkeypatch.setattr(httpx.AsyncClient, "send", _no_network)
         monkeypatch.setattr(httpx.Client, "send", _no_network)
 
-        with pytest.raises(HTTPException, match="Content blocked: eu_ai_act_article"):
+        with pytest.raises(HTTPException, match="Content blocked: eu_ai_act_article") as exc_info:
             await content_filter_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
                 input_type="request",
             )
+        assert exc_info.value.status_code == 400
 
 
 if __name__ == "__main__":
