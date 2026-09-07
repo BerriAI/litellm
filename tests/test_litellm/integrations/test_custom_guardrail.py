@@ -1889,22 +1889,28 @@ class TestGuardrailInterventionClassification:
     async def test_example_config_guardrail_blocks_with_blocked_content(self):
         """The example_config_yaml copy is what otel_test_config.yaml loads; it must block the same way."""
         guardrail = ExampleConfigGuardrail(guardrail_name="example-config")
+        input_request: dict = {"metadata": {}, "messages": [{"role": "user", "content": "tell me about litellm"}]}
+        output_request: dict = {"metadata": {}}
 
         with pytest.raises(GuardrailRaisedException) as input_block:
             await guardrail.async_moderation_hook(
-                data={"messages": [{"role": "user", "content": "tell me about litellm"}]},
+                data=input_request,
                 user_api_key_dict=UserAPIKeyAuth(),
                 call_type="completion",
             )
         assert input_block.value.blocked_content is True
+        input_slg = input_request["metadata"]["standard_logging_guardrail_information"][0]
+        assert input_slg["guardrail_status"] == "guardrail_intervened"
 
         with pytest.raises(GuardrailRaisedException) as output_block:
             await guardrail.async_post_call_success_hook(
-                data={},
+                data=output_request,
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="coffee"))]),
             )
         assert output_block.value.blocked_content is True
+        output_slg = output_request["metadata"]["standard_logging_guardrail_information"][0]
+        assert output_slg["guardrail_status"] == "guardrail_intervened"
 
 
 class _ApplyStyleGuardrail(CustomGuardrail):

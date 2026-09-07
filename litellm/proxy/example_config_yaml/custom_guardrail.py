@@ -4,7 +4,10 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import GuardrailRaisedException
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import CallTypesLiteral
 
@@ -79,6 +82,7 @@ class myCustomGuardrail(CustomGuardrail):
 
         return data
 
+    @log_guardrail_information
     async def async_moderation_hook(
         self,
         data: dict,
@@ -107,6 +111,7 @@ class myCustomGuardrail(CustomGuardrail):
                             blocked_content=True,
                         )
 
+    @log_guardrail_information
     async def async_post_call_success_hook(
         self,
         data: dict,
