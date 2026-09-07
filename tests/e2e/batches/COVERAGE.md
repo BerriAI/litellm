@@ -131,7 +131,12 @@ failures up to three times. Teardown attempts every registered cleanup before
 reporting failures as test errors. Already deleted files and batches that are
 terminal are safe to clean up again. Managed batch cancellation polls for up to eleven minutes
 before input deletion: the ten-minute provider window plus a propagation margin.
-Raw and model-encoded inputs can be deleted after cancellation is accepted
+Accepted cancellation may still report validating or in_progress while the provider
+updates its state. Raw and model-encoded batches are polled until cancelling or
+terminal before input deletion. OpenAI and Azure lifecycle cleanup also deletes
+output and error files returned by terminal batches. Bedrock deletion uses a signed S3 DELETE
+restricted to the configured storage buckets and managed file prefixes. The low-RPM
+test submits with its restricted key and cleans up with the test administrator key
 
 Azure input uploads request `expires_after` anchored to `created_at` with
 `seconds=1209600`, and the lifecycle tests check the returned expiry. This is a

@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import Final
 
 import pytest
-
 from batch_cleanup import BATCH_CANCEL_TIMEOUT_SECONDS, CLEANUP_DELAYS, cleanup_batch, cleanup_file, cleanup_result
 from batch_client import AZURE_FILE_EXPIRY_SECONDS, BatchObject, FileDeleteResponse, batch_upload_form
 from capabilities import CAPABILITIES, Capability
@@ -217,6 +216,74 @@ class TestBatchCancellation:
             cancellations=iter((batch("cancelling"),)),
         )
         cleanup_batch(client, "batch-1", key="test-key", provider="azure")
+        client.calls.assert_done()
+
+    @pytest.mark.parametrize("batch_id", ["batch-1", MANAGED_BATCH_ID])
+    @pytest.mark.parametrize("pending_status", ["validating", "in_progress"])
+    def test_accepted_cancellation_waits_through_stale_provider_status(
+        self, batch_id: str, pending_status: str
+    ) -> None:
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(
+                iter(
+                    (
+                        f"retrieve vertex_ai {batch_id}",
+                        f"cancel vertex_ai {batch_id}",
+                        f"retrieve vertex_ai {batch_id}",
+                        f"retrieve vertex_ai {batch_id}",
+                        f"retrieve vertex_ai {batch_id}",
+                        "delete vertex_ai file-1",
+                        "delete key test-key",
+                    )
+                )
+            ),
+            batches=iter((batch("validating"), batch(pending_status), batch(pending_status), batch("cancelled"))),
+            cancellations=iter((batch(pending_status),)),
+            files=iter((deleted_file(),)),
+        )
+        delays: Final = ExpectedCalls(iter((10.0, 10.0)))
+        manager: Final = ResourceManager(client=client, strict_cleanup=True)
+        key: Final = manager.key()
+        manager.defer(lambda: cleanup_file(client, "file-1", key=key, provider="vertex_ai"))
+        manager.defer(lambda: cleanup_batch(client, batch_id, key=key, provider="vertex_ai", wait=delays))
+        manager.teardown()
+        client.calls.assert_done()
+        delays.assert_done()
+
+    @pytest.mark.parametrize("output_delete_fails", [False, True])
+    def test_batch_that_completed_before_cleanup_deletes_output_and_error_files(
+        self, output_delete_fails: bool
+    ) -> None:
+        client: Final = CleanupClient(
+            calls=ExpectedCalls(
+                iter(("retrieve openai batch-1", "delete openai file-output", "delete openai file-error"))
+            ),
+            batches=iter(
+                (
+                    Success(
+                        status_code=200,
+                        data=BatchObject(
+                            id="batch-1",
+                            status="completed",
+                            input_file_id="file-input",
+                            output_file_id="file-output",
+                            error_file_id="file-error",
+                        ),
+                    ),
+                )
+            ),
+            files=iter(
+                (
+                    UnknownApiError(status_code=403, body="forbidden") if output_delete_fails else deleted_file(),
+                    deleted_file(),
+                )
+            ),
+        )
+        if output_delete_fails:
+            with pytest.raises(ExceptionGroup, match="output cleanup failed"):
+                cleanup_batch(client, "batch-1", key="test-key", provider="openai", delete_output_files=True)
+        else:
+            cleanup_batch(client, "batch-1", key="test-key", provider="openai", delete_output_files=True)
         client.calls.assert_done()
 
     @pytest.mark.parametrize("status", ["completed", "in_progress"])

@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from pydantic import BaseModel
 
-from e2e_config import PROXY_BASE_URL, unique_marker
+from e2e_config import MASTER_KEY, PROXY_BASE_URL, unique_marker
 
 from batch_cleanup import cleanup_batch, cleanup_file
 from batch_client import (
@@ -257,7 +257,9 @@ def test_batch_lifecycle(
     require_successful_call(created)
     batch = BatchObject.model_validate_json(created.body)
     resources.defer(
-        lambda: cleanup_batch(client, batch.id, key=key, provider=provider)
+        lambda: cleanup_batch(
+            client, batch.id, key=key, provider=provider, delete_output_files=cap.provider in {"openai", "azure"}
+        )
     )
 
     assert batch.id, f"create returned no batch id (body={created.body[:200]})"
@@ -801,7 +803,7 @@ class TestBatchEnqueuedTokenLimit:
     """
 
     def _upload_batch_file(
-        self, client: BatchClient, resources: ResourceManager, key: str
+        self, client: BatchClient, resources: ResourceManager, key: str, *, cleanup_key: str | None = None
     ) -> FileObject:
         file = unwrap(
             client.upload_file(
@@ -811,7 +813,7 @@ class TestBatchEnqueuedTokenLimit:
                 key=key,
             )
         )
-        resources.defer(lambda: cleanup_file(client, file.id, key=key))
+        resources.defer(lambda: cleanup_file(client, file.id, key=cleanup_key or key))
         return file
 
     def _generate_enqueued_key(
@@ -848,7 +850,7 @@ class TestBatchEnqueuedTokenLimit:
             marker="rpm",
             rpm_limit=BATCH_RL_RPM_LIMIT,
         )
-        file = self._upload_batch_file(client, resources, key)
+        file = self._upload_batch_file(client, resources, key, cleanup_key=MASTER_KEY)
 
         created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
 
@@ -859,7 +861,7 @@ class TestBatchEnqueuedTokenLimit:
         )
         require_successful_call(created)
         batch = BatchObject.model_validate_json(created.body)
-        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=MASTER_KEY, delete_output_files=True))
 
     @pytest.mark.covers(
         "quota_management.ratelimit.batch_enqueued_tokens.blocks_when_exhausted",
