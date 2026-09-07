@@ -1,25 +1,28 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
+from litellm._logging import verbose_logger
 from litellm.llms.azure_ai.common_utils import (
     AzureFoundryModelInfo,
     api_key_header_for_base,
     get_azure_ai_auth_headers,
 )
+from litellm.llms.azure_ai.ocr.common_utils import get_azure_ai_ocr_config
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, strip_leading_model_segment
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import StandardPassThroughResponseObject
+from litellm.types.utils import CallTypes, StandardPassThroughResponseObject
 
 if TYPE_CHECKING:
     from httpx import URL, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
     from litellm.types.utils import CostResponseTypes
 
 
@@ -75,6 +78,10 @@ def relayed_body(httpx_response: Response) -> str | dict:
 
 
 class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
+    def __init__(self, ocr_config_for: Callable[[str], BaseOCRConfig | None] = get_azure_ai_ocr_config) -> None:
+        super().__init__()
+        self.ocr_config_for: Final = ocr_config_for
+
     def is_streaming_request(self, endpoint: str, request_data: Mapping[str, object]) -> bool:
         return bool(request_data.get("stream"))
 
@@ -123,7 +130,7 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         request_data: Mapping[str, object],
         logging_obj: Logging,
         endpoint: str,
-    ) -> CostResponseTypes | StandardPassThroughResponseObject | None:
+    ) -> CostResponseTypes | OCRResponse | StandardPassThroughResponseObject | None:
         from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
 
         chat_result: Final = AzurePassthroughConfig().logging_non_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # the Azure config still types request_data as a bare dict
@@ -136,7 +143,39 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         )
         if chat_result is not None:
             return chat_result
+        ocr_result: Final = self.logged_ocr_response(model, httpx_response, logging_obj, endpoint)
+        if ocr_result is not None:
+            return ocr_result
         return StandardPassThroughResponseObject(response=relayed_body(httpx_response))
+
+    def logged_ocr_response(
+        self, model: str, httpx_response: Response, logging_obj: Logging, endpoint: str
+    ) -> OCRResponse | None:
+        ocr_config: Final = self.ocr_config_for(model)
+        if ocr_config is None or httpx_response.status_code != 200:
+            return None
+        relayed_url: Final = httpx_response.request.url
+        relayed_origin: Final = str(relayed_url.copy_with(path="/", query=None, fragment=None)).rstrip("/")
+        ocr_url: Final = httpx.URL(
+            ocr_config.get_complete_url(
+                api_base=relayed_origin,
+                model=model,
+                optional_params={},  # mutable-ok: BaseOCRConfig wants a dict
+            )
+        )
+        known_prefixes: Final = (model, model_group_from(logging_obj.litellm_params))
+        native_endpoint: Final = strip_leading_model_segment(endpoint, known_prefixes)
+        if f"/{native_endpoint.strip('/')}" != ocr_url.path:
+            return None
+        try:
+            ocr_response: Final = ocr_config.transform_ocr_response(
+                model=model, raw_response=httpx_response, logging_obj=logging_obj
+            )
+        except (ValueError, AttributeError) as error:
+            verbose_logger.warning("azure_ai passthrough: OCR body from %s is not costable: %s", ocr_url, error)
+            return None
+        logging_obj.call_type = CallTypes.aocr.value  # rebind-ok: routes cost calculation to the per-page OCR path
+        return ocr_response
 
     def handle_logging_collected_chunks(
         self,

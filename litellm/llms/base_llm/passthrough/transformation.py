@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
     from ..chat.transformation import BaseLLMException
+    from ..ocr.transformation import OCRResponse
 
 
 def strip_leading_model_segment(endpoint: str, model_names: tuple[str, ...]) -> str:
@@ -120,7 +121,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         request_data: dict,
         logging_obj: "LiteLLMLoggingObj",
         endpoint: str,
-    ) -> Optional["CostResponseTypes | StandardPassThroughResponseObject"]:
+    ) -> Optional["CostResponseTypes | OCRResponse | StandardPassThroughResponseObject"]:
         pass
 
     def handle_logging_collected_chunks(
