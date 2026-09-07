@@ -1,0 +1,54 @@
+name: Monitor Databricks Pricing (deepseek/glm/kimi)
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # daily 02:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  monitor-db-pricing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: "3.12"
+
+      - name: Run monitor
+        shell: bash
+        run: |
+          set -o pipefail
+          python scripts/monitor_databricks_pricing.py | tee /tmp/monitor_out.txt
+          if grep -q '^NO_CHANGE' /tmp/monitor_out.txt; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR if changed
+        if: steps.monitor.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN_FOR_PUSH: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="monitor-dbx-pricing-$(date +'%Y-%m-%d')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+          git commit -m "chore(model_prices): refresh Databricks Foundation Model Serving rates - automated monitor detected changed DBU rates on the Databricks pricing page; updated databricks-deepseek-v4-* entries."
+          git push "https://x-access-token:${GITHUB_TOKEN_FOR_PUSH}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
+          gh pr create --repo "${{ github.repository }}" \
+            --base litellm_internal_staging \
+            --head "$BRANCH" \
+            --title "chore(model_prices): refresh Databricks Foundation Model Serving rates" \
+            --body "Automated daily check of the Databricks Foundation Model Serving pricing page detected rate changes. Updated model_prices_and_context_window.json and packaged backup for monitored models."
