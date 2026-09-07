@@ -31,6 +31,7 @@ _AGGREGATED_FIELDS: Final = frozenset(
         "promptTokenCount",
         "candidatesTokenCount",
         "totalTokenCount",
+        "toolUsePromptTokenCount",
         "promptTokensDetails",
         "candidatesTokensDetails",
     }
@@ -159,6 +160,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             "promptTokenCount": sum(snapshot.get("promptTokenCount", 0) for snapshot in snapshots),
             "candidatesTokenCount": sum(snapshot.get("candidatesTokenCount", 0) for snapshot in snapshots),
             "totalTokenCount": sum(snapshot.get("totalTokenCount", 0) for snapshot in snapshots),
+            "toolUsePromptTokenCount": sum(snapshot.get("toolUsePromptTokenCount", 0) for snapshot in snapshots),
             "promptTokensDetails": [
                 {"modality": modality, "tokenCount": count} for modality, count in prompt_totals.items() if count > 0
             ],
