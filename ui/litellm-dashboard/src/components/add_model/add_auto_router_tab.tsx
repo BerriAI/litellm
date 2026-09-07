@@ -207,10 +207,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
-  // Closed by default, and opened by a deliberate act: clicking it, choosing Custom, or running
-  // automatic setup. The latter two expand it so the tiers they just filled in are visible. A
-  // preset re-collapses it after prefilling, since its own label already says what got applied.
-  // A caller can always toggle it manually at any point.
   const [detailsExpanded, setDetailsExpanded] = useState<boolean>(false);
 
   const [isRoutingTestVisible, setIsRoutingTestVisible] = useState<boolean>(false);

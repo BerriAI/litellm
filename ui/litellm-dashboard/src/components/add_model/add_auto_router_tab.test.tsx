@@ -60,9 +60,6 @@ const optionByLabel = (label: string): HTMLElement | undefined =>
 
 const isOptionDisabled = (option: HTMLElement): boolean => option.getAttribute("aria-disabled") === "true";
 
-// A tier's multi-select renders as a toolbar holding one labelled chip per selected model, and its
-// own input carries the row's placeholder as a label. That placeholder is what tells the tiers
-// apart, so the toolbar is found by which one contains it.
 const tierChips = (tier: string): HTMLElement => {
   const placeholder = `Select model(s) for ${tier.toLowerCase()} queries`;
   const chips = screen
@@ -212,7 +209,6 @@ describe("AddAutoRouterTab", () => {
     expectTierModel("Medium", "claude-sonnet-5");
     expectTierModel("Complex", "claude-opus-5");
     expectTierModel("Reasoning", "claude-opus-5");
-    // The cheap model is what the mix is proving: it must not have leaked onto the top tiers.
     expectTierMissingModel("Complex", "gpt-5.6-luna");
     expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining("Configured with"));
   });
@@ -237,8 +233,6 @@ describe("AddAutoRouterTab", () => {
     expectTierMissingModel("Complex", "gpt-5.6-luna");
   });
 
-  // The whole point of the button is that a caller can see what it filled in, so it opens Detailed
-  // Configuration rather than leaving the tiers behind a collapsed summary.
   it("opens Detailed Configuration on the tiers automatic setup just filled in", async () => {
     const simpleModel = "gpt-5.6-luna";
     mockFetchAvailableModels.mockResolvedValue([...ALL_FAMILY_MODELS, { model_group: simpleModel, mode: "chat" }]);
