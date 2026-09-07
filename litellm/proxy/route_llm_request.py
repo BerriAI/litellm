@@ -158,6 +158,11 @@ REQUIRED_BODY_PARAMS_BY_ROUTE: Final[Mapping[str, tuple[str, ...]]] = {
     "acompletion": ("messages",),
     "aembedding": ("input",),
     "acreate_batch": ("input_file_id", "endpoint", "completion_window"),
+    "aresponses": ("input",),
+    "arerank": ("query", "documents"),
+    "aspeech": ("input",),
+    "amoderation": ("input",),
+    "aimage_generation": ("prompt",),
 }
 
 
