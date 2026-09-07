@@ -6,11 +6,11 @@ import os
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, overload, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, overload, runtime_checkable
 
 import httpx
 from openai._streaming import SSEDecoder
@@ -100,9 +100,7 @@ def _enforce_responses_ws_safety_identifier(
     user_api_key_dict: UserAPIKeyAuth | None,
 ) -> bool:
     return enforce_safety_identifier(
-        data=cast(  # cast-ok: JSON protocol is backed by a mutable response.create dictionary
-            MutableMapping[str, object], msg_obj
-        ),
+        data=msg_obj,
         user_id=user_api_key_dict.user_id if user_api_key_dict is not None else None,
         enabled=str_to_bool(os.getenv("LITELLM_ENFORCE_SAFETY_IDENTIFIER")) is True,
     )

@@ -1,11 +1,20 @@
 import hashlib
-from collections.abc import MutableMapping
-from typing import Final
+from typing import Final, Protocol
+
+
+class _SafetyIdentifierPayload(Protocol):
+    def get(self, key: str, /) -> object | None: ...
+
+    def __setitem__(self, key: str, value: object, /) -> None: ...
+
+    def __contains__(self, key: object, /) -> bool: ...
+
+    def pop(self, key: str, default: object | None = None, /) -> object | None: ...
 
 
 def enforce_safety_identifier(
     *,
-    data: MutableMapping[str, object],  # mutable-ok: trusted enforcement rewrites the request payload in place
+    data: _SafetyIdentifierPayload,
     user_id: str | None,
     enabled: bool,
 ) -> bool:
