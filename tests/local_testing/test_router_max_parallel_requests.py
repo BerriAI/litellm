@@ -2,15 +2,12 @@
 ## Unit tests for the max_parallel_requests feature on Router
 import asyncio
 import inspect
-import os
-import sys
 import time
 import traceback
 from datetime import datetime
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 from typing import Optional
 
 import litellm
@@ -205,9 +202,12 @@ async def test_max_parallel_requests_tpm_rate_limiting_base_case():
         num_retries=0,
     )
 
-    with pytest.raises(litellm.RateLimitError):
+    async def _exceed_limit():
         for _ in range(2):
             await router.acompletion(
                 model="gpt-4o-2024-08-06",
                 messages=_messages,
             )
+
+    with pytest.raises(litellm.RateLimitError):
+        await _exceed_limit()

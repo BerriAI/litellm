@@ -1,19 +1,18 @@
 from enum import Enum
-from typing import List, Optional
 
 from typing_extensions import NotRequired, TypedDict
 
 
 class WatsonXAPIParams(TypedDict):
-    project_id: Optional[str]
-    space_id: Optional[str]
-    region_name: Optional[str]
+    project_id: str | None
+    space_id: str | None
+    region_name: str | None
 
 
 class WatsonXCredentials(TypedDict):
     api_key: str
     api_base: str
-    token: Optional[str]
+    token: str | None
 
 
 class WatsonXAudioTranscriptionRequestBody(TypedDict):
@@ -45,7 +44,7 @@ class WatsonXAudioTranscriptionRequestBody(TypedDict):
     temperature: NotRequired[float]
     """Sampling temperature (0-1)"""
 
-    timestamp_granularities: NotRequired[List[str]]
+    timestamp_granularities: NotRequired[list[str]]
     """Timestamp granularities: ['word', 'segment']"""
 
 

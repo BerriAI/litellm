@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import CreateKeyPage from "./page";
 
@@ -11,16 +11,15 @@ const { mockReplace, mockUseKeys, mockMigratedHref, state } = vi.hoisted(() => {
     login: "success" as string | null,
     userRole: "Internal User",
     keys: [] as KeyRow[],
-    keysLoading: false,
     returnUrl: null as string | null,
   };
   return {
     state,
     mockReplace: vi.fn(),
     mockMigratedHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
-    mockUseKeys: vi.fn((_page: number, _size: number, _opts: unknown, _enabled: boolean) => ({
-      data: state.keysLoading ? undefined : { keys: state.keys, total_count: state.keys.length },
-      isLoading: state.keysLoading,
+    mockUseKeys: vi.fn(() => ({
+      data: { keys: state.keys, total_count: state.keys.length },
+      isLoading: false,
     })),
   };
 });
@@ -55,73 +54,60 @@ vi.mock("@/utils/returnUrlUtils", () => ({
   storeReturnUrl: () => undefined,
 }));
 
-describe("dashboard landing keyless redirect", () => {
+const realLocation = window.location;
+const mockLocationReplace = vi.fn();
+
+describe("dashboard landing", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        origin: "http://localhost:3000",
+        href: "http://localhost:3000/ui/?login=success",
+        replace: mockLocationReplace,
+      },
+    });
+  });
+
   afterEach(() => {
+    Object.defineProperty(window, "location", { configurable: true, value: realLocation });
     state.login = "success";
     state.userRole = "Internal User";
     state.keys = [];
-    state.keysLoading = false;
     state.returnUrl = null;
     mockReplace.mockClear();
     mockUseKeys.mockClear();
     mockMigratedHref.mockClear();
+    mockLocationReplace.mockClear();
   });
 
-  it.each(["Internal User", "Internal Viewer"])("sends a keyless %s to the connect page after login", (role) => {
-    state.userRole = role;
-    render(<CreateKeyPage />);
-    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/connect");
-    expect(screen.queryByTestId("api-keys-dashboard")).not.toBeInTheDocument();
-  });
+  it.each(["Internal User", "Internal Viewer", "Admin", "Admin Viewer", "Org Admin", ""])(
+    "lands a keyless %s on the keys dashboard, never on the MCP connect page",
+    (role) => {
+      state.userRole = role;
+      render(<CreateKeyPage />);
+      expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
+      expect(screen.queryByTestId("loading-screen")).not.toBeInTheDocument();
+      expect(mockReplace).not.toHaveBeenCalled();
+      expect(mockMigratedHref).not.toHaveBeenCalledWith("connect");
+    },
+  );
 
-  it.each(["Admin", "Admin Viewer", "Org Admin"])("leaves a keyless %s on the dashboard", (role) => {
-    state.userRole = role;
-    render(<CreateKeyPage />);
-    expect(mockReplace).not.toHaveBeenCalled();
-    expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
-  });
-
-  it("leaves a user who already has a key on the dashboard", () => {
+  it("lands a user who already owns a key on the keys dashboard", () => {
     state.keys = [{ token: "sk-abc" }];
     render(<CreateKeyPage />);
-    expect(mockReplace).not.toHaveBeenCalled();
     expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
-  });
-
-  it("does not redirect outside the post-login landing, and skips the key lookup entirely", () => {
-    state.login = null;
-    render(<CreateKeyPage />);
-    expect(mockReplace).not.toHaveBeenCalled();
-    expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
-    expect(mockUseKeys.mock.calls[0][3]).toBe(false);
-  });
-
-  it("holds the loading screen on the landing until the role hydrates, instead of flashing the dashboard", () => {
-    state.userRole = "";
-    render(<CreateKeyPage />);
-    expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
-    expect(screen.queryByTestId("api-keys-dashboard")).not.toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
-  it("does not hold the dashboard for an unhydrated role outside the post-login landing", () => {
-    state.login = null;
-    state.userRole = "";
+  it("never looks a user's keys up to decide where the landing goes", () => {
     render(<CreateKeyPage />);
-    expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
+    expect(mockUseKeys).not.toHaveBeenCalled();
   });
 
-  it("holds the loading screen while the key lookup is in flight", () => {
-    state.keysLoading = true;
-    render(<CreateKeyPage />);
-    expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
-    expect(screen.queryByTestId("api-keys-dashboard")).not.toBeInTheDocument();
-    expect(mockReplace).not.toHaveBeenCalled();
-  });
-
-  it("yields to an explicit return URL instead of the connect redirect", () => {
+  it("still sends the user to an explicit stored return URL", () => {
     state.returnUrl = "/ui/models-and-endpoints";
     render(<CreateKeyPage />);
-    expect(mockReplace).not.toHaveBeenCalledWith("/mocked-ui/connect");
+    expect(mockLocationReplace).toHaveBeenCalledWith("http://localhost:3000/ui/models-and-endpoints");
   });
 });

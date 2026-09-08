@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -11,6 +11,7 @@ from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
 
 if TYPE_CHECKING:
+    import tiktoken
     from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
 
 
@@ -22,8 +23,8 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
     @staticmethod
     def get_mai_image_generation_url(
-        api_base: Optional[str],
-        api_version: Optional[str],
+        api_base: str | None,
+        api_version: str | None,
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Azure AI MAI image generation")
@@ -44,8 +45,8 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
     @staticmethod
     def get_mai_image_edit_url(
-        api_base: Optional[str],
-        api_version: Optional[str],
+        api_base: str | None,
+        api_version: str | None,
     ) -> str:
         if api_base is None:
             raise ValueError("api_base is required for Azure AI MAI image editing")
@@ -66,11 +67,11 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
     @staticmethod
     def is_mai_model(model: str) -> bool:
-        model_normalized = model.lower().replace("-", "").replace("_", "")
+        model_normalized: Final = model.lower().replace("-", "").replace("_", "")
         return "maiimage" in model_normalized
 
     @staticmethod
-    def normalize_mai_image_usage(usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    def normalize_mai_image_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
         """Map Azure MAI usage fields to OpenAI ImageUsage schema."""
         if usage is None:
             return {
@@ -80,7 +81,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
                 "total_tokens": 0,
             }
 
-        normalized_usage = dict(usage)
+        normalized_usage: Final = dict(usage)
         input_tokens_details = normalized_usage.get("input_tokens_details")
         if not isinstance(input_tokens_details, dict):
             input_tokens_details = {}
@@ -126,7 +127,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         )
         return normalized_usage
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         return ["n", "size"]
 
     def map_openai_params(
@@ -136,7 +137,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         for k, v in non_default_params.items():
             if k in optional_params:
@@ -165,7 +166,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         return optional_params
 
     def _map_size_param(self, size: str, optional_params: dict) -> None:
-        size_mapping = {
+        size_mapping: Final = {
             "1024x1024": (1024, 1024),
             "1792x1024": (1792, 1024),
             "1024x1792": (1024, 1792),
@@ -199,12 +200,12 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         try:
-            response = raw_response.json()
+            response: Final = raw_response.json()
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -218,13 +219,13 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
             original_response=response,
         )
 
-        image_response: ImageResponse = convert_to_model_response_object(
+        image_response: Final[ImageResponse] = convert_to_model_response_object(
             response_object=response,
             model_response_object=model_response,
             response_type="image_generation",
         )
 
-        width = optional_params.get("width", self.DEFAULT_WIDTH)
-        height = optional_params.get("height", self.DEFAULT_HEIGHT)
-        image_response.size = f"{width}x{height}"  # type: ignore[assignment]
+        width: Final = optional_params.get("width", self.DEFAULT_WIDTH)
+        height: Final = optional_params.get("height", self.DEFAULT_HEIGHT)
+        image_response.size = f"{width}x{height}"
         return image_response

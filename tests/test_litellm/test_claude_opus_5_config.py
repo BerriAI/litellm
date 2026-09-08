@@ -52,20 +52,6 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so assertions don't depend on the
-    network-fetched ``main`` copy (which lags this branch until merge)."""
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
-
 
 def test_opus_5_pricing_and_capabilities():
     model_data = _load_root_cost_map()

@@ -1,5 +1,6 @@
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, Union
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from typing_extensions import TypedDict
@@ -42,11 +43,10 @@ class HuggingFaceRerankResponse(TypedDict):
     """Type definition for HuggingFace rerank API complete response."""
 
     # The response is a list of HuggingFaceRerankResponseItem
-    pass
 
 
 # Type alias for the actual response structure
-HuggingFaceRerankResponseList = List[HuggingFaceRerankResponseItem]
+HuggingFaceRerankResponseList = list[HuggingFaceRerankResponseItem]
 
 
 class HuggingFaceRerankConfig(BaseRerankConfig):
@@ -93,16 +93,16 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         model: str,
         drop_params: bool,
         query: str,
-        documents: List[Union[str, Dict[str, Any]]],
+        documents: list[str | dict[str, Any]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
-        rank_fields: List[str] | None = None,
+        rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> Dict:
-        optional_rerank_params = {}
+    ) -> dict:
+        optional_rerank_params: Final = {}
         if non_default_params is not None:
             for k, v in non_default_params.items():
                 if k == "documents" and v is not None:
@@ -116,7 +116,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
                 elif k == "query" and v is not None:
                     optional_rerank_params["query"] = v
 
-        return OptionalRerankParams(**optional_rerank_params)  # type: ignore
+        return OptionalRerankParams(**optional_rerank_params)
 
     def validate_environment(
         self,
@@ -124,12 +124,13 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         # Get API credentials
         api_key, api_base = self.get_api_credentials(api_key=api_key, api_base=api_base)
 
-        default_headers = {
+        default_headers: Final = {
             "accept": "application/json",
             "content-type": "application/json",
         }
@@ -145,7 +146,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: Union[OptionalRerankParams, dict],
+        optional_rerank_params: OptionalRerankParams | dict,
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -155,7 +156,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             raise ValueError("Cohere 'documents' param is required for HuggingFace rerank")
         # Ensure return_text is a boolean value
         # HuggingFace API expects return_text parameter, corresponding to our return_documents parameter
-        request_body = {
+        request_body: Final = {
             "raw_scores": False,
             "truncate": False,
             "truncation_direction": "Right",
@@ -177,7 +178,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         litellm_params: dict = {},
     ) -> RerankResponse:
         try:
-            raw_response_json: HuggingFaceRerankResponseList = raw_response.json()
+            raw_response_json: Final[HuggingFaceRerankResponseList] = raw_response.json()
         except Exception:
             raise HuggingFaceError(
                 message=getattr(raw_response, "text", str(raw_response)),
@@ -188,12 +189,12 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         input_text = request_data.get("query", "")
         try:
             # Calculate tokens for the raw response JSON string
-            response_text = str(raw_response_json)
+            response_text: Final = str(raw_response_json)
             estimated_output_tokens = token_counter(model=model, text=response_text)
 
             # Calculate input tokens from query and documents
-            query = request_data.get("query", "")
-            documents = request_data.get("texts", [])
+            query: Final = request_data.get("query", "")
+            documents: Final = request_data.get("texts", [])
 
             # Convert documents to string if they're not already
             documents_text = ""
@@ -211,15 +212,15 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             estimated_output_tokens = len(raw_response_json) * 10 if raw_response_json else 10
             estimated_input_tokens = len(input_text) * 4 if "input_text" in locals() else 0
 
-        _billed_units = RerankBilledUnits(search_units=1)
-        _tokens = RerankTokens(input_tokens=estimated_input_tokens, output_tokens=estimated_output_tokens)
+        _billed_units: Final = RerankBilledUnits(search_units=1)
+        _tokens: Final = RerankTokens(input_tokens=estimated_input_tokens, output_tokens=estimated_output_tokens)
         rerank_meta = RerankResponseMeta(api_version={"version": "1.0"}, billed_units=_billed_units, tokens=_tokens)
 
         # Check if documents should be returned based on request parameters
         should_return_documents = request_data.get("return_text", False) or request_data.get("return_documents", False)
-        original_documents = request_data.get("texts", [])
+        original_documents: Final = request_data.get("texts", [])
 
-        results = []
+        results: Final = []
         for item in raw_response_json:
             # Extract required fields with defaults to handle None values
             index = item.get("index")
@@ -255,16 +256,14 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             meta=rerank_meta,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HuggingFaceError(message=error_message, status_code=status_code)
 
     def get_api_credentials(
         self,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> Tuple[str | None, str | None]:
+    ) -> tuple[str | None, str | None]:
         """
         Get API key and base URL from multiple sources.
         Returns tuple of (api_key, api_base).
@@ -274,10 +273,10 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             api_base: API base provided directly to this function, takes precedence over all other sources
         """
         # Get API key from multiple sources
-        final_api_key = api_key or litellm.huggingface_key or get_secret_str("HUGGINGFACE_API_KEY")
+        final_api_key: Final = api_key or litellm.huggingface_key or get_secret_str("HUGGINGFACE_API_KEY")
 
         # Get API base from multiple sources
-        final_api_base = (
+        final_api_base: Final = (
             api_base or litellm.api_base or get_secret_str("HF_API_BASE") or get_secret_str("HUGGINGFACE_API_BASE")
         )
 

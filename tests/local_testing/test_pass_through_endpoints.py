@@ -1,5 +1,4 @@
 import os
-import sys
 from litellm._uuid import uuid
 from functools import partial
 from typing import Optional
@@ -9,9 +8,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds-the parent directory to the system path
 
 import asyncio
 from unittest.mock import Mock

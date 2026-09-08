@@ -10,6 +10,10 @@ on:
       - litellm_oss_staging
       - "litellm_**"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   frontend-lint:
     runs-on: ubuntu-latest
@@ -22,12 +26,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       - name: Collect changed files
         id: changed
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
@@ -37,7 +42,9 @@ jobs:
           # landed since, so a PR that touches no UI file still gets linted
           # against hundreds of other people's files. Diff the PR head against its
           # own merge base instead, which is exactly what this PR changed.
-          merge_base=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          merge_base=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          test -n "$merge_base"
+          git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
           : > "$RUNNER_TEMP/prettier_files.txt"
           : > "$RUNNER_TEMP/eslint_files.txt"
           while IFS= read -r f; do
@@ -61,7 +68,7 @@ jobs:
         if: steps.changed.outputs.has_files == 'true'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: "20"
+          node-version-file: ui/litellm-dashboard/.nvmrc
           cache: "npm"
           cache-dependency-path: ui/litellm-dashboard/package-lock.json
 

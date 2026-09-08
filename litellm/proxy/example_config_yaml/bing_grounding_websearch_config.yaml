@@ -1,0 +1,30 @@
+# Web search via Microsoft Foundry (Grounding with Bing Search / the built-in
+# web_search tool), called through the Foundry Responses API.
+#
+# Configure the provider with env vars (setup and pricing are in the LiteLLM docs;
+# the code lives in litellm/llms/azure/search/transformation.py):
+#   BING_GROUNDING_PROJECT_ENDPOINT  (required) the Foundry project endpoint
+#   BING_GROUNDING_MODEL             (required) a model deployment in that project
+#   BING_GROUNDING_CONNECTION_ID     (optional) a Grounding with Bing connection id;
+#                                    without it the built-in web_search tool is used
+#   BING_GROUNDING_TOKEN             (optional) an Entra bearer token; without it (and
+#                                    without api_key) azure-identity mints one
+
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-5
+      aws_region_name: us-east-1
+
+search_tools:
+  - search_tool_name: bing-grounding-search
+    litellm_params:
+      search_provider: bing_grounding
+      # Optional: an Azure API key instead of BING_GROUNDING_TOKEN / azure-identity
+      # api_key: os.environ/AZURE_AI_API_KEY
+
+litellm_settings:
+  callbacks: ["websearch_interception"]
+  websearch_interception_params:
+    enabled_providers: ["bedrock"]
+    search_tool_name: bing-grounding-search
