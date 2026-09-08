@@ -142,5 +142,5 @@ def raise_vertex_credentials_failure(failure: VertexCredentialsFailure) -> NoRet
                 f"The inline `vertex_credentials` value is not valid JSON: {detail}. "
                 "Check for unescaped newlines in private_key."
             )
-        case _:
+        case _:  # pragma: no cover - exhaustiveness guard, unreachable while the union holds
             assert_never(failure)

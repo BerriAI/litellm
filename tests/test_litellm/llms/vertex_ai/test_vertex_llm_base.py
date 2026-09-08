@@ -2322,10 +2322,15 @@ class TestVertexCredentialsSource:
 
         assert "embedded null" in str(exc_info.value)
 
-    def test_a_file_whose_name_starts_with_a_brace_is_still_read(self, tmp_path):
-        """Shape dispatch must not strand a real file that happens to be named like JSON."""
+    def test_a_file_whose_name_starts_with_a_brace_is_still_read(self, tmp_path, monkeypatch):
+        """Shape dispatch must not strand a real file that happens to be named like JSON.
+
+        The value has to be relative for this to bite: an absolute path never starts with
+        a brace, so only "{vertex}.json" reaches the inline branch and needs the fallback.
+        """
         braced = tmp_path / "{vertex}.json"
         braced.write_text(json.dumps({"type": "service_account", "project_id": "from-braced-file"}))
+        monkeypatch.chdir(tmp_path)
         vertex_base = VertexBase()
         mock_creds = MagicMock()
         mock_creds.project_id = "from-braced-file"
@@ -2334,8 +2339,17 @@ class TestVertexCredentialsSource:
             patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
             patch.object(vertex_base, "refresh_auth"),
         ):
-            creds, project_id = vertex_base.load_auth(credentials=str(braced), project_id=None)
+            creds, project_id = vertex_base.load_auth(credentials="{vertex}.json", project_id=None)
 
         assert creds is mock_creds
         assert project_id == "from-braced-file"
         assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-braced-file"}
+
+    def test_a_credentials_file_that_is_not_text_is_reported_as_such(self, tmp_path):
+        not_text = tmp_path / "vertexai.json"
+        not_text.write_bytes(bytes([0xFF, 0xFE, 0x00, 0x01]))
+
+        with pytest.raises(ValueError, match="is not valid JSON") as exc_info:
+            VertexBase().load_auth(credentials=str(not_text), project_id="p")
+
+        assert "UTF-8" in str(exc_info.value)
