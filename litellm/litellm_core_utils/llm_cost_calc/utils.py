@@ -10,6 +10,7 @@ from typing import Any, Final, Literal, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import litellm
+from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
@@ -306,7 +307,7 @@ def _is_within_off_peak_window(off_peak_hours_utc: str | Sequence[str], current_
     than being localised, so callers must pass datetime.now(timezone.utc), never datetime.now(),
     or every window shifts by the host's offset.
     """
-    reference: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    reference: Final = current_time if current_time is not None else current_billing_time()
     now: Final = (reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference).time()
     windows: Final = (off_peak_hours_utc,) if isinstance(off_peak_hours_utc, str) else off_peak_hours_utc
     for window in windows:
@@ -393,7 +394,7 @@ def _is_off_peak(off_peak: Mapping[str, object], current_time: datetime | None =
     rules: the flat hours_utc windows, which apply every day, or any entry in windows, whose
     hours apply only on its weekdays.
     """
-    reference: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    reference: Final = current_time if current_time is not None else current_billing_time()
     reference_utc: Final = (
         reference.astimezone(timezone.utc) if reference.tzinfo is not None else reference.replace(tzinfo=timezone.utc)
     )
@@ -1187,7 +1188,7 @@ def generic_cost_per_token(
             usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
         )
 
-    billing_time: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    billing_time: Final = current_time if current_time is not None else current_billing_time()
     (
         prompt_base_cost,
         completion_base_cost,
@@ -1379,7 +1380,7 @@ def _cost_map_billed_rates(
     vertex_location: str | None,
     current_time: datetime | None,
 ) -> BilledTokenRates:
-    billing_time: Final = current_time if current_time is not None else datetime.now(timezone.utc)
+    billing_time: Final = current_time if current_time is not None else current_billing_time()
     (
         prompt_base_cost,
         completion_base_cost,

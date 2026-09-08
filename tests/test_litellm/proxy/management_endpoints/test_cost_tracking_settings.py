@@ -4,6 +4,7 @@ Tests for cost tracking settings management endpoints.
 Tests the GET and PATCH endpoints for managing cost discount configuration.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from pydantic import ValidationError
 
 
 import litellm
+from litellm._internal_context import pinned_billing_time
 from litellm.proxy._types import CostEstimateRequest
 from litellm.proxy.management_endpoints.cost_tracking_settings import router
 from litellm.proxy.proxy_server import app
@@ -1107,6 +1109,34 @@ class TestEstimateCostCacheAndReasoningTokens:
             + response.cache_creation_cost_per_request
         )
         assert response.output_cost_per_request == pytest.approx(1_000 * response.output_cost_per_token)
+
+    @pytest.mark.asyncio
+    async def test_a_quote_prices_its_totals_and_its_rates_at_the_same_moment(self, monkeypatch):
+        """The totals and the reported rates resolve off-peak pricing on separate paths. A quote
+        taken as a window opens must not bill on one side of it and report rates from the other."""
+        monkeypatch.setitem(
+            litellm.model_cost,
+            A_MAPPED_MODEL,
+            {
+                "input_cost_per_token": 3e-6,
+                "output_cost_per_token": 15e-6,
+                "off_peak_pricing": {
+                    "hours_utc": "02:00-03:00",
+                    "input_cost_per_token": 1e-6,
+                    "output_cost_per_token": 5e-6,
+                },
+                "litellm_provider": "openai",
+                "mode": "chat",
+            },
+        )
+
+        with pinned_billing_time(datetime(2026, 1, 1, 2, 30, tzinfo=timezone.utc)):
+            response = await _estimate(None, model=A_MAPPED_MODEL)
+
+        assert response.input_cost_per_token == pytest.approx(1e-6)
+        assert response.output_cost_per_token == pytest.approx(5e-6)
+        assert response.input_cost_per_request == pytest.approx(INPUT_TOKENS * response.input_cost_per_token)
+        assert response.output_cost_per_request == pytest.approx(OUTPUT_TOKENS * response.output_cost_per_token)
 
 
 class TestCostEstimateRequestTokenSubsets:
