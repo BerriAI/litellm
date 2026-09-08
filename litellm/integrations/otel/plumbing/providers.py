@@ -136,7 +136,8 @@ def parse_headers(raw: str | None) -> dict[str, str]:
 
 
 _IN_MEMORY_KINDS: Final = ("in_memory", "inmemory", "memory")
-_OTLP_HTTP_KINDS: Final = ("otlp_http", "http", "http/protobuf", "http/json")
+_OTLP_HTTP_JSON_KINDS: Final = ("http/json",)
+_OTLP_HTTP_KINDS: Final = ("otlp_http", "http", "http/protobuf", *_OTLP_HTTP_JSON_KINDS)
 _OTLP_GRPC_KINDS: Final = ("otlp_grpc", "grpc")
 
 
@@ -164,6 +165,13 @@ def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
         return factory(spec)
     if kind in _IN_MEMORY_KINDS:
         return InMemorySpanExporter()
+    if kind in _OTLP_HTTP_JSON_KINDS:
+        from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
+
+        return OTLPJsonSpanExporter(
+            endpoint=spec.traces_endpoint or _otlp_traces_endpoint(spec.endpoint),
+            headers=parse_headers(spec.headers),
+        )
     if kind in _OTLP_HTTP_KINDS:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as HTTPExporter,

@@ -69,7 +69,7 @@ class ExporterSpec(BaseModel):
 
     kind: str = Field(
         default="console",
-        description="console | in_memory | otlp_http | otlp_grpc | <factory kind>",
+        description="console | in_memory | otlp_http | http/json | otlp_grpc | <factory kind>",
     )
     endpoint: str | None = None
     traces_endpoint: str | None = Field(

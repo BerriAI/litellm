@@ -3584,6 +3584,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="OpenTelemetry",
         litellm_callback_params=[
             "OTEL_EXPORTER",
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
             "OTEL_ENDPOINT",
             "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
