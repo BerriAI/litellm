@@ -53,7 +53,7 @@ bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
-_EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _with_resolved_session_model(session: dict[str, object], model_name: str) -> dict[str, object]:

@@ -266,7 +266,7 @@ def get_pre_routing_selection(kwargs: Mapping[str, object]) -> str | None:
 DISABLE_FALLBACKS_METADATA_KEY: Final = "_disable_fallbacks"
 
 
-def record_disable_fallbacks(request_kwargs: Mapping[str, Any] | None, disabled: bool) -> None:
+def record_disable_fallbacks(request_kwargs: Mapping[str, object] | None, disabled: bool) -> None:
     """
     Write-or-clear the request's disable_fallbacks verdict into the router-internal metadata
     bucket. The wrapper pops the raw kwarg before any downstream frame runs, so the refusal
@@ -286,7 +286,7 @@ def record_disable_fallbacks(request_kwargs: Mapping[str, Any] | None, disabled:
         bucket.pop(DISABLE_FALLBACKS_METADATA_KEY, None)
 
 
-def fallbacks_disabled_for_request(kwargs: Mapping[str, Any]) -> bool:
+def fallbacks_disabled_for_request(kwargs: Mapping[str, object]) -> bool:
     """True when this request opted out of fallbacks, read from the raw kwarg (pre-pop
     snapshots keep it) or the router-internal bucket the wrapper stamps after popping it."""
     if kwargs.get("disable_fallbacks") is True:
@@ -639,7 +639,7 @@ async def log_failure_fallback_event(original_model_group: str, kwargs: dict, or
             verbose_router_logger.error("Error in log_failure_fallback_event: %s", e)
 
 
-def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
+def _check_non_standard_fallback_format(fallbacks: Sequence[object] | None) -> bool:
     """
     Checks if the fallbacks list is a list of strings or a list of dictionaries.
 
@@ -653,8 +653,9 @@ def _check_non_standard_fallback_format(fallbacks: list[Any] | None) -> bool:
         return False
     if all(isinstance(item, str) for item in fallbacks):
         return True
-    elif all(isinstance(item, dict) for item in fallbacks):
-        for item in fallbacks:
+    dict_entries: Final = tuple(item for item in fallbacks if isinstance(item, dict))
+    if len(dict_entries) == len(fallbacks):
+        for item in dict_entries:
             for key in LiteLLMParamsTypedDict.__annotations__:
                 if key in item:
                     # If the value is a list, it's likely a standard fallback model group mapping

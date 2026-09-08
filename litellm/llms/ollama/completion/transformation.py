@@ -227,7 +227,7 @@ class OllamaConfig(BaseConfig):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> Any:
+    ) -> dict[str, object] | None:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"

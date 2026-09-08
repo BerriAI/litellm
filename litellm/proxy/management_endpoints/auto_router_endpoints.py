@@ -8,7 +8,6 @@ POST /auto_router/validate_complexity_router_config - Dry-run the complexity-rou
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
-from operator import attrgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Protocol
 from uuid import uuid4
@@ -1094,6 +1093,10 @@ def _slices(rows: Sequence[_AttemptAggRow]) -> tuple[ShadowEvalSlice, ...]:
     )
 
 
+def _leg_group_id(leg: "_LegRow") -> str:
+    return leg.group_id
+
+
 class _LegRow(BaseModel):
     """One LiteLLM_ShadowEvalJob row, validated off the untyped prisma record. A row is
     one target's leg of a job; the legs of a job share group_id and identical config,
@@ -1598,10 +1601,7 @@ async def list_shadow_eval_jobs(
         or ()
     )
     by_group: Final[Mapping[str, tuple[_LegRow, ...]]] = MappingProxyType(
-        {
-            group_id: tuple(group)
-            for group_id, group in groupby(sorted(legs, key=attrgetter("group_id")), key=attrgetter("group_id"))
-        }
+        {group_id: tuple(group) for group_id, group in groupby(sorted(legs, key=_leg_group_id), key=_leg_group_id)}
     )
     newest_first: Final = sorted(
         by_group, key=lambda group_id: max(leg.created_at for leg in by_group[group_id]), reverse=True

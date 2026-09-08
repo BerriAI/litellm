@@ -4,29 +4,23 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.model import LiteLLM_ProxyModelTable
-from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
 
 
-class _PrismaModelDb(Protocol):
-    @property
-    def litellm_proxymodeltable(self) -> TableActions["prisma_models.LiteLLM_ProxyModelTable"]: ...
-
-
-class _PrismaClientView(Protocol):
-    @property
-    def db(self) -> _PrismaModelDb: ...
+class _ProxyModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ProxyModelTable"]):
+    table_name = "litellm_proxymodeltable"
 
 
 class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
@@ -38,11 +32,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
 
     @property
     def table(self) -> TableActions["prisma_models.LiteLLM_ProxyModelTable"]:
-        client: Final[_PrismaClientView] = self.prisma_client
-        return wrap_table_actions_for_config_sync(
-            actions=client.db.litellm_proxymodeltable,
-            table_name="litellm_proxymodeltable",
-        )
+        return _ProxyModelTableRepository(self._prisma_client).table
 
     @property
     def model_class(self) -> type[LiteLLM_ProxyModelTable]:

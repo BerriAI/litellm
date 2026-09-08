@@ -48,7 +48,7 @@ from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManage
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.prisma_protocols import SpendLinkedTable
+from litellm.repositories.prisma_protocols import PrismaBatch, SpendLinkedTable
 from litellm.repositories.table_repositories import (
     EndUserRepository,
     ModelAccessGroupBudgetRepository,
@@ -435,6 +435,11 @@ class ResetBudgetJob:
         self.reset_settings: BudgetResetSettings = reset_settings or get_budget_reset_settings()
         self.pod_lock_manager: PodLockManager | None = pod_lock_manager
 
+    @property
+    def _new_batch(self) -> Callable[[], PrismaBatch]:
+        new_batch: Final[Callable[[], PrismaBatch]] = self.prisma_client.db.batch_
+        return new_batch
+
     async def _lease_is_held(self, lock_manager: PodLockManager) -> bool:
         """True only when the lease is readable and someone holds it.
 
@@ -721,7 +726,7 @@ class ResetBudgetJob:
         )
 
     async def _commit_budget_cascade_once(self, cascade: _BudgetCascade) -> None:
-        async with budget_cascade_unit_of_work(self.prisma_client.db.batch_) as uow:
+        async with budget_cascade_unit_of_work(self._new_batch) as uow:
             _queue_budget_linked_resets(uow.team_memberships, cascade)
             _queue_budget_linked_resets(uow.keys, cascade, extra=_LINKED_KEYS_WHERE)
             _queue_budget_linked_resets(uow.organizations, cascade, extra=_SPENT_ROWS_WHERE)
@@ -861,7 +866,7 @@ class ResetBudgetJob:
         )
 
     async def _write_key_reset_updates_once(self, updated_keys: list[LiteLLM_VerificationToken]) -> None:
-        async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
+        async with spend_reset_unit_of_work(self._new_batch) as uow:
             for k in updated_keys:
                 if k.token is None:
                     continue
@@ -885,7 +890,7 @@ class ResetBudgetJob:
         )
 
     async def _write_user_reset_updates_once(self, updated_users: list[LiteLLM_UserTable]) -> None:
-        async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
+        async with spend_reset_unit_of_work(self._new_batch) as uow:
             for u in updated_users:
                 uow.users.queue_spend_reset(
                     user_id=u.user_id,
@@ -907,7 +912,7 @@ class ResetBudgetJob:
         )
 
     async def _write_team_reset_updates_once(self, updated_teams: list[LiteLLM_TeamTable]) -> None:
-        async with spend_reset_unit_of_work(self.prisma_client.db.batch_) as uow:
+        async with spend_reset_unit_of_work(self._new_batch) as uow:
             for t in updated_teams:
                 uow.teams.queue_spend_reset(
                     team_id=t.team_id,

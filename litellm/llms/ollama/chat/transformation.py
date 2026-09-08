@@ -124,7 +124,7 @@ class OllamaChatConfig(BaseConfig):
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
         return super().get_config()
 
     def get_supported_openai_params(self, model: str):
