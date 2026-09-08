@@ -58,6 +58,76 @@ def test_prices_file_validates_against_committed_schema(prices: dict, committed_
     assert errors == []
 
 
+def test_openrouter_gpt56_sol_catalog_entry_matches_official_metadata(prices: dict):
+    entry = prices["openrouter/openai/gpt-5.6-sol"]
+
+    assert {
+        key: entry[key]
+        for key in (
+            "litellm_provider",
+            "mode",
+            "source",
+            "input_cost_per_token",
+            "input_cost_per_token_above_272k_tokens",
+            "output_cost_per_token",
+            "output_cost_per_token_above_272k_tokens",
+            "cache_read_input_token_cost",
+            "cache_read_input_token_cost_above_272k_tokens",
+            "cache_creation_input_token_cost",
+            "cache_creation_input_token_cost_above_272k_tokens",
+            "max_input_tokens",
+            "max_output_tokens",
+            "max_tokens",
+            "supported_modalities",
+            "supported_output_modalities",
+            "reasoning_effort_levels",
+            "default_reasoning_effort",
+        )
+    } == {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "source": "https://openrouter.ai/openai/gpt-5.6-sol",
+        "input_cost_per_token": 2e-6,
+        "input_cost_per_token_above_272k_tokens": 4e-6,
+        "output_cost_per_token": 1e-5,
+        "output_cost_per_token_above_272k_tokens": 1.5e-5,
+        "cache_read_input_token_cost": 2e-7,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-7,
+        "cache_creation_input_token_cost": 2.5e-6,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-6,
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["text"],
+        "reasoning_effort_levels": ["none", "low", "medium", "high", "xhigh", "max"],
+        "default_reasoning_effort": "medium",
+    }
+    assert {
+        key: entry[key]
+        for key in (
+            "supports_function_calling",
+            "supports_tool_choice",
+            "supports_reasoning",
+            "supports_response_schema",
+            "supports_vision",
+            "supports_pdf_input",
+            "supports_prompt_caching",
+        )
+    } == {
+        key: True
+        for key in (
+            "supports_function_calling",
+            "supports_tool_choice",
+            "supports_reasoning",
+            "supports_response_schema",
+            "supports_vision",
+            "supports_pdf_input",
+            "supports_prompt_caching",
+        )
+    }
+
+
 @pytest.mark.parametrize(
     "entry",
     [
