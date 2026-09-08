@@ -11,6 +11,7 @@ on:
       - "litellm/_redis.py"
       - "litellm/_redis_credential_provider.py"
       - "tests/test_litellm/test_redis.py"
+      - "tests/local_testing/test_caching.py"
       - "tests/test_litellm/caching/test_redis_connection_pool.py"
       - ".github/workflows/test-redis-compat.yml"
       - "pyproject.toml"
@@ -83,6 +84,8 @@ jobs:
           uv run --no-sync pytest \
             tests/test_litellm/test_redis.py \
             tests/test_litellm/caching/test_redis_connection_pool.py \
+            tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_azure_credentials \
+            tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_gcp_credentials \
             --tb=short -vv \
             --reruns 2 \
             --reruns-delay 1 \
