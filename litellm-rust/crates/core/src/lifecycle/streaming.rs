@@ -119,7 +119,7 @@ impl StreamingCompletion {
 impl Drop for StreamingCompletion {
     fn drop(&mut self) {
         if self.receiver.is_some() {
-            let _ = self.spawn();
+            drop(self.spawn());
         }
     }
 }

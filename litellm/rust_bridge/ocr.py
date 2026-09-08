@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import traceback
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from contextvars import copy_context
 from datetime import datetime
 from typing import Final, Protocol, cast  # noqa: TID251  # native extension exposes dynamically typed callables
@@ -80,7 +80,7 @@ def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: 
             (
                 *callbacks,
                 *cast(  # cast-ok: per-call callback list is a legacy untyped boundary
-                    list, arguments.get("success_callback") or []
+                    list, arguments.get("success_callback") or ()
                 ),  # cast-ok: per-call callback list is a legacy untyped boundary
             )  # cast-ok: per-call callback list is a legacy untyped boundary
         )  # cast-ok: per-call callback list is a legacy untyped boundary  # mutable-ok: deduplication uses dict keys
@@ -90,7 +90,7 @@ def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: 
             (
                 *callbacks,
                 *cast(  # cast-ok: per-call callback list is a legacy untyped boundary
-                    list, arguments.get("failure_callback") or []
+                    list, arguments.get("failure_callback") or ()
                 ),  # cast-ok: per-call callback list is a legacy untyped boundary
             )  # cast-ok: per-call callback list is a legacy untyped boundary
         )  # cast-ok: per-call callback list is a legacy untyped boundary  # mutable-ok: deduplication uses dict keys
@@ -116,13 +116,12 @@ def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: 
             cb not in litellm._known_custom_logger_compatible_callbacks  # pyright: ignore[reportPrivateUsage]  # callback compatibility registry has no public accessor
             or cb in litellm.input_callback + litellm.success_callback + litellm.failure_callback
         )
-        and cb
-        not in (utils.callback_list or [])  # mutable-ok: empty list normalizes an uninitialized callback registry
+        and cb not in (utils.callback_list or ())
     ]
     if uninitialized:
         set_callbacks(uninitialized, function_id=arguments.get("id"))
         utils.callback_list = list(  # mutable-ok: global callback registry is mutable
-            dict.fromkeys((*(utils.callback_list or []), *uninitialized))
+            dict.fromkeys((*(utils.callback_list or ()), *uninitialized))
         )  # mutable-ok: global callback registry is mutable
     if litellm_logging.customLogger is None:  # pyright: ignore[reportUnnecessaryComparison]  # runtime plugin registry can be reset to None
         set_callbacks(
@@ -183,7 +182,7 @@ def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: 
         supports_correlation_logging=asynchronous,
     )
     logger.dynamic_input_callbacks = [  # mutable-ok: remove callbacks promoted to the global registry
-        cb for cb in dict.fromkeys(logger.dynamic_input_callbacks or []) if cb not in litellm.input_callback
+        cb for cb in dict.fromkeys(logger.dynamic_input_callbacks or ()) if cb not in litellm.input_callback
     ]
     arguments["litellm_call_id"] = call_id
     arguments["litellm_logging_obj"] = logger
@@ -194,7 +193,7 @@ def invoke_terminal(
     action: str,
     roots: object,
     logger: object,
-    record: dict[str, object] | None,
+    record: Mapping[str, object] | None,
     value: object,
     fallback_start_time: datetime,
     fallback_end_time: datetime,
@@ -203,13 +202,22 @@ def invoke_terminal(
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-    logging: Final = cast(Logging, logger)  # cast-ok: Rust passes the logger returned by initialize_logging
-    timing: Final = cast(dict[str, object], record["timing"]) if record is not None else None
+    if not isinstance(logger, Logging):
+        raise TypeError(f"expected Logging, got {type(logger).__name__}")
+    logging: Final = logger
+    timing_value: Final = record.get("timing") if record is not None else None
+    timing: Final = timing_value if isinstance(timing_value, Mapping) else None
+    start_value: Final = timing.get("start_time") if timing is not None else None
+    end_value: Final = timing.get("end_time") if timing is not None else None
     start_time: Final = (
-        datetime.fromtimestamp(cast(float, timing["start_time"])) if timing is not None else fallback_start_time
+        datetime.fromtimestamp(start_value, tz=fallback_start_time.tzinfo)
+        if isinstance(start_value, (int, float))
+        else fallback_start_time
     )
     end_time: Final = (
-        datetime.fromtimestamp(cast(float, timing["end_time"])) if timing is not None else fallback_end_time
+        datetime.fromtimestamp(end_value, tz=fallback_end_time.tzinfo)
+        if isinstance(end_value, (int, float))
+        else fallback_end_time
     )
     if action == "sync_success":
 

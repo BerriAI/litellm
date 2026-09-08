@@ -2456,11 +2456,11 @@ class BaseLLMHTTPHandler:
             )
         except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
             from litellm.rust_bridge.bindings import native_exception_types
-            from litellm.rust_bridge.runtime import BridgeErrorContext, _raise_upstream
+            from litellm.rust_bridge.runtime import BridgeErrorContext, raise_upstream
 
             exception_types: Final = native_exception_types()
             if exception_types is not None and isinstance(rust_error, exception_types[1]):
-                _raise_upstream(
+                raise_upstream(
                     rust_error,
                     BridgeErrorContext(route="messages", provider=custom_llm_provider, model=model),
                 )
@@ -2472,9 +2472,8 @@ class BaseLLMHTTPHandler:
         if rust_response is None:
             return None
 
-        response_obj: Final = cast(AnthropicMessagesResponse, rust_response)
-        response_obj["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
-        return response_obj
+        rust_response["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
+        return rust_response
 
     @staticmethod
     def _rust_anthropic_messages_fake_stream(
@@ -2488,12 +2487,9 @@ class BaseLLMHTTPHandler:
             AnthropicMessagesStreamingResponse,
         )
 
-        completion_stream = cast(
-            AsyncIterator[bytes],
-            FakeAnthropicMessagesStreamIterator(
-                response=rust_response,
-                on_complete=getattr(rust_response, "complete", None),
-            ),
+        completion_stream: Final[AsyncIterator[bytes]] = FakeAnthropicMessagesStreamIterator(
+            response=rust_response,
+            on_complete=getattr(rust_response, "complete", None),
         )
         hidden_params: Final = AnthropicMessagesStreamHiddenParams(additional_headers={"x-litellm-rust": "true"})
         return AnthropicMessagesStreamingResponse(
@@ -6510,7 +6506,6 @@ class BaseLLMHTTPHandler:
             return
 
         import websockets
-        from websockets.asyncio.client import ClientConnection
 
         litellm_params: Final = GenericLiteLLMParams.model_validate(
             {
@@ -6610,7 +6605,7 @@ class BaseLLMHTTPHandler:
 
                 streaming: Final = ResponsesWebSocketStreaming(
                     websocket=websocket,
-                    backend_ws=cast(ClientConnection, backend_ws),
+                    backend_ws=backend_ws,
                     logging_obj=logging_obj,
                     user_api_key_dict=user_api_key_dict,
                     request_data=_request_data,

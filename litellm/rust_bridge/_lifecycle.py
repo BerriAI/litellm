@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 
 
@@ -13,7 +14,7 @@ def invoke_terminal(
     action: str,
     roots: object,
     logger: object,
-    record: dict[str, object] | None,
+    record: Mapping[str, object] | None,
     value: object,
     start_time: datetime,
     end_time: datetime,

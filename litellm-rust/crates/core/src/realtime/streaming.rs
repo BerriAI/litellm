@@ -254,7 +254,7 @@ where
                 for outbound in OPENAI_REALTIME_CONFIG.transform_realtime_request(&event, model)?.events {
                     let payload = serde_json::to_string(&outbound)
                         .map_err(|error| Error::InvalidResponse(error.to_string()))?;
-                    upstream_tx.send(Message::Text(payload.into())).await.map_err(ws_transport_error)?;
+                    upstream_tx.send(Message::Text(payload)).await.map_err(ws_transport_error)?;
                 }
                 observation.observe_client(&event);
             }
@@ -635,16 +635,12 @@ mod tests {
                 let events = events.clone();
                 tokio::spawn(async move {
                     let mut socket = accept_async(stream).await.unwrap();
-                    socket.send(Message::Text(json!({"type":"session.created","session":{"id":"sess-core","model":"upstream-model"}}).to_string().into())).await.unwrap();
+                    socket.send(Message::Text(json!({"type":"session.created","session":{"id":"sess-core","model":"upstream-model"}}).to_string())).await.unwrap();
                     while let Some(Ok(Message::Text(text))) = socket.next().await {
                         let event: RealtimeEvent = serde_json::from_str(&text).unwrap();
                         if event.event_type == "response.create" {
                             for event in &events {
-                                if socket
-                                    .send(Message::Text(event.to_string().into()))
-                                    .await
-                                    .is_err()
-                                {
+                                if socket.send(Message::Text(event.to_string())).await.is_err() {
                                     return;
                                 }
                             }

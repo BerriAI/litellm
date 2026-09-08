@@ -9,7 +9,7 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 """
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from types import TracebackType
 from typing import Any, Final, cast
 
@@ -193,10 +193,10 @@ class FakeAnthropicMessagesStreamIterator:
 
         return chunks
 
-    def __aiter__(self):
+    def __aiter__(self) -> AsyncIterator[bytes]:
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> bytes:
         if self.current_index >= len(self.chunks):
             self.close()
             raise StopAsyncIteration
@@ -205,10 +205,10 @@ class FakeAnthropicMessagesStreamIterator:
         self.current_index += 1
         return chunk
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[bytes]:
         return self
 
-    def __next__(self):
+    def __next__(self) -> bytes:
         if self.current_index >= len(self.chunks):
             self.close()
             raise StopIteration

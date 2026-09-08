@@ -114,11 +114,13 @@ async fn bridge(
     let _ = service::run(
         &router,
         &pool,
-        &model,
-        None,
-        loggers,
-        new_call_id(),
-        metadata,
+        service::RealtimeCall {
+            model,
+            idle_timeout: None,
+            loggers,
+            call_id: new_call_id(),
+            metadata,
+        },
         client_in,
         client_out,
     )

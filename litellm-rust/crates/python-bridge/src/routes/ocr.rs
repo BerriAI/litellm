@@ -902,6 +902,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the Python SDK and its dependencies on PYTHONPATH"]
     fn callback_decline_is_terminal_and_identity_is_reused() {
         Python::initialize();
         Python::attach(|py| {
@@ -984,6 +985,7 @@ asyncio.run(exercise())
     }
 
     #[test]
+    #[ignore = "requires the Python SDK and its dependencies on PYTHONPATH"]
     fn native_send_owns_state_without_the_python_driver() {
         Python::initialize();
         Python::attach(|py| {
@@ -1081,6 +1083,7 @@ asyncio.run(exercise())
     }
 
     #[test]
+    #[ignore = "requires the Python SDK and its dependencies on PYTHONPATH"]
     fn retains_identity_independent_wire_roots_and_collects_cycles() {
         Python::initialize();
         Python::attach(|py| {
@@ -1170,6 +1173,7 @@ assert alive() is None
     }
 
     #[test]
+    #[ignore = "requires the Python SDK and its dependencies on PYTHONPATH"]
     fn async_callbacks_are_inline_and_unsupported_requests_never_call_them() {
         Python::initialize();
         Python::attach(|py| {

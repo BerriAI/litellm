@@ -91,7 +91,7 @@ def attempt(
     except declined as error:
         return RustDeclined(reason=_decline_reason(error))
     except upstream as error:
-        _raise_upstream(error, context)
+        raise_upstream(error, context)
     return RustHandled(adapt(value))
 
 
@@ -112,7 +112,7 @@ async def aattempt(
     except declined as error:
         return RustDeclined(reason=_decline_reason(error))
     except upstream as error:
-        _raise_upstream(error, context)
+        raise_upstream(error, context)
     return RustHandled(adapt(value))
 
 
@@ -136,7 +136,7 @@ def _required_reason(result: RustDeclined | RustUnavailable) -> str:
             return f"declined the request: {reason}"
 
 
-def _raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
+def raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
     args: Final[tuple[object, ...]] = error.args
     status_value: Final = args[0] if args else 0
     message_value: Final = args[1] if len(args) > 1 else str(error)

@@ -439,10 +439,13 @@ async def test_fake_stream_context_closes_after_early_cancellation():
         AnthropicMessagesStreamHiddenParams(additional_headers={}),
     )
 
-    with pytest.raises(asyncio.CancelledError):
+    async def cancel_inside_context() -> None:
         async with stream:
             await anext(stream)
             raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await cancel_inside_context()
 
     await stream.aclose()
     assert completed == [True]

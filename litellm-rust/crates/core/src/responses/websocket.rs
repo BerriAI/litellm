@@ -317,7 +317,7 @@ async fn send_provider_event(
         let payload = serde_json::to_string(&outbound)
             .map_err(|error| Error::InvalidResponse(error.to_string()))?;
         upstream
-            .send(Message::Text(payload.into()))
+            .send(Message::Text(payload))
             .await
             .map_err(ws_transport_error)?;
     }
@@ -548,10 +548,7 @@ mod tests {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = accept_async(stream).await.unwrap();
             for frame in frames {
-                socket
-                    .send(Message::Text(frame.to_string().into()))
-                    .await
-                    .unwrap();
+                socket.send(Message::Text(frame.to_string())).await.unwrap();
             }
             if remain_open {
                 futures_util::future::pending::<()>().await;
@@ -562,10 +559,12 @@ mod tests {
         (format!("http://{address}"), task)
     }
 
-    fn input() -> (
+    type InputChannel = (
         futures_channel::mpsc::UnboundedSender<Result<ResponsesWsEvent, Error>>,
         futures_channel::mpsc::UnboundedReceiver<Result<ResponsesWsEvent, Error>>,
-    ) {
+    );
+
+    fn input() -> InputChannel {
         futures_channel::mpsc::unbounded()
     }
 

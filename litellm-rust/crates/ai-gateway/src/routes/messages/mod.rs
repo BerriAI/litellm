@@ -40,7 +40,7 @@ async fn handle(
         .map_err(MessagesRouteError::from)?
     {
         service::MessagesResponse::Json(body) => Ok(Json(body).into_response()),
-        service::MessagesResponse::Stream(upstream) => stream_response(upstream),
+        service::MessagesResponse::Stream(upstream) => stream_response(*upstream),
     }
 }
 

@@ -141,8 +141,7 @@ pub async fn messages<S: MessagesServices>(
 ) -> ExecutedCall<AnthropicMessagesResponse, Error> {
     CallLifecycle
         .run_with_usage(
-            context,
-            request,
+            (context, request),
             services,
             services,
             services,

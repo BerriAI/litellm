@@ -16,7 +16,12 @@ import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import (
+    TYPE_CHECKING,
+    Final,
+    Protocol,
+    cast,  # noqa: TID251  # native callables require runtime signature narrowing
+)
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -27,7 +32,6 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
-from litellm.rust_bridge._lifecycle import invoke_terminal
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -55,6 +59,36 @@ class RustChatCompletions(Protocol):
 class RustAchatCompletions(Protocol):
     def __call__(self, arguments: dict[str, object]) -> Awaitable[ModelResponse]:
         raise NotImplementedError
+
+
+class LegacyRustChatCompletions(Protocol):
+    def __call__(
+        self,
+        *,
+        model: str,
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str | None,
+        extra_headers: Mapping[str, object] | None,
+        timeout_seconds: float | None,
+    ) -> Mapping[str, object]: ...
+
+
+class LegacyRustAchatCompletions(Protocol):
+    def __call__(
+        self,
+        *,
+        model: str,
+        messages: Sequence[object],
+        optional_params: Mapping[str, object],
+        api_key: str | None,
+        api_base: str | None,
+        custom_llm_provider: str | None,
+        extra_headers: Mapping[str, object] | None,
+        timeout_seconds: float | None,
+    ) -> Awaitable[Mapping[str, object]]: ...
 
 
 class RustChatCompletionsDecline(Protocol):
@@ -108,8 +142,8 @@ _UNSET: Final[_Unset] = _Unset()
 
 @dataclass(slots=True)
 class _RustChatCompletionsState:
-    chat_completions: RustChatCompletions | None = None
-    achat_completions: RustAchatCompletions | None = None
+    chat_completions: RustChatCompletions | LegacyRustChatCompletions | None = None
+    achat_completions: RustAchatCompletions | LegacyRustAchatCompletions | None = None
     decline: RustChatCompletionsDecline | None = None
 
 
@@ -118,8 +152,8 @@ _STATE: Final[_RustChatCompletionsState] = _RustChatCompletionsState()
 
 def set_rust_chat_completions(
     *,
-    chat_completions: RustChatCompletions | None | _Unset = _UNSET,
-    achat_completions: RustAchatCompletions | None | _Unset = _UNSET,
+    chat_completions: RustChatCompletions | LegacyRustChatCompletions | None | _Unset = _UNSET,
+    achat_completions: RustAchatCompletions | LegacyRustAchatCompletions | None | _Unset = _UNSET,
     decline: RustChatCompletionsDecline | None | _Unset = _UNSET,
 ) -> None:
     """Inject the native callables, so tests can supply a double instead of
@@ -132,7 +166,7 @@ def set_rust_chat_completions(
         _STATE.decline = decline
 
 
-def load_rust_chat_completions() -> RustChatCompletions | None:
+def load_rust_chat_completions() -> RustChatCompletions | LegacyRustChatCompletions | None:
     if _STATE.chat_completions is not None:
         return _STATE.chat_completions
     native_bridge: Final = get_native_bridge()
@@ -142,7 +176,7 @@ def load_rust_chat_completions() -> RustChatCompletions | None:
     return loaded
 
 
-def load_rust_achat_completions() -> RustAchatCompletions | None:
+def load_rust_achat_completions() -> RustAchatCompletions | LegacyRustAchatCompletions | None:
     if _STATE.achat_completions is not None:
         return _STATE.achat_completions
     native_bridge: Final = get_native_bridge()
@@ -332,7 +366,10 @@ def chat_completions(
         return None
     try:
         if _STATE.chat_completions is not None and _uses_argument_bag(rust_chat_completions):
-            rust_result: Final = rust_chat_completions(
+            argument_bag_call: Final = cast(  # cast-ok: signature inspection selected the argument-bag callable
+                RustChatCompletions, rust_chat_completions
+            )
+            rust_result: Final = argument_bag_call(
                 _arguments(
                     arguments,
                     model,
@@ -349,7 +386,10 @@ def chat_completions(
             )
             return rust_result
         if _STATE.chat_completions is not None:
-            rust_response: Final = rust_chat_completions(
+            legacy: Final = cast(  # cast-ok: signature inspection selected the legacy injected callable
+                LegacyRustChatCompletions, rust_chat_completions
+            )
+            rust_response: Final = legacy(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
@@ -362,7 +402,8 @@ def chat_completions(
             if on_response is not None:
                 on_response(rust_response)
             return build_model_response(rust_response, model_response)
-        return rust_chat_completions(
+        native_call: Final = cast(RustChatCompletions, rust_chat_completions)  # cast-ok: native ABI uses argument bag
+        return native_call(
             _arguments(
                 arguments,
                 model,
@@ -403,7 +444,10 @@ async def achat_completions(
         return None
     try:
         if _STATE.achat_completions is not None and _uses_argument_bag(rust_achat_completions):
-            rust_result: Final = await rust_achat_completions(
+            argument_bag_call: Final = cast(  # cast-ok: signature inspection selected the argument-bag callable
+                RustAchatCompletions, rust_achat_completions
+            )
+            rust_result: Final = await argument_bag_call(
                 _arguments(
                     arguments,
                     model,
@@ -420,7 +464,10 @@ async def achat_completions(
             )
             return rust_result
         if _STATE.achat_completions is not None:
-            rust_response: Final = await rust_achat_completions(
+            legacy: Final = cast(  # cast-ok: signature inspection selected the legacy injected callable
+                LegacyRustAchatCompletions, rust_achat_completions
+            )
+            rust_response: Final = await legacy(
                 model=model,
                 messages=messages,
                 optional_params=optional_params,
@@ -433,7 +480,10 @@ async def achat_completions(
             if on_response is not None:
                 on_response(rust_response)
             return build_model_response(rust_response, model_response)
-        return await rust_achat_completions(
+        native_call: Final = cast(  # cast-ok: native ABI uses argument bag
+            RustAchatCompletions, rust_achat_completions
+        )
+        return await native_call(
             _arguments(
                 arguments,
                 model,

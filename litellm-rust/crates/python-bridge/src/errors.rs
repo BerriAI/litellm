@@ -78,6 +78,12 @@ pub(crate) fn messages_provider_error_to_pyerr(err: Error) -> PyErr {
     }
 }
 
+pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = module.py();
+    module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
+    module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,10 +125,4 @@ mod tests {
             }
         });
     }
-}
-
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    let py = module.py();
-    module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
-    module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
 }

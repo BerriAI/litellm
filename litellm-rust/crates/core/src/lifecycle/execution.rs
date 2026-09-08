@@ -190,8 +190,7 @@ impl CallLifecycle {
         ProviderFuture: Future<Output = Result<Resp, Error>>,
     {
         self.run_with_usage(
-            context,
-            request,
+            (context, request),
             policy,
             dispatcher,
             clock,
@@ -213,8 +212,7 @@ impl CallLifecycle {
         ResponseUsage,
     >(
         &self,
-        mut context: CallLifecycleContext,
-        request: InitialReq,
+        input: (CallLifecycleContext, InitialReq),
         policy: &Policy,
         dispatcher: &Dispatcher,
         clock: &ClockImpl,
@@ -230,6 +228,7 @@ impl CallLifecycle {
         ProviderFuture: Future<Output = Result<Resp, Error>>,
         ResponseUsage: FnOnce(&Resp) -> Option<Usage>,
     {
+        let (mut context, request) = input;
         let start_time = clock.now();
         let request = match policy.async_pre_call_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,

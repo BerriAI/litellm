@@ -63,7 +63,7 @@ impl TerminalDispatcher for GatewayTerminalDispatcher {
 
 pub(crate) enum MessagesResponse {
     Json(Value),
-    Stream(StreamingCall),
+    Stream(Box<StreamingCall>),
 }
 
 #[tracing::instrument(
@@ -129,6 +129,7 @@ pub async fn run(
     if request.body.get("stream").and_then(Value::as_bool) == Some(true) {
         return lifecycle::messages_stream(services, request, Options::default(), context)
             .await
+            .map(Box::new)
             .map(MessagesResponse::Stream);
     }
 

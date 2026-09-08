@@ -26,6 +26,14 @@ struct GatewayRealtimeServices {
     runner: CustomLoggerRunner,
 }
 
+pub struct RealtimeCall {
+    pub model: String,
+    pub idle_timeout: Option<Duration>,
+    pub loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
+    pub call_id: String,
+    pub metadata: RequestMetadata,
+}
+
 impl Clock for GatewayRealtimeServices {
     fn now(&self) -> f64 {
         std::time::SystemTime::now()
@@ -49,11 +57,7 @@ impl TerminalDispatcher for GatewayRealtimeServices {
 pub async fn run<In, Out>(
     router: &Router,
     pool: &RealtimePool,
-    model: &str,
-    idle_timeout: Option<Duration>,
-    loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
-    call_id: String,
-    metadata: RequestMetadata,
+    call: RealtimeCall,
     client_in: In,
     client_out: Out,
 ) -> Result<ExecutedCall<(), Error>, Error>
@@ -62,8 +66,15 @@ where
     Out: Sink<RealtimeEvent> + Unpin + Send,
     <Out as Sink<RealtimeEvent>>::Error: std::fmt::Display,
 {
+    let RealtimeCall {
+        model,
+        idle_timeout,
+        loggers,
+        call_id,
+        metadata,
+    } = call;
     let deployment = router
-        .get_available_deployment(model)
+        .get_available_deployment(&model)
         .ok_or_else(|| Error::Routing(format!("no deployment available for model '{model}'")))?;
     let params = &deployment.litellm_params;
     let connection = upstream_key(

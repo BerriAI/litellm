@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Final, Protocol, cast
 
 import httpx
@@ -11,15 +11,19 @@ from litellm.rust_bridge._lifecycle import (
     initialize_logging as initialize_lifecycle_logging,
 )
 from litellm.rust_bridge._lifecycle import invoke_terminal
+from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.timeouts import timeout_to_seconds
+from litellm.types.llms.anthropic_messages.anthropic_response import (
+    AnthropicMessagesResponse,
+)
 
 
 class RustMessages(Protocol):
-    def __call__(self, arguments: dict[str, object]) -> dict[str, object]: ...
+    def __call__(self, arguments: dict[str, object]) -> AnthropicMessagesResponse: ...
 
 
 class RustAmessages(Protocol):
-    def __call__(self, arguments: dict[str, object]) -> Awaitable[dict[str, object]]: ...
+    def __call__(self, arguments: dict[str, object]) -> Awaitable[AnthropicMessagesResponse]: ...
 
 
 class _MessagesLogging(Protocol):
@@ -44,6 +48,18 @@ class _RustMessagesState:
 _STATE: Final = _RustMessagesState()
 
 
+def _as_messages(value: object) -> RustMessages | None:
+    return cast(RustMessages, value) if callable(value) else None  # cast-ok: callable native binding
+
+
+def _as_amessages(value: object) -> RustAmessages | None:
+    return cast(RustAmessages, value) if callable(value) else None  # cast-ok: callable native binding
+
+
+_MESSAGES: Final = NativeBinding("messages", validate=_as_messages)
+_AMESSAGES: Final = NativeBinding("amessages", validate=_as_amessages)
+
+
 def set_rust_messages(
     *,
     messages: RustMessages | None | _Unset = _UNSET,
@@ -58,19 +74,13 @@ def set_rust_messages(
 def load_rust_messages() -> RustMessages | None:
     if _STATE.messages is not None:
         return _STATE.messages
-    from litellm.rust_bridge import get_native_bridge
-
-    bridge: Final = get_native_bridge()
-    return cast(RustMessages, getattr(bridge, "messages", None)) if bridge is not None else None
+    return _MESSAGES.load()
 
 
 def load_rust_amessages() -> RustAmessages | None:
     if _STATE.amessages is not None:
         return _STATE.amessages
-    from litellm.rust_bridge import get_native_bridge
-
-    bridge: Final = get_native_bridge()
-    return cast(RustAmessages, getattr(bridge, "amessages", None)) if bridge is not None else None
+    return _AMESSAGES.load()
 
 
 def initialize_logging(arguments: dict[str, object], asynchronous: bool) -> object:
@@ -78,10 +88,12 @@ def initialize_logging(arguments: dict[str, object], asynchronous: bool) -> obje
 
 
 class _RetainedMessagesResponse(dict[str, object]):
-    def __init__(self, response: dict[str, object], roots: object, logger: object, start_time: datetime) -> None:
+    def __init__(
+        self, response: AnthropicMessagesResponse, roots: object, logger: _MessagesLogging, start_time: datetime
+    ) -> None:
         super().__init__(response)
         self._roots = roots
-        self._logger = cast(_MessagesLogging, logger)
+        self._logger = logger
         self._start_time = start_time
         self._completed = False
 
@@ -95,7 +107,7 @@ class _RetainedMessagesResponse(dict[str, object]):
                 self
             )
             self._logger.model_call_details["complete_streaming_response"] = complete_response
-            end_time = datetime.now()
+            end_time = datetime.now(tz=self._start_time.tzinfo or timezone.utc)
             try:
                 invoke_terminal(
                     "async_success",
@@ -123,9 +135,11 @@ class _RetainedMessagesResponse(dict[str, object]):
 
 
 def retain_stream_response(
-    response: dict[str, object], roots: object, logger: object, start_time: datetime
-) -> dict[str, object]:
-    return _RetainedMessagesResponse(response, roots, logger, start_time)
+    response: AnthropicMessagesResponse, roots: object, logger: _MessagesLogging, start_time: datetime
+) -> AnthropicMessagesResponse:
+    return cast(  # cast-ok: dict subclass preserves the Anthropic response mapping contract
+        AnthropicMessagesResponse, _RetainedMessagesResponse(response, roots, logger, start_time)
+    )
 
 
 def _arguments(
@@ -138,7 +152,7 @@ def _arguments(
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
 ) -> dict[str, object]:
-    return {
+    return {  # mutable-ok: the native bridge requires a concrete argument bag
         **arguments,
         "model": model,
         "body": body,
@@ -160,7 +174,7 @@ def messages(
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     arguments: dict[str, object] | None = None,
-) -> dict[str, object] | None:
+) -> AnthropicMessagesResponse | None:
     implementation: Final = load_rust_messages()
     if implementation is None:
         return None
@@ -181,7 +195,7 @@ async def amessages(
     extra_headers: dict[str, object] | None,
     timeout: float | httpx.Timeout | None,
     arguments: dict[str, object] | None = None,
-) -> dict[str, object] | None:
+) -> AnthropicMessagesResponse | None:
     implementation: Final = load_rust_amessages()
     if implementation is None:
         return None
@@ -192,7 +206,7 @@ async def amessages(
     )
 
 
-__all__ = [
+__all__ = (
     "amessages",
     "initialize_logging",
     "invoke_terminal",
@@ -201,4 +215,4 @@ __all__ = [
     "messages",
     "retain_stream_response",
     "set_rust_messages",
-]
+)
