@@ -89,6 +89,16 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
     });
 
+    it("should map the chatgpt slug and CHATGPT enum key to the ChatGPT Subscription name and OpenAI logo", () => {
+      const fromSlug = getProviderLogoAndName("chatgpt");
+      expect(fromSlug.displayName).toBe("ChatGPT Subscription");
+      expect(fromSlug.logo).toContain("openai_small");
+
+      const fromEnumKey = getProviderLogoAndName("CHATGPT");
+      expect(fromEnumKey.displayName).toBe("ChatGPT Subscription");
+      expect(fromEnumKey.logo).toContain("openai_small");
+    });
+
     it("should handle provider values case-insensitively", () => {
       const result = getProviderLogoAndName("OPENAI");
       expect(result.displayName).toBe(Providers.OpenAI);
@@ -270,6 +280,10 @@ describe("provider_info_helpers", () => {
 
     it("should return cognition/swe-1.7 placeholder for Cognition provider", () => {
       expect(getPlaceholder(Providers.Cognition)).toBe("cognition/swe-1.7");
+    });
+
+    it("should return a chatgpt/ placeholder for the CHATGPT dropdown key", () => {
+      expect(getPlaceholder("CHATGPT")).toBe("chatgpt/gpt-5.4");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {

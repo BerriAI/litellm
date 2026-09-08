@@ -1264,7 +1264,10 @@ export interface paths {
          *     A target is a virtual key, a team, or a user. Team and user targets match on the
          *     identity every request resolves to at auth time, so they cover JWT-authenticated
          *     traffic, which presents no virtual key; a user target samples that user's traffic
-         *     across all their teams, whether it arrives on a JWT or a key they own.
+         *     across all their teams, whether it arrives on a JWT or a key they own. models narrows
+         *     every target to requests for those model groups, so a user plus one model samples that
+         *     user's traffic on that model across every key they own; it is forward-only, since a
+         *     reverse job already samples exactly the traffic its own router served.
          *
          *     A forward job answers whether the targets should adopt router_name: it samples the
          *     requests the router did not serve and duplicates them through it. A reverse job
@@ -8014,6 +8017,11 @@ export interface paths {
          * Update Key Fn
          * @description Update an existing API key's parameters.
          *
+         *     The body is a merge patch: a field left out keeps its stored value, and on the key's own columns
+         *     an explicit null clears it. The metadata-backed fields below are the exception, merging into the
+         *     stored metadata instead: passing one as null leaves it unchanged, while `metadata` itself
+         *     replaces the stored metadata wholesale.
+         *
          *     Parameters:
          *     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
          *     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
@@ -8031,7 +8039,7 @@ export interface paths {
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
-         *     - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+         *     - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached. Set to null to remove the soft budget.
          *     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
          *     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
          *     - tpm_limit: Optional[int] - Tokens per minute limit
@@ -19864,6 +19872,12 @@ export interface paths {
          *     curl "http://localhost:4000/v1/skills?beta=true&limit=10"       -H "Authorization: Bearer your-key"       -H "x-litellm-model: claude-account-1"
          *     ```
          *
+         *     Pass `?custom_llm_provider=litellm_proxy&query=<task>` to rank the LiteLLM-hosted skills you can
+         *     access by semantic similarity instead of paging through the whole registry:
+         *     ```bash
+         *     curl "http://localhost:4000/v1/skills?custom_llm_provider=litellm_proxy&query=summarize+a+pdf&top_k=5"       -H "Authorization: Bearer your-key"
+         *     ```
+         *
          *     Returns: ListSkillsResponse with list of skills
          */
         get: operations["list_skills_v1_skills_get"];
@@ -21198,6 +21212,8 @@ export interface paths {
          *         modelId: Return a single deployment by LiteLLM model id.
          *         teamId: Filter to models with direct access or team membership for this team id.
          *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+         *         access_group: Only return deployments in this model access group.
+         *         wildcard_only: Only return deployments whose `model_name` contains `*`.
          *
          *     Example request:
          *     ```
@@ -22764,22 +22780,40 @@ export interface components {
             /** Spend */
             spend?: number | null;
         };
+        /**
+         * AccessGroupResource
+         * @description A resource referenced by an access group. `name` is null when the id no longer resolves or has no alias.
+         */
+        AccessGroupResource: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string | null;
+        };
         /** AccessGroupResponse */
         AccessGroupResponse: {
             /** Access Agent Ids */
             access_agent_ids: string[];
+            /** Access Agents */
+            access_agents: components["schemas"]["AccessGroupResource"][];
             /** Access Group Id */
             access_group_id: string;
             /** Access Group Name */
             access_group_name: string;
             /** Access Mcp Server Ids */
             access_mcp_server_ids: string[];
+            /** Access Mcp Servers */
+            access_mcp_servers: components["schemas"]["AccessGroupResource"][];
             /** Access Model Names */
             access_model_names: string[];
             /** Assigned Key Ids */
             assigned_key_ids: string[];
+            /** Assigned Keys */
+            assigned_keys: components["schemas"]["AccessGroupResource"][];
             /** Assigned Team Ids */
             assigned_team_ids: string[];
+            /** Assigned Teams */
+            assigned_teams: components["schemas"]["AccessGroupResource"][];
             /**
              * Created At
              * Format: date-time
@@ -23270,6 +23304,11 @@ export interface components {
             baseline_spend: number;
             cache: components["schemas"]["AutoRouterCacheStats"];
             /**
+             * Classifier Cost
+             * @description Recorded LLM classifier cost already included in spend; null when any session turns predate subtotal recording, and zero for an empty window
+             */
+            classifier_cost: number | null;
+            /**
              * Router Name
              * @description The auto-router alias requests were sent to
              */
@@ -23325,6 +23364,11 @@ export interface components {
              */
             baseline_spend: number;
             cache: components["schemas"]["AutoRouterCacheStats"];
+            /**
+             * Classifier Cost
+             * @description Recorded LLM classifier cost already included in spend; null when any session turns predate subtotal recording, and zero for an empty window
+             */
+            classifier_cost: number | null;
             /**
              * Saved Pct
              * @description saved_spend over baseline_spend, as a percentage
@@ -23689,6 +23733,11 @@ export interface components {
              */
             guard_name?: string | null;
             /**
+             * Inspect Embeddings
+             * @description When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.
+             */
+            inspect_embeddings?: boolean | null;
+            /**
              * Keyword Redaction Tag
              * @description Tag to use for keyword redaction
              */
@@ -23720,9 +23769,9 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
-            on_violation?: ("warn" | "end_session") | null;
+            on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
              * Only Scan New Messages
              * @description When True, the guardrail only scans messages that have not already been scanned earlier in the same session (identified by litellm_session_id / session_id). Message content is hashed per session and cached; only the diff (new or edited messages) is sent to the guardrail provider on follow-up calls. Falls back to a full scan when the request has no session id or the cache is unavailable. Intended for blocking/detection guardrails; not applied when mask_request_content is set.
@@ -25305,6 +25354,30 @@ export interface components {
              * @default 3000
              */
             timeout_ms: number;
+            /** @description Whether the classifier sees images on the request, and how many */
+            vision?: components["schemas"]["ClassifierVisionConfig"];
+        };
+        /**
+         * ClassifierVisionConfig
+         * @description Whether the LLM classifier sees the images on the request it is classifying.
+         *
+         *     Off by default because images cost far more than the text ask they arrive with, and the
+         *     classifier runs on every request. A turn whose complexity lives in the image ("what is wrong in
+         *     this stack trace screenshot") is invisible to a text-only classifier, which is what this buys.
+         */
+        ClassifierVisionConfig: {
+            /**
+             * Enabled
+             * @description Forward image content to the classifier. Requires a classifier model declared supports_vision, on the deployment's model_info or in the model cost map; images stay stripped otherwise, so a classifier that cannot read them is never sent one. Declare model_info.supports_vision on the deployment to enable a model the cost map does not describe. Only inline data: URIs are forwarded. A request whose images are http(s) URLs still classifies on its text alone, because some providers fetch such a URL from the proxy rather than the provider, which would let a caller aim a proxy-side request at an address of their choosing.
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Max Images
+             * @description How many images from the newest user turn to forward, in wire order. Bounds the added cost of a turn that attaches many images. Images on earlier turns are never forwarded.
+             * @default 1
+             */
+            max_images: number;
         };
         /**
          * CloudZeroExportRequest
@@ -25731,6 +25804,11 @@ export interface components {
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
             disable_password_login_when_sso_enabled?: boolean | null;
+            /**
+             * Enable Openai Websocket Passthrough
+             * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
+             */
+            enable_openai_websocket_passthrough?: boolean | null;
             /**
              * Enable Public Model Hub
              * @description Public model hub for users to see what models they have access to, supported openai params, etc.
@@ -28813,6 +28891,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Review Notes */
@@ -29229,6 +29312,10 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Auto Router Max Input Chars */
             auto_router_max_input_chars?: number | null;
+            /** Auto Router Model Compression */
+            auto_router_model_compression?: string | null;
+            /** Auto Router Routing Compression */
+            auto_router_routing_compression?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
@@ -29496,8 +29583,6 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
-            /** Rust */
-            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -30438,6 +30523,12 @@ export interface components {
             categories?: components["schemas"]["ContentFilterCategoryConfig"][] | null;
             /** @description Threshold configuration for Lakera guardrail categories */
             category_thresholds?: components["schemas"]["LakeraCategoryThresholds"] | null;
+            /**
+             * Ccr Retrieval
+             * @description Inject the Headroom retrieval tool for hashes declared by the compression service.
+             * @default true
+             */
+            ccr_retrieval: boolean;
             /** @description Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier. */
             checks?: components["schemas"]["BedrockChecksConfigModel"] | null;
             /**
@@ -30619,6 +30710,11 @@ export interface components {
              */
             include_scanners: boolean | null;
             /**
+             * Inspect Embeddings
+             * @description When True, the Aim and Cato Networks guardrails send /embeddings `input` to the vendor as user messages. Off by default because embedding input is documents being indexed, not a conversation.
+             */
+            inspect_embeddings?: boolean | null;
+            /**
              * Is Detector Server
              * @description Boolean flag to determine if calling a detector server (True) or the FMS Orchestrator (False). Defaults to True.
              * @default true
@@ -30715,9 +30811,9 @@ export interface components {
             on_sensitive_data?: ("block" | "route") | null;
             /**
              * On Violation
-             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection.
+             * @description For /v1/realtime sessions: 'warn' speaks the violation message and continues; 'end_session' speaks the message and closes the connection. For guardrail='mcp_security': 'block' rejects the request; 'alert' only logs a warning.
              */
-            on_violation?: ("warn" | "end_session") | null;
+            on_violation?: ("warn" | "end_session" | "block" | "alert") | null;
             /**
              * Only Scan New Messages
              * @description When True, the guardrail only scans messages that have not already been scanned earlier in the same session (identified by litellm_session_id / session_id). Message content is hashed per session and cached; only the diff (new or edited messages) is sent to the guardrail provider on follow-up calls. Falls back to a full scan when the request has no session id or the cache is unavailable. Intended for blocking/detection guardrails; not applied when mask_request_content is set.
@@ -31938,6 +32034,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -34924,6 +35025,24 @@ export interface components {
              */
             simple_keywords?: string[] | null;
             /**
+             * Stall Escalation Enabled
+             * @description Escalate mid-task to the next-higher configured tier when the assistant's own recent tool calls look stuck: the newest tool call repeats, or errors, at least stall_escalation_repeat_threshold times across the last stall_escalation_window calls. Both tests are anchored on the newest call, so a task that tried the same thing a few times and then moved on is not escalated on the strength of those older calls alone, while a retry loop broken up by an unrelated lookup still counts. One tier at most, on the same ladder escalation_keywords bumps along, and never above the highest configured tier. Detection re-runs on every classified turn from the tool calls visible in that request, so it needs no state and nothing survives past the task. Mutually exclusive with session_affinity and classification_mode='user_turn', which both replay a held routing decision instead of classifying most turns, so this would never see the tool calls to look at. Off by default.
+             * @default false
+             */
+            stall_escalation_enabled: boolean;
+            /**
+             * Stall Escalation Repeat Threshold
+             * @description How many of the last stall_escalation_window tool calls must repeat the newest call, or must have errored alongside it, before the task counts as stalled. Must not exceed stall_escalation_window, or the condition could never be reached.
+             * @default 3
+             */
+            stall_escalation_repeat_threshold: number;
+            /**
+             * Stall Escalation Window
+             * @description How many of the assistant's most recent tool calls stall detection looks at, oldest ones dropped as new calls happen. Counted across the whole visible conversation rather than reset at the newest human ask, so evidence from before a plain follow-up message like 'try again' is still visible on the turn after it.
+             * @default 6
+             */
+            stall_escalation_window: number;
+            /**
              * Technical Keywords
              * @description Keywords indicating technical content
              */
@@ -35026,10 +35145,14 @@ export interface components {
             BadRequestErrorRetries?: number | null;
             /** Contentpolicyviolationerrorretries */
             ContentPolicyViolationErrorRetries?: number | null;
+            /** Defaultretries */
+            DefaultRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
+            /** Serviceunavailableerrorretries */
+            ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
         };
@@ -35741,6 +35864,12 @@ export interface components {
              * @description Most recent attempt error; detail endpoint only
              */
             last_error?: string | null;
+            /**
+             * Models
+             * @description Model groups the sampled traffic is narrowed to; empty means every model the targets use
+             * @default []
+             */
+            models: string[];
             /** @description Stratified verdicts; detail endpoint only */
             results?: components["schemas"]["ShadowEvalResult"] | null;
             /**
@@ -35937,12 +36066,16 @@ export interface components {
         Skill: {
             /** Created At */
             created_at: string;
+            /** Description */
+            description?: string | null;
             /** Display Title */
             display_title?: string | null;
             /** Id */
             id: string;
             /** Latest Version */
             latest_version?: string | null;
+            /** Search Score */
+            search_score?: number | null;
             /** Source */
             source: string;
             /**
@@ -36164,6 +36297,12 @@ export interface components {
              * @default 10
              */
             max_budget: number;
+            /**
+             * Models
+             * @description Model groups to narrow the sampled traffic to, matched on the group the caller requested and resolved through model_group_alias, so an alias and its target are one name. Empty samples every model the targets use. This ANDs with the targets: a job over a user and one model samples that user's requests on that model across every key they own, and none of their other traffic. Forward jobs only: a reverse job samples exactly the traffic its own router served, which no other model group can name
+             * @default []
+             */
+            models: string[];
             /**
              * Router Name
              * @description The auto-router under evaluation, in either direction: the single-router spelling of router_names. Provide exactly one of the two fields
@@ -37632,6 +37771,8 @@ export interface components {
             rpm_limit?: number | null;
             /** Rpm Limit Type */
             rpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+            /** Soft Budget */
+            soft_budget?: number | null;
             /** Spend */
             spend?: number | null;
             /** Tag Rpm Limit */
@@ -37727,6 +37868,11 @@ export interface components {
              * @default false
              */
             oauth_passthrough: boolean;
+            /**
+             * Per Server Oauth Discovery
+             * @default false
+             */
+            per_server_oauth_discovery: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Server Id */
@@ -38396,6 +38542,18 @@ export interface components {
             /** Untracked Usage Units */
             untracked_usage_units: {
                 [key: string]: number;
+            };
+            /** Untracked Usage Units By Key */
+            untracked_usage_units_by_key: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Untracked Usage Units By Team */
+            untracked_usage_units_by_team: {
+                [key: string]: {
+                    [key: string]: number;
+                };
             };
             /** Usage Units */
             usage_units: {
@@ -39325,6 +39483,10 @@ export interface components {
             auto_router_embedding_model?: string | null;
             /** Auto Router Max Input Chars */
             auto_router_max_input_chars?: number | null;
+            /** Auto Router Model Compression */
+            auto_router_model_compression?: string | null;
+            /** Auto Router Routing Compression */
+            auto_router_routing_compression?: string | null;
             /** Aws Access Key Id */
             aws_access_key_id?: string | null;
             /** Aws Batch Role Arn */
@@ -39592,8 +39754,6 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
-            /** Rust */
-            rust?: boolean | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
@@ -41255,6 +41415,8 @@ export interface operations {
                 start_date?: string | null;
                 /** @description YYYY-MM-DD UTC, inclusive (defaults to today) */
                 end_date?: string | null;
+                /** @description Filter to one virtual key token hash */
+                api_key?: string | null;
             };
             header?: never;
             path?: never;
@@ -64416,6 +64578,10 @@ export interface operations {
                 after_id?: string | null;
                 before_id?: string | null;
                 custom_llm_provider?: string | null;
+                /** @description Describe what you need in natural language to rank the skills you can access by semantic similarity over their title and description. Each result carries a search_score. Only supported for custom_llm_provider=litellm_proxy. Requires litellm_settings.skill_search_embedding_model. */
+                query?: string | null;
+                /** @description With query: the maximum number of ranked skills to return. */
+                top_k?: number;
             };
             header?: never;
             path?: never;
@@ -66440,6 +66606,10 @@ export interface operations {
                 sortOrder?: string | null;
                 /** @description Omit auto-router deployments (litellm model prefixed `auto_router/`). They select among deployments rather than being deployments themselves, so a caller rendering a deployment list can leave them out. Defaults to false, so existing callers are unaffected */
                 exclude_auto_routers?: boolean | null;
+                /** @description Only return deployments whose `model_info.access_groups` contains this access group */
+                access_group?: string | null;
+                /** @description Only return wildcard deployments, i.e. those whose `model_name` contains `*` */
+                wildcard_only?: boolean | null;
             };
             header?: never;
             path?: never;

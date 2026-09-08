@@ -3217,6 +3217,65 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     assert "Your role=internal_user" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_non_admin_can_open_vector_store_details(user_role):
+    """Regression for LIT-7132: the dashboard lists a vector store via /vector_store/list
+    (an LLM API route) but opened it via /vector_store/info, which no non-admin allowlist
+    granted, so the route gate 401'd before the handler's per-store access check ran."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    granted = RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route="/vector_store/info",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+    assert granted is None
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/vector_store/new", "/vector_store/update", "/vector_store/delete"],
+)
+def test_internal_user_blocked_from_vector_store_writes(route):
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
 def test_proxy_admin_viewer_can_read_another_users_info():
     """Admin Viewer has read parity with Proxy Admin, so the /user/info
     key-ownership gate must not apply to it — the Users page reads every row."""

@@ -3917,6 +3917,7 @@ def _object_permission_mocks(mocker, existing_object_permission_id=None):
     mock_prisma_client.db.litellm_objectpermissiontable.upsert = mocker.AsyncMock(
         return_value=SimpleNamespace(object_permission_id="perm-new")
     )
+    mock_prisma_client.db.litellm_mcpservertable.find_many = mocker.AsyncMock(return_value=[])
     mock_prisma_client.update_data = mocker.AsyncMock(
         return_value={"user_id": "target-user"}
     )
@@ -4146,6 +4147,7 @@ async def test_new_user_persists_the_requested_mcp_entitlement(mocker):
     mock_prisma_client.db.litellm_objectpermissiontable.create = mocker.AsyncMock(
         return_value=SimpleNamespace(object_permission_id="perm-created")
     )
+    mock_prisma_client.db.litellm_mcpservertable.find_many = mocker.AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
         return_value=None
     )

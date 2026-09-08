@@ -662,6 +662,124 @@ class TestProxyInitializationHelpers:
                 assert "Invalid value for '--limit_concurrency'" in result.output
                 mock_uvicorn_run.assert_not_called()
 
+    @patch("uvicorn.run")
+    @patch("httpx.HTTPTransport.handle_request")
+    @patch("atexit.register")
+    @patch("subprocess.Popen")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch(  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+        "litellm.proxy.db.prisma_client.should_update_prisma_schema", return_value=False
+    )
+    def test_prometheus_metrics_port_starts_separate_metrics_process(
+        self,
+        mock_should_update,
+        mock_setup_db,
+        mock_popen,
+        mock_atexit_register,
+        mock_handle_request,
+        mock_uvicorn_run,
+        tmp_path,
+    ):
+        """--prometheus_metrics_port must spawn `python -m litellm.proxy.prometheus_metrics_server` on --host
+        with the shared multiproc dir, wait for its /metrics response, and only then start uvicorn. It must stay off by
+        default, refuse to share --port, and abort the proxy when the child dies before serving."""
+        import httpx
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+        mock_popen.return_value = MagicMock(pid=4242, **{"poll.return_value": None})
+        probed_urls: list[str] = []
+
+        def child_metrics(request: httpx.Request) -> httpx.Response:
+            probed_urls.append(str(request.url))
+            return httpx.Response(200, headers={"x-litellm-metrics-pid": "4242"}, content=b"")
+
+        mock_handle_request.side_effect = child_metrics
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "PROMETHEUS_METRICS_PORT")
+        }
+        clean_env["PROMETHEUS_MULTIPROC_DIR"] = str(tmp_path)
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+            patch(  # test-quality-ok: same isolation as the sibling CLI tests above
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+        ):
+            mock_get_args.side_effect = lambda *a, **k: {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server,
+                ["--local", "--host", "127.0.0.1", "--port", "4000", "--prometheus_metrics_port", "4001"],
+            )
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_popen.assert_called_once()
+            spawned = list(mock_popen.call_args.args[0])
+            assert spawned[1:3] == ["-m", "litellm.proxy.prometheus_metrics_server"]
+            assert spawned[3:] == ["--host", "127.0.0.1", "--port", "4001", "--multiproc_dir", str(tmp_path)]
+            assert probed_urls == ["http://127.0.0.1:4001/metrics"]
+            assert "Serving Prometheus metrics on 127.0.0.1:4001/metrics (pid 4242)" in result.output
+            mock_uvicorn_run.assert_called_once()
+
+            mock_popen.reset_mock()
+            mock_uvicorn_run.reset_mock()
+            mock_popen.return_value = MagicMock(pid=4243, **{"poll.return_value": 1})
+            result = runner.invoke(
+                run_server,
+                ["--local", "--port", "4000", "--prometheus_metrics_port", "4001"],
+            )
+            assert result.exit_code == 1, f"exit_code={result.exit_code}, output={result.output}"
+            assert "Prometheus metrics server exited with code 1 before serving 0.0.0.0:4001" in result.output
+            mock_uvicorn_run.assert_not_called()
+
+            mock_popen.reset_mock()
+            mock_uvicorn_run.reset_mock()
+            result = runner.invoke(run_server, ["--local"])
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            mock_popen.assert_not_called()
+            mock_uvicorn_run.assert_called_once()
+
+            mock_uvicorn_run.reset_mock()
+            result = runner.invoke(
+                run_server,
+                ["--local", "--port", "4000", "--prometheus_metrics_port", "4000"],
+            )
+            assert result.exit_code == 2
+            assert "--prometheus_metrics_port must differ from --port" in result.output
+            mock_popen.assert_not_called()
+            mock_uvicorn_run.assert_not_called()
+
+            result = runner.invoke(
+                run_server, ["--local", "--prometheus_metrics_port", "0"]
+            )
+            assert result.exit_code == 2
+            assert "Invalid value for '--prometheus_metrics_port'" in result.output
+            mock_popen.assert_not_called()
+
     @pytest.mark.parametrize(
         "timeout_config,expected_timeout",
         [

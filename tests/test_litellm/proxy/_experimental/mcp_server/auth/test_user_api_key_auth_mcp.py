@@ -7184,6 +7184,7 @@ class TestAggregateGatewayDcrChallenge:
 
         cases = [
             (_server(MCPAuth.oauth2), "srv"),
+            (_server(MCPAuth.oauth2, per_server_oauth_discovery=True), None),
             (_server(MCPAuth.oauth2, oauth2_flow="client_credentials"), "srv"),
             (_server(MCPAuth.oauth2, delegate_auth_to_upstream=True), None),
             (_server(MCPAuth.oauth2_token_exchange), None),

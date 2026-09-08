@@ -26,6 +26,30 @@ variable "env" {
   type        = string
 }
 
+variable "create_runtime" {
+  description = "Create Cloud Run and load balancer resources."
+  type        = bool
+  default     = true
+}
+
+variable "network_id" {
+  description = "Existing VPC network resource ID. Empty creates a VPC."
+  type        = string
+  default     = ""
+}
+
+variable "create_psa_connection" {
+  description = "Create Private Services Access resources."
+  type        = bool
+  default     = true
+}
+
+variable "redis_transit_encryption" {
+  description = "Enable Memorystore transit encryption."
+  type        = bool
+  default     = true
+}
+
 # Sensitive — prefer TF_VAR_litellm_master_key / TF_VAR_litellm_license /
 # TF_VAR_ui_password so values stay out of any committed tfvars file.
 variable "litellm_master_key" {

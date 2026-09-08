@@ -61,6 +61,7 @@ def test_cleanup_router_config_variables_resets_globals(monkeypatch):
     monkeypatch.setattr(ps, "user_custom_auth", lambda x: x, raising=False)
     monkeypatch.setattr(ps, "health_check_interval", 42, raising=False)
     monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(ps, "heuristic_v1_tuning_baselines", {"router": "baseline"}, raising=False)
 
     cleanup_router_config_variables()
 
@@ -70,6 +71,7 @@ def test_cleanup_router_config_variables_resets_globals(monkeypatch):
         "user_custom_auth": ps.user_custom_auth,
         "health_check_interval": ps.health_check_interval,
         "prisma_client": ps.prisma_client,
+        "heuristic_v1_tuning_baselines": ps.heuristic_v1_tuning_baselines,
     }
     assert normalize(observed) == {
         "master_key": None,
@@ -77,6 +79,7 @@ def test_cleanup_router_config_variables_resets_globals(monkeypatch):
         "user_custom_auth": None,
         "health_check_interval": None,
         "prisma_client": None,
+        "heuristic_v1_tuning_baselines": None,
     }
 
 
@@ -816,6 +819,42 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     assert budget_check_pos < warn_pos < next_startup_section_pos, (
         "DB-less budget warning must run after Prisma setup and the DB-backed budget block"
     )
+
+
+@pytest.mark.asyncio
+async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
+    from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_config.create = AsyncMock()
+    deployment = {
+        "model_name": "a",
+        "litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": {}},
+    }
+
+    result = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, [deployment])
+
+    assert result == {'yaml:["a",[]]': DEFAULT_TUNING_FINGERPRINT}
+    assert prisma_client.db.litellm_config.create.await_args.kwargs["data"] == {
+        "param_name": "auto_router_tuning_baseline_v2",
+        "param_value": json.dumps(dict(result)),
+    }
+
+
+@pytest.mark.asyncio
+async def test_tuning_baseline_waits_for_a_complete_db_model_census(monkeypatch):
+    prisma_client = MagicMock()
+    monkeypatch.setattr(ps.proxy_config, "_get_models_from_db", AsyncMock(return_value=None))
+
+    result = await ProxyStartupEvent.enforce_heuristic_v1_tuning_baseline(
+        prisma_client=prisma_client,
+        llm_router=None,
+        limit=1,
+    )
+
+    assert result is None
+    prisma_client.db.litellm_config.find_unique.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

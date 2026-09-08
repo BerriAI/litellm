@@ -67,8 +67,8 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.93",
-    "litellm-enterprise==0.1.64",
+    "litellm-proxy-extras==0.4.94",
+    "litellm-enterprise==0.1.65",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -112,6 +112,9 @@ utils = [
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
 mcp = ["mcp>=1.28.1,<2.0"]
+# Driver for the MongoDB Atlas vector store; Atlas Vector Search has no HTTP query API.
+# The floor is 4.9 because that is the release AsyncMongoClient landed in.
+mongodb = ["pymongo>=4.9,<5.0"]
 # SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
 # bundle the native libxmlsec1/libxml2 libraries, so no system packages are
 # required. Kept out of the base `proxy` extra so it stays optional.
@@ -385,7 +388,7 @@ mutate_only_covered_lines = true
 # registered hash algorithm". Nothing to do with mutation coverage, and one
 # erroring test is enough to end the stats phase before any mutant runs.
 pytest_add_cli_args = [
-    "-p", "no:retry",
+    "-p", "no:pytest-retry",
     "-p", "no:rerunfailures",
     "-p", "no:xdist",
     "--ignore=tests/test_litellm/proxy/management_endpoints/test_saml_sso.py",
