@@ -129,11 +129,13 @@ async def test_ui_view_users_search_matches_user_id_or_email(mocker):
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
 
     # Flag OFF by default
-    mocker.patch(
+    mocker.patch(  # test-quality-ok: endpoint reads settings via module global; same seam as sibling tests
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={},
     )
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(  # test-quality-ok: endpoint reads prisma_client via module global; same seam as sibling tests
+        "litellm.proxy.proxy_server.prisma_client", mock_prisma_client
+    )
 
     await ui_view_users(
         user_api_key_dict=UserAPIKeyAuth(
