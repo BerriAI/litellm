@@ -369,6 +369,38 @@ def test_azure_passthrough_url_fills_in_the_deployments_api_version_when_the_cal
     assert url.params["api-version"] == "2024-10-21"
 
 
+FULL_URL_API_BASE = (
+    "https://my-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2024-10-21"
+)
+
+
+def _full_url_complete_url(request_query_params: dict) -> httpx.URL:
+    url, _ = AzurePassthroughConfig().get_complete_url(
+        api_base=FULL_URL_API_BASE,
+        api_key="key",
+        model="gpt-4.1-mini",
+        endpoint="chat/completions",
+        request_query_params=request_query_params,
+        litellm_params={},
+    )
+    return url
+
+
+def test_azure_passthrough_url_prefers_the_callers_api_version_over_a_full_url_api_bases():
+    url = _full_url_complete_url(request_query_params={"api-version": "2025-04-01-preview"})
+
+    assert str(url) == (
+        "https://my-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions"
+        "?api-version=2025-04-01-preview"
+    )
+
+
+def test_azure_passthrough_url_keeps_a_full_url_api_bases_api_version_when_the_caller_sends_none():
+    url = _full_url_complete_url(request_query_params={})
+
+    assert url.params["api-version"] == "2024-10-21"
+
+
 def test_azure_passthrough_url_strips_the_leading_router_model_segment():
     url, _ = AzurePassthroughConfig().get_complete_url(
         api_base="https://my-resource.openai.azure.com",
