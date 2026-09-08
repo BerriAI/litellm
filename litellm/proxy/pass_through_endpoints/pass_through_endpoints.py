@@ -2330,9 +2330,6 @@ async def websocket_passthrough_request(
                                             setup_data,
                                         )
                                         if isinstance(setup_data, dict) and "model" in setup_data:
-                                            # Resolve the alias first: a client may name a bare gateway model,
-                                            # which carries no "/models/" for the extractor to read, so reading
-                                            # the raw frame leaves the session logged as "unknown" and unbilled.
                                             extracted_model = _extract_model_from_vertex_ai_setup(
                                                 _resolved_vertex_live_setup(setup_data, setup_model_rewriter)
                                             )
