@@ -177,6 +177,9 @@ from litellm.types.mcp import (
 )
 from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
+from litellm.utils import (
+    _add_custom_logger_callback_to_specific_event,  # pyright: ignore[reportPrivateUsage]  # only string-to-logger helper
+)
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
@@ -856,6 +859,14 @@ class ProxyLogging:
                 litellm.logging_callback_manager.add_litellm_failure_callback(callback)
                 litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
                 litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
+
+        # Runs after load_config applied every litellm_settings key: logger __init__s read e.g. s3_callback_params
+        success_callbacks: Final = tuple(cb for cb in litellm.success_callback if isinstance(cb, str))
+        failure_callbacks: Final = tuple(cb for cb in litellm.failure_callback if isinstance(cb, str))
+        for callback in success_callbacks:
+            _add_custom_logger_callback_to_specific_event(callback, "success")
+        for callback in failure_callbacks:
+            _add_custom_logger_callback_to_specific_event(callback, "failure")
 
     async def update_request_status(self, litellm_call_id: str, status: Literal["success", "fail"]):
         # only use this if slack alerting is being used

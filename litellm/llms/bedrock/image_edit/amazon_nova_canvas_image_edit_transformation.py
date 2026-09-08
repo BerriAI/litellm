@@ -20,6 +20,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
@@ -227,6 +228,14 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         drops keys not on ModelInfoBase).
         """
         return _supports_nova_canvas_image_edit_from_model_cost(model or "")
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
