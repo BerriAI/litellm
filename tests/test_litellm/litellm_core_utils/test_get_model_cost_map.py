@@ -335,6 +335,7 @@ def test_get_model_cost_map_stamps_loaded_at(monkeypatch):
 
 import functools
 import random
+from datetime import datetime, timezone
 
 import httpx
 
@@ -552,6 +553,27 @@ async def test_refetch_local_override_reports_the_bundled_blob_id_without_an_eta
     assert isinstance(result, ModelCostMapReloaded)
     assert result.revision == _bundled_blob_id()
     assert get_model_cost_map_provenance() == {"source_revision": _bundled_blob_id(), "etag": None}
+
+
+@pytest.mark.asyncio
+async def test_refetch_stamps_loaded_at_on_remote_and_local_reloads(monkeypatch):
+    from litellm.litellm_core_utils import get_model_cost_map as module
+
+    client, _ = _mock_client([httpx.Response(200, content=_real_map_bytes())])
+    monkeypatch.setattr(module._cost_map_source_info, "loaded_at", None)
+    before_remote = datetime.now(timezone.utc)
+    await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client)
+    remote_loaded_at = module.get_model_cost_map_loaded_at()
+    assert remote_loaded_at is not None
+    assert before_remote <= remote_loaded_at <= datetime.now(timezone.utc)
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(module._cost_map_source_info, "loaded_at", None)
+    before_local = datetime.now(timezone.utc)
+    await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0))
+    local_loaded_at = module.get_model_cost_map_loaded_at()
+    assert local_loaded_at is not None
+    assert before_local <= local_loaded_at <= datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
