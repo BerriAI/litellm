@@ -1546,8 +1546,32 @@ class Router:
                 self._override_selectors[strategy] = self._build_strategy_selector(
                     strategy=strategy,
                     routing_strategy_args={},
+                    register_callbacks=False,
                 )
             return self._override_selectors[strategy]
+
+    def _override_selector_pre_call_check(
+        self, strategy: str | None, selector: RouterStrategySelector | None, deployment: dict
+    ) -> None:
+        """
+        Override selectors are not in `litellm.callbacks`, so the pre-call check that
+        `routing_strategy_pre_call_checks` runs for the router's own selectors (rpm
+        accounting for `usage-based-routing-v2`) runs here, for the overriding request only.
+        """
+        if selector is None or strategy is None or selector is not self._override_selectors.get(strategy):
+            return
+        selector.pre_call_check(deployment)
+
+    async def _async_override_selector_pre_call_check(
+        self,
+        strategy: str | None,
+        selector: RouterStrategySelector | None,
+        deployment: dict,
+        parent_otel_span: Span | None,
+    ) -> None:
+        if selector is None or strategy is None or selector is not self._override_selectors.get(strategy):
+            return
+        await selector.async_pre_call_check(deployment, parent_otel_span)
 
     def _get_routing_context(
         self, model: str, request_kwargs: dict | None = None
@@ -12807,10 +12831,16 @@ class Router:
                 parent_otel_span=parent_otel_span,
             )
             if isinstance(healthy_deployments, dict):
+                await self._async_override_selector_pre_call_check(
+                    strategy, strategy_selector, healthy_deployments, parent_otel_span
+                )
                 return healthy_deployments
 
             # When encrypted content affinity pins to a specific deployment,
             if request_kwargs.get("_encrypted_content_affinity_pinned") and len(healthy_deployments) == 1:
+                await self._async_override_selector_pre_call_check(
+                    strategy, strategy_selector, healthy_deployments[0], parent_otel_span
+                )
                 return healthy_deployments[0]
 
             start_time: Final = time.time()
@@ -12836,6 +12866,9 @@ class Router:
                     parent_otel_span=parent_otel_span,
                 )
                 raise exception
+            await self._async_override_selector_pre_call_check(
+                strategy, strategy_selector, deployment, parent_otel_span
+            )
             verbose_router_logger.info(
                 "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
                 model,
@@ -12921,6 +12954,8 @@ class Router:
                 parent_otel_span=parent_otel_span,
             )
 
+            strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
+
             # 3. If specific deployment returned, verify if it supports pass-through
             if isinstance(healthy_deployments, dict):
                 if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -12931,6 +12966,9 @@ class Router:
                     )
                 litellm_params: Final = healthy_deployments.get("litellm_params", {})
                 if litellm_params.get("use_in_pass_through"):
+                    await self._async_override_selector_pre_call_check(
+                        strategy, strategy_selector, healthy_deployments, parent_otel_span
+                    )
                     return healthy_deployments
                 else:
                     raise litellm.BadRequestError(
@@ -12951,7 +12989,6 @@ class Router:
 
             # 5. Apply load balancing strategy
             start_time: Final = time.perf_counter()
-            strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
             if strategy == "simple-shuffle":
                 return simple_shuffle(
                     llm_router_instance=self,
@@ -12975,6 +13012,9 @@ class Router:
                     parent_otel_span=parent_otel_span,
                 )
                 raise exception
+            await self._async_override_selector_pre_call_check(
+                strategy, strategy_selector, deployment, parent_otel_span
+            )
 
             verbose_router_logger.info(
                 "async_get_available_deployment_for_pass_through model: %s, selected deployment: %s",
@@ -13550,6 +13590,7 @@ class Router:
             specific_deployment=specific_deployment,
             request_kwargs=request_kwargs,
         )
+        strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
 
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -13558,6 +13599,7 @@ class Router:
                     model=model,
                     llm_provider="",
                 )
+            self._override_selector_pre_call_check(strategy, strategy_selector, healthy_deployments)
             return healthy_deployments
 
         parent_otel_span: Final[Span | None] = _get_parent_otel_span_from_kwargs(request_kwargs)
@@ -13633,7 +13675,6 @@ class Router:
                 cooldown_list=_cooldown_list,
             )
 
-        strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
         if strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
@@ -13665,6 +13706,7 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
             )
+        self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
         verbose_router_logger.info(
             "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
             model,
@@ -13708,6 +13750,8 @@ class Router:
             specific_deployment=specific_deployment,
         )
 
+        strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
+
         # 2. If the returned is a specific deployment (Dict), verify and return directly
         if isinstance(healthy_deployments, dict):
             if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
@@ -13718,6 +13762,7 @@ class Router:
                 )
             litellm_params: Final = healthy_deployments.get("litellm_params", {})
             if litellm_params.get("use_in_pass_through"):
+                self._override_selector_pre_call_check(strategy, strategy_selector, healthy_deployments)
                 return healthy_deployments
             else:
                 # Specific deployment does not support pass-through
@@ -13777,7 +13822,6 @@ class Router:
             )
 
         # 6. Apply load balancing strategy
-        strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
         if strategy == "simple-shuffle":
             return simple_shuffle(
                 llm_router_instance=self,
@@ -13809,6 +13853,7 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
             )
+        self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
 
         verbose_router_logger.info(
             "get_available_deployment_for_pass_through model: %s, selected deployment: %s",
