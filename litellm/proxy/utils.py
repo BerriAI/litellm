@@ -551,9 +551,11 @@ def _without_names(
     claimed: Final = bucket.get(slot)
     if not isinstance(claimed, list):
         return
-    remaining: Final = [name for name in claimed if name not in names]
+    remaining: Final = [  # mutable-ok: the slot stays a list, the shape every applied_* header writer appends to
+        name for name in claimed if name not in names
+    ]
     if remaining:
-        bucket[slot] = remaining
+        bucket[slot] = remaining  # rebind-ok: the slot lives in the shared request-state dict, rewritten in place
     else:
         bucket.pop(slot)
 
@@ -574,7 +576,9 @@ def _withdraw_deferred_claims(
     sources: Final = bucket.get("policy_sources")
     if not isinstance(sources, dict):
         return
-    remaining_sources: Final = {name: reason for name, reason in sources.items() if name not in withdrawn_policies}
+    remaining_sources: Final = {  # mutable-ok: policy_sources stays a dict, the shape its writer updates in place
+        name: reason for name, reason in sources.items() if name not in withdrawn_policies
+    }
     if remaining_sources:
         bucket["policy_sources"] = remaining_sources
     else:
