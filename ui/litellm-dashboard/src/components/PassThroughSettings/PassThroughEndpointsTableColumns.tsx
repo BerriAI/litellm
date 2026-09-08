@@ -18,9 +18,8 @@ import { cn } from "@/lib/cva.config";
 
 import type { passThroughItem } from "./PassThroughSettings";
 
-const CONFIG_EDIT_HINT = "Config pass-through endpoints cannot be edited on the dashboard. Please edit the config file.";
-const CONFIG_DELETE_HINT =
-  "Config pass-through endpoints cannot be deleted on the dashboard. Please edit the config file.";
+const CONFIG_ENDPOINT_HINT =
+  "This endpoint is defined in the config file and cannot be edited or deleted on the dashboard.";
 
 function HeaderWithTooltip({ title, tooltip }: { title: string; tooltip: string }) {
   return (
@@ -91,7 +90,6 @@ function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: Endpoi
         <DropdownMenuItem
           data-testid="endpoint-action-edit"
           disabled={isFromConfig || !endpointId}
-          title={isFromConfig ? CONFIG_EDIT_HINT : undefined}
           onClick={() => !isFromConfig && endpointId && onEndpointClick(endpointId)}
         >
           <Pencil />
@@ -102,12 +100,16 @@ function EndpointRowActions({ endpoint, onEndpointClick, onDeleteClick }: Endpoi
           variant="destructive"
           data-testid="endpoint-action-delete"
           disabled={isFromConfig || !endpointId}
-          title={isFromConfig ? CONFIG_DELETE_HINT : undefined}
           onClick={() => !isFromConfig && endpointId && onDeleteClick(endpointId)}
         >
           <Trash2 />
           Delete
         </DropdownMenuItem>
+        {isFromConfig && (
+          <div data-testid="endpoint-config-hint" className="px-2 py-1.5 text-xs text-muted-foreground">
+            {CONFIG_ENDPOINT_HINT}
+          </div>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
