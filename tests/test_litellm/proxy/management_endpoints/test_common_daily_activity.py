@@ -473,9 +473,7 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
         return_value=[SimpleNamespace(user_id="alice", user_email="alice@example.com")]
     )
     mock_prisma.db.query_raw = AsyncMock(
-        return_value=[
-            {"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": "alice"}
-        ]
+        return_value=[{"digest": double_hashed, "key_alias": "batch-worker", "team_id": "team-1", "user_id": "alice"}]
     )
 
     result = await get_api_key_metadata(
