@@ -1,11 +1,9 @@
 {{- if .Values.gateway.config.create }}
-{{- $config := deepCopy .Values.gateway.config.proxy_config }}
-{{- include "litellm.applyReliabilityConfig" (dict "config" $config "reliability" .Values.gateway.reliability) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "litellm.gateway.fullname" . }}-config
 data:
   config.yaml: |
-{{ $config | toYaml | indent 6 }}
+{{ .Values.gateway.config.proxy_config | toYaml | indent 6 }}
 {{- end }}

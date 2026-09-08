@@ -195,25 +195,7 @@ locals {
   # downloads it to /tmp/litellm-config.yaml via boto3 before exec'ing
   # uvicorn. The S3 object's etag is embedded in the task definition so a
   # config edit forces a new task-def revision and a rolling redeploy.
-  reliability_litellm_settings = { for k, v in {
-    sse_keepalive_ping_interval_seconds = var.sse_keepalive_ping_interval_seconds
-    anthropic_sse_ping_interval_seconds = var.anthropic_sse_ping_interval_seconds
-  } : k => v if v != null }
-  reliability_router_settings = { for k, v in {
-    enable_pre_call_checks = var.enable_pre_call_checks
-  } : k => v if v != null }
-
-  proxy_config = merge(
-    var.proxy_config,
-    length(local.reliability_litellm_settings) > 0 ? {
-      litellm_settings = merge(local.reliability_litellm_settings, try(var.proxy_config.litellm_settings, {}))
-    } : {},
-    length(local.reliability_router_settings) > 0 ? {
-      router_settings = merge(local.reliability_router_settings, try(var.proxy_config.router_settings, {}))
-    } : {},
-  )
-
-  proxy_config_enabled = length(keys(local.proxy_config)) > 0
+  proxy_config_enabled = length(keys(var.proxy_config)) > 0
   proxy_config_path    = "/tmp/litellm-config.yaml"
 
   proxy_config_env = local.proxy_config_enabled ? [

@@ -12,7 +12,6 @@
 {{- $_ := set $config "general_settings" $generalSettings }}
 {{- end }}
 {{- end }}
-{{- include "litellm.applyReliabilityConfig" (dict "config" $config "reliability" .Values.reliability) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

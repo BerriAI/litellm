@@ -1,6 +1,5 @@
-# Plan-only coverage for the reliability inputs: keepalive and pre-call-check
-# merging into the uploaded config.yaml, and the metrics sidecar wiring.
-# Offline via mock_provider, same as byo_infrastructure.tftest.hcl.
+# Plan-only coverage for the Prometheus metrics sidecar wiring. Offline via
+# mock_provider, same as byo_infrastructure.tftest.hcl.
 
 mock_provider "aws" {
   mock_data "aws_iam_policy_document" {
@@ -23,11 +22,6 @@ run "defaults_change_nothing" {
   command = plan
 
   assert {
-    condition     = length(aws_s3_object.proxy_config) == 0 && local.proxy_config_enabled == false
-    error_message = "With every reliability input null and no proxy_config there must be no config.yaml to upload."
-  }
-
-  assert {
     condition = alltrue([
       length(local.gateway_metrics_container) == 0,
       length(local.metrics_env) == 0,
@@ -35,79 +29,6 @@ run "defaults_change_nothing" {
       length([for r in aws_security_group.tasks.ingress : r if r.description == "Prometheus scrapers to the gateway metrics sidecar"]) == 0,
     ])
     error_message = "The metrics sidecar, its env, its volume, and its security-group rule must all be absent by default."
-  }
-}
-
-run "reliability_values_land_in_the_uploaded_config" {
-  command = plan
-
-  variables {
-    sse_keepalive_ping_interval_seconds = 20
-    anthropic_sse_ping_interval_seconds = 10
-    enable_pre_call_checks              = true
-    proxy_config = {
-      litellm_settings = { drop_params = true }
-      router_settings  = { routing_strategy = "simple-shuffle" }
-    }
-  }
-
-  assert {
-    condition     = length(aws_s3_object.proxy_config) == 1
-    error_message = "Reliability values are delivered through config.yaml, so the S3 object must exist."
-  }
-
-  assert {
-    condition = aws_s3_object.proxy_config[0].content == yamlencode({
-      litellm_settings = {
-        anthropic_sse_ping_interval_seconds = 10
-        drop_params                         = true
-        sse_keepalive_ping_interval_seconds = 20
-      }
-      router_settings = {
-        enable_pre_call_checks = true
-        routing_strategy       = "simple-shuffle"
-      }
-    })
-    error_message = "config.yaml must carry the keepalive intervals under litellm_settings and enable_pre_call_checks under router_settings next to the user's own keys."
-  }
-}
-
-run "reliability_values_alone_produce_a_config" {
-  command = plan
-
-  variables {
-    enable_pre_call_checks = true
-  }
-
-  assert {
-    condition     = length(aws_s3_object.proxy_config) == 1 && aws_s3_object.proxy_config[0].content == yamlencode({ router_settings = { enable_pre_call_checks = true } })
-    error_message = "A reliability input with an empty proxy_config must still upload a config.yaml so the setting reaches the gateway."
-  }
-
-  assert {
-    condition     = local.proxy_config_enabled && contains([for e in local.proxy_config_env : e.name], "CONFIG_FILE_PATH")
-    error_message = "The gateway must be told to fetch the generated config (CONFIG_FILE_PATH)."
-  }
-}
-
-run "explicit_proxy_config_keys_win" {
-  command = plan
-
-  variables {
-    sse_keepalive_ping_interval_seconds = 20
-    enable_pre_call_checks              = true
-    proxy_config = {
-      litellm_settings = { sse_keepalive_ping_interval_seconds = 7 }
-      router_settings  = { enable_pre_call_checks = false }
-    }
-  }
-
-  assert {
-    condition = aws_s3_object.proxy_config[0].content == yamlencode({
-      litellm_settings = { sse_keepalive_ping_interval_seconds = 7 }
-      router_settings  = { enable_pre_call_checks = false }
-    })
-    error_message = "A key written directly into proxy_config must not be overridden by the typed variable."
   }
 }
 
@@ -184,18 +105,4 @@ run "metrics_port_may_not_reuse_the_gateway_port" {
   }
 
   expect_failures = [var.gateway_metrics_port]
-}
-
-run "keepalive_interval_is_range_checked" {
-  command = plan
-
-  variables {
-    sse_keepalive_ping_interval_seconds = 301
-    anthropic_sse_ping_interval_seconds = 0
-  }
-
-  expect_failures = [
-    var.sse_keepalive_ping_interval_seconds,
-    var.anthropic_sse_ping_interval_seconds,
-  ]
 }

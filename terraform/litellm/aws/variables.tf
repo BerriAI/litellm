@@ -549,54 +549,7 @@ variable "proxy_config" {
   default     = {}
 }
 
-# ---------- Reliability ----------
-#
-# Typed shortcuts for the runtime controls in
-# https://docs.litellm.ai/docs/proxy/prod. Each one is merged into the
-# generated config.yaml next to proxy_config; a null value is left out so the
-# proxy keeps its own default, and a key set explicitly in proxy_config wins.
-
-variable "sse_keepalive_ping_interval_seconds" {
-  description = <<-EOT
-    litellm_settings.sse_keepalive_ping_interval_seconds: seconds between
-    `: ping` SSE comments on OpenAI-shaped streams while the upstream is
-    silent (1-300). Off by default. Set it below the ALB idle timeout (60s
-    default) so a slow first token cannot get the stream closed. Needs
-    gateway_image v1.98.0 or newer.
-  EOT
-  type        = number
-  default     = null
-
-  validation {
-    condition     = var.sse_keepalive_ping_interval_seconds == null || (var.sse_keepalive_ping_interval_seconds >= 1 && var.sse_keepalive_ping_interval_seconds <= 300)
-    error_message = "sse_keepalive_ping_interval_seconds must be between 1 and 300."
-  }
-}
-
-variable "anthropic_sse_ping_interval_seconds" {
-  description = <<-EOT
-    litellm_settings.anthropic_sse_ping_interval_seconds: seconds between
-    `event: ping` frames on /v1/messages streams while the upstream is silent
-    (1-300). The proxy defaults to 15 (since v1.97.0).
-  EOT
-  type        = number
-  default     = null
-
-  validation {
-    condition     = var.anthropic_sse_ping_interval_seconds == null || (var.anthropic_sse_ping_interval_seconds >= 1 && var.anthropic_sse_ping_interval_seconds <= 300)
-    error_message = "anthropic_sse_ping_interval_seconds must be between 1 and 300."
-  }
-}
-
-variable "enable_pre_call_checks" {
-  description = <<-EOT
-    router_settings.enable_pre_call_checks: reject a request whose prompt
-    exceeds every candidate deployment's context window before it is sent
-    to the provider. Relies on accurate max_input_tokens for each model.
-  EOT
-  type        = bool
-  default     = null
-}
+# ---------- Prometheus metrics sidecar ----------
 
 variable "gateway_metrics_port" {
   description = <<-EOT

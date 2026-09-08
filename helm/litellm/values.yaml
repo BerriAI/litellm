@@ -268,29 +268,13 @@ gateway:
   config:
     create: true
     proxy_config: {}
-  # Reliability controls written into the rendered config.yaml (needs
-  # config.create). A null key is left out, so the proxy keeps its own default;
-  # a key you set yourself under config.proxy_config wins over the value here.
-  # Needs the gateway image v1.101.0 or newer for the full set (keep-alive
-  # since v1.98.0).
-  reliability:
-    # litellm_settings.sse_keepalive_ping_interval_seconds. Seconds between
-    # `: ping` SSE comments on OpenAI-shaped streams while the upstream is
-    # silent (1-300). Off by default; set it below your ingress idle timeout.
-    sseKeepalivePingIntervalSeconds: null
-    # litellm_settings.anthropic_sse_ping_interval_seconds. Same for
-    # /v1/messages streams; the proxy defaults to 15.
-    anthropicSsePingIntervalSeconds: null
-    # router_settings.enable_pre_call_checks. Reject a request whose prompt
-    # exceeds every candidate deployment's context window before dispatch.
-    enablePreCallChecks: null
   # Serve Prometheus /metrics from a `metrics` sidecar container (same image,
   # `python -m litellm.proxy.prometheus_metrics_server`) that aggregates the
   # workers' PROMETHEUS_MULTIPROC_DIR samples over a shared emptyDir, so a
   # scrape never runs on an inference worker. Adds a `metrics` port to the pod
-  # and the gateway Service; point your scrape config at it. The port has no
-  # virtual-key auth: keep it off public ingress. Needs the gateway image
-  # v1.101.0 or newer.
+  # and a dedicated ClusterIP `<gateway>-metrics` Service; point your scrape
+  # config at it. The port has no virtual-key auth: keep it off public ingress.
+  # Needs the gateway image v1.101.0 or newer.
   metricsServer:
     enabled: false
     port: 4001

@@ -180,27 +180,12 @@ proxy_config:
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
 
-# Reliability controls written into the rendered config.yaml. A null key is
-# left out, so the proxy keeps its own default; a key you set yourself under
-# proxy_config wins over the value here. Needs the proxy image v1.101.0 or
-# newer for the full set (keep-alive since v1.98.0).
-reliability:
-  # litellm_settings.sse_keepalive_ping_interval_seconds. Seconds between
-  # `: ping` SSE comments on OpenAI-shaped streams while the upstream is
-  # silent (1-300). Off by default; set it below your ingress idle timeout.
-  sseKeepalivePingIntervalSeconds: null
-  # litellm_settings.anthropic_sse_ping_interval_seconds. Same for /v1/messages
-  # streams; the proxy defaults to 15.
-  anthropicSsePingIntervalSeconds: null
-  # router_settings.enable_pre_call_checks. Reject a request whose prompt
-  # exceeds every candidate deployment's context window before dispatch.
-  enablePreCallChecks: null
-
 # Serve Prometheus /metrics from a separate process (PROMETHEUS_METRICS_PORT)
 # so a scrape never runs on an inference worker. Adds a `metrics` port to the
-# container and the Service, and the ServiceMonitor scrapes it instead of the
-# proxy port. The separate port has no virtual-key auth: keep it off public
-# ingress. Needs the proxy image v1.101.0 or newer.
+# container and a dedicated ClusterIP `<release>-metrics` Service, and the
+# ServiceMonitor scrapes it instead of the proxy port. The separate port has
+# no virtual-key auth: keep it off public ingress. Needs the proxy image
+# v1.101.0 or newer.
 metricsServer:
   enabled: false
   port: 4001

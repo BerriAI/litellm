@@ -159,24 +159,6 @@ variable "backend_extra_secrets" {
   default     = {}
 }
 
-variable "sse_keepalive_ping_interval_seconds" {
-  description = "Seconds between SSE keepalive pings on OpenAI-shaped streams (1-300). Null keeps them off."
-  type        = number
-  default     = null
-}
-
-variable "anthropic_sse_ping_interval_seconds" {
-  description = "Seconds between ping events on /v1/messages streams (1-300). Null keeps the proxy default of 15."
-  type        = number
-  default     = null
-}
-
-variable "enable_pre_call_checks" {
-  description = "Reject over-context prompts before dispatch (router_settings.enable_pre_call_checks). Null keeps the proxy default."
-  type        = bool
-  default     = null
-}
-
 variable "gateway_metrics_port" {
   description = "Port for the Prometheus metrics sidecar in the gateway task. Null keeps /metrics on the gateway port only."
   type        = number
