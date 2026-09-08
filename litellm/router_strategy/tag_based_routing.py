@@ -461,7 +461,6 @@ def _request_tags_after_router_consumption(metadata: object, model: str) -> Sequ
     if not isinstance(metadata, Mapping):
         return None
     typed_metadata: Final[Mapping[str, object]] = metadata
-    # `tags` also carries the previous attempt's deployment tags, so retries read the pre-deployment snapshot
     request_tags: Final = _tags_in_metadata(
         typed_metadata,
         key=ROUTING_REQUEST_TAGS_METADATA_KEY if ROUTING_REQUEST_TAGS_METADATA_KEY in typed_metadata else "tags",
