@@ -150,8 +150,7 @@ class VertexBase:
                             json_obj = json.load(f)
                     except FileNotFoundError as e:
                         raise Exception(
-                            "Unable to load vertex credentials from file path: "
-                            f"{credentials}. File not found. ({e})"
+                            f"Unable to load vertex credentials from file path: {credentials}. File not found. ({e})"
                         ) from e
                     except PermissionError as e:
                         raise Exception(
@@ -163,7 +162,7 @@ class VertexBase:
                             "Unable to load vertex credentials from file path: "
                             f"{credentials}. Unable to read file. ({e})"
                         ) from e
-                    except json.JSONDecodeError as e:
+                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
                         raise Exception(
                             "Unable to load vertex credentials from file path: "
                             f"{credentials}. Ensure the JSON is valid "
