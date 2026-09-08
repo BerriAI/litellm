@@ -39,6 +39,8 @@ _SIZE_TO_ASPECT_RATIO: Final = {
     "1920x1080": "16:9",
     "1080x1920": "9:16",
 }
+
+
 def _duration_from_seconds(seconds: object) -> int:
     try:
         return int(seconds) if seconds is not None else 6
@@ -110,9 +112,7 @@ class XAIVideoConfig(BaseVideoConfig):
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
 
         params: Final = (
-            litellm_params.model_dump()
-            if isinstance(litellm_params, GenericLiteLLMParams)
-            else (litellm_params or {})
+            litellm_params.model_dump() if isinstance(litellm_params, GenericLiteLLMParams) else (litellm_params or {})
         )
         if should_use_xai_oauth(params) and not XAIModelInfo.get_api_key(api_key):
             return XAIOAuthAuthenticator().get_api_base().rstrip("/")
@@ -243,9 +243,7 @@ class XAIVideoConfig(BaseVideoConfig):
             progress=0,
         )
         if custom_llm_provider:
-            video_obj.id = encode_video_id_with_provider(
-                video_obj.id, custom_llm_provider, model
-            )
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
         video_obj.usage = usage if isinstance(usage, dict) else {}
         video_obj._hidden_params["video_url"] = None
         return video_obj
@@ -294,9 +292,7 @@ class XAIVideoConfig(BaseVideoConfig):
         )
         video_obj._hidden_params["video_url"] = video_url
         if custom_llm_provider and video_obj.id and video_obj.id != "unknown":
-            video_obj.id = encode_video_id_with_provider(
-                video_obj.id, custom_llm_provider, response_data.get("model")
-            )
+            video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, response_data.get("model"))
         return video_obj
 
     def transform_video_content_request(
@@ -321,9 +317,7 @@ class XAIVideoConfig(BaseVideoConfig):
         url: Final = video_meta.get("url") if isinstance(video_meta, dict) else None
         if isinstance(url, str) and url:
             return url
-        raise ValueError(
-            f"xAI video not ready for download (status={payload.get('status')}): {payload}"
-        )
+        raise ValueError(f"xAI video not ready for download (status={payload.get('status')}): {payload}")
 
     def transform_video_content_response(
         self,
