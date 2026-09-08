@@ -82,7 +82,11 @@ from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.exceptions import RejectedRequestError, SensitiveDataRouteException
+from litellm.exceptions import (
+    GuardrailRaisedException,
+    RejectedRequestError,
+    SensitiveDataRouteException,
+)
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
@@ -2628,6 +2632,7 @@ class ProxyLogging:
             - Authentication Errors from user_api_key_auth
             - HTTP HTTPException (rate limit errors)
             - ProxyException (guardrail blocks, budget / rate-limit errors)
+            - GuardrailRaisedException (guardrail blocks / guardrail failures)
         """
 
         #########################################################
@@ -2642,9 +2647,9 @@ class ProxyLogging:
         if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
             return False
 
-        return isinstance(original_exception, (HTTPException, ProxyException)) or (
-            error_type == ProxyErrorTypes.auth_error
-        )
+        return isinstance(
+            original_exception, (HTTPException, ProxyException, GuardrailRaisedException)
+        ) or (error_type == ProxyErrorTypes.auth_error)
 
     async def _handle_logging_proxy_only_error(
         self,
@@ -3181,7 +3186,7 @@ class ProxyLogging:
             except (GeneratorExit, asyncio.CancelledError):
                 raise
             except Exception:
-                ProxyLogging._fire_deferred_stream_logging(request_data)
+                ProxyLogging._discard_deferred_stream_logging_for_failure(request_data)
                 raise
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
@@ -3241,7 +3246,7 @@ class ProxyLogging:
         except (GeneratorExit, asyncio.CancelledError):
             raise
         except Exception:
-            ProxyLogging._fire_deferred_stream_logging(request_data)
+            ProxyLogging._discard_deferred_stream_logging_for_failure(request_data)
             raise
 
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
@@ -3271,6 +3276,44 @@ class ProxyLogging:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
+
+    @staticmethod
+    def _discard_deferred_stream_logging_for_failure(request_data: dict) -> None:
+        """Discard the deferred stream-complete dispatch when the stream ends in
+        a failure (e.g. an end-of-stream guardrail block raising out of the
+        callback chain). The deferred dispatch is the success logging path —
+        firing it here would record the blocked request as a success callback
+        and a ``status=success`` spend row before the outer generator's
+        ``post_call_failure_hook`` writes the failure row. The CSW shape parks
+        ``(assembled ModelResponse, cache_hit)``; record its partial usage so
+        the failure row bills what the stream consumed instead of zero. The
+        native /v1/messages and responses shapes park ``(coroutine,)`` and
+        still need the flush (no success row is produced without it), so they
+        keep the existing fire behaviour.
+        """
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if logging_obj is None:
+            return
+        _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
+            logging_obj, "_on_deferred_stream_complete", None
+        )
+        _args: Final[tuple[object, ...] | None] = getattr(
+            logging_obj, "_deferred_stream_complete_args", None
+        )
+        if _deferred_cb is None or _args is None:
+            return
+        assembled: Final = _args[0]
+        if not isinstance(assembled, ModelResponse):
+            ProxyLogging._fire_deferred_stream_logging(request_data)
+            return
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj._deferred_stream_complete_args = None
+        usage: Final[Usage | None] = getattr(assembled, "usage", None)
+        if isinstance(usage, Usage):
+            logging_obj.record_partial_usage_for_failure(
+                usage,
+                logging_obj._response_cost_calculator(result=assembled) or 0.0,
+            )
 
     async def _arelease_max_parallel_requests_on_disconnect(
         self,

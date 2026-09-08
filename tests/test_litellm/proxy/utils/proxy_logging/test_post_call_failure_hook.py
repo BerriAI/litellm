@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 
 import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import AlertType, ProxyErrorTypes
 from litellm.proxy.utils import ProxyLogging
@@ -49,12 +50,17 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
             error_type=ProxyErrorTypes.auth_error,
             route="/chat/completions",
         ),
+        "guardrail_raised_on_llm_route": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=GuardrailRaisedException(guardrail_name="g", message="blocked"),
+            route="/chat/completions",
+        ),
     }
     assert snapshot == {
         "no_route": False,
         "non_llm_route": False,
         "http_on_llm_route": True,
         "auth_short_circuit": True,
+        "guardrail_raised_on_llm_route": True,
     }
 
 
@@ -267,3 +273,49 @@ async def test_handle_logging_proxy_only_path_propagates_async_failure_raises(
             route="/chat/completions",
             original_exception=Exception("x"),
         )
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_guardrail_block_fires_failure_callback(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """A ``GuardrailRaisedException`` on an LLM route must reach the logging
+    object's ``async_failure_handler`` so custom loggers see a ``failure``
+    status - without this, guardrail blocks produce only
+    ``post_call_failure_hook`` and no failure logging event."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    recorded: dict[str, Any] = {}
+
+    class _StatusRecorder(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            recorded["status"] = (kwargs.get("standard_logging_object") or {}).get("status")
+
+    monkeypatch.setattr(litellm, "_async_failure_callback", [_StatusRecorder()])
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test_guardrail_block_failure_cb",
+        function_id="test_guardrail_block_failure_cb",
+    )
+    request_data = {
+        "litellm_logging_obj": logging_obj,
+        "litellm_call_id": "test_guardrail_block_failure_cb",
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {},
+    }
+    proxy_logging.alert_types = []
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=GuardrailRaisedException(guardrail_name="g", message="blocked"),
+        user_api_key_dict=make_user_api_key_auth(request_route="/chat/completions"),
+    )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert recorded["status"] == "failure"
