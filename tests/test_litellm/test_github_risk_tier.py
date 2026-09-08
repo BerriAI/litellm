@@ -342,6 +342,8 @@ def test_author_factor(risk_tier, rules, author, from_fork, expected):
         ("litellm/proxy/_experimental/mcp_server/byok_oauth_endpoints.py", "high"),
         ("litellm/proxy/_experimental/mcp_server/bridge_token_flow.py", "high"),
         ("litellm/proxy/_experimental/mcp_server/proxy_api_credentials.py", "high"),
+        ("litellm/proxy/_experimental/mcp_server/faults/render_oauth.py", "high"),
+        ("litellm/proxy/_experimental/mcp_server/faults/classify.py", "medium"),
         ("litellm/proxy/_experimental/mcp_server/server.py", "medium"),
         ("enterprise/litellm_enterprise/proxy/hooks/x.py", "high"),
         ("enterprise/litellm_enterprise/proxy/auth/x.py", "high"),
