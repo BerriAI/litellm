@@ -2,6 +2,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Literal, Optional
 
 from litellm.exceptions import GuardrailRaisedException
+from litellm.integrations.custom_guardrail import log_guardrail_information
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     GenericGuardrailAPI,
 )
@@ -41,6 +42,7 @@ class RecoGuardrail(GenericGuardrailAPI):
             **kwargs,
         )
 
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
