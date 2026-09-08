@@ -2,8 +2,48 @@ import json
 
 import pytest
 
-
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+
+
+@pytest.mark.parametrize("json_succeeds", [True, False])
+def test_repeated_pydantic_model_with_serialization_error(json_succeeds: bool) -> None:
+    from typing import Final
+
+    from pydantic import BaseModel, SerializationInfo, model_serializer
+
+    class FailingModel(BaseModel):
+        value: int = 42
+
+        @model_serializer
+        def serialize_model(self, info: SerializationInfo) -> dict[str, int]:
+            if json_succeeds and info.mode == "json":
+                return {"value": self.value}
+            raise ValueError("serialization failed")
+
+    model: Final = FailingModel()
+    expected: Final = {"value": 42} if json_succeeds else str(model)
+    assert json.loads(safe_dumps([model, model])) == [expected, expected]
+
+
+def test_pydantic_string_fallback_preserves_value_transform() -> None:
+    from typing import Final
+
+    from pydantic import BaseModel, model_serializer
+
+    class FailingModel(BaseModel):
+        @model_serializer
+        def serialize_model(self) -> dict[str, object]:
+            raise ValueError("serialization failed")
+
+        def __str__(self) -> str:
+            return "secret\x00"
+
+    model: Final = FailingModel()
+    assert json.loads(
+        safe_dumps(
+            {"token": model, "other": model}, value_transform=lambda key, value: "redacted" if key == "token" else value
+        )
+    ) == {"token": "redacted", "other": "secret"}
 
 
 def test_primitive_types():
@@ -205,9 +245,7 @@ def test_pydantic_base_model():
         inner: InnerModel
         tags: list
 
-    outer = OuterModel(
-        name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"]
-    )
+    outer = OuterModel(name="test", inner=InnerModel(value=42, label="hello"), tags=["a", "b"])
 
     # Test a pydantic model at the top level
     result = json.loads(safe_dumps(outer))
