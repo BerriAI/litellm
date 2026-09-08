@@ -71,7 +71,7 @@ def _post_call_pipelines_for_context(context: PolicyMatchContext) -> tuple[Polic
 
 
 def attach_post_call_pipelines_to_retrieval(
-    data: dict,  # mutable-ok: the proxy's request-state dict, written in place like every other policy engine hook
+    data: dict[str, object],  # mutable-ok: request-state dict the policy engine hooks all write in place
     user_api_key_dict: "UserAPIKeyAuth",
     llm_router: "Router | None",
 ) -> None:
