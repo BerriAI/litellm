@@ -667,6 +667,14 @@ class CustomDimension(BaseModel):
     weight: float = Field(gt=0, le=1, allow_inf_nan=False)
     keywords: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=32)
     patterns: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=32)
+    scoring_mode: Literal["binary", "match_count"] = Field(
+        default="binary",
+        description=(
+            "'binary' scores 1 when any matcher hits. 'match_count' scores 0.5 when one distinct matcher hits and 1 "
+            "when two or more do; repeated occurrences of one matcher never raise it. Keywords are distinct "
+            "case-insensitively, patterns by source, and a keyword and a pattern are always distinct from each other."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_matchers(self) -> "CustomDimension":
@@ -794,8 +802,9 @@ class ComplexityRouterConfig(BaseModel):
         default=(),
         max_length=16,
         description=(
-            "Named binary dimensions added to the heuristic-v1 score. Each contributes its inline weight once "
-            "when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters. "
+            "Named dimensions added to the heuristic-v1 score. Each contributes its inline weight once "
+            "when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters; "
+            "scoring_mode 'match_count' instead grades half weight for one distinct matcher and full for two or more. "
             "Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, "
             "backreferences and lookarounds are rejected. Conservative work limits include alternation paths, "
             "repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. "
@@ -1078,6 +1087,20 @@ class ComplexityRouterConfig(BaseModel):
             "Additional case-sensitive literal sentinels that mark a request as plan mode, on "
             "top of the built-in Claude Code and Copilot ones. For clients whose plan-mode "
             "wording the built-ins don't cover, or after a client release changes its strings."
+        ),
+    )
+    max_tokens_from_tier_model: bool = Field(
+        default=True,
+        description=(
+            "Set max_tokens on every routed request to the output ceiling of the tier model it "
+            "lands on, replacing whatever the caller sent. A caller behind an auto-router cannot "
+            "pick one value that fits every tier: the smallest tier's ceiling starves a bigger "
+            "tier's thinking budget, and a bigger tier's ceiling is rejected by the smallest. The "
+            "ceiling is the smallest max_output_tokens across the tier model's deployments, read "
+            "from each deployment's model_info and then the model cost map; a tier model with a "
+            "deployment whose ceiling is unknown keeps the caller's value. A max_tokens, "
+            "max_completion_tokens or max_output_tokens in the tier's own litellm_params still "
+            "wins. Set false to forward the caller's value unchanged."
         ),
     )
     route_housekeeping_to_cheapest_tier: bool = Field(
