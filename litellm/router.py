@@ -403,6 +403,7 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
+_FALLBACK_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _EXACT_KEY_FALLBACK_ENTRY_ADAPTER: Final = TypeAdapter(dict[str, list[str]])
 
 
@@ -417,11 +418,11 @@ def _exact_key_fallback_entries(
     resolver walks entries one at a time and can return an earlier well-formed entry's chain
     without ever reading a malformed one.
     """
-    if not isinstance(fallbacks, list):
+    try:
+        entries: Final = _FALLBACK_LIST_ADAPTER.validate_python(fallbacks)
+    except ValidationError:
         return []
-    return [
-        typed for entry in cast(list[object], fallbacks) if (typed := _as_exact_key_fallback_entry(entry)) is not None
-    ]
+    return [typed for entry in entries if (typed := _as_exact_key_fallback_entry(entry)) is not None]
 
 
 def _as_exact_key_fallback_entry(entry: object) -> dict[str, list[str]] | None:
@@ -7279,12 +7280,7 @@ class Router:
         # Use wildcard-aware lookup so order-based fallback also works for model
         # groups resolved via pattern routing (e.g. `openai/*` -> `openai/gpt-4.1-mini`).
         all_deployments: Final = self.get_model_list(model_name=original_model_group, team_id=_request_team_id) or []
-        _order_set: Final[set] = {
-            litellm.utils._get_deployment_order(d)
-            for d in all_deployments
-            if litellm.utils._get_deployment_order(d) is not None
-        }
-        order_values: Final[list] = sorted(_order_set)
+        order_values: Final = litellm.utils.get_distinct_deployment_orders(all_deployments)
         if len(order_values) > 1 and not _skip_order_fallback:
             # Determine which order levels have already been tried
             current_target: Final = kwargs.get("_target_order")
@@ -8417,12 +8413,7 @@ class Router:
             strategy, _ = self._get_routing_context(model_group, kwargs)  # pyright: ignore[reportArgumentType]  # Mapping is read-only, safe for dict param
             if strategy == "simple-shuffle" and len(all_deployments) > 1:
                 return True
-        order_values: Final = {
-            litellm.utils._get_deployment_order(d)
-            for d in all_deployments
-            if litellm.utils._get_deployment_order(d) is not None
-        }
-        if len(order_values) > 1:
+        if len(litellm.utils.get_distinct_deployment_orders(all_deployments)) > 1:
             return True
         lookup_groups: Final = fallback_lookup_groups(kwargs, model_group)
         if (
