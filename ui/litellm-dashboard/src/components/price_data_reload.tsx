@@ -137,7 +137,8 @@ const CostMapProvenanceRows: React.FC<{ sourceInfo: CostMapSourceInfo }> = ({ so
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Info className="size-3.5 shrink-0" />
         <span>
-          Reported by the worker that answered this request. Other workers pick up a reload on their next poll
+          Reported by the worker that answered this request. Other workers pick up a reload on their next poll, and the
+          Last run time is the latest reload any worker recorded
         </span>
       </div>
     )}

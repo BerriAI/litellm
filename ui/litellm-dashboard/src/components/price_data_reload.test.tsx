@@ -69,6 +69,7 @@ describe("PriceDataReload", () => {
     expect(screen.getByText('W/"eb8e9a53f4cc284b"')).toBeInTheDocument();
     expect(screen.getByText("Loaded at:")).toBeInTheDocument();
     expect(screen.getByText(/worker that answered this request/)).toBeInTheDocument();
+    expect(screen.getByText(/Last run time is the latest reload any worker recorded/)).toBeInTheDocument();
     expect(screen.getByText(new Date(provenance.loaded_at).toLocaleString())).toBeInTheDocument();
   });
 
