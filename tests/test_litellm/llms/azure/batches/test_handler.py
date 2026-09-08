@@ -21,13 +21,10 @@ runs for real.
 from __future__ import annotations
 
 import asyncio
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from openai import AsyncOpenAI, OpenAI  # noqa: E402
 

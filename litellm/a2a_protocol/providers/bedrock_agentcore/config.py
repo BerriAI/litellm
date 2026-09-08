@@ -2,7 +2,8 @@
 Bedrock AgentCore A2A provider configuration.
 """
 
-from typing import Any, AsyncIterator, Dict, Optional
+from collections.abc import AsyncIterator
+from typing import Any, Final
 
 from litellm.a2a_protocol.providers.base import BaseA2AProviderConfig
 from litellm.a2a_protocol.providers.bedrock_agentcore.handler import (
@@ -22,12 +23,12 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
     async def handle_non_streaming(
         self,
         request_id: str,
-        params: Dict[str, Any],
-        api_base: Optional[str] = None,
+        params: dict[str, Any],
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle non-streaming request to AgentCore A2A agent."""
-        litellm_params = kwargs.get("litellm_params")
+        litellm_params: Final = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
                 "litellm_params is required for BedrockAgentCoreA2AConfig (must contain model with AgentCore ARN)"
@@ -42,12 +43,12 @@ class BedrockAgentCoreA2AConfig(BaseA2AProviderConfig):
     async def handle_streaming(
         self,
         request_id: str,
-        params: Dict[str, Any],
-        api_base: Optional[str] = None,
+        params: dict[str, Any],
+        api_base: str | None = None,
         **kwargs,
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """Handle streaming request to AgentCore A2A agent."""
-        litellm_params = kwargs.get("litellm_params")
+        litellm_params: Final = kwargs.get("litellm_params")
         if not litellm_params:
             raise ValueError(
                 "litellm_params is required for BedrockAgentCoreA2AConfig (must contain model with AgentCore ARN)"

@@ -1,17 +1,16 @@
+import inspect
 import json
-import os
-import sys
-from typing import Any, Dict, Optional
+from collections.abc import Sequence
+from typing import Optional
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from prisma.actions import LiteLLM_VerificationTokenActions
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
-from unittest.mock import patch
+from contextlib import contextmanager
+from unittest.mock import AsyncMock, Mock, patch
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -19,6 +18,28 @@ from litellm.proxy.proxy_server import app
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
 
 client = TestClient(app)
+
+
+class FakeVerificationTokenTable:
+    """Stand-in for ``prisma_client.db.litellm_verificationtoken``.
+
+    ``AsyncMock`` swallows any keyword argument, so a plain mock cannot catch a
+    call that the generated prisma client would reject at runtime. This double
+    binds every call against the real ``find_many`` signature, so passing an
+    unsupported kwarg (e.g. ``select``) raises the same ``TypeError`` the proxy
+    surfaces as an HTTP 500.
+    """
+
+    def __init__(self, records: Sequence[Mock]):
+        self._records = tuple(records)
+        self.calls: list[dict[str, object]] = []
+
+    async def find_many(self, **kwargs: object) -> tuple[Mock, ...]:
+        inspect.signature(LiteLLM_VerificationTokenActions.find_many).bind(
+            self, **kwargs
+        )
+        self.calls.append(kwargs)
+        return self._records
 
 
 @pytest.mark.asyncio
@@ -250,6 +271,190 @@ async def test_delete_tag():
         app.dependency_overrides.clear()
 
 
+class _RecordingAuthCache:
+    """Captures the keys an endpoint evicts, so tests assert on cache keys not mock plumbing."""
+
+    def __init__(self):
+        self.deleted: list[str] = []
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.deleted.append(key)
+
+
+@contextmanager
+def _tag_cache_doubles():
+    """Swaps in the auth cache and the cross-worker publisher a tag mutation is expected to hit."""
+    recording_cache = _RecordingAuthCache()
+    mock_publish = AsyncMock()
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache", recording_cache),
+        patch(
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            mock_publish,
+        ),
+    ):
+        yield recording_cache, mock_publish
+
+
+def _published_keys(mock_publish) -> list[str]:
+    return [call.kwargs["cache_key"] for call in mock_publish.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_new_tag_invalidates_tag_and_registry_caches():
+    """
+    A tag created on one worker must be visible to every worker's auth path immediately.
+
+    Auth serves tags cache-first, and the cached tag-name registry is what decides whether a
+    request tag is looked up at all, so a create that leaves both entries stale means the new
+    tag's budget goes unenforced until the TTL expires.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        with (
+            _tag_cache_doubles() as (recording_cache, mock_publish),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+            patch("litellm.proxy.proxy_server.llm_router"),
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.tag_management_endpoints.get_deployments_by_model"
+            ) as mock_get_deployments,
+        ):
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
+            mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+            mock_get_deployments.return_value = []
+
+            created_tag = Mock()
+            created_tag.tag_name = "cache-tag"
+            created_tag.description = None
+            created_tag.models = []
+            created_tag.model_info = {}
+            created_tag.spend = 0.0
+            created_tag.budget_id = None
+            created_tag.created_at = datetime.now()
+            created_tag.updated_at = datetime.now()
+            created_tag.created_by = "test-user-123"
+            mock_db.litellm_tagtable.create = AsyncMock(return_value=created_tag)
+
+            response = client.post(
+                "/tag/new",
+                json={"name": "cache-tag"},
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+            assert response.status_code == 200
+
+            assert recording_cache.deleted == ["tag:cache-tag", "tag_registry"]
+            assert _published_keys(mock_publish) == ["tag:cache-tag", "tag_registry"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_tag_invalidates_only_the_tag_cache():
+    """An update can change the tag's budget but never the set of names, so the registry stands."""
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        with (
+            _tag_cache_doubles() as (recording_cache, mock_publish),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+            patch(
+                "litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"
+            ),
+        ):
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            existing_tag = Mock()
+            existing_tag.tag_name = "cache-tag"
+            existing_tag.budget_id = None
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+            mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+            updated_tag = Mock()
+            updated_tag.tag_name = "cache-tag"
+            updated_tag.description = "updated"
+            updated_tag.models = []
+            updated_tag.model_info = {}
+            updated_tag.spend = 0.0
+            updated_tag.budget_id = None
+            updated_tag.created_at = datetime.now()
+            updated_tag.updated_at = datetime.now()
+            updated_tag.created_by = "test-user-123"
+            mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+
+            response = client.post(
+                "/tag/update",
+                json={"name": "cache-tag", "description": "updated"},
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+            assert response.status_code == 200
+
+            assert recording_cache.deleted == ["tag:cache-tag"]
+            assert _published_keys(mock_publish) == ["tag:cache-tag"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_delete_tag_invalidates_tag_and_registry_caches():
+    """Without this a deleted tag keeps its cached budget enforced until the TTL expires."""
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    try:
+        with (
+            _tag_cache_doubles() as (recording_cache, mock_publish),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        ):
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            existing_tag = Mock()
+            existing_tag.tag_name = "cache-tag"
+            mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+            mock_db.litellm_tagtable.delete = AsyncMock(return_value=existing_tag)
+
+            response = client.post(
+                "/tag/delete",
+                json={"name": "cache-tag"},
+                headers={"Authorization": "Bearer sk-1234"},
+            )
+            assert response.status_code == 200
+
+            assert recording_cache.deleted == ["tag:cache-tag", "tag_registry"]
+            assert _published_keys(mock_publish) == ["tag:cache-tag", "tag_registry"]
+    finally:
+        app.dependency_overrides.clear()
+
+
 @pytest.mark.asyncio
 async def test_list_tags_with_dynamic_tags():
     """
@@ -380,6 +585,7 @@ async def test_list_tags_no_dynamic_tags():
         app.dependency_overrides.clear()
 
 
+@pytest.mark.asyncio
 async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
     """
     Internal users can view tag usage, but the tag list must be scoped to tags
@@ -404,9 +610,8 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
 
             owned_key_record = Mock()
             owned_key_record.token = "owned-key"
-            mock_db.litellm_verificationtoken.find_many = AsyncMock(
-                return_value=[owned_key_record]
-            )
+            fake_token_table = FakeVerificationTokenTable([owned_key_record])
+            mock_db.litellm_verificationtoken = fake_token_table
 
             mock_db.litellm_dailytagspend.group_by = AsyncMock(
                 return_value=[
@@ -446,10 +651,9 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
                 "stored-owned-tag",
                 "dynamic-owned-tag",
             ]
-            mock_db.litellm_verificationtoken.find_many.assert_awaited_once_with(
-                where={"user_id": "internal-user-123"},
-                select={"token": True},
-            )
+            assert fake_token_table.calls == [
+                {"where": {"user_id": "internal-user-123"}}
+            ]
             mock_db.litellm_dailytagspend.group_by.assert_awaited_once_with(
                 by=["tag"],
                 where={
@@ -464,6 +668,54 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
                 include={"litellm_budget_table": True},
             )
 
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_internal_user_list_tags_does_not_500_on_unsupported_prisma_kwarg():
+    """
+    Regression: /tag/list returned 500 for every internal user because the
+    non-admin branch looked up the caller's keys with
+    ``find_many(select={"token": True})``, and the generated prisma client has no
+    ``select`` kwarg. This reproduces the reported case exactly: a freshly created
+    internal user with no tag spend yet, which must get an empty 200 rather than
+    "LiteLLM_VerificationTokenActions.find_many() got an unexpected keyword
+    argument 'select'".
+    """
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="new-user-key",
+        user_id="brand-new-internal-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            key_record = Mock()
+            key_record.token = "new-user-key"
+            fake_token_table = FakeVerificationTokenTable([key_record])
+            mock_db.litellm_verificationtoken = fake_token_table
+
+            mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[])
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+
+            response = client.get(
+                "/tag/list", headers={"Authorization": "Bearer new-user-key"}
+            )
+
+            assert response.status_code == 200, response.text
+            assert response.json() == []
+            assert fake_token_table.calls == [
+                {"where": {"user_id": "brand-new-internal-user"}}
+            ]
     finally:
         app.dependency_overrides.clear()
 
@@ -537,9 +789,8 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
 
         owned_key_record = Mock()
         owned_key_record.token = "owned-key"
-        mock_db.litellm_verificationtoken.find_many = AsyncMock(
-            return_value=[owned_key_record]
-        )
+        fake_token_table = FakeVerificationTokenTable([owned_key_record])
+        mock_db.litellm_verificationtoken = fake_token_table
         mock_get_daily_activity.return_value = "daily-activity-response"
 
         result = await get_tag_daily_activity(
@@ -549,6 +800,7 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
         )
 
         assert result == "daily-activity-response"
+        assert fake_token_table.calls == [{"where": {"user_id": "internal-user-123"}}]
         mock_get_daily_activity.assert_awaited_once()
         assert mock_get_daily_activity.await_args.kwargs["api_key"] == ["owned-key"]
 
@@ -583,9 +835,8 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
 
         owned_key_record = Mock()
         owned_key_record.token = "owned-key"
-        mock_db.litellm_verificationtoken.find_many = AsyncMock(
-            return_value=[owned_key_record]
-        )
+        fake_token_table = FakeVerificationTokenTable([owned_key_record])
+        mock_db.litellm_verificationtoken = fake_token_table
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
             end_date="2025-01-31",
@@ -593,6 +844,7 @@ async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter()
             user_api_key_dict=mock_user_auth,
         )
 
+        assert fake_token_table.calls == [{"where": {"user_id": "internal-user-123"}}]
         assert result.results == []
         assert result.metadata.total_spend == 0
         assert result.metadata.total_api_requests == 0
@@ -626,7 +878,8 @@ async def test_internal_user_tag_daily_activity_scopes_to_current_key_without_us
     ):
         mock_db = Mock()
         mock_prisma.db = mock_db
-        mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        fake_token_table = FakeVerificationTokenTable([])
+        mock_db.litellm_verificationtoken = fake_token_table
         mock_get_daily_activity.return_value = "daily-activity-response"
 
         result = await get_tag_daily_activity(
@@ -636,7 +889,7 @@ async def test_internal_user_tag_daily_activity_scopes_to_current_key_without_us
         )
 
         assert result == "daily-activity-response"
-        mock_db.litellm_verificationtoken.find_many.assert_not_awaited()
+        assert fake_token_table.calls == []
         mock_get_daily_activity.assert_awaited_once()
         assert mock_get_daily_activity.await_args.kwargs["api_key"] == [
             "current-owned-key"
@@ -669,7 +922,8 @@ async def test_internal_user_tag_daily_activity_without_any_scoped_keys_returns_
     ):
         mock_db = Mock()
         mock_prisma.db = mock_db
-        mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        fake_token_table = FakeVerificationTokenTable([])
+        mock_db.litellm_verificationtoken = fake_token_table
 
         result = await get_tag_daily_activity(
             start_date="2025-01-01",
@@ -680,7 +934,7 @@ async def test_internal_user_tag_daily_activity_without_any_scoped_keys_returns_
         assert result.results == []
         assert result.metadata.total_spend == 0
         assert result.metadata.total_api_requests == 0
-        mock_db.litellm_verificationtoken.find_many.assert_not_awaited()
+        assert fake_token_table.calls == []
         mock_get_daily_activity.assert_not_awaited()
 
 

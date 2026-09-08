@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, MockedFunction, vi } from "vitest";
 
-import { renderWithProviders } from "../../../tests/test-utils";
+import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import { Team } from "../key_team_helpers/key_list";
 import { TeamsResponse, useTeamsTable } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { TeamsTable } from "./TeamsTable";
@@ -107,8 +107,8 @@ it("renders a team row with alias, organization, and spend/budget", async () => 
   await waitFor(() => {
     expect(screen.getByText("Acme Team")).toBeInTheDocument();
     expect(screen.getByText("Test Organization")).toBeInTheDocument();
-    expect(screen.getByText("$42.5000")).toBeInTheDocument();
-    expect(screen.getByText("of $100")).toBeInTheDocument();
+    expect(screen.getByText("$42.50")).toBeInTheDocument();
+    expect(screen.getByText("of $100.00")).toBeInTheDocument();
   });
 });
 
@@ -151,7 +151,7 @@ describe("sort contract – only backend-sortable columns are sortable", () => {
 
   it("does not make Spend / Budget sortable (the backend rejects sort_by=spend)", () => {
     renderTable();
-    expect(screen.getByText("Spend / Budget").closest("button")).toBeNull();
+    expect(screen.queryByText("Spend / Budget").closest("button")).toBeNull();
     // Team and Created are the only sortable headers.
     expect(screen.getByText("Team").closest("button")).not.toBeNull();
     expect(screen.getByText("Created").closest("button")).not.toBeNull();
@@ -196,6 +196,19 @@ describe("server-side filtering maps controls to the right query params", () => 
       expect(mockUseTeamsTable).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ search: "platform" }));
     });
   });
+
+  it("opts into team id prefix matching so a partial id from a proxy error finds the team", async () => {
+    renderTable();
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "66c432fa" } });
+
+    await waitFor(() => {
+      expect(mockUseTeamsTable).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ search: "66c432fa", searchTeamIdMatch: "prefix" }),
+      );
+    });
+  });
 });
 
 describe("non-admin scoping", () => {
@@ -230,8 +243,7 @@ describe("row actions", () => {
     await user.click(await screen.findByText("Edit team"));
     expect(onEditTeam).toHaveBeenCalledWith(expect.objectContaining({ team_id: "team-1" }));
 
-    await user.click(screen.getByTestId("team-actions-team-1"));
-    await user.click(await screen.findByText("Delete team"));
+    await chooseSelectOption(user, screen.getByTestId("team-actions-team-1"), "Delete team", "menuitem");
     expect(onDeleteTeam).toHaveBeenCalledWith(expect.objectContaining({ team_id: "team-1" }));
   });
 

@@ -2,13 +2,10 @@
 Test Bedrock AgentCore integration
 """
 
-import os
-import sys
 from dotenv import load_dotenv
 
 load_dotenv()
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from unittest.mock import MagicMock, Mock, patch

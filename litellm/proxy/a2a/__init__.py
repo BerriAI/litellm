@@ -10,8 +10,8 @@ A2A registration helpers for the LiteLLM proxy.
 
 from litellm.proxy.a2a.agent_card import (
     LITELLM_A2A_PROTOCOL_VERSION,
-    LITELLM_SECURITY_SCHEMES,
     LITELLM_SECURITY_REQUIREMENTS,
+    LITELLM_SECURITY_SCHEMES,
     merge_agent_card,
 )
 from litellm.proxy.a2a.discovery import (

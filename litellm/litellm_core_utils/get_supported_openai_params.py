@@ -1,16 +1,17 @@
-from typing import Literal, Optional
+from typing import Final, Literal
 
 import litellm
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
 def get_supported_openai_params(
     model: str,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     request_type: Literal["chat_completion", "embeddings", "transcription"] = "chat_completion",
-    base_model: Optional[str] = None,
-) -> Optional[list]:
+    base_model: str | None = None,
+) -> list | None:
     """
     Returns the supported openai params for a given model + provider
 
@@ -30,6 +31,10 @@ def get_supported_openai_params(
     - List if custom_llm_provider is mapped
     - None if unmapped
     """
+    if not custom_llm_provider:
+        custom_llm_provider = declared_authenticating_provider(
+            model
+        )  # rebind-ok: resolving would run the provider's OAuth flow
     if not custom_llm_provider:
         try:
             custom_llm_provider = litellm.get_llm_provider(model=model)[1]
@@ -54,7 +59,7 @@ def get_supported_openai_params(
     if provider_config and request_type == "chat_completion":
         supported_params = provider_config.get_supported_openai_params(model=model)
         if base_model and base_model != model:
-            base_model_params = provider_config.get_supported_openai_params(model=base_model)
+            base_model_params: Final = provider_config.get_supported_openai_params(model=base_model)
             supported_params = list(dict.fromkeys([*supported_params, *base_model_params]))
         return supported_params
 
@@ -128,7 +133,7 @@ def get_supported_openai_params(
         elif request_type == "embeddings":
             return litellm.GenAIHubEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "azure":
-        _azure_detection_model = base_model or model
+        _azure_detection_model: Final = base_model or model
         if litellm.AzureOpenAIO1Config().is_o_series_model(model=_azure_detection_model):
             return litellm.AzureOpenAIO1Config().get_supported_openai_params(model=_azure_detection_model)
         elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=_azure_detection_model):
@@ -172,7 +177,7 @@ def get_supported_openai_params(
         if request_type == "embeddings":
             return litellm.JinaAIEmbeddingConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "together_ai":
-        return litellm.TogetherAIConfig().get_supported_openai_params(model=model)
+        return litellm.TogetherAIChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "databricks":
         if request_type == "chat_completion":
             return litellm.DatabricksConfig().get_supported_openai_params(model=model)
@@ -284,9 +289,7 @@ def get_supported_openai_params(
             )
             if provider_config:
                 return provider_config.get_supported_openai_params(model=model)
-        elif request_type == "embeddings":
-            return None
-        elif request_type == "transcription":
+        elif request_type == "embeddings" or request_type == "transcription":
             return None
 
     return None

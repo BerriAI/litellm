@@ -691,7 +691,6 @@ async def test_dynamic_rate_limiter_v3_model_capacity_path_populates_provider():
             user_api_key_dict=user_api_key_dict,
             priority="default",
             saturation=1.0,
-            data={"model": "gpt-4o-mini"},
         )
 
     exc = exc_info.value
@@ -741,7 +740,6 @@ async def test_dynamic_rate_limiter_v3_unknown_descriptor_path_populates_provide
             user_api_key_dict=user_api_key_dict,
             priority="default",
             saturation=1.0,
-            data={"model": "gpt-4o-mini"},
         )
 
     assert exc_info.value.llm_provider == "openai"

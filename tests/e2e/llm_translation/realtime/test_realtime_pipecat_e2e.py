@@ -25,10 +25,10 @@ import asyncio
 
 import pytest
 
+from e2e_config import ws_base_url
 from realtime_client import (
     PROVIDERS,
     RealtimeProvider,
-    ws_base_url,
     realtime_model,
 )
 
