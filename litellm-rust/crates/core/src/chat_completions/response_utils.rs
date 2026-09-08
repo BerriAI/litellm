@@ -86,7 +86,9 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 20);
         assert_eq!(usage.completion_tokens, 4);
         assert_eq!(usage.total_tokens, 24);
-        let details = usage.prompt_tokens_details.expect("unexpected prompt_tokens_details missing");
+        let details = usage
+            .prompt_tokens_details
+            .expect("unexpected prompt_tokens_details missing");
         assert_eq!(details.cached_tokens, 7);
         assert_eq!(details.cache_creation_tokens, 3);
         assert_eq!(details.text_tokens, 10);
@@ -97,7 +99,9 @@ mod tests {
         let usage = usage_from_parts(12, 5, 0, 0);
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.total_tokens, 17);
-        let details = usage.prompt_tokens_details.expect("unexpected prompt_tokens_details missing");
+        let details = usage
+            .prompt_tokens_details
+            .expect("unexpected prompt_tokens_details missing");
         assert_eq!(details.text_tokens, 12);
     }
 }

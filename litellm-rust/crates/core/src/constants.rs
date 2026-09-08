@@ -35,7 +35,7 @@ pub(crate) const AUDIO_TRANSCRIPTION_TIMEOUT_SECS: u64 = 600;
 /// `object` field every non-streaming chat completion response carries.
 pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 
-/// Ollama credential and endpoint env vars, mirrors 
+/// Ollama credential and endpoint env vars, mirrors
 /// Python's `OllamaModelInfo.get_api_key` / `get_api_base` resolution
 /// in `litellm/llms/ollama/common_utils.py`.
 pub const OLLAMA_API_KEY_ENV: &str = "OLLAMA_API_KEY";
