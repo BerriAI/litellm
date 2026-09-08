@@ -1,11 +1,13 @@
-//! Enforcement: the litellm-rust workspace has exactly six crates.
+//! Enforcement: the litellm-rust workspace has exactly seven crates.
 //!
 //! `core` (the Rust SDK), `token-counter` (standalone input token counting),
 //! `config` (the config-loading boundary),
 //! `ai-gateway` (the HTTP/WebSocket host),
 //! `python-interop` (domain-neutral PyO3 primitives), and `python-bridge` (the
-//! PyO3 cdylib). Adding or removing a crate must be a
-//! deliberate act: this test fails until the allowlist here is updated, forcing
+//! PyO3 cdylib). and `tests` (e2e integration tests).
+//!
+//! Adding or removing a crate must be a deliberate act: this test 
+//! fails until the allowlist here is updated, forcing
 //! whoever changes the crate set to justify the new crate per the rule that a
 //! crate is a layer needing independent compilation / its own deps / a separate
 //! artifact — and to keep `litellm-rust/AGENTS.md` in sync.
@@ -26,6 +28,7 @@ const EXPECTED_MEMBERS: &[&str] = &[
     "crates/ai-gateway",
     "crates/python-interop",
     "crates/python-bridge",
+    "crates/tests",
 ];
 
 /// The crate subdirectory names that must exist under `crates/`.
@@ -36,6 +39,7 @@ const EXPECTED_CRATE_DIRS: &[&str] = &[
     "ai-gateway",
     "python-interop",
     "python-bridge",
+    "tests",
 ];
 
 const MISMATCH: &str = "litellm-rust crate set changed — update this allowlist AND litellm-rust/AGENTS.md, and justify the crate per the rule (crate = layer needing independent compilation / its own deps / a separate artifact).";

@@ -12,8 +12,9 @@ litellm-rust has six crates. A crate is a layer or shared foundation, not a rout
 | litellm-ai-gateway | The axum server (behind the `server` feature) plus the WebSocket hosts. Translates HTTP/WS to core entrypoints; owns no provider logic and no handlers. |
 | litellm-python-interop | Domain-neutral PyO3 foundation for GIL handling and typed Python/Serde conversion. |
 | litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. Owns API registration, domain wiring, and Python exception mapping. |
+| litellm-rust-tests | e2e integration tests (`provider_parity`) that drive the compiled proxy and native extension as subprocesses. |
 
-Dependency direction is acyclic: `litellm-config` depends on `litellm-core`, the gateway depends on both, and `litellm-python-bridge` depends on the domain layers, `litellm-token-counter`, and `litellm-python-interop`. The token counter and interop foundations depend on no LiteLLM domain crate.
+Dependency direction is acyclic: `litellm-config` depends on `litellm-core`, the gateway depends on both, and `litellm-python-bridge` depends on the domain layers, `litellm-token-counter`, and `litellm-python-interop`; `litellm-rust-tests` depends on no LiteLLM crate at all. The token counter and interop foundations depend on no LiteLLM domain crate.
 
 ## Where a route lives
 
