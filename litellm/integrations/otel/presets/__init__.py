@@ -65,12 +65,9 @@ DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynami
 )
 
 #: Callback name → per-request OTLP endpoint resolver. Only integrations whose
-#: destination host varies per tenant appear here; for everyone else the preset's
-#: endpoint is authoritative. Two shapes exist: newrelic picks from a fixed region
-#: table, and langfuse_otel reads the host the key or team was configured with,
-#: which the proxy resolved at auth. Neither takes a URL straight off the request:
-#: a client-supplied langfuse_host is rejected unless an admin opts in with
-#: general_settings.allow_client_side_credentials.
+#: destination host varies per tenant appear here (newrelic's region table, the
+#: Langfuse host a key or team was configured with); for everyone else the
+#: preset's endpoint is authoritative.
 DYNAMIC_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], str | None]]] = (
     MappingProxyType(
         {

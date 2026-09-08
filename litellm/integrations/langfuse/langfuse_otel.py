@@ -318,13 +318,6 @@ class LangfuseOtelLogger(OpenTelemetry):
 
     @staticmethod
     def get_langfuse_otel_endpoint(langfuse_host: str | None) -> str:
-        """
-        The Langfuse OTLP endpoint for langfuse_host, or the US cloud endpoint when
-        no host is given.
-
-        Shared by the env-resolved config and by per-key/team routing so the two can
-        never derive a different endpoint from the same host.
-        """
         if not langfuse_host:
             verbose_logger.debug("Using Langfuse US cloud endpoint: %s", LANGFUSE_CLOUD_US_ENDPOINT)
             return LANGFUSE_CLOUD_US_ENDPOINT
