@@ -22,7 +22,7 @@ pub struct ChatCompletionsRequest<'a> {
     pub timeout: Option<Duration>,
 }
 
-pub(super) struct ResolvedChatCompletionsRequest<'a> {
+pub struct ResolvedChatCompletionsRequest<'a> {
     pub(super) model: String,
     pub(super) config: &'static dyn ChatCompletionsProviderConfig,
     pub(super) messages: Vec<ChatMessage>,
@@ -33,16 +33,16 @@ pub(super) struct ResolvedChatCompletionsRequest<'a> {
     pub(super) timeout: Option<Duration>,
 }
 
-pub(super) struct ProviderChatCompletionsRequest {
-    pub(super) model: String,
-    pub(super) config: &'static dyn ChatCompletionsProviderConfig,
-    pub(super) url: String,
-    pub(super) body: Value,
-    pub(super) upstream_headers: Vec<(String, String)>,
-    pub(super) auth: ChatCompletionsAuth,
+pub struct ProviderChatCompletionsRequest {
+    pub model: String,
+    pub config: &'static dyn ChatCompletionsProviderConfig,
+    pub url: String,
+    pub body: Value,
+    pub upstream_headers: Vec<(String, String)>,
+    pub auth: ChatCompletionsAuth,
     #[cfg_attr(not(feature = "bedrock-auth"), allow(dead_code))]
-    pub(super) optional_params: Map<String, Value>,
-    pub(super) timeout: Option<Duration>,
+    pub optional_params: Map<String, Value>,
+    pub timeout: Option<Duration>,
 }
 
 /// The provider-shaped request body a config produces. Named rather than a bare

@@ -4,13 +4,14 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::error::Error;
+use litellm_core::error::Error;
 
-use super::common_utils::{
+use litellm_core::messages::common_utils::{
     has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
 };
-use super::messages;
-use super::types::MessagesRequest;
+use litellm_core::messages::messages;
+use litellm_core::messages::request::build_endpoint;
+use litellm_core::messages::types::{MessagesOptions, MessagesRequest};
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
@@ -58,6 +59,23 @@ fn provider_config_resolves_anthropic_and_azure_ai() {
     assert!(messages_provider_config("anthropic").is_some());
     assert!(messages_provider_config("azure_ai").is_some());
     assert!(messages_provider_config("openai").is_none());
+}
+
+#[test]
+fn messages_capture_the_structured_body_during_request_building() {
+    let endpoint = build_endpoint(MessagesOptions {
+        model: "anthropic/claude-sonnet-4-5".into(),
+        api_key: Some("test-key".into()),
+        api_base: None,
+        custom_llm_provider: None,
+        extra_headers: None,
+        timeout: None,
+    })
+    .expect("endpoint");
+    assert_eq!(
+        endpoint.request_body_behavior(),
+        litellm_core::lifecycle::RequestBodyBehavior::STRUCTURED_AT_BUILD
+    );
 }
 
 #[test]

@@ -1,20 +1,31 @@
+#![recursion_limit = "256"]
+
+#[cfg(feature = "bedrock-auth")]
 use std::io::{Read, Write};
+#[cfg(feature = "bedrock-auth")]
 use std::net::TcpListener;
+#[cfg(feature = "bedrock-auth")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "bedrock-auth")]
 use std::thread;
 
 use serde_json::{Map, json};
 
-use super::types::AudioTranscriptionRequest;
-use super::{AudioRoute, AudioRouteRequest, DefaultAudioServices, audio_transcription};
-use crate::Error;
-use crate::integrations::custom_guardrail::{
+use litellm_core::Error;
+#[cfg(feature = "bedrock-auth")]
+use litellm_core::audio_transcription::audio_transcription;
+#[cfg(feature = "bedrock-auth")]
+use litellm_core::audio_transcription::types::AudioTranscriptionRequest;
+use litellm_core::audio_transcription::{AudioRoute, AudioRouteRequest, DefaultAudioServices};
+#[cfg(feature = "bedrock-auth")]
+use litellm_core::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailEventHook, GuardrailFuture,
     GuardrailRequest,
 };
-use crate::lifecycle::{ExecutedCall, RouteProjection};
+use litellm_core::lifecycle::{ExecutedCall, RouteProjection};
 
 #[tokio::test]
+#[cfg(feature = "bedrock-auth")]
 async fn bedrock_request_is_signed_and_contains_audio() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
     let address = listener.local_addr().expect("address");
@@ -56,10 +67,12 @@ async fn bedrock_request_is_signed_and_contains_audio() {
     server.join().expect("server");
 }
 
+#[cfg(feature = "bedrock-auth")]
 struct ReplacingGuardrail {
     calls: Mutex<Vec<&'static str>>,
 }
 
+#[cfg(feature = "bedrock-auth")]
 impl CustomGuardrail for ReplacingGuardrail {
     fn guardrail_name(&self) -> &str {
         "audio-test"
@@ -96,6 +109,7 @@ impl CustomGuardrail for ReplacingGuardrail {
 }
 
 #[tokio::test]
+#[cfg(feature = "bedrock-auth")]
 async fn route_owns_guardrail_provider_and_terminal_sequence() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
     let address = listener.local_addr().expect("address");

@@ -9,7 +9,7 @@
 use crate::Error;
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 mod client;
-mod common_utils;
+pub mod common_utils;
 mod handler;
 pub mod lifecycle;
 pub mod request;
@@ -64,6 +64,3 @@ pub async fn messages_stream(request: MessagesRequest) -> Result<StreamingCall, 
     )
     .await
 }
-
-#[cfg(test)]
-mod tests;

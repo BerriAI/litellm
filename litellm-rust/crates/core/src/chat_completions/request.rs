@@ -37,7 +37,7 @@ pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error>
         .map_err(|err| Error::InvalidRequest(format!("invalid chat completions messages: {err}")))
 }
 
-pub(super) fn resolve_request(
+pub fn resolve_request(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ResolvedChatCompletionsRequest<'_>, Error> {
     let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)?;
@@ -116,7 +116,7 @@ fn validate_environment(
     Ok((headers, auth))
 }
 
-pub(super) fn build_provider_request(
+pub fn build_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
     let (headers, auth) = validate_environment(&request, &request.model, request.config)?;

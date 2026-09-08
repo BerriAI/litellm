@@ -20,6 +20,7 @@ pub mod types;
 use serde_json::{Map, Value};
 
 use handler::execute_chat_completions_provider_call;
+pub use handler::{as_response_error, signed_headers};
 use request::{parse_messages, resolve_provider_config, resolve_request};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
@@ -156,6 +157,3 @@ pub fn chat_completions_decline_reason(
         .unsupported_reason(&messages, optional_params)
         .map(|reason| reason.0)
 }
-
-#[cfg(test)]
-mod tests;

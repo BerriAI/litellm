@@ -214,7 +214,3 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         })
     }
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;

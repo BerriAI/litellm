@@ -302,7 +302,3 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         })
     }
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;

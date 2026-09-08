@@ -6,12 +6,12 @@ use serde_json::{Map, Value};
 
 use super::transformation::AnthropicMessagesProviderConfig;
 
-pub(super) use crate::http_utils::{has_bearer_auth, has_header, truncate_error_body};
+pub use crate::http_utils::{has_bearer_auth, has_header, truncate_error_body};
 
 const HEADER_CONTEXT: &str = "messages";
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(super) fn messages_provider_config(
+pub fn messages_provider_config(
     provider: &str,
 ) -> Option<&'static dyn AnthropicMessagesProviderConfig> {
     match provider {
@@ -21,7 +21,7 @@ pub(super) fn messages_provider_config(
     }
 }
 
-pub(super) fn string_headers(
+pub fn string_headers(
     extra_headers: Option<Map<String, Value>>,
 ) -> Result<Vec<(String, String)>, Error> {
     shared_string_headers(HEADER_CONTEXT, extra_headers)

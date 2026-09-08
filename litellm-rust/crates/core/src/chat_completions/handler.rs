@@ -93,7 +93,7 @@ pub(super) async fn execute_settled_request(
 /// second kind has already been billed, and a host that keeps a reference
 /// implementation must not retry those, so collapse them to one variant that
 /// can only mean the provider was already called.
-pub(super) fn as_response_error(err: Error) -> Error {
+pub fn as_response_error(err: Error) -> Error {
     match err {
         already @ (Error::InvalidResponse(_) | Error::Http { .. }) => already,
         other => Error::InvalidResponse(other.to_string()),
@@ -101,7 +101,7 @@ pub(super) fn as_response_error(err: Error) -> Error {
 }
 
 #[cfg(feature = "bedrock-auth")]
-pub(super) async fn signed_headers(
+pub async fn signed_headers(
     request: &ProviderChatCompletionsRequest,
     body: &[u8],
 ) -> Result<Vec<(String, String)>, Error> {
@@ -158,7 +158,7 @@ pub(super) async fn signed_headers(
 }
 
 #[cfg(not(feature = "bedrock-auth"))]
-pub(super) async fn signed_headers(
+pub async fn signed_headers(
     request: &ProviderChatCompletionsRequest,
     _body: &[u8],
 ) -> Result<Vec<(String, String)>, Error> {

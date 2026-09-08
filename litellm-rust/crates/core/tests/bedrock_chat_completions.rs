@@ -1,6 +1,14 @@
-use super::*;
-use crate::Error;
-use serde_json::json;
+#![cfg(feature = "bedrock-auth")]
+
+use litellm_core::Error;
+use litellm_core::chat_completions::transformation::{
+    ChatCompletionsAuth, ChatCompletionsProviderConfig, Unsupported,
+};
+use litellm_core::chat_completions::types::{
+    ChatCompletionsResponse, ChatMessage, ProviderChatResponseData,
+};
+use litellm_core::providers::bedrock::chat_completions::transformation::*;
+use serde_json::{Map, Value, json};
 
 fn messages(value: Value) -> Vec<ChatMessage> {
     serde_json::from_value(value).expect("valid messages")
@@ -37,6 +45,10 @@ fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
 
 #[test]
 fn builds_the_converse_body_python_builds() {
+    assert_eq!(
+        BEDROCK_CHAT_COMPLETIONS_CONFIG.request_body_behavior(),
+        litellm_core::lifecycle::RequestBodyBehavior::SERIALIZED_AT_BUILD
+    );
     let body = transform(
         json!([
             {"role": "system", "content": "be terse"},
@@ -553,7 +565,7 @@ fn leaves_a_complete_converse_url_untouched() {
 
 #[test]
 fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
-    use crate::providers::bedrock::aws_base::host_supplied_credentials;
+    use litellm_core::providers::bedrock::aws_base::host_supplied_credentials;
 
     let supplied = params(json!({
         "aws_access_key_id": "AKIAHOST",
@@ -561,9 +573,15 @@ fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
         "aws_session_token": "hosttoken"
     }));
     let credentials = host_supplied_credentials(&supplied).expect("host credentials");
+    let different_secret = host_supplied_credentials(&params(json!({
+        "aws_access_key_id": "AKIAHOST",
+        "aws_secret_access_key": "different",
+        "aws_session_token": "hosttoken"
+    })))
+    .expect("credentials with a different secret");
     assert_eq!(credentials.access_key_id(), "AKIAHOST");
-    assert_eq!(credentials.secret_access_key(), "hostsecret");
     assert_eq!(credentials.session_token(), Some("hosttoken"));
+    assert_ne!(credentials, different_secret);
 
     // Without a full static pair there is nothing to honor, so the core falls
     // back to deriving credentials itself.

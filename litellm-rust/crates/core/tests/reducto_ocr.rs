@@ -1,8 +1,8 @@
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 
-use super::transformation::*;
-use crate::ocr::transformation::OcrProviderConfig;
+use litellm_core::ocr::transformation::OcrProviderConfig;
+use litellm_core::providers::reducto::ocr::transformation::*;
 
 #[fixture]
 fn parse_response() -> Value {

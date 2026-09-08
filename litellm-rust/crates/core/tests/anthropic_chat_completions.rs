@@ -1,6 +1,12 @@
-use super::*;
-use crate::Error;
-use serde_json::json;
+use litellm_core::Error;
+use litellm_core::chat_completions::transformation::{
+    ChatCompletionsAuth, ChatCompletionsProviderConfig, Unsupported,
+};
+use litellm_core::chat_completions::types::{
+    ChatCompletionsResponse, ChatMessage, ProviderChatResponseData,
+};
+use litellm_core::providers::anthropic::chat_completions::transformation::*;
+use serde_json::{Map, Value, json};
 
 fn messages(value: Value) -> Vec<ChatMessage> {
     serde_json::from_value(value).expect("valid messages")

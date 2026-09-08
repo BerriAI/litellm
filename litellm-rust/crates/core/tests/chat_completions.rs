@@ -1,10 +1,12 @@
 use serde_json::{Map, Value, json};
 
-use crate::error::Error;
+use litellm_core::error::Error;
 
-use super::request::{build_provider_request, resolve_request};
-use super::transformation::ChatCompletionsAuth;
-use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
+use litellm_core::chat_completions::request::{build_provider_request, resolve_request};
+use litellm_core::chat_completions::transformation::ChatCompletionsAuth;
+use litellm_core::chat_completions::types::{
+    ChatCompletionsRequest, ProviderChatCompletionsRequest,
+};
 
 fn build_chat_completions_request(
     request: ChatCompletionsRequest<'_>,
@@ -54,6 +56,10 @@ fn resolves_the_provider_from_the_model_prefix() {
     assert_eq!(built.model, "claude-sonnet-4-5");
     assert_eq!(built.url, "https://api.anthropic.com/v1/messages");
     assert_eq!(built.body["model"], json!("claude-sonnet-4-5"));
+    assert_eq!(
+        built.config.request_body_behavior(),
+        litellm_core::lifecycle::RequestBodyBehavior::STRUCTURED_AT_SEND
+    );
 }
 
 #[test]
@@ -325,7 +331,7 @@ async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
         json!("abc-123"),
     )]));
     let built = build_chat_completions_request(call).expect("builds");
-    let signed = super::handler::signed_headers(&built, br#"{"a":1}"#)
+    let signed = litellm_core::chat_completions::signed_headers(&built, br#"{"a":1}"#)
         .await
         .expect("signs");
 
@@ -376,7 +382,7 @@ async fn a_forwarded_header_the_signer_computes_declines_to_python() {
         call.api_key = None;
         call.extra_headers = Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
         let built = build_chat_completions_request(call).expect("builds");
-        let error = super::handler::signed_headers(&built, br#"{"a":1}"#)
+        let error = litellm_core::chat_completions::signed_headers(&built, br#"{"a":1}"#)
             .await
             .expect_err("{forwarded} should decline instead of being signed");
         assert!(
@@ -492,7 +498,9 @@ fn decline_reason(
         Value::Object(map) => map,
         other => panic!("params must be an object, got {other}"),
     };
-    super::chat_completions_decline_reason(model, provider, messages, &params)
+    litellm_core::chat_completions::chat_completions_decline_reason(
+        model, provider, messages, &params,
+    )
 }
 
 #[test]
@@ -595,7 +603,7 @@ mod round_trip {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
 
-    use crate::chat_completions::chat_completions;
+    use litellm_core::chat_completions::chat_completions;
 
     async fn read_http_request(socket: &mut TcpStream) -> String {
         let mut request = Vec::new();
@@ -800,7 +808,7 @@ mod round_trip {
 
     #[test]
     fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-        use crate::chat_completions::handler::as_response_error;
+        use litellm_core::chat_completions::as_response_error;
 
         for original in [
             Error::MissingField("usage"),

@@ -32,6 +32,3 @@ pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Resu
     .await
     .into_result()
 }
-
-#[cfg(test)]
-mod tests;
