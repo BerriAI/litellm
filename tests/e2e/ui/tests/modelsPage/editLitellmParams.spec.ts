@@ -1,4 +1,8 @@
-import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
+import {
+  test as base,
+  expect,
+  type Page as PlaywrightPage,
+} from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
@@ -61,18 +65,13 @@ async function deleteDeployment(
 const uniqueSuffix = (): string =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-test.describe("Edit LiteLLM Params on a deployment", () => {
-  test.use({ storageState: ADMIN_STORAGE_PATH });
-
-  const auth = () => ({ Authorization: `Bearer ${masterKey()}` });
-
-  let createdModelId = "";
-  let modelName = "";
-
-  test.beforeEach(async ({ page, request }) => {
-    modelName = `e2e-edit-params-${uniqueSuffix()}`;
+const test = base.extend<{
+  deployment: { readonly modelName: string; readonly createdModelId: string };
+}>({
+  deployment: async ({ page, request }, use) => {
+    const modelName = `e2e-edit-params-${uniqueSuffix()}`;
     const created = await page.request.post("/model/new", {
-      headers: auth(),
+      headers: { Authorization: `Bearer ${masterKey()}` },
       data: {
         model_name: modelName,
         litellm_params: {
@@ -87,40 +86,43 @@ test.describe("Edit LiteLLM Params on a deployment", () => {
       created.ok(),
       `/model/new failed: ${created.status()} ${await created.text()}`,
     ).toBe(true);
-    createdModelId = (await created.json()).model_info?.id;
+    const createdModelId = (await created.json()).model_info?.id;
     expect(createdModelId, "model id from /model/new").toBeTruthy();
 
-    await expect
-      .poll(
-        async () => {
-          try {
-            await sendChatCompletion(request, {
-              model: modelName,
-              prompt: `warmup ${modelName}`,
-            });
-            return true;
-          } catch {
-            return false;
-          }
-        },
-        {
-          message: `deployment ${modelName} never became routable after /model/new`,
-          timeout: 60_000,
-        },
-      )
-      .toBe(true);
-  });
+    try {
+      await expect
+        .poll(
+          async () => {
+            try {
+              await sendChatCompletion(request, {
+                model: modelName,
+                prompt: `warmup ${modelName}`,
+              });
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          {
+            message: `deployment ${modelName} never became routable after /model/new`,
+            timeout: 60_000,
+          },
+        )
+        .toBe(true);
+      await use({ modelName, createdModelId });
+    } finally {
+      await deleteDeployment(page, createdModelId);
+    }
+  },
+});
 
-  test.afterEach(async ({ page }) => {
-    if (!createdModelId) return;
-    const id = createdModelId;
-    createdModelId = "";
-    await deleteDeployment(page, id);
-  });
+test.describe("Edit LiteLLM Params on a deployment", () => {
+  test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("params added on a deployment can be re-edited, and the deployment keeps serving", async ({
     page,
     request,
+    deployment: { modelName, createdModelId },
   }) => {
     await navigateToPage(page, Page.Models);
     const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);

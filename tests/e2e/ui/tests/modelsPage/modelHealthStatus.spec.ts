@@ -1,5 +1,5 @@
 import {
-  test,
+  test as base,
   expect,
   type Locator,
   type Page as PlaywrightPage,
@@ -113,66 +113,60 @@ async function deleteDeployment(
 const uniqueSuffix = (): string =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+async function withDeployment(
+  page: PlaywrightPage,
+  prefix: string,
+  apiBase: string,
+  use: (name: string) => Promise<void>,
+): Promise<void> {
+  const name = `${prefix}-${uniqueSuffix()}`;
+  const created = await page.request.post("/model/new", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: {
+      model_name: name,
+      litellm_params: {
+        model: `openai/${name}`,
+        api_base: apiBase,
+        api_key: "fake-key",
+      },
+      model_info: {},
+    },
+  });
+  expect(
+    created.ok(),
+    `/model/new for ${name} failed: ${created.status()} ${await created.text()}`,
+  ).toBe(true);
+  const id = (await created.json()).model_info?.id;
+  expect(id, `model id from /model/new for ${name}`).toBeTruthy();
+  try {
+    await expect
+      .poll(() => isRegistered(page, name), {
+        message: `deployment ${name} never appeared in /v2/model/info after create`,
+        timeout: 60_000,
+      })
+      .toBe(true);
+    await use(name);
+  } finally {
+    await deleteDeployment(page, id);
+  }
+}
+
+const test = base.extend<{ reachableName: string; unreachableName: string }>({
+  reachableName: async ({ page }, use) => {
+    await withDeployment(page, "e2e-health-up", MOCK_LLM_BASE, use);
+  },
+  unreachableName: async ({ page }, use) => {
+    await withDeployment(page, "e2e-health-down", UNREACHABLE_BASE, use);
+  },
+});
+
 test.describe("Model health status", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
-  const auth = () => ({ Authorization: `Bearer ${masterKey()}` });
-
-  let reachableName = "";
-  let unreachableName = "";
-  let createdIds: string[] = [];
-
-  test.beforeEach(async ({ page }) => {
-    const stamp = uniqueSuffix();
-    reachableName = `e2e-health-up-${stamp}`;
-    unreachableName = `e2e-health-down-${stamp}`;
-    createdIds = [];
-
-    for (const [name, apiBase] of [
-      [reachableName, MOCK_LLM_BASE],
-      [unreachableName, UNREACHABLE_BASE],
-    ] as const) {
-      const created = await page.request.post("/model/new", {
-        headers: auth(),
-        data: {
-          model_name: name,
-          litellm_params: {
-            model: `openai/${name}`,
-            api_base: apiBase,
-            api_key: "fake-key",
-          },
-          model_info: {},
-        },
-      });
-      expect(
-        created.ok(),
-        `/model/new for ${name} failed: ${created.status()} ${await created.text()}`,
-      ).toBe(true);
-      const id = (await created.json()).model_info?.id;
-      expect(id, `model id from /model/new for ${name}`).toBeTruthy();
-      createdIds = [...createdIds, id];
-    }
-
-    for (const name of [reachableName, unreachableName]) {
-      await expect
-        .poll(async () => await isRegistered(page, name), {
-          message: `deployment ${name} never appeared in /v2/model/info after create`,
-          timeout: 60_000,
-        })
-        .toBe(true);
-    }
-  });
-
-  test.afterEach(async ({ page }) => {
-    const ids = createdIds;
-    createdIds = [];
-    for (const id of ids) {
-      await deleteDeployment(page, id);
-    }
-  });
-
   test("Run Health Check reports a reachable deployment healthy and an unreachable one unhealthy", async ({
     page,
+    reachableName,
+    unreachableName,
   }) => {
     await navigateToPage(page, Page.Models);
     await openHealthTab(page);

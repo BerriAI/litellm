@@ -1,5 +1,5 @@
 import {
-  test,
+  test as base,
   expect,
   type Locator,
   type Page as PlaywrightPage,
@@ -77,18 +77,11 @@ async function isRegistered(
 const uniqueSuffix = (): string =>
   `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-test.describe("Models and Endpoints for an internal user", () => {
-  test.use({ storageState: INTERNAL_USER_STORAGE_PATH });
-
-  const auth = () => ({ Authorization: `Bearer ${masterKey()}` });
-
-  let ungrantedModelId = "";
-  let ungrantedModelName = "";
-
-  test.beforeEach(async ({ page }) => {
-    ungrantedModelName = `e2e-ungranted-${uniqueSuffix()}`;
+const test = base.extend<{ ungrantedModelName: string }>({
+  ungrantedModelName: async ({ page }, use) => {
+    const ungrantedModelName = `e2e-ungranted-${uniqueSuffix()}`;
     const created = await page.request.post("/model/new", {
-      headers: auth(),
+      headers: { Authorization: `Bearer ${masterKey()}` },
       data: {
         model_name: ungrantedModelName,
         litellm_params: {
@@ -103,26 +96,29 @@ test.describe("Models and Endpoints for an internal user", () => {
       created.ok(),
       `/model/new failed: ${created.status()} ${await created.text()}`,
     ).toBe(true);
-    ungrantedModelId = (await created.json()).model_info?.id;
+    const ungrantedModelId = (await created.json()).model_info?.id;
     expect(ungrantedModelId, "model id from /model/new").toBeTruthy();
 
-    await expect
-      .poll(async () => await isRegistered(page, ungrantedModelName), {
-        message: `deployment ${ungrantedModelName} never appeared in /v2/model/info after create`,
-        timeout: 60_000,
-      })
-      .toBe(true);
-  });
+    try {
+      await expect
+        .poll(async () => await isRegistered(page, ungrantedModelName), {
+          message: `deployment ${ungrantedModelName} never appeared in /v2/model/info after create`,
+          timeout: 60_000,
+        })
+        .toBe(true);
+      await use(ungrantedModelName);
+    } finally {
+      await deleteDeployment(page, ungrantedModelId);
+    }
+  },
+});
 
-  test.afterEach(async ({ page }) => {
-    if (!ungrantedModelId) return;
-    const id = ungrantedModelId;
-    ungrantedModelId = "";
-    await deleteDeployment(page, id);
-  });
+test.describe("Models and Endpoints for an internal user", () => {
+  test.use({ storageState: INTERNAL_USER_STORAGE_PATH });
 
   test("shows an internal user exactly the models of the team they select", async ({
     page,
+    ungrantedModelName,
   }) => {
     await navigateToPage(page, Page.Models);
 
