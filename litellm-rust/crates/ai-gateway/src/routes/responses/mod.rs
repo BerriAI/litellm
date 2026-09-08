@@ -15,10 +15,10 @@ use litellm_core::responses::types::{ResponsesErrorFrame, ResponsesWsEvent, Resp
 use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
-use crate::auth::RequireMasterKey;
 use crate::state::AppState;
 use litellm_core::integrations::custom_logger::CustomLogger;
 use litellm_core::integrations::types::RequestMetadata;
+use litellm_gateway_auth::{RequireMasterKey, hash_token};
 
 static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -87,7 +87,7 @@ where
     S::Error: std::fmt::Display,
 {
     if let Ok(payload) = serde_json::to_string(&ResponsesErrorFrame::invalid_request(message)) {
-        let _ = sink.send(Message::Text(payload)).await;
+        let _ = sink.send(Message::Text(payload.into())).await;
     }
     let _ = sink
         .send(Message::Close(Some(axum::extract::ws::CloseFrame {
@@ -117,7 +117,7 @@ impl Sink<ResponsesWsEvent> for ResponseClientSink {
         item: ResponsesWsEvent,
     ) -> Result<(), Self::Error> {
         let payload = serde_json::to_string(&item).map_err(axum::Error::new)?;
-        std::pin::Pin::new(&mut self.sink).start_send(Message::Text(payload))
+        std::pin::Pin::new(&mut self.sink).start_send(Message::Text(payload.into()))
     }
 
     fn poll_flush(
@@ -207,7 +207,7 @@ async fn bridge(
 
     let call_id = new_call_id();
     let metadata = RequestMetadata {
-        user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
+        user_api_key_hash: master_key.as_deref().map(hash_token),
         ..RequestMetadata::default()
     };
     let client_in = Box::pin(stream.filter_map(|message| async move {

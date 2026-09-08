@@ -13,9 +13,9 @@ use litellm_core::Error;
 use litellm_core::lifecycle::StreamingCall;
 use serde_json::{Map, Value};
 
-use crate::auth::RequireMasterKey;
 use crate::constants::{MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH};
 use crate::state::AppState;
+use litellm_gateway_auth::RequireMasterKey;
 
 /// This route's contribution to the app router.
 pub fn router() -> Router<AppState> {

@@ -4,6 +4,7 @@ use crate::io::realtime_pool::RealtimePool;
 use litellm_core::router::Router;
 
 use litellm_core::integrations::custom_logger::CustomLogger;
+use litellm_gateway_auth::MasterKeyState;
 
 /// Shared application state handed to every route handler.
 #[derive(Clone)]
@@ -18,4 +19,10 @@ pub struct AppState {
     /// (`RealtimePool::disabled()`) when `REALTIME_POOL_SIZE=0`, in which case
     /// every realtime connect fresh-dials exactly as before.
     pub realtime_pool: Arc<RealtimePool>,
+}
+
+impl MasterKeyState for AppState {
+    fn master_key(&self) -> Option<&str> {
+        self.master_key.as_deref()
+    }
 }

@@ -22,10 +22,10 @@ use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
-use crate::auth::RequireMasterKey;
 use crate::state::AppState;
 use litellm_core::integrations::custom_logger::CustomLogger;
 use litellm_core::integrations::types::RequestMetadata;
+use litellm_gateway_auth::{RequireMasterKey, hash_token};
 
 /// Process-local monotonic counter, mixed into the per-session call id so two
 /// sessions opened in the same nanosecond still get distinct ids.
@@ -93,7 +93,7 @@ async fn bridge(
     let (ws_sink, ws_stream) = socket.split();
 
     let metadata = RequestMetadata {
-        user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
+        user_api_key_hash: master_key.as_deref().map(hash_token),
         ..RequestMetadata::default()
     };
 
@@ -105,7 +105,7 @@ async fn bridge(
     });
     let client_out = ws_sink.with(|event: RealtimeEvent| async move {
         Ok::<Message, axum::Error>(Message::Text(
-            serde_json::to_string(&event).unwrap_or_default(),
+            serde_json::to_string(&event).unwrap_or_default().into(),
         ))
     });
 
