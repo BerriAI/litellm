@@ -22,7 +22,12 @@ from litellm.litellm_core_utils.litellm_logging import (
     _get_status_fields,
     set_callbacks,
 )
-from litellm.types.utils import ModelResponse, TextCompletionResponse
+from litellm.types.utils import (
+    CallTypes,
+    LiteLLMRealtimeStreamLoggingObject,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 
 @pytest.fixture
@@ -6394,8 +6399,6 @@ async def test_prompt_hook_injection_marker_recorded_for_every_surface(logging_o
 
 
 def _responses_ws_logging_obj() -> LitellmLogging:
-    from litellm.types.utils import CallTypes
-
     return LitellmLogging(
         model="gpt-4o",
         messages=[],
@@ -6410,8 +6413,6 @@ def _responses_ws_logging_obj() -> LitellmLogging:
 def test_normalize_logging_result_extracts_usage_for_responses_websocket():
     """LIT-6512: native /v1/responses WebSocket sessions logged $0 spend because the usage
     carried by stored response.completed events was never extracted."""
-    from litellm.types.utils import CallTypes, LiteLLMRealtimeStreamLoggingObject
-
     logging_obj = _responses_ws_logging_obj()
     events = [
         {"type": "response.created", "response": {}},
@@ -6443,8 +6444,6 @@ def test_normalize_logging_result_extracts_usage_for_responses_websocket():
 def test_normalize_logging_result_bills_incomplete_responses_websocket_turns():
     """LIT-6512: a turn cut short by max_output_tokens ends in response.incomplete, which
     OpenAI bills, so its usage counts toward the session like a completed turn."""
-    from litellm.types.utils import LiteLLMRealtimeStreamLoggingObject
-
     events = [
         {
             "type": "response.created",
