@@ -1295,6 +1295,19 @@ def test_text_plus_tool_calls_sequence():
 # =============================================================================
 
 
+def test_developer_message_content_uses_input_text():
+    handler = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [{"role": "developer", "content": "Always answer in French."}]
+    )
+
+    assert instructions is None
+    assert input_items == [
+        {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Always answer in French."}]}
+    ]
+
+
 def test_tool_message_output_uses_input_text_not_output_text():
     """
     Test that tool message content uses input_text type, not output_text.
@@ -3939,3 +3952,198 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
 
     function_call_output = next(item for item in response if item.get("type") == "function_call_output")
     assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
+
+
+def _litellm_encoded_response_id(upstream_id: str) -> str:
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure", model_id="deployment-1", response_id=upstream_id
+    )
+
+
+def test_transform_response_keeps_upstream_id_and_provider_extras():
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse, Usage
+
+    content_filters = [
+        {"blocked": False, "source_type": "prompt", "content_filter_results": {"hate": {"filtered": False}}}
+    ]
+    raw_response = ResponsesAPIResponse.model_validate(
+        {
+            "id": _litellm_encoded_response_id("resp_azure_123"),
+            "created_at": 1734366691,
+            "object": "response",
+            "model": "gpt-5.6",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "lookup_weather",
+                    "arguments": '{"city": "Seattle"}',
+                    "status": "completed",
+                }
+            ],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            "service_tier": "default",
+            "content_filters": content_filters,
+            "max_tool_calls": None,
+            "background": False,
+            "top_logprobs": 0,
+            "store": True,
+        }
+    )
+    model_response = ModelResponse(
+        id="chatcmpl-local",
+        created=1734366691,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result = LiteLLMResponsesTransformationHandler().transform_response(
+        model="gpt-5.6",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.6"},
+        messages=[{"role": "user", "content": "What is the weather in Seattle?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+    dumped = result.model_dump()
+
+    assert dumped["id"] == "resp_azure_123"
+    assert dumped["object"] == "chat.completion"
+    assert dumped["service_tier"] == "default"
+    assert dumped["content_filters"] == content_filters
+    assert "max_tool_calls" not in dumped, "a null provider field must not appear as a null top-level key"
+    assert "output" not in dumped and "status" not in dumped, (
+        "Responses schema fields must not leak into the chat response"
+    )
+    assert not {"background", "top_logprobs", "store"} & dumped.keys(), (
+        "Responses API bookkeeping must not ride along as chat metadata"
+    )
+    assert dumped["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "lookup_weather"
+
+
+def test_bridged_response_is_priced_by_the_reported_service_tier():
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse
+
+    raw_response = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_flex",
+            "created_at": 1734366691,
+            "object": "response",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100},
+            "service_tier": "flex",
+        }
+    )
+
+    result = LiteLLMResponsesTransformationHandler().transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+    pricing = litellm.model_cost["gpt-5.4"]
+    flex_cost = 1000 * pricing["input_cost_per_token_flex"] + 100 * pricing["output_cost_per_token_flex"]
+    standard_cost = 1000 * pricing["input_cost_per_token"] + 100 * pricing["output_cost_per_token"]
+
+    cost = litellm.completion_cost(completion_response=result, custom_llm_provider="openai")
+
+    assert cost == pytest.approx(flex_cost)
+    assert cost < standard_cost
+
+
+def test_streaming_chunks_carry_the_upstream_response_id():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    encoded_id = _litellm_encoded_response_id("resp_azure_stream")
+    events = [
+        {"type": "response.created", "response": {"id": encoded_id, "output": []}},
+        {"type": "response.output_text.delta", "delta": "Hel"},
+        {"type": "response.completed", "response": {"id": encoded_id, "output": [{"type": "message"}]}},
+    ]
+
+    ids = [iterator.chunk_parser(event).id for event in events]
+
+    assert ids == ["resp_azure_stream"] * len(events), f"streamed chunks did not carry the upstream id: {ids}"
+
+
+def test_streaming_final_chunk_carries_provider_metadata():
+    from unittest.mock import MagicMock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    content_filters = [{"blocked": False, "source_type": "completion", "content_filter_results": {}}]
+    events = [
+        {"type": "response.created", "response": {"id": "resp_azure_stream", "output": []}},
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_azure_stream",
+                "output": [{"type": "message"}],
+                "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+                "service_tier": "default",
+                "content_filters": content_filters,
+                "background": False,
+            },
+        },
+    ]
+    stream = CustomStreamWrapper(
+        completion_stream=iter([iterator.chunk_parser(event) for event in events]),
+        model="gpt-5.6",
+        custom_llm_provider="azure",
+        logging_obj=MagicMock(),
+    )
+
+    chunks = [chunk.model_dump() for chunk in stream]
+
+    assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+    assert chunks[-1]["service_tier"] == "default"
+    assert chunks[-1]["content_filters"] == content_filters
+    assert "background" not in chunks[-1]
+    assert all("service_tier" not in chunk for chunk in chunks[:-1])

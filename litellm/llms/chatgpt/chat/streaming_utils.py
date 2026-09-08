@@ -49,10 +49,10 @@ class ChatGPTToolCallNormalizer:
     def __getattr__(self, name: str) -> object:
         return getattr(self._stream, name)
 
-    def __iter__(self):
+    def __iter__(self) -> "ChatGPTToolCallNormalizer":
         return self
 
-    def __aiter__(self):
+    def __aiter__(self) -> "ChatGPTToolCallNormalizer":
         return self
 
     def __next__(self) -> ModelResponseStream:

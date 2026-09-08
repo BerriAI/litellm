@@ -4,7 +4,7 @@ import sys
 import types
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -1493,6 +1493,32 @@ def test_budget_table_reset_invalidates_every_tag_not_just_the_first(reset_budge
 
     deleted = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
     assert deleted == {"tag:tenant-a", "tag:tenant-b", "tag:tenant-c"}
+
+
+def test_budget_table_reset_invalidates_enduser_counter_and_cache(reset_budget_job, mock_prisma_client, monkeypatch):
+    """When an end user's budget resets, its Redis spend counter is zeroed and its management cache is evicted."""
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    budget: Final = _budget_row(budget_id="budget-1")
+    mock_prisma_client.data["budget"] = [budget]
+    test_enduser: Final = type(
+        "LiteLLM_EndUserTable",
+        (),
+        {
+            "spend": 20.0,
+            "litellm_budget_table": budget,
+            "budget_id": "budget-1",
+            "user_id": "customer-42",
+        },
+    )
+    mock_prisma_client.data["enduser"] = [test_enduser]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:end_user:customer-42", value=0.0, ttl=60)
+    counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:end_user:customer-42", value=0.0, ttl=60)
+    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    assert "end_user_id:customer-42" in deleted
+
 
 
 def test_budget_table_reset_commits_even_when_cache_eviction_fails(reset_budget_job, mock_prisma_client, monkeypatch):
@@ -3026,6 +3052,38 @@ def test_budget_cascade_carries_enduser_overage_when_rollover_enabled(
         "where": {"user_id": {"in": ["enduser-roll"]}, "spend": {"lte": 10.0}},
         "data": {"spend": 0},
     } in enduser_writes
+
+
+def test_budget_cascade_carries_default_tier_enduser_counter_when_rollover_enabled(
+    rollover_enabled, reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """An end user on the default budget (no budget_id on its row) 5 over the cap
+    keeps a counter of 5 in the next window and loses its cached object."""
+    import litellm
+
+    counter_cache: Final = _make_counter_invalidation_job(monkeypatch)
+    monkeypatch.setattr(litellm, "max_end_user_budget_id", "default-enduser-budget")
+    mock_prisma_client.data["budget"] = [
+        _budget_row(budget_id="default-enduser-budget", budget_duration="1d", max_budget=10.0)
+    ]
+    implicit_enduser: Final = type(
+        "EndUserRow",
+        (),
+        {
+            "spend": 15.0,
+            "user_id": "enduser-implicit",
+            "budget_id": None,
+            "model_dump": lambda self=None: {"spend": 15.0, "user_id": "enduser-implicit", "budget_id": None, "blocked": False},
+        },
+    )
+    mock_prisma_client.db.litellm_endusertable.set_find_many_results([implicit_enduser])
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(key="spend:end_user:enduser-implicit", value=5.0, ttl=60)
+    counter_cache.redis_cache.async_set_cache.assert_any_await(key="spend:end_user:enduser-implicit", value=5.0, ttl=60)
+    deleted: Final = {call.kwargs.get("key") for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
+    assert "end_user_id:enduser-implicit" in deleted
 
 
 def _replay_spend_writes(writes, spend):

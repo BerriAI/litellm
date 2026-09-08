@@ -34,7 +34,7 @@ def teams():
     """Manage teams and team assignments"""
 
 
-def display_teams_table(teams: list[dict[str, Any]]) -> None:
+def display_teams_table(teams: Sequence[dict[str, Any]]) -> None:
     """Display teams in a formatted table"""
     console: Final = Console()
 

@@ -394,6 +394,51 @@ async def test_resync_model_deployments_mutates_router_under_model_reconcile_loc
 
 
 @pytest.mark.asyncio
+async def test_resync_model_deployments_loads_db_credentials_before_reconciling_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.proxy.common_utils.registry_read_through import _resync_model_deployments
+    from litellm.types.utils import CredentialItem
+
+    rows: Final = [MagicMock()]
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=rows)
+    router: Final = MagicMock()
+    router.get_model_list.return_value = []
+    installed: Final = MagicMock()
+
+    async def load_credentials_from_db(prisma_client: object) -> None:
+        CredentialAccessor.upsert_credentials(
+            [
+                CredentialItem(
+                    credential_name="openai-cred",
+                    credential_values={"api_key": "sk-from-db"},
+                    credential_info={},
+                )
+            ]
+        )
+
+    def install_models(db_models: object) -> None:
+        installed(db_models=db_models, credential=CredentialAccessor.get_credential_values("openai-cred"))
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", None)
+    monkeypatch.setattr(proxy_server.proxy_config, "get_credentials", load_credentials_from_db)
+    monkeypatch.setattr(proxy_server.proxy_config, "_add_deployment", install_models)
+
+    assert await _resync_model_deployments("model-created-on-a-sibling-replica") is True
+    installed.assert_called_once_with(db_models=rows, credential={"api_key": "sk-from-db"})
+
+
+@pytest.mark.asyncio
 async def test_resync_model_deployments_respects_supported_db_objects(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
 
