@@ -1029,6 +1029,7 @@ def mock_completion(
                     custom_llm_provider="openai",
                     logging_obj=logging,
                     count_prompt_tokens=count_prompt_tokens,
+                    is_mock=True,
                 )
             return CustomStreamWrapper(
                 completion_stream=mock_completion_streaming_obj(
@@ -1038,6 +1039,7 @@ def mock_completion(
                 custom_llm_provider="openai",
                 logging_obj=logging,
                 count_prompt_tokens=count_prompt_tokens,
+                is_mock=True,
             )
         if isinstance(mock_response, litellm.MockException):
             raise mock_response
