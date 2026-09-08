@@ -1742,6 +1742,15 @@ async def _user_api_key_auth_builder(
             ):
                 valid_token = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(api_key)
 
+            if valid_token is not None and valid_token.is_session_token:
+                valid_token = await _refresh_session_token_team_grants(
+                    valid_token=valid_token,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+
         if (
             valid_token is not None
             and isinstance(valid_token, UserAPIKeyAuth)
@@ -2341,6 +2350,30 @@ def _team_obj_from_token(valid_token: UserAPIKeyAuth) -> LiteLLM_TeamTableCached
         models=token_team_models,
         metadata=valid_token.team_metadata,
         object_permission_id=valid_token.team_object_permission_id,
+    )
+
+
+async def _refresh_session_token_team_grants(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> UserAPIKeyAuth:
+    if valid_token.team_id is None or valid_token.team_id == UI_TEAM_ID or prisma_client is None:
+        return valid_token
+    try:
+        team_obj: Final = await get_team_object(
+            team_id=valid_token.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except HTTPException:
+        return valid_token
+    return valid_token.model_copy(
+        update={"team_models": list(team_obj.models), "team_alias": team_obj.team_alias}  # mutable-ok: auth model requires a fresh list
     )
 
 
