@@ -1922,6 +1922,34 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
     assert "test_proxy_utils" in captured["async_traceback"]
 
 
+@pytest.mark.parametrize(
+    "key_metadata, team_metadata, expected_to_run",
+    [
+        ({"guardrails": ["key-scoped-guardrail"]}, None, True),
+        ({}, {"guardrails": ["key-scoped-guardrail"]}, True),
+        ({"guardrails": ["some-other-guardrail"]}, None, False),
+        ({}, None, False),
+    ],
+)
+def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata, team_metadata, expected_to_run):
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    guardrail = CustomGuardrail(guardrail_name="key-scoped-guardrail", event_hook="pre_mcp_call", default_on=False)
+    kwargs = {
+        "name": "ask_question",
+        "arguments": {"question": "hello"},
+        "server_name": "deepwiki",
+        "user_api_key_auth": UserAPIKeyAuth(metadata=key_metadata, team_metadata=team_metadata),
+    }
+    request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
+
+    with patch(  # test-quality-ok: the key-guardrail premium gate reads this proxy_server module global and has no injection seam
+        "litellm.proxy.proxy_server.premium_user", True
+    ):
+        synthetic = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+
+    assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is expected_to_run
+
+
 class _TracebackRecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()

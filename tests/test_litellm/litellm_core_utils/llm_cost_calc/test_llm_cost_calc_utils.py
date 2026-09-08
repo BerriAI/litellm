@@ -49,6 +49,44 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
 
+@pytest.mark.parametrize("prompt_tokens", [100, 200000, 200001])
+@pytest.mark.parametrize("read_rate", [None, 0.0, 0.25e-6])
+@pytest.mark.parametrize("service_tier", [None, "priority"])
+def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, service_tier):
+    info = {
+        "input_cost_per_token": 3e-6,
+        "input_cost_per_token_priority": 4e-6,
+        "input_cost_per_token_above_200k_tokens": 6e-6,
+        "input_cost_per_token_above_200k_tokens_priority": 8e-6,
+        "output_cost_per_token": 1e-6,
+        "cache_read_input_token_cost": read_rate,
+    }
+    usage = Usage(prompt_tokens=prompt_tokens, prompt_tokens_details={"cached_tokens": 100})
+    billed = _get_token_base_cost(info, usage, service_tier=service_tier)
+    savings = _get_token_base_cost(info, usage, service_tier=service_tier, missing_cache_read_uses_input=True)
+    prompt_cost, _ = generic_cost_per_token("policy-fixture", usage, "openai", service_tier=service_tier, model_info=info)
+    assert billed[4] == pytest.approx(read_rate or 0.0)
+    assert savings[:4] == billed[:4]
+    assert savings[4] == pytest.approx(billed[0] if read_rate is None else read_rate)
+    assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[4])
+
+
+def test_missing_cache_read_uses_off_peak_input_rate():
+    from datetime import datetime, timezone
+
+    info = {
+        "input_cost_per_token": 3e-6,
+        "off_peak_pricing": {"hours_utc": "00:00-23:59", "input_cost_per_token": 5e-6},
+    }
+    when = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
+    billed = _get_token_base_cost(info, Usage(prompt_tokens=100), current_time=when)
+    savings = _get_token_base_cost(
+        info, Usage(prompt_tokens=100), current_time=when, missing_cache_read_uses_input=True
+    )
+    assert billed[4] == 0.0
+    assert savings[0] == savings[4] == 5e-6
+
+
 def test_reasoning_tokens_no_price_set(_local_model_cost_map):
     # Use o1 - o1-mini was deprecated/renamed; o1 has same reasoning-token semantics
     # (no separate output_cost_per_reasoning_token, so all completion tokens use output_cost_per_token)
@@ -4787,3 +4825,100 @@ def test_route_image_generation_cost_falls_back_to_requested_size(monkeypatch, r
     )
 
     assert cost == expected_cost
+
+
+def test_generic_cost_per_token_bills_reasoning_nested_in_text_tokens_once(_local_model_cost_map: None) -> None:
+    """
+    Realtime usage (OpenAI and Azure) reports output_tokens == text_tokens + audio_tokens with
+    reasoning_tokens already counted inside text_tokens, so reasoning must not be billed on top.
+    """
+
+    model = "gpt-realtime-2.1-mini"
+    usage = Usage(
+        prompt_tokens=346,
+        completion_tokens=29,
+        total_tokens=375,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=152, image_tokens=194, audio_tokens=0, cached_tokens=128
+        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            text_tokens=29, audio_tokens=0, reasoning_tokens=19
+        ),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    breakdown = get_token_type_cost_breakdown(model=model, custom_llm_provider="openai", usage=usage)
+
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+    assert completion_cost == pytest.approx(29 * info["output_cost_per_token"])
+    assert completion_cost - breakdown.reasoning_cost == pytest.approx(10 * info["output_cost_per_token"])
+    assert prompt_cost == pytest.approx(
+        24 * info["input_cost_per_token"]
+        + 128 * info["cache_read_input_token_cost"]
+        + 194 * info["input_cost_per_image_token"]
+    )
+
+
+def test_generic_cost_per_token_keeps_billing_reasoning_reported_beside_text_tokens(
+    _local_model_cost_map: None,
+) -> None:
+    """Providers whose text_tokens exclude reasoning (text + reasoning == completion) stay billed in full."""
+
+    model = "gpt-realtime-2.1-mini"
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=44,
+        total_tokens=144,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            text_tokens=25, audio_tokens=0, reasoning_tokens=19
+        ),
+    )
+
+    _, completion_cost = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+    assert completion_cost == pytest.approx(44 * info["output_cost_per_token"])
+
+
+def test_generic_cost_per_token_strips_only_the_reasoning_share_when_text_over_reports(
+    _local_model_cost_map: None,
+) -> None:
+    """Text over-reported past the reasoning share keeps its extra tokens billed; only the nested reasoning is netted out."""
+
+    model = "gpt-realtime-2.1-mini"
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=100,
+        total_tokens=220,
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=100, audio_tokens=70, reasoning_tokens=10),
+    )
+
+    _, completion_cost = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    breakdown = get_token_type_cost_breakdown(model=model, custom_llm_provider="openai", usage=usage)
+
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+    assert breakdown.reasoning_cost == pytest.approx(10 * info["output_cost_per_token"])
+    assert completion_cost == pytest.approx(
+        100 * info["output_cost_per_token"] + 70 * info["output_cost_per_audio_token"]
+    )
+
+
+def test_generic_cost_per_token_bills_nested_reasoning_once_beside_audio_output(_local_model_cost_map: None) -> None:
+    """Audio-output realtime usage nests reasoning inside text_tokens next to audio_tokens; text is billed net of it."""
+
+    model = "gpt-realtime-2.1-mini"
+    usage = Usage(
+        prompt_tokens=120,
+        completion_tokens=100,
+        total_tokens=220,
+        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=30, audio_tokens=70, reasoning_tokens=20),
+    )
+
+    _, completion_cost = generic_cost_per_token(model=model, usage=usage, custom_llm_provider="openai")
+    breakdown = get_token_type_cost_breakdown(model=model, custom_llm_provider="openai", usage=usage)
+
+    info = litellm.get_model_info(model=model, custom_llm_provider="openai")
+    assert breakdown.reasoning_cost == pytest.approx(20 * info["output_cost_per_token"])
+    assert completion_cost == pytest.approx(
+        30 * info["output_cost_per_token"] + 70 * info["output_cost_per_audio_token"]
+    )

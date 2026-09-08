@@ -306,6 +306,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
+    log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
 )
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
@@ -597,6 +598,10 @@ from litellm.proxy.middleware.admission_control_middleware import (
 )
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
+)
+from litellm.proxy.middleware.per_request_root_path_middleware import (
+    PerRequestRootPathMiddleware,
+    get_server_root_paths,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
@@ -5647,6 +5652,10 @@ class ProxyConfig:
             warn_once_if_custom_auth_skips_common_checks(
                 custom_auth_configured=custom_auth is not None,
                 run_common_checks=bool(general_settings.get("custom_auth_run_common_checks", False)),
+            )
+
+            log_once_if_budget_reservation_disabled(
+                disabled=general_settings.get("disable_budget_reservation") is True,
             )
 
             custom_key_generate: Final = general_settings.get("custom_key_generate", None)
@@ -18384,6 +18393,22 @@ app.add_middleware(
     get_settings=lambda: get_admission_control_settings(general_settings),
     state=admission_control_state,
 )
+# Added last on purpose - last-added is outermost, and the client-visible URL
+# prefix must be resolved into scope["root_path"] before any inner middleware
+# or the router inspects the path. Only added when SERVER_ROOT_PATHS is
+# configured, so the default deployment's middleware stack is unchanged.
+_server_root_paths: Final = get_server_root_paths()
+if _server_root_paths:
+    if server_root_path and server_root_path != "/":
+        verbose_proxy_logger.warning(
+            "Both SERVER_ROOT_PATH=%r and SERVER_ROOT_PATHS=%r are set. A request "
+            "matching a SERVER_ROOT_PATHS prefix overrides the scalar root_path for "
+            "that request; unmatched requests keep SERVER_ROOT_PATH. Configure one "
+            "mechanism or the other.",
+            server_root_path,
+            _server_root_paths,
+        )
+    app.add_middleware(PerRequestRootPathMiddleware, root_paths=_server_root_paths)
 
 
 async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "StreamingResponse":
