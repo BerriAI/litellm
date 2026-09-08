@@ -8,16 +8,7 @@ from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
 )
-
-
-def _clear_prometheus_registry() -> None:
-    from prometheus_client import REGISTRY
-
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        try:
-            REGISTRY.unregister(collector)
-        except Exception:
-            pass
+from tests._prometheus_helpers import clear_prometheus_registry
 
 
 def _collected_samples(metric_name: str):
@@ -661,7 +652,7 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
         "hidden_params": {"litellm_overhead_time_ms": None, "additional_headers": None},
     }
 
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
     try:
         logger = PrometheusLogger()
         now = datetime.datetime.now()
@@ -682,7 +673,7 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
             f"{[s.labels.get('api_provider') for s in samples]}"
         )
     finally:
-        _clear_prometheus_registry()
+        clear_prometheus_registry()
 
 
 @pytest.mark.asyncio
@@ -698,7 +689,7 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import UserAPIKeyAuth
 
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
     try:
         logger = PrometheusLogger()
         await logger.async_post_call_failure_hook(
@@ -713,7 +704,7 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
             f"{[s.labels.get('api_provider') for s in samples]}"
         )
     finally:
-        _clear_prometheus_registry()
+        clear_prometheus_registry()
 
 
 if __name__ == "__main__":

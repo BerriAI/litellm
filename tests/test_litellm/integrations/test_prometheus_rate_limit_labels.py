@@ -31,6 +31,7 @@ from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelNames,
     UserAPIKeyLabelValues,
 )
+from tests._prometheus_helpers import clear_prometheus_registry
 
 
 # ---------------------------------------------------------------------------
@@ -482,16 +483,6 @@ KEY_AND_TEAM_RATE_LIMIT_METRICS = (
 )
 
 
-def _clear_prometheus_registry() -> None:
-    from prometheus_client import REGISTRY
-
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        try:
-            REGISTRY.unregister(collector)
-        except Exception:
-            pass
-
-
 def _collected_samples(metric_name: str) -> dict[tuple[tuple[str, str], ...], float]:
     from prometheus_client import REGISTRY
 
@@ -569,7 +560,7 @@ async def test_should_emit_key_and_team_rate_limit_allowed_and_used_from_v3_head
     and the window consumption as ``limit - remaining`` for each key / team
     dimension, split by ``rate_limit_type``.
     """
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
     try:
         await _run_success_event(
             {
@@ -624,7 +615,7 @@ async def test_should_emit_key_and_team_rate_limit_allowed_and_used_from_v3_head
             team_tokens: 40,
         }
     finally:
-        _clear_prometheus_registry()
+        clear_prometheus_registry()
 
 
 @pytest.mark.asyncio
@@ -634,7 +625,7 @@ async def test_should_emit_only_the_dimensions_the_limiter_enforced():
     key/requests headers, so no tokens series and no team series may appear
     (a phantom 0 or sys.maxsize series would misreport an unlimited dimension).
     """
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
     try:
         await _run_success_event(
             {
@@ -653,7 +644,7 @@ async def test_should_emit_only_the_dimensions_the_limiter_enforced():
         assert _collected_samples("litellm_team_rate_limit_allowed_metric") == {}
         assert _collected_samples("litellm_team_rate_limit_used_metric") == {}
     finally:
-        _clear_prometheus_registry()
+        clear_prometheus_registry()
 
 
 @pytest.mark.asyncio
@@ -664,7 +655,7 @@ async def test_should_drop_key_and_team_series_once_the_limiter_stops_reporting_
     requests. The old allowed/used samples must disappear instead of keeping
     a limit that no longer exists on the scrape.
     """
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
     try:
         logger = PrometheusLogger()
         await _run_success_event(
@@ -698,7 +689,7 @@ async def test_should_drop_key_and_team_series_once_the_limiter_stops_reporting_
         assert _collected_samples("litellm_team_rate_limit_allowed_metric") == {team_requests: 50}
         assert _collected_samples("litellm_team_rate_limit_used_metric") == {team_requests: 4}
     finally:
-        _clear_prometheus_registry()
+        clear_prometheus_registry()
 
 
 @pytest.mark.asyncio
@@ -715,11 +706,11 @@ async def test_should_drop_key_and_team_series_once_the_limiter_stops_reporting_
 async def test_should_emit_no_key_or_team_rate_limit_series_without_a_complete_int_pair(
     additional_headers,
 ):
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
     try:
         await _run_success_event(additional_headers)
 
         for metric_name in KEY_AND_TEAM_RATE_LIMIT_METRICS:
             assert _collected_samples(metric_name) == {}, metric_name
     finally:
-        _clear_prometheus_registry()
+        clear_prometheus_registry()

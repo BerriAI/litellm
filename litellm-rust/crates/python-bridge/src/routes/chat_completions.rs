@@ -17,6 +17,7 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
+use crate::driver::{ADDITIONAL_ARGS, API_BASE, API_KEY, COMPLETE_INPUT_DICT, HEADERS, INPUT};
 use crate::errors::{RustBridgeDeclined, chat_completions_error_to_pyerr, core_error_to_pyerr};
 use crate::marshal::optional_timeout;
 
@@ -154,36 +155,15 @@ fn invoke(
         let machine = machine.borrow(py);
         (machine.machine.operation(), machine.asynchronous)
     };
-    let (method, awaiting) = match operation {
-        Operation::Setup => ("setup", false),
-        Operation::DeploymentPre => ("deployment_pre", true),
-        Operation::Prepare => ("prepare", false),
-        Operation::PreCall => {
-            return Err(PyRuntimeError::new_err(
-                "chat completions lifecycle selected an unsupported pre-call operation",
-            ));
-        }
-        Operation::Send if asynchronous => ("send", true),
-        Operation::Send => ("send_sync", false),
-        Operation::DeploymentSuccess => ("deployment_success", true),
-        Operation::DeploymentFailure => ("deployment_failure", true),
-        Operation::SyncSuccess => ("sync_success", false),
-        Operation::AsyncSuccess => ("async_success", false),
-        Operation::SyncSuccessIfNeeded => ("sync_success_if_needed", false),
-        Operation::SyncFailure => ("sync_failure", false),
-        Operation::AsyncFailure => ("async_failure", true),
-        Operation::Restore => ("restore", false),
-        Operation::Complete(_) => {
-            return Err(PyRuntimeError::new_err(
-                "chat completions lifecycle is complete",
-            ));
-        }
-    };
-    Ok((awaiting, host.getattr(py, method)?.call0(py)?))
+    crate::driver::invoke(py, operation, asynchronous, false, "chat completions", host)
 }
 
 #[pyfunction]
-fn prepare(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Py<ChatCompletionsState>> {
+fn prepare(
+    py: Python<'_>,
+    arguments: Py<PyDict>,
+    logging: Py<PyAny>,
+) -> PyResult<Py<ChatCompletionsState>> {
     let bag = arguments.bind(py);
     let admission = admission(bag)?;
     let api_key = scalar(bag, "api_key")?;
@@ -195,10 +175,6 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Py<ChatCompletions
             .map(|value| value.extract::<f64>())
             .transpose()?,
     )?;
-    let logging = bag
-        .get_item("litellm_logging_obj")?
-        .filter(|value| !value.is_none())
-        .ok_or_else(|| PyRuntimeError::new_err("chat completions logging was not initialized"))?;
     let complete_input = PyDict::new(py);
     complete_input.set_item("model", &admission.model)?;
     complete_input.set_item("messages", bag.get_item("messages")?)?;
@@ -206,14 +182,16 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Py<ChatCompletions
         complete_input.set_item(name, Pythonized(value))?;
     }
     let additional = PyDict::new(py);
-    additional.set_item("complete_input_dict", complete_input)?;
-    additional.set_item("api_base", bag.get_item("api_base")?)?;
-    additional.set_item("headers", bag.get_item("extra_headers")?)?;
+    additional.set_item(COMPLETE_INPUT_DICT, complete_input)?;
+    additional.set_item(API_BASE, bag.get_item("api_base")?)?;
+    additional.set_item(HEADERS, bag.get_item("extra_headers")?)?;
     let kwargs = PyDict::new(py);
-    kwargs.set_item("input", bag.get_item("messages")?)?;
-    kwargs.set_item("api_key", bag.get_item("logging_api_key")?)?;
-    kwargs.set_item("additional_args", additional)?;
-    logging.call_method("pre_call", (), Some(&kwargs))?;
+    kwargs.set_item(INPUT, bag.get_item("messages")?)?;
+    kwargs.set_item(API_KEY, bag.get_item("logging_api_key")?)?;
+    kwargs.set_item(ADDITIONAL_ARGS, additional)?;
+    logging
+        .bind(py)
+        .call_method("pre_call", (), Some(&kwargs))?;
     Py::new(
         py,
         ChatCompletionsState {
@@ -348,13 +326,17 @@ fn validate_arguments(arguments: &Bound<'_, PyDict>) -> PyResult<()> {
 #[pyfunction]
 fn chat_completions(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
     validate_arguments(arguments.bind(py))?;
-    driver(py)?.getattr("drive_sync")?.call1((arguments,))
+    runner(py)?
+        .getattr("_drive_sync")?
+        .call1((arguments, bindings(py)?))
 }
 
 #[pyfunction]
 fn achat_completions(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
     validate_arguments(arguments.bind(py))?;
-    driver(py)?.getattr("drive_async")?.call1((arguments,))
+    runner(py)?
+        .getattr("_drive_async")?
+        .call1((arguments, bindings(py)?))
 }
 
 #[pyfunction]
@@ -376,94 +358,32 @@ fn chat_completions_decline(
     .map(str::to_string)
 }
 
-fn driver(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
-    static DRIVER: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
-    if let Some(module) = DRIVER.get(py) {
+fn runner(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
+    static RUNNER: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+    if let Some(module) = RUNNER.get(py) {
         return Ok(module.bind(py));
     }
-    let module = crate::driver::compile(py, "chat_completions", HOST)?;
-    module.add("_Lifecycle", py.get_type::<ChatCompletionsLifecycle>())?;
-    module.add("_invoke", wrap_pyfunction!(invoke, &module)?)?;
-    module.add("_prepare", wrap_pyfunction!(prepare, &module)?)?;
-    module.add("_send", wrap_pyfunction!(send, &module)?)?;
-    module.add("_send_sync", wrap_pyfunction!(send_sync, &module)?)?;
-    module.add(
-        "_terminal_record",
-        wrap_pyfunction!(terminal_record, &module)?,
-    )?;
-    Ok(DRIVER.get_or_init(py, || module.unbind()).bind(py))
+    let module = py.import("litellm.rust_bridge.chat_completions")?;
+    Ok(RUNNER.get_or_init(py, || module.unbind()).bind(py))
 }
 
-const HOST: &str = r#"
-from datetime import datetime
-from litellm import utils
-from litellm.types.utils import CallTypes
-from litellm.rust_bridge.chat_completions import build_model_response, initialize_logging, invoke_terminal
-
-class Host:
-    def __init__(self, arguments, asynchronous):
-        self.machine = _Lifecycle(arguments, asynchronous, utils.is_internal_call.get())
-        self.arguments = arguments
-        self.current = arguments
-        self.asynchronous = asynchronous
-        self.logger = arguments.get('litellm_logging_obj')
-        self.state = None
-        self.response = None
-        self.error = None
-        self.start = datetime.now()
-        self.end = None
-
-    def setup(self):
-        self.logger = initialize_logging(self.arguments, self.asynchronous)
-        self.arguments['litellm_logging_obj'] = self.logger
-
-    async def deployment_pre(self):
-        modified = await utils.async_pre_call_deployment_hook(self.current, 'acompletion')
-        if modified is not None:
-            self.current = modified
-        self.current['litellm_logging_obj'] = self.logger
-
-    def prepare(self): self.state = _prepare(self.current)
-
-    def send_sync(self):
-        self.response = build_model_response(_send_sync(self.state), self.arguments['model_response'])
-        self.end = datetime.now()
-
-    async def send(self):
-        self.response = build_model_response(await _send(self.state), self.arguments['model_response'])
-        self.end = datetime.now()
-
-    async def deployment_success(self):
-        self.response = await utils.async_post_call_success_deployment_hook(self.current, self.response, CallTypes.acompletion)
-
-    async def deployment_failure(self):
-        await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'acompletion')
-
-    def terminal(self, action, value):
-        record = _terminal_record(self.state) if self.state is not None else None
-        return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, record, value, self.start, self.end)
-
-    def sync_success(self): return self.terminal('sync_success', self.response)
-    def async_success(self): return self.terminal('async_success', self.response)
-    def sync_success_if_needed(self): return self.terminal('sync_success_if_needed', self.response)
-    def sync_failure(self): return self.terminal('sync_failure', self.error)
-    def async_failure(self): return self.terminal('async_failure', self.error)
-    def restore(self): utils._restore_correlation_context_if_supported(self.logger)
-
-    def advance(self, outcome, error=None):
-        if error is not None and self.end is None:
-            self.end = datetime.now()
-        if self.logger is None:
-            self.logger = self.arguments.get('litellm_logging_obj')
-        replace = self.machine.advance(outcome, self.logger is not None, self.current.get('fallbacks') is not None)
-        if replace:
-            self.error = error
-
-    def result(self):
-        if self.machine.complete():
-            return self.response
-        raise self.error
-"#;
+fn bindings(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
+    static BINDINGS: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+    if let Some(module) = BINDINGS.get(py) {
+        return Ok(module.bind(py));
+    }
+    let module = PyModule::new(py, "_chat_completions_bindings")?;
+    module.add("Lifecycle", py.get_type::<ChatCompletionsLifecycle>())?;
+    module.add("invoke", wrap_pyfunction!(invoke, &module)?)?;
+    module.add("prepare", wrap_pyfunction!(prepare, &module)?)?;
+    module.add("send", wrap_pyfunction!(send, &module)?)?;
+    module.add("send_sync", wrap_pyfunction!(send_sync, &module)?)?;
+    module.add(
+        "terminal_record",
+        wrap_pyfunction!(terminal_record, &module)?,
+    )?;
+    Ok(BINDINGS.get_or_init(py, || module.unbind()).bind(py))
+}
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     crate::routes::definition::add_function(module, wrap_pyfunction!(chat_completions, module)?)?;

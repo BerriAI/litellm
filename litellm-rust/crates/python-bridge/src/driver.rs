@@ -1,83 +1,197 @@
-use std::ffi::CString;
-
+use litellm_core::lifecycle::program::Operation;
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use crate::errors::RustBridgeDriverError;
+pub(crate) const ADDITIONAL_ARGS: &str = "additional_args";
+pub(crate) const API_BASE: &str = "api_base";
+pub(crate) const API_KEY: &str = "api_key";
+pub(crate) const COMPLETE_INPUT_DICT: &str = "complete_input_dict";
+pub(crate) const HEADERS: &str = "headers";
+pub(crate) const INPUT: &str = "input";
 
-const DRIVE: &str = r#"
-def drive_sync(arguments):
-    host = Host(arguments, False)
-    while host.machine.complete() is None:
-        try:
-            _invoke(host.machine, host)
-        except Exception as error:
-            host.advance(1, error)
-        except BaseException as error:
-            host.advance(2, error)
-        else:
-            host.advance(0)
-    return host.result()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OperationBinding {
+    method: &'static str,
+    awaiting: bool,
+}
 
-async def drive_async(arguments):
-    host = Host(arguments, True)
-    while host.machine.complete() is None:
-        try:
-            awaiting, value = _invoke(host.machine, host)
-            if awaiting:
-                await value
-        except Exception as error:
-            host.advance(1, error)
-        except BaseException as error:
-            host.advance(2, error)
-        else:
-            host.advance(0)
-    return host.result()
-"#;
-
-pub(crate) fn compile<'py>(
-    py: Python<'py>,
+fn operation_binding(
+    operation: Operation,
+    asynchronous: bool,
+    supports_pre_call: bool,
     route: &str,
-    host: &str,
-) -> PyResult<Bound<'py, PyModule>> {
-    let source = CString::new(format!("{host}\n{DRIVE}"))
-        .map_err(|_| RustBridgeDriverError::new_err("driver source contains a null byte"))?;
-    let filename = CString::new(format!("{route}_driver.py"))
-        .map_err(|_| RustBridgeDriverError::new_err("driver route name contains a null byte"))?;
-    let module_name = CString::new(format!("_{route}_driver"))
-        .map_err(|_| RustBridgeDriverError::new_err("driver route name contains a null byte"))?;
-    PyModule::from_code(py, &source, &filename, &module_name)
+) -> PyResult<OperationBinding> {
+    let binding = match operation {
+        Operation::Setup => OperationBinding {
+            method: "setup",
+            awaiting: false,
+        },
+        Operation::DeploymentPre => OperationBinding {
+            method: "deployment_pre",
+            awaiting: true,
+        },
+        Operation::Prepare => OperationBinding {
+            method: "prepare",
+            awaiting: false,
+        },
+        Operation::PreCall if supports_pre_call => OperationBinding {
+            method: "pre_call",
+            awaiting: false,
+        },
+        Operation::PreCall => {
+            return Err(PyRuntimeError::new_err(format!(
+                "{route} lifecycle selected an unsupported pre-call operation"
+            )));
+        }
+        Operation::Send if asynchronous => OperationBinding {
+            method: "send",
+            awaiting: true,
+        },
+        Operation::Send => OperationBinding {
+            method: "send_sync",
+            awaiting: false,
+        },
+        Operation::DeploymentSuccess => OperationBinding {
+            method: "deployment_success",
+            awaiting: true,
+        },
+        Operation::DeploymentFailure => OperationBinding {
+            method: "deployment_failure",
+            awaiting: true,
+        },
+        Operation::SyncSuccess => OperationBinding {
+            method: "sync_success",
+            awaiting: false,
+        },
+        Operation::AsyncSuccess => OperationBinding {
+            method: "async_success",
+            awaiting: false,
+        },
+        Operation::SyncSuccessIfNeeded => OperationBinding {
+            method: "sync_success_if_needed",
+            awaiting: false,
+        },
+        Operation::SyncFailure => OperationBinding {
+            method: "sync_failure",
+            awaiting: false,
+        },
+        Operation::AsyncFailure => OperationBinding {
+            method: "async_failure",
+            awaiting: true,
+        },
+        Operation::Restore => OperationBinding {
+            method: "restore",
+            awaiting: false,
+        },
+        Operation::Complete(_) => {
+            return Err(PyRuntimeError::new_err(format!(
+                "{route} lifecycle is complete"
+            )));
+        }
+    };
+    Ok(binding)
+}
+
+pub(crate) fn invoke(
+    py: Python<'_>,
+    operation: Operation,
+    asynchronous: bool,
+    supports_pre_call: bool,
+    route: &str,
+    host: Py<PyAny>,
+) -> PyResult<(bool, Py<PyAny>)> {
+    let binding = operation_binding(operation, asynchronous, supports_pre_call, route)?;
+    Ok((
+        binding.awaiting,
+        host.getattr(py, binding.method)?.call0(py)?,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
+    use litellm_core::lifecycle::Outcome;
+
     use super::*;
 
     #[test]
-    fn null_byte_in_route_raises_driver_error() {
+    fn operation_bindings_cover_the_lifecycle_contract() {
         Python::initialize();
-        Python::attach(|py| {
-            let error = compile(py, "invalid\0route", "class Host: pass")
-                .expect_err("route names containing null bytes should fail");
-
-            assert!(error.is_instance_of::<RustBridgeDriverError>(py));
-            assert_eq!(
-                error.to_string(),
-                "RustBridgeDriverError: driver route name contains a null byte"
-            );
+        Python::attach(|_| {
+            let cases = [
+                (Operation::Setup, false, false, "setup", false),
+                (
+                    Operation::DeploymentPre,
+                    false,
+                    false,
+                    "deployment_pre",
+                    true,
+                ),
+                (Operation::Prepare, false, false, "prepare", false),
+                (Operation::PreCall, false, true, "pre_call", false),
+                (Operation::Send, false, false, "send_sync", false),
+                (Operation::Send, true, false, "send", true),
+                (
+                    Operation::DeploymentSuccess,
+                    false,
+                    false,
+                    "deployment_success",
+                    true,
+                ),
+                (
+                    Operation::DeploymentFailure,
+                    false,
+                    false,
+                    "deployment_failure",
+                    true,
+                ),
+                (Operation::SyncSuccess, false, false, "sync_success", false),
+                (
+                    Operation::AsyncSuccess,
+                    false,
+                    false,
+                    "async_success",
+                    false,
+                ),
+                (
+                    Operation::SyncSuccessIfNeeded,
+                    false,
+                    false,
+                    "sync_success_if_needed",
+                    false,
+                ),
+                (Operation::SyncFailure, false, false, "sync_failure", false),
+                (Operation::AsyncFailure, false, false, "async_failure", true),
+                (Operation::Restore, false, false, "restore", false),
+            ];
+            for (operation, asynchronous, pre_call, method, awaiting) in cases {
+                assert_eq!(
+                    operation_binding(operation, asynchronous, pre_call, "test").unwrap(),
+                    OperationBinding { method, awaiting },
+                );
+            }
         });
     }
 
     #[test]
-    fn null_byte_in_source_raises_driver_error() {
+    fn invalid_operations_raise_route_specific_errors() {
         Python::initialize();
-        Python::attach(|py| {
-            let error = compile(py, "test", "class Host:\0 pass")
-                .expect_err("driver source containing null bytes should fail");
-
-            assert!(error.is_instance_of::<RustBridgeDriverError>(py));
+        Python::attach(|_| {
+            let pre_call = operation_binding(Operation::PreCall, false, false, "messages")
+                .expect_err("unsupported pre-call should fail");
             assert_eq!(
-                error.to_string(),
-                "RustBridgeDriverError: driver source contains a null byte"
+                pre_call.to_string(),
+                "RuntimeError: messages lifecycle selected an unsupported pre-call operation"
+            );
+            let complete = operation_binding(
+                Operation::Complete(Outcome::Success),
+                false,
+                false,
+                "messages",
+            )
+            .expect_err("complete lifecycle should fail");
+            assert_eq!(
+                complete.to_string(),
+                "RuntimeError: messages lifecycle is complete"
             );
         });
     }

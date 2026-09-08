@@ -3,13 +3,28 @@
 from __future__ import annotations
 
 import traceback
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextvars import copy_context
 from datetime import datetime
 from typing import Final, Protocol, cast  # noqa: TID251  # native extension exposes dynamically typed callables
 from uuid import uuid4
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge._lifecycle import (
+    LOGGING_OBJECT_KEY,
+    NativeLifecycle,
+    NativeLifecycleBindings,
+    NativeOutcome,
+    TerminalAction,
+    advance_host,
+    deployment_failure,
+    deployment_pre,
+    deployment_success,
+    drive_async,
+    drive_sync,
+    host_result,
+    restore_correlation_context,
+)
 from litellm.rust_bridge.bindings import NativeBinding
 
 
@@ -63,7 +78,7 @@ def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: 
     from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
     from litellm.litellm_core_utils.litellm_logging import Logging, set_callbacks
 
-    supplied: Final = arguments.get("litellm_logging_obj")
+    supplied: Final = arguments.get(LOGGING_OBJECT_KEY)
     if supplied is not None:
         return supplied
     callbacks: Final = tuple(  # cast-ok: callback registry accepts heterogeneous legacy callback objects
@@ -185,12 +200,12 @@ def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: 
         cb for cb in dict.fromkeys(logger.dynamic_input_callbacks or ()) if cb not in litellm.input_callback
     ]
     arguments["litellm_call_id"] = call_id
-    arguments["litellm_logging_obj"] = logger
+    arguments[LOGGING_OBJECT_KEY] = logger
     return logger
 
 
 def invoke_terminal(
-    action: str,
+    action: TerminalAction,
     roots: object,
     logger: object,
     record: Mapping[str, object] | None,
@@ -250,3 +265,127 @@ def invoke_terminal(
         logging.failure_handler(exception, trace, start_time, end_time)
         return None
     return logging.async_failure_handler(exception, trace, start_time, end_time)
+
+
+class _OcrLifecycle(NativeLifecycle, Protocol):
+    def identity(self) -> tuple[str, str | None]: ...
+
+
+class _OcrBindings(NativeLifecycleBindings, Protocol):
+    Lifecycle: Callable[[dict[str, object], object | None, bool, bool], _OcrLifecycle]
+    prepare: Callable[[dict[str, object], object, bool], object]
+    pre_call: Callable[[object], None]
+    send: Callable[[object], Awaitable[dict[str, object]]]
+    send_sync: Callable[[object], OCRResponse]
+    finish: Callable[[dict[str, object]], OCRResponse]
+    terminal_record: Callable[[object], Mapping[str, object]]
+
+
+class _OcrHost:
+    def __init__(self, arguments: dict[str, object], asynchronous: bool, bindings: _OcrBindings) -> None:
+        from litellm import utils
+
+        self.bindings: _OcrBindings = bindings
+        self.arguments: dict[str, object] = arguments
+        self.current: dict[str, object] = arguments
+        self.asynchronous: bool = asynchronous
+        self.logger: object | None = arguments.get(LOGGING_OBJECT_KEY)
+        self.machine: _OcrLifecycle = bindings.Lifecycle(
+            arguments, self.logger, asynchronous, utils.is_internal_call.get()
+        )
+        self.state: object | None = None
+        self.response: object = None
+        self.error: BaseException | None = None
+        self.start: datetime = datetime.now()
+        self.end: datetime | None = None
+
+    def invoke(self) -> tuple[bool, object]:
+        return self.bindings.invoke(self.machine, self)
+
+    def setup(self) -> None:
+        call_id, trace_id = self.machine.identity()
+        self.arguments["litellm_call_id"] = call_id
+        self.arguments["litellm_trace_id"] = trace_id
+        self.logger = initialize_logging(self.arguments, self.asynchronous)
+        self.arguments[LOGGING_OBJECT_KEY] = self.logger
+
+    async def deployment_pre(self) -> None:
+        self.current = await deployment_pre(self.current, "aocr")
+        self.current[LOGGING_OBJECT_KEY] = self.logger
+        call_id, trace_id = self.machine.identity()
+        self.current["litellm_call_id"] = call_id
+        self.current["litellm_trace_id"] = trace_id
+
+    def prepare(self) -> None:
+        if self.logger is None:
+            raise RuntimeError("OCR logging was not initialized")
+        self.state = self.bindings.prepare(self.current, self.logger, self.asynchronous)
+
+    def pre_call(self) -> None:
+        self.bindings.pre_call(self.state)
+
+    def send_sync(self) -> None:
+        self.response = self.bindings.send_sync(self.state)
+        self.end = datetime.now()
+
+    async def send(self) -> None:
+        self.response = self.bindings.finish(await self.bindings.send(self.state))
+        self.end = datetime.now()
+
+    async def deployment_success(self) -> None:
+        from litellm.types.utils import CallTypes
+
+        self.response = await deployment_success(self.current, self.response, CallTypes.aocr)
+
+    async def deployment_failure(self) -> None:
+        await deployment_failure(self.current, self.error, "aocr")
+
+    def terminal(self, action: TerminalAction, value: object) -> object:
+        if self.logger is None or self.end is None:
+            raise RuntimeError("OCR terminal state was not initialized")
+        record: Final = self.bindings.terminal_record(self.state) if self.state is not None else None
+        return invoke_terminal(
+            action,
+            (self.arguments, self.current, self.state),
+            self.logger,
+            record,
+            value,
+            self.start,
+            self.end,
+        )
+
+    def sync_success(self) -> object:
+        return self.terminal("sync_success", self.response)
+
+    def async_success(self) -> object:
+        return self.terminal("async_success", self.response)
+
+    def sync_success_if_needed(self) -> object:
+        return self.terminal("sync_success_if_needed", self.response)
+
+    def sync_failure(self) -> object:
+        return self.terminal("sync_failure", self.error)
+
+    def async_failure(self) -> object:
+        return self.terminal("async_failure", self.error)
+
+    def restore(self) -> None:
+        restore_correlation_context(self.logger)
+
+    def advance(self, outcome: NativeOutcome, error: BaseException | None = None) -> None:
+        advance_host(self, outcome, error)
+
+    def result(self) -> object:
+        return host_result(self)
+
+
+def _drive_sync(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
+    arguments: dict[str, object], bindings: _OcrBindings
+) -> OCRResponse:
+    return cast(OCRResponse, drive_sync(_OcrHost(arguments, False, bindings)))
+
+
+async def _drive_async(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
+    arguments: dict[str, object], bindings: _OcrBindings
+) -> OCRResponse:
+    return cast(OCRResponse, await drive_async(_OcrHost(arguments, True, bindings)))

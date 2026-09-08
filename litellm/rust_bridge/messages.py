@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Protocol, cast
@@ -8,9 +8,24 @@ from typing import Final, Protocol, cast
 import httpx
 
 from litellm.rust_bridge._lifecycle import (
+    LOGGING_OBJECT_KEY,
+    NativeLifecycle,
+    NativeLifecycleBindings,
+    NativeOutcome,
+    TerminalAction,
+    advance_host,
+    deployment_failure,
+    deployment_pre,
+    deployment_success,
+    drive_async,
+    drive_sync,
+    host_result,
+    invoke_terminal,
+    restore_correlation_context,
+)
+from litellm.rust_bridge._lifecycle import (
     initialize_logging as initialize_lifecycle_logging,
 )
-from litellm.rust_bridge._lifecycle import invoke_terminal
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -204,6 +219,141 @@ async def amessages(
             arguments or {}, model, body, api_key, api_base, custom_llm_provider, extra_headers, timeout
         )
     )
+
+
+class _MessagesLifecycle(NativeLifecycle, Protocol):
+    def failed_after_provider_response(self) -> bool: ...
+
+
+class _MessagesBindings(NativeLifecycleBindings, Protocol):
+    Lifecycle: Callable[[bool, bool], _MessagesLifecycle]
+    prepare: Callable[[dict[str, object], object], object]
+    send: Callable[[object], Awaitable[AnthropicMessagesResponse]]
+    send_sync: Callable[[object], AnthropicMessagesResponse]
+    committed_failure: Callable[[], None]
+
+
+class _MessagesHost:
+    def __init__(self, arguments: dict[str, object], asynchronous: bool, bindings: _MessagesBindings) -> None:
+        from litellm import utils
+
+        self.bindings: _MessagesBindings = bindings
+        self.machine: _MessagesLifecycle = bindings.Lifecycle(asynchronous, utils.is_internal_call.get())
+        self.arguments: dict[str, object] = arguments
+        self.current: dict[str, object] = arguments
+        self.asynchronous: bool = asynchronous
+        self.logger: object | None = arguments.get(LOGGING_OBJECT_KEY)
+        self.lifecycle_owned: bool = self.logger is None
+        self.state: object | None = None
+        self.response: object = None
+        self.error: BaseException | None = None
+        self.start: datetime = datetime.now()
+        self.end: datetime | None = None
+        self.streaming: bool = False
+
+    def invoke(self) -> tuple[bool, object]:
+        return self.bindings.invoke(self.machine, self)
+
+    def setup(self) -> None:
+        self.logger = initialize_logging(self.arguments, self.asynchronous)
+        self.arguments[LOGGING_OBJECT_KEY] = self.logger
+        self.streaming = getattr(self.logger, "stream", False) is True
+
+    async def deployment_pre(self) -> None:
+        if not self.lifecycle_owned:
+            return
+        self.current = await deployment_pre(self.current, "anthropic_messages")
+        self.current[LOGGING_OBJECT_KEY] = self.logger
+
+    def prepare(self) -> None:
+        if self.logger is None:
+            raise RuntimeError("messages logging was not initialized")
+        self.state = self.bindings.prepare(self.current, self.logger)
+
+    def send_sync(self) -> None:
+        self.response = self.bindings.send_sync(self.state)
+        self.end = datetime.now()
+
+    async def send(self) -> None:
+        self.response = await self.bindings.send(self.state)
+        self.end = datetime.now()
+
+    async def deployment_success(self) -> None:
+        from litellm.types.utils import CallTypes
+
+        if self.lifecycle_owned:
+            self.response = await deployment_success(self.current, self.response, CallTypes.aanthropic_messages)
+        if not self.streaming:
+            return
+        if self.logger is None:
+            raise RuntimeError("messages logging was not initialized")
+        self.response = retain_stream_response(
+            cast(AnthropicMessagesResponse, self.response),
+            (self.arguments, self.current, self.state),
+            cast(_MessagesLogging, self.logger),
+            self.start,
+        )
+
+    async def deployment_failure(self) -> None:
+        if not self.lifecycle_owned:
+            return
+        await deployment_failure(self.current, self.error, "anthropic_messages")
+
+    def terminal(self, action: TerminalAction, value: object) -> object:
+        if self.streaming or not self.lifecycle_owned:
+            return None
+        if self.logger is None or self.end is None:
+            raise RuntimeError("messages terminal state was not initialized")
+        return invoke_terminal(
+            action,
+            (self.arguments, self.current, self.state),
+            self.logger,
+            None,
+            value,
+            self.start,
+            self.end,
+        )
+
+    def sync_success(self) -> object:
+        return self.terminal("sync_success", self.response)
+
+    def async_success(self) -> object:
+        return self.terminal("async_success", self.response)
+
+    def sync_success_if_needed(self) -> object:
+        return self.terminal("sync_success_if_needed", self.response)
+
+    def sync_failure(self) -> object:
+        return self.terminal("sync_failure", self.error)
+
+    def async_failure(self) -> object:
+        return self.terminal("async_failure", self.error)
+
+    def restore(self) -> None:
+        if not self.streaming and self.lifecycle_owned:
+            restore_correlation_context(self.logger)
+
+    def advance(self, outcome: NativeOutcome, error: BaseException | None = None) -> None:
+        advance_host(self, outcome, error)
+
+    def result(self) -> object:
+        if self.machine.complete():
+            return self.response
+        if self.machine.failed_after_provider_response():
+            self.bindings.committed_failure()
+        return host_result(self)
+
+
+def _drive_sync(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
+    arguments: dict[str, object], bindings: _MessagesBindings
+) -> AnthropicMessagesResponse:
+    return cast(AnthropicMessagesResponse, drive_sync(_MessagesHost(arguments, False, bindings)))
+
+
+async def _drive_async(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
+    arguments: dict[str, object], bindings: _MessagesBindings
+) -> AnthropicMessagesResponse:
+    return cast(AnthropicMessagesResponse, await drive_async(_MessagesHost(arguments, True, bindings)))
 
 
 __all__ = (

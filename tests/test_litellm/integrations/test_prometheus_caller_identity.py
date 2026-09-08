@@ -24,6 +24,7 @@ from litellm.types.integrations.prometheus import (
     validate_prometheus_deployment_and_latency_caller_identity,
 )
 from litellm.types.utils import StandardLoggingPayload
+from tests._prometheus_helpers import clear_prometheus_registry
 
 TARGET_METRICS: Final[tuple[DEFINED_PROMETHEUS_METRICS, ...]] = cast(
     tuple[DEFINED_PROMETHEUS_METRICS, ...],
@@ -32,14 +33,9 @@ TARGET_METRICS: Final[tuple[DEFINED_PROMETHEUS_METRICS, ...]] = cast(
 IDENTITY_MODES: Final = ("api_key_alias", "user_email", "both")
 
 
-def _clear_prometheus_registry() -> None:
-    for collector in list(REGISTRY._collector_to_names):  # pyright: ignore[reportPrivateUsage]
-        REGISTRY.unregister(collector)
-
-
 @pytest.fixture(autouse=True)
 def reset_prometheus_settings(monkeypatch: pytest.MonkeyPatch):
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
     monkeypatch.setattr(litellm, "prometheus_deployment_and_latency_caller_identity", "api_key_alias")
     monkeypatch.setattr(litellm, "prometheus_metrics_config", None)
     monkeypatch.setattr(litellm, "prometheus_exclude_metrics", None)
@@ -47,7 +43,7 @@ def reset_prometheus_settings(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", [])
     monkeypatch.setattr(litellm, "custom_prometheus_tags", [])
     yield
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
 
 
 def _expected_identity_labels(baseline: list[str], mode: str) -> list[str]:

@@ -6,12 +6,7 @@ from prometheus_client import REGISTRY
 
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
-
-
-def _clear_prometheus_registry() -> None:
-    collectors = list(REGISTRY._collector_to_names.keys())
-    for collector in collectors:
-        REGISTRY.unregister(collector)
+from tests._prometheus_helpers import clear_prometheus_registry
 
 
 def _create_prometheus_logger_with_custom_labels(monkeypatch: pytest.MonkeyPatch):
@@ -20,7 +15,7 @@ def _create_prometheus_logger_with_custom_labels(monkeypatch: pytest.MonkeyPatch
         "custom_prometheus_metadata_labels",
         ["metadata.department", "metadata.environment"],
     )
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
     return PrometheusLogger()
 
 

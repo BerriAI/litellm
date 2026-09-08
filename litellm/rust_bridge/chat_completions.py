@@ -16,6 +16,7 @@ import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -32,6 +33,22 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
+from litellm.rust_bridge._lifecycle import (
+    LOGGING_OBJECT_KEY,
+    NativeLifecycle,
+    NativeLifecycleBindings,
+    NativeOutcome,
+    TerminalAction,
+    advance_host,
+    deployment_failure,
+    deployment_pre,
+    deployment_success,
+    drive_async,
+    drive_sync,
+    host_result,
+    invoke_terminal,
+    restore_correlation_context,
+)
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -579,3 +596,127 @@ def _arguments(
         "timeout_seconds": timeout_to_seconds(timeout),
         "logging_api_key": logging_api_key if logging_api_key is not None else api_key or "",
     }
+
+
+class _ChatCompletionsBindings(NativeLifecycleBindings, Protocol):
+    Lifecycle: Callable[[dict[str, object], bool, bool], NativeLifecycle]
+    prepare: Callable[[dict[str, object], object], object]
+    send: Callable[[object], Awaitable[Mapping[str, object]]]
+    send_sync: Callable[[object], Mapping[str, object]]
+    terminal_record: Callable[[object], Mapping[str, object]]
+
+
+class _ChatCompletionsHost:
+    def __init__(
+        self,
+        arguments: dict[str, object],
+        asynchronous: bool,
+        bindings: _ChatCompletionsBindings,
+    ) -> None:
+        from litellm import utils
+
+        self.bindings: _ChatCompletionsBindings = bindings
+        self.machine: NativeLifecycle = bindings.Lifecycle(arguments, asynchronous, utils.is_internal_call.get())
+        self.arguments: dict[str, object] = arguments
+        self.current: dict[str, object] = arguments
+        self.asynchronous: bool = asynchronous
+        self.logger: object | None = arguments.get(LOGGING_OBJECT_KEY)
+        self.state: object | None = None
+        self.response: object = None
+        self.error: BaseException | None = None
+        self.start: datetime = datetime.now()
+        self.end: datetime | None = None
+
+    def invoke(self) -> tuple[bool, object]:
+        return self.bindings.invoke(self.machine, self)
+
+    def setup(self) -> None:
+        self.logger = initialize_logging(self.arguments, self.asynchronous)
+        self.arguments[LOGGING_OBJECT_KEY] = self.logger
+
+    async def deployment_pre(self) -> None:
+        self.current = await deployment_pre(self.current, "acompletion")
+        self.current[LOGGING_OBJECT_KEY] = self.logger
+
+    def prepare(self) -> None:
+        if self.logger is None:
+            raise RuntimeError("chat completions logging was not initialized")
+        self.state = self.bindings.prepare(self.current, self.logger)
+
+    def send_sync(self) -> None:
+        model_response: Final = self.arguments["model_response"]
+        if not isinstance(model_response, ModelResponse):
+            raise TypeError("chat completions model_response must be a ModelResponse")
+        self.response = build_model_response(self.bindings.send_sync(self.state), model_response)
+        self.end = datetime.now()
+
+    async def send(self) -> None:
+        model_response: Final = self.arguments["model_response"]
+        if not isinstance(model_response, ModelResponse):
+            raise TypeError("chat completions model_response must be a ModelResponse")
+        self.response = build_model_response(await self.bindings.send(self.state), model_response)
+        self.end = datetime.now()
+
+    async def deployment_success(self) -> None:
+        from litellm.types.utils import CallTypes
+
+        self.response = await deployment_success(self.current, self.response, CallTypes.acompletion)
+
+    async def deployment_failure(self) -> None:
+        await deployment_failure(self.current, self.error, "acompletion")
+
+    def terminal(self, action: TerminalAction, value: object) -> object:
+        if self.logger is None or self.end is None:
+            raise RuntimeError("chat completions terminal state was not initialized")
+        record: Final = self.bindings.terminal_record(self.state) if self.state is not None else None
+        return invoke_terminal(
+            action,
+            (self.arguments, self.current, self.state),
+            self.logger,
+            record,
+            value,
+            self.start,
+            self.end,
+        )
+
+    def sync_success(self) -> object:
+        return self.terminal("sync_success", self.response)
+
+    def async_success(self) -> object:
+        return self.terminal("async_success", self.response)
+
+    def sync_success_if_needed(self) -> object:
+        return self.terminal("sync_success_if_needed", self.response)
+
+    def sync_failure(self) -> object:
+        return self.terminal("sync_failure", self.error)
+
+    def async_failure(self) -> object:
+        return self.terminal("async_failure", self.error)
+
+    def restore(self) -> None:
+        restore_correlation_context(self.logger)
+
+    def advance(self, outcome: NativeOutcome, error: BaseException | None = None) -> None:
+        advance_host(self, outcome, error)
+
+    def result(self) -> object:
+        return host_result(self)
+
+
+def _drive_sync(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
+    arguments: dict[str, object], bindings: _ChatCompletionsBindings
+) -> ModelResponse:
+    result: Final = drive_sync(_ChatCompletionsHost(arguments, False, bindings))
+    if not isinstance(result, ModelResponse):
+        raise TypeError("native chat completions driver returned an invalid response")
+    return result
+
+
+async def _drive_async(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
+    arguments: dict[str, object], bindings: _ChatCompletionsBindings
+) -> ModelResponse:
+    result: Final = await drive_async(_ChatCompletionsHost(arguments, True, bindings))
+    if not isinstance(result, ModelResponse):
+        raise TypeError("native chat completions driver returned an invalid response")
+    return result

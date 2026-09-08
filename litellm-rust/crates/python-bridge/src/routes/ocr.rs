@@ -19,6 +19,7 @@ use pyo3::pyclass::{PyTraverseError, PyVisit};
 use pyo3::sync::PyOnceLock;
 use pyo3::types::PyDict;
 
+use crate::driver::{ADDITIONAL_ARGS, API_BASE, API_KEY, COMPLETE_INPUT_DICT, HEADERS, INPUT};
 use crate::errors::core_error_to_pyerr;
 use litellm_python_interop::{run_async_value, run_sync_value};
 
@@ -213,15 +214,13 @@ impl OcrLifecycle {
     fn new(
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
+        logger: Option<&Bound<'_, PyAny>>,
         asynchronous: bool,
         internal_call: bool,
     ) -> PyResult<Self> {
         let request = decode_request(py, arguments)?;
-        let logger = arguments
-            .get_item("litellm_logging_obj")?
-            .filter(|value| !value.is_none());
         let identity = |name: &str| -> PyResult<Option<String>> {
-            if let Some(logger) = &logger {
+            if let Some(logger) = logger {
                 match logger.getattr(name) {
                     Ok(value) => {
                         if let Ok(value) = value.extract::<String>() {
@@ -313,30 +312,16 @@ fn invoke(
         let machine = machine.borrow(py);
         (machine.machine.operation(), machine.asynchronous)
     };
-    let (method, awaiting) = match operation {
-        Operation::Setup => ("setup", false),
-        Operation::DeploymentPre => ("deployment_pre", true),
-        Operation::Prepare => ("prepare", false),
-        Operation::PreCall => ("pre_call", false),
-        Operation::Send if asynchronous => ("send", true),
-        Operation::Send => ("send_sync", false),
-        Operation::DeploymentSuccess => ("deployment_success", true),
-        Operation::DeploymentFailure => ("deployment_failure", true),
-        Operation::SyncSuccess => ("sync_success", false),
-        Operation::AsyncSuccess => ("async_success", false),
-        Operation::SyncSuccessIfNeeded => ("sync_success_if_needed", false),
-        Operation::SyncFailure => ("sync_failure", false),
-        Operation::AsyncFailure => ("async_failure", true),
-        Operation::Restore => ("restore", false),
-        Operation::Complete(_) => return Err(PyRuntimeError::new_err("OCR lifecycle is complete")),
-    };
-    let value = host.getattr(py, method)?.call0(py)?;
-    Ok((awaiting, value))
+    crate::driver::invoke(py, operation, asynchronous, true, "OCR", host)
 }
 
 #[pyfunction]
-#[pyo3(signature = (arguments, asynchronous=false))]
-fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResult<Py<OcrState>> {
+fn prepare(
+    py: Python<'_>,
+    arguments: Py<PyDict>,
+    logging: Py<PyAny>,
+    asynchronous: bool,
+) -> PyResult<Py<OcrState>> {
     let bag = arguments.bind(py);
     let request = decode_request(py, bag)?;
     let model = request.model.clone();
@@ -380,10 +365,6 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
     for (name, value) in &draft_headers {
         headers.set_item(name, value)?;
     }
-    let logging = py
-        .import("litellm.rust_bridge.ocr")?
-        .getattr("initialize_logging")?
-        .call1((bag, asynchronous))?;
     let litellm_params = PyDict::new(py);
     litellm_params.set_item("litellm_call_id", bag.get_item("litellm_call_id")?)?;
     litellm_params.set_item(
@@ -396,17 +377,18 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
     update.set_item("optional_params", optional_params)?;
     update.set_item("litellm_params", litellm_params)?;
     update.set_item("custom_llm_provider", endpoint.custom_llm_provider())?;
-    logging.call_method("update_from_kwargs", (), Some(&update))?;
+    logging
+        .bind(py)
+        .call_method("update_from_kwargs", (), Some(&update))?;
 
     let additional_args = PyDict::new(py);
-    additional_args.set_item("complete_input_dict", &body)?;
-    additional_args.set_item(pyo3::intern!(py, "api_base"), endpoint.url())?;
-    additional_args.set_item(pyo3::intern!(py, "headers"), &headers)?;
+    additional_args.set_item(COMPLETE_INPUT_DICT, &body)?;
+    additional_args.set_item(API_BASE, endpoint.url())?;
+    additional_args.set_item(HEADERS, &headers)?;
     let pre_call = PyDict::new(py);
-    pre_call.set_item("input", "OCR document processing")?;
-    pre_call.set_item("api_key", bag.get_item("api_key")?)?;
-    pre_call.set_item("additional_args", additional_args)?;
-    let logging = logging.unbind();
+    pre_call.set_item(INPUT, "OCR document processing")?;
+    pre_call.set_item(API_KEY, bag.get_item("api_key")?)?;
+    pre_call.set_item(ADDITIONAL_ARGS, additional_args)?;
     Py::new(
         py,
         OcrState {
@@ -593,127 +575,45 @@ fn terminal_record(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
 
 #[pyfunction]
 fn ocr(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
-    driver(py)?.getattr("drive_sync")?.call1((arguments,))
+    runner(py)?
+        .getattr("_drive_sync")?
+        .call1((arguments, bindings(py)?))
 }
 
 #[pyfunction]
 fn aocr(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
-    driver(py)?.getattr("drive_async")?.call1((arguments,))
+    runner(py)?
+        .getattr("_drive_async")?
+        .call1((arguments, bindings(py)?))
 }
 
-// Compilation can re-enter through audit hooks; publish only a finished module.
-fn driver(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
-    static DRIVER: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
-    if let Some(module) = DRIVER.get(py) {
+fn runner(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
+    static RUNNER: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+    if let Some(module) = RUNNER.get(py) {
         return Ok(module.bind(py));
     }
-    let module = crate::driver::compile(
-        py,
-        "ocr",
-        "from datetime import datetime
-from litellm import utils
-from litellm.types.utils import CallTypes
-from litellm.rust_bridge.ocr import initialize_logging, invoke_terminal
+    let module = py.import("litellm.rust_bridge.ocr")?;
+    Ok(RUNNER.get_or_init(py, || module.unbind()).bind(py))
+}
 
-class Host:
-    def __init__(self, arguments, asynchronous):
-        self.machine = _Lifecycle(arguments, asynchronous, utils.is_internal_call.get())
-        self.arguments = arguments
-        self.current = arguments
-        self.asynchronous = asynchronous
-        self.logger = arguments.get('litellm_logging_obj')
-        self.state = None
-        self.response = None
-        self.error = None
-        self.start = datetime.now()
-        self.end = None
-
-    def setup(self):
-        call_id, trace_id = self.machine.identity()
-        self.arguments['litellm_call_id'] = call_id
-        self.arguments['litellm_trace_id'] = trace_id
-        self.logger = initialize_logging(self.arguments, self.asynchronous)
-        self.arguments['litellm_logging_obj'] = self.logger
-
-    async def deployment_pre(self):
-        modified = await utils.async_pre_call_deployment_hook(self.current, 'aocr')
-        if modified is not None:
-            self.current = modified
-        self.current['litellm_logging_obj'] = self.logger
-        call_id, trace_id = self.machine.identity()
-        self.current['litellm_call_id'] = call_id
-        self.current['litellm_trace_id'] = trace_id
-
-    def prepare(self):
-        self.state = _prepare(self.current, self.asynchronous)
-
-    def pre_call(self):
-        _pre_call(self.state)
-
-    def send_sync(self):
-        self.response = _send_sync(self.state)
-        self.end = datetime.now()
-
-    async def send(self):
-        self.response = _finish(await _send(self.state))
-        self.end = datetime.now()
-
-    async def deployment_success(self):
-        self.response = await utils.async_post_call_success_deployment_hook(self.current, self.response, CallTypes.aocr)
-
-    async def deployment_failure(self):
-        await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'aocr')
-
-    def terminal(self, action, value):
-        record = _terminal_record(self.state) if self.state is not None else None
-        return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, record, value, self.start, self.end)
-
-    def sync_success(self):
-        return self.terminal('sync_success', self.response)
-
-    def async_success(self):
-        return self.terminal('async_success', self.response)
-
-    def sync_success_if_needed(self):
-        return self.terminal('sync_success_if_needed', self.response)
-
-    def sync_failure(self):
-        return self.terminal('sync_failure', self.error)
-
-    def async_failure(self):
-        return self.terminal('async_failure', self.error)
-
-    def restore(self):
-        utils._restore_correlation_context_if_supported(self.logger)
-
-    def advance(self, outcome, error=None):
-        if error is not None and self.end is None:
-            self.end = datetime.now()
-        if self.logger is None:
-            self.logger = self.arguments.get('litellm_logging_obj')
-        replace = self.machine.advance(outcome, self.logger is not None, self.current.get('fallbacks') is not None)
-        if replace:
-            self.error = error
-
-    def result(self):
-        if self.machine.complete():
-            return self.response
-        raise self.error
-
-",
-    )?;
-    module.add("_Lifecycle", py.get_type::<OcrLifecycle>())?;
-    module.add("_invoke", wrap_pyfunction!(invoke, &module)?)?;
-    module.add("_prepare", wrap_pyfunction!(prepare, &module)?)?;
-    module.add("_pre_call", wrap_pyfunction!(pre_call, &module)?)?;
-    module.add("_send", wrap_pyfunction!(send, &module)?)?;
-    module.add("_send_sync", wrap_pyfunction!(send_sync, &module)?)?;
-    module.add("_finish", wrap_pyfunction!(finish, &module)?)?;
+fn bindings(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
+    static BINDINGS: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+    if let Some(module) = BINDINGS.get(py) {
+        return Ok(module.bind(py));
+    }
+    let module = PyModule::new(py, "_ocr_bindings")?;
+    module.add("Lifecycle", py.get_type::<OcrLifecycle>())?;
+    module.add("invoke", wrap_pyfunction!(invoke, &module)?)?;
+    module.add("prepare", wrap_pyfunction!(prepare, &module)?)?;
+    module.add("pre_call", wrap_pyfunction!(pre_call, &module)?)?;
+    module.add("send", wrap_pyfunction!(send, &module)?)?;
+    module.add("send_sync", wrap_pyfunction!(send_sync, &module)?)?;
+    module.add("finish", wrap_pyfunction!(finish, &module)?)?;
     module.add(
-        "_terminal_record",
+        "terminal_record",
         wrap_pyfunction!(terminal_record, &module)?,
     )?;
-    Ok(DRIVER.get_or_init(py, || module.unbind()).bind(py))
+    Ok(BINDINGS.get_or_init(py, || module.unbind()).bind(py))
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

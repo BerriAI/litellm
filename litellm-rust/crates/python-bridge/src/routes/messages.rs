@@ -11,6 +11,7 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
+use crate::driver::{ADDITIONAL_ARGS, API_BASE, API_KEY, COMPLETE_INPUT_DICT, HEADERS, INPUT};
 use crate::errors::{RustUpstreamError, core_error_to_pyerr, messages_provider_error_to_pyerr};
 use crate::marshal::optional_timeout;
 
@@ -145,34 +146,15 @@ fn invoke(
         let machine = machine.borrow(py);
         (machine.machine.operation(), machine.asynchronous)
     };
-    let (method, awaiting) = match operation {
-        Operation::Setup => ("setup", false),
-        Operation::DeploymentPre => ("deployment_pre", true),
-        Operation::Prepare => ("prepare", false),
-        Operation::PreCall => {
-            return Err(PyRuntimeError::new_err(
-                "messages lifecycle selected an unsupported pre-call operation",
-            ));
-        }
-        Operation::Send if asynchronous => ("send", true),
-        Operation::Send => ("send_sync", false),
-        Operation::DeploymentSuccess => ("deployment_success", true),
-        Operation::DeploymentFailure => ("deployment_failure", true),
-        Operation::SyncSuccess => ("sync_success", false),
-        Operation::AsyncSuccess => ("async_success", false),
-        Operation::SyncSuccessIfNeeded => ("sync_success_if_needed", false),
-        Operation::SyncFailure => ("sync_failure", false),
-        Operation::AsyncFailure => ("async_failure", true),
-        Operation::Restore => ("restore", false),
-        Operation::Complete(_) => {
-            return Err(PyRuntimeError::new_err("messages lifecycle is complete"));
-        }
-    };
-    Ok((awaiting, host.getattr(py, method)?.call0(py)?))
+    crate::driver::invoke(py, operation, asynchronous, false, "messages", host)
 }
 
 #[pyfunction]
-fn prepare(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Py<MessagesState>> {
+fn prepare(
+    py: Python<'_>,
+    arguments: Py<PyDict>,
+    logging: Py<PyAny>,
+) -> PyResult<Py<MessagesState>> {
     let bag = arguments.bind(py);
     let request = decode_request(py, bag)?;
     let prepared = py
@@ -185,23 +167,18 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Py<MessagesState>>
     for (name, value) in &prepared.upstream_headers {
         headers.set_item(name, value)?;
     }
-    let logging = bag
-        .get_item("litellm_logging_obj")?
-        .filter(|value| !value.is_none())
-        .map(|value| value.unbind())
-        .ok_or_else(|| PyRuntimeError::new_err("messages logging was not initialized"))?;
     let additional = PyDict::new(py);
-    additional.set_item(pyo3::intern!(py, "complete_input_dict"), &body)?;
-    additional.set_item(pyo3::intern!(py, "api_base"), &prepared.url)?;
-    additional.set_item(pyo3::intern!(py, "headers"), &headers)?;
+    additional.set_item(COMPLETE_INPUT_DICT, &body)?;
+    additional.set_item(API_BASE, &prepared.url)?;
+    additional.set_item(HEADERS, &headers)?;
     let kwargs = PyDict::new(py);
     let serialized = py.import("json")?.call_method1("dumps", (&body,))?;
     let message = PyDict::new(py);
     message.set_item("role", "user")?;
     message.set_item("content", serialized)?;
-    kwargs.set_item("input", vec![message])?;
-    kwargs.set_item("api_key", "")?;
-    kwargs.set_item("additional_args", additional)?;
+    kwargs.set_item(INPUT, vec![message])?;
+    kwargs.set_item(API_KEY, "")?;
+    kwargs.set_item(ADDITIONAL_ARGS, additional)?;
     logging
         .bind(py)
         .call_method(pyo3::intern!(py, "pre_call"), (), Some(&kwargs))?;
@@ -296,123 +273,45 @@ fn committed_failure() -> PyResult<()> {
 #[pyfunction]
 fn messages(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
     validate_arguments(arguments.bind(py))?;
-    driver(py)?.getattr("drive_sync")?.call1((arguments,))
+    runner(py)?
+        .getattr("_drive_sync")?
+        .call1((arguments, bindings(py)?))
 }
 
 #[pyfunction]
 fn amessages(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
     validate_arguments(arguments.bind(py))?;
-    driver(py)?.getattr("drive_async")?.call1((arguments,))
+    runner(py)?
+        .getattr("_drive_async")?
+        .call1((arguments, bindings(py)?))
 }
 
-fn driver(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
-    static DRIVER: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
-    if let Some(module) = DRIVER.get(py) {
+fn runner(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
+    static RUNNER: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+    if let Some(module) = RUNNER.get(py) {
         return Ok(module.bind(py));
     }
-    let module = crate::driver::compile(py, "messages", HOST)?;
-    module.add("_Lifecycle", py.get_type::<MessagesLifecycle>())?;
-    module.add("_invoke", wrap_pyfunction!(invoke, &module)?)?;
-    module.add("_prepare", wrap_pyfunction!(prepare, &module)?)?;
-    module.add("_send", wrap_pyfunction!(send, &module)?)?;
-    module.add("_send_sync", wrap_pyfunction!(send_sync, &module)?)?;
-    module.add(
-        "_committed_failure",
-        wrap_pyfunction!(committed_failure, &module)?,
-    )?;
-    Ok(DRIVER.get_or_init(py, || module.unbind()).bind(py))
+    let module = py.import("litellm.rust_bridge.messages")?;
+    Ok(RUNNER.get_or_init(py, || module.unbind()).bind(py))
 }
 
-const HOST: &str = r#"
-from datetime import datetime
-from litellm import utils
-from litellm.types.utils import CallTypes
-from litellm.rust_bridge.messages import initialize_logging, invoke_terminal, retain_stream_response
-
-class Host:
-    def __init__(self, arguments, asynchronous):
-        self.machine = _Lifecycle(asynchronous, utils.is_internal_call.get())
-        self.arguments = arguments
-        self.current = arguments
-        self.asynchronous = asynchronous
-        self.logger = arguments.get('litellm_logging_obj')
-        self.lifecycle_owned = self.logger is None
-        self.state = None
-        self.response = None
-        self.error = None
-        self.start = datetime.now()
-        self.end = None
-        self.streaming = False
-
-    def setup(self):
-        self.logger = initialize_logging(self.arguments, self.asynchronous)
-        self.arguments['litellm_logging_obj'] = self.logger
-        self.streaming = self.logger.stream is True
-
-    async def deployment_pre(self):
-        if not self.lifecycle_owned:
-            return
-        modified = await utils.async_pre_call_deployment_hook(self.current, 'anthropic_messages')
-        if modified is not None:
-            self.current = modified
-        self.current['litellm_logging_obj'] = self.logger
-
-    def prepare(self):
-        self.state = _prepare(self.current)
-
-    def send_sync(self):
-        self.response = _send_sync(self.state)
-        self.end = datetime.now()
-
-    async def send(self):
-        self.response = await _send(self.state)
-        self.end = datetime.now()
-
-    async def deployment_success(self):
-        if self.lifecycle_owned:
-            self.response = await utils.async_post_call_success_deployment_hook(self.current, self.response, CallTypes.aanthropic_messages)
-        if self.streaming:
-            self.response = retain_stream_response(
-                self.response,
-                (self.arguments, self.current, self.state),
-                self.logger,
-                self.start,
-            )
-
-    async def deployment_failure(self):
-        if self.lifecycle_owned:
-            await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'anthropic_messages')
-
-    def terminal(self, action, value):
-        if self.streaming or not self.lifecycle_owned:
-            return None
-        return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, None, value, self.start, self.end)
-
-    def sync_success(self): return self.terminal('sync_success', self.response)
-    def async_success(self): return self.terminal('async_success', self.response)
-    def sync_success_if_needed(self): return self.terminal('sync_success_if_needed', self.response)
-    def sync_failure(self): return self.terminal('sync_failure', self.error)
-    def async_failure(self): return self.terminal('async_failure', self.error)
-    def restore(self):
-        if not self.streaming and self.lifecycle_owned:
-            utils._restore_correlation_context_if_supported(self.logger)
-
-    def advance(self, outcome, error=None):
-        if error is not None and self.end is None:
-            self.end = datetime.now()
-        if self.logger is None:
-            self.logger = self.arguments.get('litellm_logging_obj')
-        replace = self.machine.advance(outcome, self.logger is not None, self.current.get('fallbacks') is not None)
-        if replace:
-            self.error = error
-
-    def result(self):
-        if self.machine.complete():
-            return self.response
-        if self.machine.failed_after_provider_response():
-            _committed_failure()
-        raise self.error
-"#;
+fn bindings(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
+    static BINDINGS: PyOnceLock<Py<PyModule>> = PyOnceLock::new();
+    if let Some(module) = BINDINGS.get(py) {
+        return Ok(module.bind(py));
+    }
+    let module = PyModule::new(py, "_messages_bindings")?;
+    module.add("Lifecycle", py.get_type::<MessagesLifecycle>())?;
+    module.add("invoke", wrap_pyfunction!(invoke, &module)?)?;
+    module.add("prepare", wrap_pyfunction!(prepare, &module)?)?;
+    module.add("send", wrap_pyfunction!(send, &module)?)?;
+    module.add("send_sync", wrap_pyfunction!(send_sync, &module)?)?;
+    module.add(
+        "committed_failure",
+        wrap_pyfunction!(committed_failure, &module)?,
+    )?;
+    Ok(BINDINGS.get_or_init(py, || module.unbind()).bind(py))
+}
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     crate::routes::definition::add_function(module, wrap_pyfunction!(messages, module)?)?;

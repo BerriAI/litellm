@@ -23,6 +23,7 @@ from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelNames,
     UserAPIKeyLabelValues,
 )
+from tests._prometheus_helpers import clear_prometheus_registry
 
 SERVICE_TIER_METRICS = [
     "litellm_llm_api_latency_metric",
@@ -30,16 +31,6 @@ SERVICE_TIER_METRICS = [
     "litellm_request_total_latency_metric",
     "litellm_spend_metric",
 ]
-
-
-def _clear_prometheus_registry() -> None:
-    from prometheus_client import REGISTRY
-
-    for collector in list(REGISTRY._collector_to_names.keys()):
-        try:
-            REGISTRY.unregister(collector)
-        except Exception:
-            pass
 
 
 def _collected_samples(metric_name: str):
@@ -211,7 +202,7 @@ async def test_success_event_emits_service_tier_on_latency_and_spend_metrics():
         "end_time": now,
     }
 
-    _clear_prometheus_registry()
+    clear_prometheus_registry()
     try:
         logger = PrometheusLogger()
         await logger.async_log_success_event(kwargs, None, now, now)
@@ -229,7 +220,7 @@ async def test_success_event_emits_service_tier_on_latency_and_spend_metrics():
                 f"{sorted({sample.labels.get('service_tier') for sample in samples})}"
             )
     finally:
-        _clear_prometheus_registry()
+        clear_prometheus_registry()
 
 
 def test_allowlist_covers_every_modeled_service_tier():

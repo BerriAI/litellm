@@ -3,6 +3,7 @@ import copy
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
@@ -44,8 +45,8 @@ class RecordingServer:
         self.responses.append(response)
 
 
-@pytest.fixture
-def recording_server() -> Iterator[RecordingServer]:
+@contextmanager
+def recording_service() -> Iterator[RecordingServer]:
     requests: list[RecordedRequest] = []
     responses: list[ResponseSpec] = []
 
@@ -105,3 +106,9 @@ def recording_server() -> Iterator[RecordingServer]:
         if recording_server.expected_requests is not None:
             assert len(recording_server.requests) == recording_server.expected_requests
         assert recording_server.responses == []
+
+
+@pytest.fixture
+def recording_server() -> Iterator[RecordingServer]:
+    with recording_service() as server:
+        yield server
