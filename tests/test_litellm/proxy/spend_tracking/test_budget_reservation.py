@@ -1,3 +1,4 @@
+import base64
 from typing import Final
 
 import pytest
@@ -75,3 +76,41 @@ def test_bedrock_converse_body_reserves_the_prompt_not_the_context_window():
     )
     assert converse_cost is not None and invoke_cost is not None
     assert invoke_cost < converse_cost < 2 * invoke_cost
+
+
+def test_input_audio_requests_reserve_at_least_the_serialised_fallback():
+    """
+    Budget reservation counts an ``input_audio`` block as a size-derived
+    estimate at a deliberately low bitrate, priced at the text rate. Before
+    #38459 the same request raised inside ``token_counter`` and reserved
+    from the serialised-messages fallback, which tokenises the base64
+    payload itself. Floor audio-bearing requests at that fallback so a
+    caller cannot be admitted against a budget more cheaply than before
+    the blocks became countable (compressed audio carries far more duration
+    per byte than the estimate assumes).
+    """
+    from litellm.proxy.spend_tracking.budget_reservation import _count_input_tokens, _count_text_tokens
+
+    model: Final = "gpt-4o-audio-preview"
+    audio_b64: Final = base64.b64encode(bytes(range(256)) * 400).decode()
+    audio_messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Transcribe this recording."},
+                {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "mp3"}},
+            ],
+        }
+    ]
+    text_messages: Final = [{"role": "user", "content": "Transcribe this recording."}]
+
+    audio_count: Final = _count_input_tokens(request_body={"messages": audio_messages}, model=model)
+    fallback: Final = _count_text_tokens(model=model, text=audio_messages)
+    text_count: Final = _count_input_tokens(request_body={"messages": text_messages}, model=model)
+
+    assert audio_count is not None, "an audio-bearing request must still be countable"
+    assert fallback > 0, "the serialised fallback must see the base64 payload"
+    assert audio_count >= fallback, (
+        f"audio request reserved {audio_count} tokens, below the pre-#38459 fallback of {fallback}"
+    )
+    assert text_count is not None and text_count < fallback, "a text-only request must not be floored"
