@@ -5,18 +5,18 @@ use crate::lifecycle::{StreamingMetadata, StreamingSource};
 
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
-use super::prepare::prepare_provider_request;
+use super::request::build_provider_request;
 use super::types::{AnthropicMessagesResponse, MessagesRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_messages_provider_call(
     request: MessagesRequest,
 ) -> Result<AnthropicMessagesResponse, Error> {
-    let request = prepare_provider_request(request)?;
-    execute_prepared_messages_provider_call(request).await
+    let request = build_provider_request(request)?;
+    execute_provider_messages_request(request).await
 }
 
-pub async fn execute_prepared_messages_provider_call(
+pub async fn execute_provider_messages_request(
     request: super::types::ProviderMessagesRequest,
 ) -> Result<AnthropicMessagesResponse, Error> {
     let mut request_builder = http_client().post(&request.url).json(&request.body);
@@ -52,7 +52,7 @@ pub async fn execute_prepared_messages_provider_call(
 pub(super) async fn execute_messages_provider_stream(
     request: MessagesRequest,
 ) -> Result<StreamingSource, Error> {
-    let request = prepare_provider_request(request)?;
+    let request = build_provider_request(request)?;
     if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::InvalidRequest(
             "streaming messages is not supported for this provider".to_string(),

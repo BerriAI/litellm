@@ -9,7 +9,7 @@ use crate::providers::vertex_ai::ocr::transformation as vertex_ai;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::transformation::{OcrProviderConfig, OcrResponseHandling};
-use super::types::{OcrAdmissionRequest, OcrDraft, OcrEndpoint};
+use super::types::{OcrAdmissionRequest, OcrEndpoint, OcrPreCallRequest};
 
 fn request_config(
     request: &OcrAdmissionRequest,
@@ -80,7 +80,7 @@ fn check_admission_capabilities(
     Ok(())
 }
 
-pub fn prepare(request: OcrAdmissionRequest) -> Result<OcrDraft, Error> {
+pub fn build_pre_call_request(request: OcrAdmissionRequest) -> Result<OcrPreCallRequest, Error> {
     let (provider, config) = request_config(&request)?;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let headers = config
@@ -130,7 +130,7 @@ pub fn prepare(request: OcrAdmissionRequest) -> Result<OcrDraft, Error> {
     let Value::Object(body) = template.data else {
         return Err(Error::Unsupported("non-object OCR request template"));
     };
-    Ok(OcrDraft {
+    Ok(OcrPreCallRequest {
         endpoint: OcrEndpoint {
             model: provider.model.to_string(),
             custom_llm_provider: provider.custom_llm_provider.to_string(),
@@ -217,16 +217,20 @@ mod tests {
         assert!(
             matches!(check_admission_capabilities(&request, &|_| None), Err(Error::Unsupported(message)) if message == expected)
         );
-        assert!(
-            matches!(prepare(request), Err(Error::Unsupported(message)) if message == expected)
-        );
+        assert!(matches!(
+            build_pre_call_request(request),
+            Err(Error::Unsupported(message)) if message == expected
+        ));
     }
 
     #[test]
-    fn admission_leaves_url_preparation_and_revalidation_until_prepare() {
+    fn admission_leaves_url_building_and_revalidation_until_request_build() {
         let request = request();
         assert!(check_admission_capabilities(&request, &|_| None).is_ok());
-        assert!(matches!(prepare(request), Err(Error::InvalidRequest(_))));
+        assert!(matches!(
+            build_pre_call_request(request),
+            Err(Error::InvalidRequest(_))
+        ));
 
         let mut request = self::request();
         assert!(check_admission_capabilities(&request, &|_| None).is_ok());
@@ -236,7 +240,10 @@ mod tests {
             check_admission_capabilities(&request, &|_| None),
             Err(Error::InvalidRequest(_))
         ));
-        assert!(matches!(prepare(request), Err(Error::InvalidRequest(_))));
+        assert!(matches!(
+            build_pre_call_request(request),
+            Err(Error::InvalidRequest(_))
+        ));
     }
 
     #[test]

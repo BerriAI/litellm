@@ -2,9 +2,10 @@ use litellm_core::Error;
 use litellm_core::chat_completions::lifecycle::{
     Admission, ChatCompletionsRoute, Observations, Operation, Options, machine,
 };
+use litellm_core::chat_completions::request::build_pre_call_request;
 use litellm_core::chat_completions::types::ChatCompletionsRequest;
 use litellm_core::chat_completions::{
-    chat_completions_decline_reason, execute_settled_with_terminal, prepare_callback_request,
+    chat_completions_decline_reason, execute_settled_with_terminal,
 };
 use litellm_core::lifecycle::{
     CallLifecycleContext, ErrorDisposition, ExecutedCall, Lifecycle, Outcome, TerminalRecord,
@@ -25,6 +26,8 @@ use crate::retained::RequestRoots;
 #[pyclass]
 struct ChatCompletionsState {
     roots: Option<RequestRoots>,
+    logging: Option<Py<PyAny>>,
+    pre_call: Option<Py<PyDict>>,
     pending: Option<PendingChatRequest>,
     context: Option<CallLifecycleContext>,
     terminal: Option<TerminalRecord>,
@@ -36,7 +39,8 @@ impl ChatCompletionsState {
         if let Some(roots) = &self.roots {
             roots.traverse(&visit)?;
         }
-        Ok(())
+        visit.call(&self.logging)?;
+        visit.call(&self.pre_call)
     }
 
     fn __clear__(slf: &Bound<'_, Self>) {
@@ -44,6 +48,8 @@ impl ChatCompletionsState {
             let mut state = slf.borrow_mut();
             (
                 state.roots.take(),
+                state.logging.take(),
+                state.pre_call.take(),
                 state.pending.take(),
                 state.context.take(),
                 state.terminal.take(),
@@ -158,7 +164,7 @@ fn invoke(
         let machine = machine.borrow(py);
         (machine.machine.operation(), machine.asynchronous)
     };
-    crate::driver::invoke(py, operation, asynchronous, false, "chat completions", host)
+    crate::driver::invoke(py, operation, asynchronous, "chat completions", host)
 }
 
 enum PendingChatRequest {
@@ -167,12 +173,12 @@ enum PendingChatRequest {
 }
 
 #[pyfunction]
-fn prepare(
+fn build_request(
     py: Python<'_>,
     arguments: Py<PyDict>,
     logging: Py<PyAny>,
 ) -> PyResult<Py<ChatCompletionsState>> {
-    use litellm_core::chat_completions::types::ChatCallbackRequest;
+    use litellm_core::chat_completions::types::ChatPreCallRequest;
 
     let bag = arguments.bind(py);
     let admission = admission(bag)?;
@@ -191,10 +197,10 @@ fn prepare(
         scalar(bag, "litellm_call_id")?.unwrap_or_default(),
     );
     let extra_headers = optional_map(bag, "extra_headers")?;
-    let prepared = run_sync_value(
+    let built = run_sync_value(
         py,
         async move {
-            prepare_callback_request(ChatCompletionsRequest {
+            build_pre_call_request(ChatCompletionsRequest {
                 model: &admission.model,
                 messages: admission.messages,
                 optional_params: admission.optional_params,
@@ -208,8 +214,8 @@ fn prepare(
         },
         core_error_to_pyerr,
     )?;
-    let (body, pending, header_values) = match prepared {
-        ChatCallbackRequest::Live {
+    let (body, pending, header_values) = match built {
+        ChatPreCallRequest::Live {
             endpoint,
             generated,
             parameter_fields,
@@ -226,7 +232,7 @@ fn prepare(
             }
             (body.into_any(), PendingChatRequest::Live(endpoint), headers)
         }
-        ChatCallbackRequest::Serialized {
+        ChatPreCallRequest::Serialized {
             snapshot,
             logging_body,
             headers,
@@ -266,9 +272,6 @@ fn prepare(
     kwargs.set_item(INPUT, bag.get_item("messages")?)?;
     kwargs.set_item(API_KEY, bag.get_item("logging_api_key")?)?;
     kwargs.set_item(ADDITIONAL_ARGS, additional)?;
-    logging
-        .bind(py)
-        .call_method("pre_call", (), Some(&kwargs))?;
     Py::new(
         py,
         ChatCompletionsState {
@@ -277,11 +280,35 @@ fn prepare(
                 body.unbind(),
                 headers.unbind(),
             )),
+            logging: Some(logging),
+            pre_call: Some(kwargs.unbind()),
             pending: Some(pending),
             context: Some(context),
             terminal: None,
         },
     )
+}
+
+#[pyfunction]
+fn pre_call(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<()> {
+    let (logging, arguments) = {
+        let state = state.borrow(py);
+        let logging = state
+            .logging
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("chat completions logging state was cleared"))?
+            .clone_ref(py);
+        let arguments = state
+            .pre_call
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("chat completions pre-call state was cleared"))?
+            .clone_ref(py);
+        (logging, arguments)
+    };
+    logging
+        .bind(py)
+        .call_method(pyo3::intern!(py, "pre_call"), (), Some(arguments.bind(py)))?;
+    Ok(())
 }
 
 struct OwnedRequest {
@@ -436,7 +463,8 @@ fn bindings(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
     let module = PyModule::new(py, "_chat_completions_bindings")?;
     module.add("Lifecycle", py.get_type::<ChatCompletionsLifecycle>())?;
     module.add("invoke", wrap_pyfunction!(invoke, &module)?)?;
-    module.add("prepare", wrap_pyfunction!(prepare, &module)?)?;
+    module.add("build_request", wrap_pyfunction!(build_request, &module)?)?;
+    module.add("pre_call", wrap_pyfunction!(pre_call, &module)?)?;
     module.add("send", wrap_pyfunction!(send, &module)?)?;
     module.add("send_sync", wrap_pyfunction!(send_sync, &module)?)?;
     module.add(
@@ -484,7 +512,10 @@ mod tests {
         Python::attach(|py| {
             let module = PyModule::new(py, "chat_test").unwrap();
             module
-                .add_function(wrap_pyfunction!(prepare, &module).unwrap())
+                .add_function(wrap_pyfunction!(build_request, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(pre_call, &module).unwrap())
                 .unwrap();
             module
                 .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
@@ -525,7 +556,8 @@ arguments = dict(model='claude-opus-5', messages=messages,
                  extra_headers=headers, api_key='test',
                  custom_llm_provider='anthropic', opaque=opaque,
                  litellm_logging_obj=logger)
-state = native.prepare(arguments, logger)
+state = native.build_request(arguments, logger)
+native.pre_call(state)
 wire_body, wire_headers = native.snapshot(state)
 assert wire_body['messages'][0]['content'][0]['text'] == 'body edit'
 assert wire_body['stop_sequences'] == ['first', 'second']

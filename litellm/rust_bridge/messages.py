@@ -303,9 +303,10 @@ class _MessagesLifecycle(NativeLifecycle, Protocol):
 
 class _MessagesBindings(NativeLifecycleBindings, Protocol):
     Lifecycle: Callable[[bool, bool], _MessagesLifecycle]
-    prepare: Callable[
+    build_request: Callable[
         [dict[str, object], object], object
     ]  # mutable-ok: native bridge retains and updates Python argument objects
+    pre_call: Callable[[object], None]
     send: Callable[[object], Awaitable[AnthropicMessagesResponse]]
     send_sync: Callable[[object], AnthropicMessagesResponse]
 
@@ -349,10 +350,13 @@ class _MessagesHost:
         self.current = await deployment_pre(self.current, "anthropic_messages")
         self.current[LOGGING_OBJECT_KEY] = self.logger
 
-    def prepare(self) -> None:
+    def build_request(self) -> None:
         if self.logger is None:
             raise RuntimeError("messages logging was not initialized")
-        self.state = self.bindings.prepare(self.current, self.logger)
+        self.state = self.bindings.build_request(self.current, self.logger)
+
+    def pre_call(self) -> None:
+        self.bindings.pre_call(self.state)
 
     def send_sync(self) -> None:
         self.response = self.bindings.send_sync(self.state)

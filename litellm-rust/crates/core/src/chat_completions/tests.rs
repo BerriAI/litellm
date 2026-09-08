@@ -2,14 +2,14 @@ use serde_json::{Map, Value, json};
 
 use crate::error::Error;
 
-use super::prepare::{prepare_provider_request, resolve_request};
+use super::request::{build_provider_request, resolve_request};
 use super::transformation::ChatCompletionsAuth;
 use super::types::{ChatCompletionsRequest, ProviderChatCompletionsRequest};
 
-fn prepare_chat_completions_call(
+fn build_chat_completions_request(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
-    prepare_provider_request(resolve_request(request)?)
+    build_provider_request(resolve_request(request)?)
 }
 
 fn request<'a>(
@@ -36,59 +36,59 @@ fn request<'a>(
 /// `ProviderChatCompletionsRequest` deliberately has no `Debug` (its headers
 /// carry resolved credentials), so unwrap the failure case by hand.
 fn decline(request: ChatCompletionsRequest<'_>) -> Error {
-    match prepare_chat_completions_call(request) {
+    match build_chat_completions_request(request) {
         Err(error) => error,
-        Ok(prepared) => panic!("expected a decline, prepared a call to {}", prepared.url),
+        Ok(built) => panic!("expected a decline, built a call to {}", built.url),
     }
 }
 
 #[test]
 fn resolves_the_provider_from_the_model_prefix() {
-    let prepared = prepare_chat_completions_call(request(
+    let built = build_chat_completions_request(request(
         "anthropic/claude-sonnet-4-5",
         None,
         json!([{"role": "user", "content": "hi"}]),
         json!({"max_tokens": 16}),
     ))
-    .expect("prepares");
-    assert_eq!(prepared.model, "claude-sonnet-4-5");
-    assert_eq!(prepared.url, "https://api.anthropic.com/v1/messages");
-    assert_eq!(prepared.body["model"], json!("claude-sonnet-4-5"));
+    .expect("builds");
+    assert_eq!(built.model, "claude-sonnet-4-5");
+    assert_eq!(built.url, "https://api.anthropic.com/v1/messages");
+    assert_eq!(built.body["model"], json!("claude-sonnet-4-5"));
 }
 
 #[test]
 fn strips_an_explicit_provider_prefix_from_the_model() {
-    let prepared = prepare_chat_completions_call(request(
+    let built = build_chat_completions_request(request(
         "anthropic/claude-sonnet-4-5",
         Some("anthropic"),
         json!([{"role": "user", "content": "hi"}]),
         json!({}),
     ))
-    .expect("prepares");
-    assert_eq!(prepared.model, "claude-sonnet-4-5");
+    .expect("builds");
+    assert_eq!(built.model, "claude-sonnet-4-5");
 }
 
 #[test]
 fn adds_the_auth_and_default_headers() {
-    let prepared = prepare_chat_completions_call(request(
+    let built = build_chat_completions_request(request(
         "claude-sonnet-4-5",
         Some("anthropic"),
         json!([{"role": "user", "content": "hi"}]),
         json!({}),
     ))
-    .expect("prepares");
+    .expect("builds");
     assert!(
-        prepared
+        built
             .upstream_headers
             .contains(&("x-api-key".to_string(), "sk-test".to_string()))
     );
     assert!(
-        prepared
+        built
             .upstream_headers
             .contains(&("anthropic-version".to_string(), "2023-06-01".to_string()))
     );
     assert!(matches!(
-        prepared.auth,
+        built.auth,
         ChatCompletionsAuth::Header {
             name: "x-api-key",
             ..
@@ -111,13 +111,13 @@ fn the_deployment_credential_replaces_a_caller_supplied_auth_header() {
         "X-Api-Key".to_string(),
         json!("sk-caller"),
     )]));
-    let prepared = prepare_chat_completions_call(call).expect("prepares");
-    let keys: Vec<_> = prepared
+    let built = build_chat_completions_request(call).expect("builds");
+    let keys: Vec<_> = built
         .upstream_headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("x-api-key"))
         .collect();
-    assert_eq!(keys.len(), 1, "got {:?}", prepared.upstream_headers);
+    assert_eq!(keys.len(), 1, "got {:?}", built.upstream_headers);
     assert_eq!(keys[0].1, "sk-test");
 }
 
@@ -139,17 +139,17 @@ fn a_forwarded_authorization_header_suppresses_the_resolved_api_key_header() {
         ),
         ("X-Api-Key".to_string(), json!("sk-caller")),
     ]));
-    let prepared = prepare_chat_completions_call(call).expect("prepares");
+    let built = build_chat_completions_request(call).expect("builds");
     assert!(
-        !prepared
+        !built
             .upstream_headers
             .iter()
             .any(|(name, value)| name.eq_ignore_ascii_case("x-api-key") && value == "sk-test"),
         "the resolved key must not be applied over an OAuth bearer, got {:?}",
-        prepared.upstream_headers
+        built.upstream_headers
     );
     assert!(
-        prepared
+        built
             .upstream_headers
             .iter()
             .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
@@ -172,22 +172,22 @@ fn an_unrelated_forwarded_authorization_does_not_defer_the_resolved_key() {
         ("Authorization".to_string(), json!("Bearer unrelated")),
         ("X-Api-Key".to_string(), json!("sk-caller")),
     ]));
-    let prepared = prepare_chat_completions_call(call).expect("prepares");
-    let keys: Vec<_> = prepared
+    let built = build_chat_completions_request(call).expect("builds");
+    let keys: Vec<_> = built
         .upstream_headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("x-api-key"))
         .collect();
-    assert_eq!(keys.len(), 1, "got {:?}", prepared.upstream_headers);
+    assert_eq!(keys.len(), 1, "got {:?}", built.upstream_headers);
     assert_eq!(keys[0].1, "sk-test");
     assert!(
-        prepared
+        built
             .upstream_headers
             .iter()
             .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
                 && value == "Bearer unrelated"),
         "the unrelated authorization must survive, got {:?}",
-        prepared.upstream_headers
+        built.upstream_headers
     );
 }
 
@@ -272,7 +272,7 @@ fn rejects_non_string_extra_headers() {
 
 #[cfg(feature = "bedrock-auth")]
 #[test]
-fn prepares_a_bedrock_call_without_resolving_credentials() {
+fn builds_a_bedrock_call_without_resolving_credentials() {
     let mut call = request(
         "bedrock/us-east-1/anthropic.claude-v2",
         None,
@@ -280,26 +280,26 @@ fn prepares_a_bedrock_call_without_resolving_credentials() {
         json!({"maxTokens": 16}),
     );
     call.api_key = None;
-    let prepared = prepare_chat_completions_call(call).expect("prepares");
+    let built = build_chat_completions_request(call).expect("builds");
     assert_eq!(
-        prepared.url,
+        built.url,
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
     );
     assert_eq!(
-        prepared.auth,
+        built.auth,
         ChatCompletionsAuth::AwsSigV4 {
             region: "us-east-1".to_string()
         }
     );
-    // SigV4 signs the serialized body, so prepare must not have added an
+    // SigV4 signs the serialized body, so build must not have added an
     // Authorization header; the handler does it.
     assert!(
-        !prepared
+        !built
             .upstream_headers
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
     );
-    assert_eq!(prepared.body["inferenceConfig"], json!({"maxTokens": 16}));
+    assert_eq!(built.body["inferenceConfig"], json!({"maxTokens": 16}));
 }
 
 #[cfg(feature = "bedrock-auth")]
@@ -324,8 +324,8 @@ async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
         "x-request-id".to_string(),
         json!("abc-123"),
     )]));
-    let prepared = prepare_chat_completions_call(call).expect("prepares");
-    let signed = super::handler::signed_headers(&prepared, br#"{"a":1}"#)
+    let built = build_chat_completions_request(call).expect("builds");
+    let signed = super::handler::signed_headers(&built, br#"{"a":1}"#)
         .await
         .expect("signs");
 
@@ -375,8 +375,8 @@ async fn a_forwarded_header_the_signer_computes_declines_to_python() {
         );
         call.api_key = None;
         call.extra_headers = Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
-        let prepared = prepare_chat_completions_call(call).expect("prepares");
-        let error = super::handler::signed_headers(&prepared, br#"{"a":1}"#)
+        let built = build_chat_completions_request(call).expect("builds");
+        let error = super::handler::signed_headers(&built, br#"{"a":1}"#)
             .await
             .expect_err("{forwarded} should decline instead of being signed");
         assert!(
@@ -403,8 +403,8 @@ fn a_bedrock_deployment_bearer_outranks_a_forwarded_authorization() {
         "Authorization".to_string(),
         json!("Bearer caller-supplied"),
     )]));
-    let prepared = prepare_chat_completions_call(call).expect("prepares");
-    let authorizations: Vec<_> = prepared
+    let built = build_chat_completions_request(call).expect("builds");
+    let authorizations: Vec<_> = built
         .upstream_headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
@@ -436,16 +436,16 @@ fn an_anthropic_forwarded_oauth_bearer_still_outranks_the_resolved_key() {
         "authorization".to_string(),
         json!("Bearer sk-ant-oat01-forwarded"),
     )]));
-    let prepared = prepare_chat_completions_call(call).expect("prepares");
-    let keys: Vec<_> = prepared
+    let built = build_chat_completions_request(call).expect("builds");
+    let keys: Vec<_> = built
         .upstream_headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("x-api-key"))
         .map(|(_, value)| value.as_str())
         .collect();
-    assert!(keys.is_empty(), "got {:?}", prepared.upstream_headers);
+    assert!(keys.is_empty(), "got {:?}", built.upstream_headers);
     assert!(
-        prepared
+        built
             .upstream_headers
             .iter()
             .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
@@ -459,26 +459,26 @@ fn a_bedrock_api_key_is_sent_as_a_bearer_token_instead_of_being_signed() {
     // The configured bearer identity has its own account and quota boundary,
     // so a request carrying one must not be signed as whatever principal the
     // host's AWS credentials resolve to.
-    let prepared = prepare_chat_completions_call(request(
+    let built = build_chat_completions_request(request(
         "bedrock/us-east-1/anthropic.claude-v2",
         None,
         json!([{"role": "user", "content": "hi"}]),
         json!({"maxTokens": 16}),
     ))
-    .expect("prepares");
+    .expect("builds");
     assert_eq!(
-        prepared.auth,
+        built.auth,
         ChatCompletionsAuth::Bearer {
             token: "sk-test".to_string()
         }
     );
     assert!(
-        prepared
+        built
             .upstream_headers
             .iter()
             .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
                 && value == "Bearer sk-test"),
-        "prepare did not carry the bearer token"
+        "build did not carry the bearer token"
     );
 }
 
@@ -496,7 +496,7 @@ fn decline_reason(
 }
 
 #[test]
-fn the_gate_accepts_what_prepare_accepts() {
+fn the_gate_accepts_what_the_builder_accepts() {
     assert_eq!(
         decline_reason(
             "anthropic/claude-sonnet-4-5",
@@ -553,8 +553,8 @@ fn the_gate_declines_without_resolving_credentials_or_calling_out() {
 }
 
 #[test]
-fn the_gate_agrees_with_prepare_on_every_case_it_accepts() {
-    // A gate that accepts what prepare then declines would make the host emit
+fn the_gate_agrees_with_the_builder_on_every_case_it_accepts() {
+    // A gate that accepts what build then declines would make the host emit
     // its pre-call logging on a path that falls back, so pin the agreement.
     for (messages, params) in [
         (
@@ -580,13 +580,13 @@ fn the_gate_agrees_with_prepare_on_every_case_it_accepts() {
             None,
             "gate declined {messages}"
         );
-        prepare_chat_completions_call(request(
+        build_chat_completions_request(request(
             "anthropic/claude-sonnet-4-5",
             None,
             messages.clone(),
             params,
         ))
-        .unwrap_or_else(|error| panic!("prepare declined {messages}: {error}"));
+        .unwrap_or_else(|error| panic!("build declined {messages}: {error}"));
     }
 }
 

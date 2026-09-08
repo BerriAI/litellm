@@ -7,7 +7,7 @@ use super::types::{
 };
 
 /// How the upstream call is authenticated. API-key strategies are resolved in
-/// `prepare`; SigV4 needs the serialized body, so the handler signs it.
+/// the request builder; SigV4 needs the serialized body, so the handler signs it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChatCompletionsAuth {
     Header { name: &'static str, value: String },

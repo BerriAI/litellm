@@ -85,7 +85,7 @@ class _OcrBindings(NativeLifecycleBindings, Protocol):
     Lifecycle: Callable[
         [dict[str, object], object | None, bool, bool], _OcrLifecycle
     ]  # mutable-ok: native bridge retains and updates Python argument objects
-    prepare: Callable[
+    build_request: Callable[
         [dict[str, object], object, bool], object
     ]  # mutable-ok: native bridge retains and updates Python argument objects
     pre_call: Callable[[object], None]
@@ -140,10 +140,10 @@ class _OcrHost:
         self.current["litellm_call_id"] = call_id
         self.current["litellm_trace_id"] = trace_id
 
-    def prepare(self) -> None:
+    def build_request(self) -> None:
         if self.logger is None:
             raise RuntimeError("OCR logging was not initialized")
-        self.state = self.bindings.prepare(self.current, self.logger, self.asynchronous)
+        self.state = self.bindings.build_request(self.current, self.logger, self.asynchronous)
 
     def pre_call(self) -> None:
         self.bindings.pre_call(self.state)

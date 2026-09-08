@@ -12,7 +12,7 @@ mod common_utils;
 pub mod conversation;
 pub(crate) mod handler;
 pub mod lifecycle;
-mod prepare;
+pub mod request;
 pub mod response_utils;
 pub mod transformation;
 pub mod types;
@@ -20,8 +20,7 @@ pub mod types;
 use serde_json::{Map, Value};
 
 use handler::execute_chat_completions_provider_call;
-pub use prepare::prepare_callback_request;
-use prepare::{parse_messages, resolve_provider_config, resolve_request};
+use request::{parse_messages, resolve_provider_config, resolve_request};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
 use crate::integrations::custom_logger::CallbackTiming;

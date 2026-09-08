@@ -59,7 +59,7 @@ pub enum OcrDocumentProjection {
     Transformed,
 }
 
-pub struct OcrDraft {
+pub struct OcrPreCallRequest {
     pub endpoint: OcrEndpoint,
     pub headers: Vec<(String, String)>,
     pub body: Map<String, Value>,

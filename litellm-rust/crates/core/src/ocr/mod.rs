@@ -1,4 +1,4 @@
-pub mod prepare;
+pub mod request;
 pub mod transformation;
 pub mod types;
 
@@ -11,7 +11,7 @@ use crate::error::json_type_name;
 use crate::http_utils::{buffered_post, has_header};
 
 pub use types::{
-    OcrAdmissionRequest, OcrDraft, OcrEndpoint, OcrResponseData, OcrTransportRequest,
+    OcrAdmissionRequest, OcrEndpoint, OcrPreCallRequest, OcrResponseData, OcrTransportRequest,
     OcrTransportResponse, SettledOcrRequest,
 };
 use types::{OcrDocument, OcrDocumentProjection};
@@ -136,8 +136,8 @@ pub(crate) async fn send<S: OcrTransport>(
         headers,
         body,
     } = request;
-    let config = prepare::provider_config(&endpoint.custom_llm_provider, &endpoint.model)?;
-    prepare::validate_capabilities(config)?;
+    let config = request::provider_config(&endpoint.custom_llm_provider, &endpoint.model)?;
+    request::validate_capabilities(config)?;
     let object = body.as_object().ok_or_else(|| Error::InvalidType {
         expected: "object",
         actual: json_type_name(&body),

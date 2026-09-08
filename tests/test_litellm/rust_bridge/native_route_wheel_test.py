@@ -232,7 +232,7 @@ def restore_ocr_context(logger: object) -> None:
 def drive_ocr_sync(arguments: dict[str, object], bindings: object) -> object:
     logger: Final = initialize_ocr_logging(arguments, False)
     try:
-        state: Final = bindings.prepare(arguments, logger, False)
+        state: Final = bindings.build_request(arguments, logger, False)
     except RuntimeError as error:
         raise NotImplementedError(str(error)) from error
     bindings.pre_call(state)
@@ -242,7 +242,7 @@ def drive_ocr_sync(arguments: dict[str, object], bindings: object) -> object:
 async def drive_ocr_async(arguments: dict[str, object], bindings: object) -> object:
     logger: Final = initialize_ocr_logging(arguments, True)
     try:
-        state: Final = bindings.prepare(arguments, logger, True)
+        state: Final = bindings.build_request(arguments, logger, True)
     except RuntimeError as error:
         raise NotImplementedError(str(error)) from error
     bindings.pre_call(state)
@@ -255,22 +255,26 @@ class MessagesLogging:
 
 
 def drive_messages_sync(arguments: dict[str, object], bindings: object) -> object:
-    state: Final = bindings.prepare(arguments, MessagesLogging())
+    state: Final = bindings.build_request(arguments, MessagesLogging())
+    bindings.pre_call(state)
     return bindings.send_sync(state)
 
 
 async def drive_messages_async(arguments: dict[str, object], bindings: object) -> object:
-    state: Final = bindings.prepare(arguments, MessagesLogging())
+    state: Final = bindings.build_request(arguments, MessagesLogging())
+    bindings.pre_call(state)
     return await bindings.send(state)
 
 
 def drive_chat_sync(arguments: dict[str, object], bindings: object) -> object:
-    state: Final = bindings.prepare(arguments, MessagesLogging())
+    state: Final = bindings.build_request(arguments, MessagesLogging())
+    bindings.pre_call(state)
     return bindings.send_sync(state)
 
 
 async def drive_chat_async(arguments: dict[str, object], bindings: object) -> object:
-    state: Final = bindings.prepare(arguments, MessagesLogging())
+    state: Final = bindings.build_request(arguments, MessagesLogging())
+    bindings.pre_call(state)
     return await bindings.send(state)
 
 

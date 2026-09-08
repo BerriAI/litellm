@@ -83,6 +83,61 @@ impl Lifecycle<MessagesRoute> {
     }
 }
 
+#[cfg(test)]
+mod program_tests {
+    use super::*;
+
+    #[test]
+    fn sync_and_async_sequences_build_then_run_pre_call() {
+        for (asynchronous, expected) in [
+            (
+                false,
+                vec![
+                    Operation::Setup,
+                    Operation::BuildRequest,
+                    Operation::PreCall,
+                    Operation::Send,
+                    Operation::SyncSuccess,
+                    Operation::Restore,
+                ],
+            ),
+            (
+                true,
+                vec![
+                    Operation::Setup,
+                    Operation::DeploymentPre,
+                    Operation::BuildRequest,
+                    Operation::PreCall,
+                    Operation::Send,
+                    Operation::DeploymentSuccess,
+                    Operation::AsyncSuccess,
+                    Operation::SyncSuccessIfNeeded,
+                    Operation::Restore,
+                ],
+            ),
+        ] {
+            let mut machine = machine(Options {
+                asynchronous,
+                ..Options::default()
+            })
+            .unwrap();
+            for operation in expected {
+                assert_eq!(machine.operation(), operation);
+                machine
+                    .advance(
+                        Outcome::Success,
+                        Observations {
+                            logger_available: true,
+                            has_fallbacks: false,
+                        },
+                    )
+                    .unwrap();
+            }
+            assert_eq!(machine.operation(), Operation::Complete(Outcome::Success));
+        }
+    }
+}
+
 pub trait MessagesServices:
     RequestPolicy<MessagesRequest, MessagesRequest> + TerminalDispatcher + Clock
 {

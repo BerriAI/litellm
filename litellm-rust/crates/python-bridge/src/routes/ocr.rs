@@ -9,7 +9,7 @@ use litellm_core::lifecycle::{
 };
 use litellm_core::ocr::DefaultOcrServices;
 use litellm_core::ocr::types::{
-    OcrAdmissionRequest, OcrDocumentProjection, OcrDraft, OcrEndpoint, SettledOcrRequest,
+    OcrAdmissionRequest, OcrDocumentProjection, OcrEndpoint, OcrPreCallRequest, SettledOcrRequest,
 };
 use litellm_core::routing_utils::provider::get_custom_llm_provider;
 use litellm_python_interop::{Pythonized, from_py, to_py};
@@ -309,11 +309,11 @@ fn invoke(
         let machine = machine.borrow(py);
         (machine.machine.operation(), machine.asynchronous)
     };
-    crate::driver::invoke(py, operation, asynchronous, true, "OCR", host)
+    crate::driver::invoke(py, operation, asynchronous, "OCR", host)
 }
 
 #[pyfunction]
-fn prepare(
+fn build_request(
     py: Python<'_>,
     arguments: Py<PyDict>,
     logging: Py<PyAny>,
@@ -323,8 +323,8 @@ fn prepare(
     let request = decode_request(py, bag)?;
     let model = request.model.clone();
     let custom_llm_provider = request.custom_llm_provider.clone();
-    let draft = py
-        .detach(|| litellm_core::ocr::prepare::prepare(request))
+    let pre_call_request = py
+        .detach(|| litellm_core::ocr::request::build_pre_call_request(request))
         .map_err(|error| {
             request_error_to_pyerr(py, error, &model, custom_llm_provider.as_deref())
         })?;
@@ -332,13 +332,13 @@ fn prepare(
         .get_item("document")?
         .ok_or_else(|| PyValueError::new_err("OCR requires document"))?
         .cast_into::<PyDict>()?;
-    let OcrDraft {
+    let OcrPreCallRequest {
         endpoint,
         headers: draft_headers,
         body: draft_body,
         document_projection,
         parameter_fields,
-    } = draft;
+    } = pre_call_request;
     let body = PyDict::new(py);
     for (name, value) in &draft_body {
         match (name.as_str(), document_projection) {
@@ -604,7 +604,7 @@ fn bindings(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
     let module = PyModule::new(py, "_ocr_bindings")?;
     module.add("Lifecycle", py.get_type::<OcrLifecycle>())?;
     module.add("invoke", wrap_pyfunction!(invoke, &module)?)?;
-    module.add("prepare", wrap_pyfunction!(prepare, &module)?)?;
+    module.add("build_request", wrap_pyfunction!(build_request, &module)?)?;
     module.add("pre_call", wrap_pyfunction!(pre_call, &module)?)?;
     module.add("send", wrap_pyfunction!(send, &module)?)?;
     module.add("send_sync", wrap_pyfunction!(send_sync, &module)?)?;
@@ -889,7 +889,7 @@ asyncio.run(exercise())
         Python::attach(|py| {
             let module = PyModule::new(py, "ocr_test").unwrap();
             module
-                .add_function(wrap_pyfunction!(prepare, &module).unwrap())
+                .add_function(wrap_pyfunction!(build_request, &module).unwrap())
                 .unwrap();
             module
                 .add_function(wrap_pyfunction!(pre_call, &module).unwrap())
@@ -929,7 +929,7 @@ async def exercise():
         port = server.sockets[0].getsockname()[1]
         logger = Logger()
         alive = weakref.ref(logger)
-        state = native.prepare(dict(
+        state = native.build_request(dict(
             model='mistral/mistral-ocr-latest', api_key='test-key', timeout=5.0,
             api_base=f'http://127.0.0.1:{port}', litellm_logging_obj=logger,
             document={'type': 'document_url', 'document_url': 'https://example.test/doc.pdf'},
@@ -983,7 +983,7 @@ asyncio.run(exercise())
         Python::attach(|py| {
             let module = PyModule::new(py, "ocr_test").unwrap();
             module
-                .add_function(wrap_pyfunction!(prepare, &module).unwrap())
+                .add_function(wrap_pyfunction!(build_request, &module).unwrap())
                 .unwrap();
             module
                 .add_function(wrap_pyfunction!(pre_call, &module).unwrap())
@@ -1033,7 +1033,7 @@ logger = Logger()
 arguments = dict(model='mistral/mistral-ocr-latest', document=document,
                  api_key='test-key', pages=pages, metadata=metadata,
                  opaque=opaque, litellm_logging_obj=logger, timeout=Timeout())
-state = native.prepare(arguments, logger, False)
+state = native.build_request(arguments, logger, False)
 native.pre_call(state)
 assert logger.calls == ['update', 'pre']
 roots = gc.get_referents(state)

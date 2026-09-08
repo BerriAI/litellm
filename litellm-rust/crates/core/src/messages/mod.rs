@@ -12,15 +12,14 @@ mod client;
 mod common_utils;
 mod handler;
 pub mod lifecycle;
-mod prepare;
+pub mod request;
 pub mod transformation;
 pub mod types;
 
 use std::sync::Arc;
 
 use crate::lifecycle::StreamingCall;
-pub use handler::execute_prepared_messages_provider_call;
-pub use prepare::{prepare_endpoint, prepare_provider_request};
+pub use handler::execute_provider_messages_request;
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
 pub async fn messages(request: MessagesRequest) -> Result<AnthropicMessagesResponse, Error> {

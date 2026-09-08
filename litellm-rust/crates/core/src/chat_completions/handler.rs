@@ -4,7 +4,7 @@ use crate::error::Error;
 use crate::http_utils::{http_request, truncate_error_body};
 
 use super::client::http_client;
-use super::prepare::prepare_provider_request;
+use super::request::build_provider_request;
 use super::transformation::ChatCompletionsAuth;
 use super::types::{
     ChatBodySnapshot, ChatCompletionsResponse, ChatEndpoint, ProviderChatCompletionsRequest,
@@ -15,7 +15,7 @@ use super::types::{
 pub(super) async fn execute_chat_completions_provider_call(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    let request = prepare_provider_request(request)?;
+    let request = build_provider_request(request)?;
     let body = serde_json::to_vec(&request.body).map_err(|err| {
         Error::InvalidRequest(format!(
             "failed to serialize chat completions request: {err}"
@@ -89,7 +89,7 @@ pub(super) async fn execute_settled_request(
 ///
 /// A config reports the same variants on either side of the call: a missing
 /// field or an unsupported block can mean "this request cannot be translated"
-/// during prepare and "this response cannot be normalized" here. Only the
+/// while building and "this response cannot be normalized" here. Only the
 /// second kind has already been billed, and a host that keeps a reference
 /// implementation must not retry those, so collapse them to one variant that
 /// can only mean the provider was already called.

@@ -6,10 +6,8 @@ use super::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrateg
 use super::types::{MessagesEndpoint, MessagesOptions, MessagesRequest, ProviderMessagesRequest};
 use serde_json::{Map, Value};
 
-pub fn prepare_provider_request(
-    request: MessagesRequest,
-) -> Result<ProviderMessagesRequest, Error> {
-    let endpoint = prepare_endpoint(MessagesOptions {
+pub fn build_provider_request(request: MessagesRequest) -> Result<ProviderMessagesRequest, Error> {
+    let endpoint = build_endpoint(MessagesOptions {
         model: request.model,
         api_key: request.api_key,
         api_base: request.api_base,
@@ -37,7 +35,7 @@ pub fn prepare_provider_request(
     })
 }
 
-pub fn prepare_endpoint(request: MessagesOptions) -> Result<MessagesEndpoint, Error> {
+pub fn build_endpoint(request: MessagesOptions) -> Result<MessagesEndpoint, Error> {
     let provider_info =
         get_custom_llm_provider(&request.model, request.custom_llm_provider.as_deref())
             .or_else(|| {

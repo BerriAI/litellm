@@ -18,7 +18,6 @@ struct OperationBinding {
 fn operation_binding(
     operation: Operation,
     asynchronous: bool,
-    supports_pre_call: bool,
     route: &str,
 ) -> PyResult<OperationBinding> {
     let binding = match operation {
@@ -34,15 +33,10 @@ fn operation_binding(
             method: "build_request",
             awaiting: false,
         },
-        Operation::PreCall if supports_pre_call => OperationBinding {
+        Operation::PreCall => OperationBinding {
             method: "pre_call",
             awaiting: false,
         },
-        Operation::PreCall => {
-            return Err(PyRuntimeError::new_err(format!(
-                "{route} lifecycle selected an unsupported pre-call operation"
-            )));
-        }
         Operation::Send if asynchronous => OperationBinding {
             method: "send",
             awaiting: true,
@@ -96,11 +90,10 @@ pub(crate) fn invoke(
     py: Python<'_>,
     operation: Operation,
     asynchronous: bool,
-    supports_pre_call: bool,
     route: &str,
     host: Py<PyAny>,
 ) -> PyResult<(bool, Py<PyAny>)> {
-    let binding = operation_binding(operation, asynchronous, supports_pre_call, route)?;
+    let binding = operation_binding(operation, asynchronous, route)?;
     Ok((
         binding.awaiting,
         host.getattr(py, binding.method)?.call0(py)?,
@@ -118,27 +111,14 @@ mod tests {
         Python::initialize();
         Python::attach(|_| {
             let cases = [
-                (Operation::Setup, false, false, "setup", false),
-                (
-                    Operation::DeploymentPre,
-                    false,
-                    false,
-                    "deployment_pre",
-                    true,
-                ),
-                (
-                    Operation::BuildRequest,
-                    false,
-                    false,
-                    "build_request",
-                    false,
-                ),
-                (Operation::PreCall, false, true, "pre_call", false),
-                (Operation::Send, false, false, "send_sync", false),
-                (Operation::Send, true, false, "send", true),
+                (Operation::Setup, false, "setup", false),
+                (Operation::DeploymentPre, false, "deployment_pre", true),
+                (Operation::BuildRequest, false, "build_request", false),
+                (Operation::PreCall, false, "pre_call", false),
+                (Operation::Send, false, "send_sync", false),
+                (Operation::Send, true, "send", true),
                 (
                     Operation::DeploymentSuccess,
-                    false,
                     false,
                     "deployment_success",
                     true,
@@ -146,32 +126,24 @@ mod tests {
                 (
                     Operation::DeploymentFailure,
                     false,
-                    false,
                     "deployment_failure",
                     true,
                 ),
-                (Operation::SyncSuccess, false, false, "sync_success", false),
-                (
-                    Operation::AsyncSuccess,
-                    false,
-                    false,
-                    "async_success",
-                    false,
-                ),
+                (Operation::SyncSuccess, false, "sync_success", false),
+                (Operation::AsyncSuccess, false, "async_success", false),
                 (
                     Operation::SyncSuccessIfNeeded,
-                    false,
                     false,
                     "sync_success_if_needed",
                     false,
                 ),
-                (Operation::SyncFailure, false, false, "sync_failure", false),
-                (Operation::AsyncFailure, false, false, "async_failure", true),
-                (Operation::Restore, false, false, "restore", false),
+                (Operation::SyncFailure, false, "sync_failure", false),
+                (Operation::AsyncFailure, false, "async_failure", true),
+                (Operation::Restore, false, "restore", false),
             ];
-            for (operation, asynchronous, pre_call, method, awaiting) in cases {
+            for (operation, asynchronous, method, awaiting) in cases {
                 assert_eq!(
-                    operation_binding(operation, asynchronous, pre_call, "test").unwrap(),
+                    operation_binding(operation, asynchronous, "test").unwrap(),
                     OperationBinding { method, awaiting },
                 );
             }
@@ -182,19 +154,9 @@ mod tests {
     fn invalid_operations_raise_route_specific_errors() {
         Python::initialize();
         Python::attach(|_| {
-            let pre_call = operation_binding(Operation::PreCall, false, false, "messages")
-                .expect_err("unsupported pre-call should fail");
-            assert_eq!(
-                pre_call.to_string(),
-                "RuntimeError: messages lifecycle selected an unsupported pre-call operation"
-            );
-            let complete = operation_binding(
-                Operation::Complete(Outcome::Success),
-                false,
-                false,
-                "messages",
-            )
-            .expect_err("complete lifecycle should fail");
+            let complete =
+                operation_binding(Operation::Complete(Outcome::Success), false, "messages")
+                    .expect_err("complete lifecycle should fail");
             assert_eq!(
                 complete.to_string(),
                 "RuntimeError: messages lifecycle is complete"

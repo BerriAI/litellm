@@ -69,7 +69,7 @@ pub struct SettledChatRequest {
     pub(super) headers: Vec<(String, String)>,
 }
 
-pub enum ChatCallbackRequest {
+pub enum ChatPreCallRequest {
     Live {
         endpoint: ChatEndpoint,
         generated: Map<String, Value>,

@@ -1,5 +1,5 @@
 use crate::Error;
-use crate::ocr::{OcrAdmissionRequest, prepare};
+use crate::ocr::{OcrAdmissionRequest, request};
 
 use super::program::{CallProgram, ProgramOptions, actions_for};
 use super::{ActionBinding, LifecycleRoute, Outcome};
@@ -96,7 +96,7 @@ impl LifecycleRoute for OcrRoute {
         admission: &Self::Admission,
         options: Self::Options,
     ) -> Result<Result<Self::State, Self::Decline>, Self::Error> {
-        match prepare::admission_capabilities(admission) {
+        match request::admission_capabilities(admission) {
             Err(Error::Unsupported(reason)) => return Ok(Err(Decline(reason))),
             Err(error) => return Err(error),
             Ok(()) => {}
@@ -221,14 +221,14 @@ mod tests {
         for (asynchronous, expected) in [
             (
                 false,
-                vec![Setup, Prepare, PreCall, Send, SyncSuccess, Restore],
+                vec![Setup, BuildRequest, PreCall, Send, SyncSuccess, Restore],
             ),
             (
                 true,
                 vec![
                     Setup,
                     DeploymentPre,
-                    Prepare,
+                    BuildRequest,
                     PreCall,
                     Send,
                     DeploymentSuccess,
@@ -259,7 +259,7 @@ mod tests {
                 vec![
                     Setup,
                     DeploymentPre,
-                    Prepare,
+                    BuildRequest,
                     PreCall,
                     Send,
                     DeploymentSuccess,
@@ -267,7 +267,7 @@ mod tests {
                     SyncSuccessIfNeeded,
                 ]
             } else {
-                vec![Setup, Prepare, PreCall, Send, SyncSuccess]
+                vec![Setup, BuildRequest, PreCall, Send, SyncSuccess]
             };
             for stage in stages {
                 for outcome in [Outcome::Failure, Outcome::Abort] {
@@ -277,7 +277,7 @@ mod tests {
                     assert_eq!(transition.error, ErrorDisposition::Replace);
                     let expected = if outcome == Outcome::Abort {
                         Restore
-                    } else if asynchronous && matches!(stage, Prepare | PreCall | Send) {
+                    } else if asynchronous && matches!(stage, BuildRequest | PreCall | Send) {
                         DeploymentFailure
                     } else {
                         SyncFailure

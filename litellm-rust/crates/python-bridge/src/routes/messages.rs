@@ -1,10 +1,11 @@
 use litellm_core::lifecycle::FailureStage;
 use litellm_core::lifecycle::{ErrorDisposition, Lifecycle, Outcome};
+use litellm_core::messages::execute_provider_messages_request;
 use litellm_core::messages::lifecycle::{MessagesRoute, Observations, Operation, Options, machine};
+use litellm_core::messages::request::build_endpoint;
 use litellm_core::messages::types::{
     MessagesBodySnapshot, MessagesEndpoint, MessagesOptions, ProviderMessagesRequest,
 };
-use litellm_core::messages::{execute_prepared_messages_provider_call, prepare_endpoint};
 use litellm_python_interop::{Pythonized, from_py, run_async_value, run_sync_value};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -21,7 +22,9 @@ use crate::retained::RequestRoots;
 #[pyclass]
 struct MessagesState {
     roots: Option<RequestRoots>,
-    prepared: Option<(MessagesEndpoint, MessagesBodySnapshot)>,
+    logging: Option<Py<PyAny>>,
+    pre_call: Option<Py<PyDict>>,
+    pending: Option<(MessagesEndpoint, MessagesBodySnapshot)>,
 }
 
 #[pymethods]
@@ -30,13 +33,19 @@ impl MessagesState {
         if let Some(roots) = &self.roots {
             roots.traverse(&visit)?;
         }
-        Ok(())
+        visit.call(&self.logging)?;
+        visit.call(&self.pre_call)
     }
 
     fn __clear__(slf: &Bound<'_, Self>) {
         let roots = {
             let mut state = slf.borrow_mut();
-            (state.roots.take(), state.prepared.take())
+            (
+                state.roots.take(),
+                state.logging.take(),
+                state.pre_call.take(),
+                state.pending.take(),
+            )
         };
         drop(roots);
     }
@@ -139,11 +148,11 @@ fn invoke(
         let machine = machine.borrow(py);
         (machine.machine.operation(), machine.asynchronous)
     };
-    crate::driver::invoke(py, operation, asynchronous, false, "messages", host)
+    crate::driver::invoke(py, operation, asynchronous, "messages", host)
 }
 
 #[pyfunction]
-fn prepare(
+fn build_request(
     py: Python<'_>,
     arguments: Py<PyDict>,
     logging: Py<PyAny>,
@@ -151,7 +160,7 @@ fn prepare(
     let bag = arguments.bind(py);
     let options = decode_options(py, bag)?;
     let endpoint = py
-        .detach(|| prepare_endpoint(options))
+        .detach(|| build_endpoint(options))
         .map_err(core_error_to_pyerr)?;
     let body = bag
         .get_item("body")?
@@ -176,9 +185,6 @@ fn prepare(
     kwargs.set_item(INPUT, vec![message])?;
     kwargs.set_item(API_KEY, "")?;
     kwargs.set_item(ADDITIONAL_ARGS, additional)?;
-    logging
-        .bind(py)
-        .call_method(pyo3::intern!(py, "pre_call"), (), Some(&kwargs))?;
     Py::new(
         py,
         MessagesState {
@@ -187,22 +193,46 @@ fn prepare(
                 body.unbind().into_any(),
                 headers.unbind().into_any(),
             )),
-            prepared: Some((endpoint, snapshot)),
+            logging: Some(logging),
+            pre_call: Some(kwargs.unbind()),
+            pending: Some((endpoint, snapshot)),
         },
     )
+}
+
+#[pyfunction]
+fn pre_call(py: Python<'_>, state: Py<MessagesState>) -> PyResult<()> {
+    let (logging, arguments) = {
+        let state = state.borrow(py);
+        let logging = state
+            .logging
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("messages logging state was cleared"))?
+            .clone_ref(py);
+        let arguments = state
+            .pre_call
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("messages pre-call state was cleared"))?
+            .clone_ref(py);
+        (logging, arguments)
+    };
+    logging
+        .bind(py)
+        .call_method(pyo3::intern!(py, "pre_call"), (), Some(arguments.bind(py)))?;
+    Ok(())
 }
 
 fn take_request(py: Python<'_>, state: &Py<MessagesState>) -> PyResult<ProviderMessagesRequest> {
     let ((endpoint, snapshot), headers) = {
         let mut state = state.borrow_mut(py);
-        let prepared = state.prepared.take().ok_or_else(|| {
+        let pending = state.pending.take().ok_or_else(|| {
             PyRuntimeError::new_err("messages request was already sent or cleared")
         })?;
         let roots = state
             .roots
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("messages roots were cleared"))?;
-        (prepared, roots.headers(py))
+        (pending, roots.headers(py))
     };
     let headers = headers
         .cast::<PyDict>()?
@@ -235,7 +265,7 @@ fn send(py: Python<'_>, state: Py<MessagesState>) -> PyResult<Bound<'_, PyAny>> 
     litellm_python_interop::run_async_py(py, async move {
         let _state = state;
         let response = run_async_value(
-            execute_prepared_messages_provider_call(request),
+            execute_provider_messages_request(request),
             messages_provider_error_to_pyerr,
         )
         .await?;
@@ -248,7 +278,7 @@ fn send_sync(py: Python<'_>, state: Py<MessagesState>) -> PyResult<Py<PyAny>> {
     let request = take_request(py, &state)?;
     let response = run_sync_value(
         py,
-        execute_prepared_messages_provider_call(request),
+        execute_provider_messages_request(request),
         messages_provider_error_to_pyerr,
     )?;
     Ok(Pythonized(response).into_pyobject(py)?.unbind().into_any())
@@ -295,7 +325,8 @@ fn bindings(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
     let module = PyModule::new(py, "_messages_bindings")?;
     module.add("Lifecycle", py.get_type::<MessagesLifecycle>())?;
     module.add("invoke", wrap_pyfunction!(invoke, &module)?)?;
-    module.add("prepare", wrap_pyfunction!(prepare, &module)?)?;
+    module.add("build_request", wrap_pyfunction!(build_request, &module)?)?;
+    module.add("pre_call", wrap_pyfunction!(pre_call, &module)?)?;
     module.add("send", wrap_pyfunction!(send, &module)?)?;
     module.add("send_sync", wrap_pyfunction!(send_sync, &module)?)?;
     module.add(
@@ -331,11 +362,19 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let module = PyModule::new(py, "messages_test").unwrap();
-            module.add_function(wrap_pyfunction!(prepare, &module).unwrap()).unwrap();
-            module.add_function(wrap_pyfunction!(snapshot, &module).unwrap()).unwrap();
+            module
+                .add_function(wrap_pyfunction!(build_request, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(pre_call, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
+                .unwrap();
             let globals = PyDict::new(py);
             globals.set_item("native", module).unwrap();
-            py.run(c"
+            py.run(
+                c"
 import gc
 import weakref
 
@@ -361,7 +400,8 @@ logger = Logger()
 arguments = dict(model='model', body=body, api_key='test',
                  custom_llm_provider='anthropic', opaque=opaque,
                  litellm_logging_obj=logger)
-state = native.prepare(arguments, logger)
+state = native.build_request(arguments, logger)
+native.pre_call(state)
 wire_body, wire_headers = native.snapshot(state)
 assert wire_body['messages'][0]['content'] == 'original'
 assert body['messages'][0]['content'] == 'changed'
@@ -382,7 +422,11 @@ assert alive() is not None
 del state
 gc.collect()
 assert alive() is None
-", Some(&globals), Some(&globals)).unwrap();
+",
+                Some(&globals),
+                Some(&globals),
+            )
+            .unwrap();
         });
     }
 

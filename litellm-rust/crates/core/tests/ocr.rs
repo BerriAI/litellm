@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use litellm_core::Error;
 use litellm_core::lifecycle::CallLifecycleContext;
-use litellm_core::ocr::prepare::prepare;
+use litellm_core::ocr::request::build_pre_call_request;
 use litellm_core::ocr::types::{OcrDocument, OcrDocumentProjection};
-use litellm_core::ocr::{DefaultOcrServices, OcrAdmissionRequest as OcrRequest, OcrDraft};
+use litellm_core::ocr::{DefaultOcrServices, OcrAdmissionRequest as OcrRequest, OcrPreCallRequest};
 use serde_json::{Value, json};
 
 fn request() -> OcrRequest {
@@ -30,8 +30,8 @@ fn request() -> OcrRequest {
     }
 }
 
-fn body(prepared: &OcrDraft) -> Value {
-    let mut body = prepared.body.clone();
+fn body(built: &OcrPreCallRequest) -> Value {
+    let mut body = built.body.clone();
     body.insert(
         "document".into(),
         json!({"type": "document_url", "document_url": "data:application/pdf;base64,cGRm"}),
@@ -42,15 +42,15 @@ fn body(prepared: &OcrDraft) -> Value {
 }
 
 async fn ocr(
-    prepared: OcrDraft,
+    built: OcrPreCallRequest,
     headers: Vec<(String, String)>,
     body: Value,
 ) -> Result<litellm_core::ocr::OcrResponseData, Error> {
-    let model = prepared.endpoint.model().to_string();
-    let provider = prepared.endpoint.custom_llm_provider().to_string();
+    let model = built.endpoint.model().to_string();
+    let provider = built.endpoint.custom_llm_provider().to_string();
     let response = litellm_core::ocr::ocr(
         &DefaultOcrServices,
-        prepared.endpoint.settle(headers, body),
+        built.endpoint.settle(headers, body),
         Default::default(),
         CallLifecycleContext::new("ocr", model, provider, "test-call"),
     )
@@ -60,38 +60,38 @@ async fn ocr(
 }
 
 #[test]
-fn prepares_provider_template_auth_and_url() {
-    let prepared = prepare(OcrRequest {
+fn builds_provider_template_auth_and_url() {
+    let built = build_pre_call_request(OcrRequest {
         api_base: Some(" https://ocr.example/v1/ ".into()),
         extra_headers: vec![("X-Request-Id".into(), "request-1".into())],
         request_format: Some("litellm".into()),
         ..request()
     })
     .unwrap();
-    assert_eq!(prepared.endpoint.model(), "mistral-ocr-latest");
-    assert_eq!(prepared.endpoint.custom_llm_provider(), "mistral");
-    assert_eq!(prepared.endpoint.url(), "https://ocr.example/v1/ocr");
-    assert_eq!(prepared.endpoint.timeout_seconds(), 2.0);
+    assert_eq!(built.endpoint.model(), "mistral-ocr-latest");
+    assert_eq!(built.endpoint.custom_llm_provider(), "mistral");
+    assert_eq!(built.endpoint.url(), "https://ocr.example/v1/ocr");
+    assert_eq!(built.endpoint.timeout_seconds(), 2.0);
     assert_eq!(
-        prepared.document_projection,
+        built.document_projection,
         OcrDocumentProjection::RetainedDocument
     );
     assert_eq!(
-        Value::Object(prepared.body),
+        Value::Object(built.body),
         json!({"model": "mistral-ocr-latest", "document": {"type": "document_url", "document_url": "data:application/pdf;base64,cGRm"}})
     );
     assert_eq!(
-        prepared.parameter_fields,
+        built.parameter_fields,
         litellm_core::providers::mistral::ocr::transformation::supported_ocr_params()
     );
     assert_eq!(
-        prepared.headers,
+        built.headers,
         vec![
             ("Authorization".into(), "Bearer test-key".into()),
             ("X-Request-Id".into(), "request-1".into()),
         ]
     );
-    let explicit = prepare(OcrRequest {
+    let explicit = build_pre_call_request(OcrRequest {
         model: "mistral-ocr-latest".into(),
         custom_llm_provider: Some("mistral".into()),
         api_key: None,
@@ -108,9 +108,9 @@ fn prepares_provider_template_auth_and_url() {
 }
 
 #[test]
-fn prepare_environment_credentials() {
+fn build_request_environment_credentials() {
     if let Ok(case) = std::env::var("LITELLM_OCR_ENV_TEST") {
-        let result = prepare(OcrRequest {
+        let result = build_pre_call_request(OcrRequest {
             api_key: Some(" ".into()),
             ..request()
         });
@@ -120,7 +120,7 @@ fn prepare_environment_credentials() {
                 vec![("Authorization".into(), "Bearer env-key".into())]
             );
             assert_eq!(
-                prepare(request()).unwrap().headers,
+                build_pre_call_request(request()).unwrap().headers,
                 vec![("Authorization".into(), "Bearer test-key".into())]
             );
         } else {
@@ -135,7 +135,7 @@ fn prepare_environment_credentials() {
     ] {
         let mut command = Command::new(std::env::current_exe().unwrap());
         command
-            .args(["--exact", "prepare_environment_credentials"])
+            .args(["--exact", "build_request_environment_credentials"])
             .env("LITELLM_OCR_ENV_TEST", case)
             .env_remove("MISTRAL_API_KEY");
         if let Some(key) = key {
@@ -146,9 +146,9 @@ fn prepare_environment_credentials() {
 }
 
 #[test]
-fn prepare_rejects_unsupported_providers_formats_and_invalid_metadata() {
+fn build_request_rejects_unsupported_providers_formats_and_invalid_metadata() {
     for (provider, capability) in [("reducto", "OCR provider"), ("openai", "OCR provider")] {
-        let result = prepare(OcrRequest {
+        let result = build_pre_call_request(OcrRequest {
             custom_llm_provider: Some(provider.into()),
             api_key: None,
             api_base: Some("not a URL".into()),
@@ -158,7 +158,7 @@ fn prepare_rejects_unsupported_providers_formats_and_invalid_metadata() {
     }
     for format in ["native", "json", "", "LiteLLM"] {
         assert!(matches!(
-            prepare(OcrRequest {
+            build_pre_call_request(OcrRequest {
                 request_format: Some(format.into()),
                 ..request()
             }),
@@ -167,7 +167,7 @@ fn prepare_rejects_unsupported_providers_formats_and_invalid_metadata() {
     }
     for timeout_seconds in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
         assert!(matches!(
-            prepare(OcrRequest {
+            build_pre_call_request(OcrRequest {
                 timeout_seconds,
                 ..request()
             }),
@@ -175,14 +175,14 @@ fn prepare_rejects_unsupported_providers_formats_and_invalid_metadata() {
         ));
     }
     assert!(matches!(
-        prepare(OcrRequest {
+        build_pre_call_request(OcrRequest {
             model: "mistral-ocr-latest".into(),
             ..request()
         }),
         Err(Error::InvalidProvider(_))
     ));
     assert!(matches!(
-        prepare(OcrRequest {
+        build_pre_call_request(OcrRequest {
             api_base: Some("file:///secret".into()),
             ..request()
         }),
@@ -197,7 +197,7 @@ fn cloud_capabilities_fail_only_when_required() {
         "vertex_ai/mistral-ocr-latest",
     ] {
         assert!(matches!(
-            prepare(OcrRequest {
+            build_pre_call_request(OcrRequest {
                 model: model.into(),
                 api_base: Some("http://127.0.0.1:1".into()),
                 document: OcrDocument::ImageUrl {
@@ -215,7 +215,7 @@ fn cloud_capabilities_fail_only_when_required() {
         "azure_ai/documentintelligence/prebuilt-layout",
     ] {
         assert!(matches!(
-            prepare(OcrRequest {
+            build_pre_call_request(OcrRequest {
                 model: model.into(),
                 api_base: Some("http://127.0.0.1:1".into()),
                 ..request()
@@ -231,7 +231,7 @@ fn cloud_capabilities_fail_only_when_required() {
         "cohere/parse-v5.0",
     ] {
         assert!(matches!(
-            prepare(OcrRequest {
+            build_pre_call_request(OcrRequest {
                 model: model.into(),
                 ..request()
             }),
@@ -263,19 +263,19 @@ fn cloud_credentials_use_native_keys_headers_or_narrow_acquisition_stub() {
                 api_base: Some("http://127.0.0.1:1".into()),
                 ..request()
             };
-            let result = prepare(make_request());
+            let result = build_pre_call_request(make_request());
             if std::env::var("LITELLM_CLOUD_OCR_ENV_TEST").unwrap() == "present" {
                 assert_eq!(result.unwrap().headers, vec![(header.into(), key.into())]);
             } else {
                 assert!(matches!(result, Err(Error::Unsupported(message)) if message == operation));
             }
-            let prepared = prepare(OcrRequest {
+            let built = build_pre_call_request(OcrRequest {
                 extra_headers: vec![("aUtHoRiZaTiOn".into(), "Bearer supplied".into())],
                 ..make_request()
             })
             .unwrap();
             assert_eq!(
-                prepared.headers,
+                built.headers,
                 vec![("aUtHoRiZaTiOn".into(), "Bearer supplied".into())]
             );
         }
@@ -332,20 +332,20 @@ async fn cloud_providers_use_existing_auth_urls_and_request_response_transforms(
             json!({"pages": [{"index": 0, "markdown": "proof"}], "usage_info": {"pages_processed": 1}})
         };
         let (base, handle) = server(200, "", &response.to_string(), Duration::ZERO);
-        let prepared = prepare(OcrRequest {
+        let built = build_pre_call_request(OcrRequest {
             model: model.into(),
             api_base: Some(base),
             ..request()
         })
         .unwrap();
-        let mut body = Value::Object(prepared.body.clone());
+        let mut body = Value::Object(built.body.clone());
         body[if deepseek {
             "temperature"
         } else {
             "include_image_base64"
         }] = if deepseek { json!(0.1) } else { json!(true) };
         assert_eq!(
-            prepared.headers,
+            built.headers,
             vec![(
                 if auth_name == "api-key" {
                     "Api-Key"
@@ -356,8 +356,8 @@ async fn cloud_providers_use_existing_auth_urls_and_request_response_transforms(
                 auth_value.into()
             )]
         );
-        let headers = prepared.headers.clone();
-        let response = ocr(prepared, headers, body.clone()).await.unwrap();
+        let headers = built.headers.clone();
+        let response = ocr(built, headers, body.clone()).await.unwrap();
         let (headers, sent) = handle.join().unwrap();
         assert!(headers.starts_with(&format!("POST {path} HTTP/1.1\r\n")));
         assert!(headers.contains(&format!("{auth_name}: {auth_value}\r\n")));
@@ -455,22 +455,19 @@ async fn posts_filled_body_and_normalizes_provider_response() {
         "private_provider_field": "not forwarded"
     });
     let (base, handle) = server(200, "", &response_json.to_string(), Duration::ZERO);
-    let prepared = prepare(OcrRequest {
+    let built = build_pre_call_request(OcrRequest {
         api_base: Some(base),
         ..request()
     })
     .unwrap();
-    let body = body(&prepared);
-    let headers = prepared
+    let body = body(&built);
+    let headers = built
         .headers
         .iter()
         .cloned()
         .chain([("X-Retained".into(), "header".into())])
         .collect();
-    let response = ocr(prepared, headers, body.clone())
-        .await
-        .unwrap()
-        .into_json();
+    let response = ocr(built, headers, body.clone()).await.unwrap().into_json();
     let (headers, sent_body) = handle.join().unwrap();
     let headers = headers.to_ascii_lowercase();
     assert!(headers.starts_with("post /v1/ocr http/1.1\r\n"));
@@ -495,15 +492,15 @@ async fn posts_filled_body_and_normalizes_provider_response() {
 #[tokio::test]
 async fn preserves_callback_body_and_header_changes() {
     let (base, handle) = server(200, "", "{}", Duration::ZERO);
-    let prepared = prepare(OcrRequest {
+    let built = build_pre_call_request(OcrRequest {
         api_base: Some(base),
         ..request()
     })
     .unwrap();
-    let mut body = body(&prepared);
+    let mut body = body(&built);
     body["model"] = json!("callback-model");
     body["custom_provider_field"] = json!({"nested": [1, true, null]});
-    let headers = prepared
+    let headers = built
         .headers
         .iter()
         .cloned()
@@ -512,7 +509,7 @@ async fn preserves_callback_body_and_header_changes() {
             ("aCcEpT-EnCoDiNg".into(), "gzip, br".into()),
         ])
         .collect();
-    ocr(prepared, headers, body.clone()).await.unwrap();
+    ocr(built, headers, body.clone()).await.unwrap();
     let (headers, sent_body) = handle.join().unwrap();
     let headers = headers.to_ascii_lowercase();
     assert_eq!(sent_body, body);
@@ -535,13 +532,13 @@ async fn preserves_callback_body_and_header_changes() {
 #[tokio::test]
 async fn settled_headers_are_the_only_headers_sent() {
     let (base, handle) = server(200, "", "{}", Duration::ZERO);
-    let prepared = prepare(OcrRequest {
+    let built = build_pre_call_request(OcrRequest {
         api_base: Some(base),
         ..request()
     })
     .unwrap();
-    let body = body(&prepared);
-    ocr(prepared, Vec::new(), body).await.unwrap();
+    let body = body(&built);
+    ocr(built, Vec::new(), body).await.unwrap();
     let (headers, _) = handle.join().unwrap();
     assert!(!headers.to_ascii_lowercase().contains("authorization:"));
 }
@@ -552,13 +549,13 @@ async fn rejects_unsupported_inputs_before_io() {
     listener.set_nonblocking(true).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     for case in ["file", "local", "compression"] {
-        let prepared = prepare(OcrRequest {
+        let built = build_pre_call_request(OcrRequest {
             api_base: Some(base.clone()),
             ..request()
         })
         .unwrap();
-        let mut body = body(&prepared);
-        let mut headers = prepared.headers.clone();
+        let mut body = body(&built);
+        let mut headers = built.headers.clone();
         match case {
             "file" => body["document"] = json!({"type": "file", "file": "private"}),
             "local" => body["document"]["document_url"] = json!("file:///private.pdf"),
@@ -566,7 +563,7 @@ async fn rejects_unsupported_inputs_before_io() {
             _ => unreachable!(),
         }
         assert!(matches!(
-            ocr(prepared, headers, body).await,
+            ocr(built, headers, body).await,
             Err(Error::Unsupported(_))
         ));
         assert_eq!(
@@ -629,15 +626,15 @@ async fn handles_errors_compression_and_timeout_without_exposing_payloads() {
         ),
     ] {
         let (base, handle) = server(status, headers, response_body, delay);
-        let prepared = prepare(OcrRequest {
+        let built = build_pre_call_request(OcrRequest {
             api_base: Some(base),
             timeout_seconds: if delay.is_zero() { 2.0 } else { 0.05 },
             ..request()
         })
         .unwrap();
-        let body = body(&prepared);
-        let headers = prepared.headers.clone();
-        assert_eq!(ocr(prepared, headers, body).await.unwrap_err(), expected);
+        let body = body(&built);
+        let headers = built.headers.clone();
+        assert_eq!(ocr(built, headers, body).await.unwrap_err(), expected);
         handle.join().unwrap();
     }
 }
@@ -645,14 +642,14 @@ async fn handles_errors_compression_and_timeout_without_exposing_payloads() {
 #[tokio::test]
 async fn normalizes_missing_fields_and_accepts_identity_response() {
     let (base, handle) = server(200, "Content-Encoding: Identity\r\n", "{}", Duration::ZERO);
-    let prepared = prepare(OcrRequest {
+    let built = build_pre_call_request(OcrRequest {
         api_base: Some(base),
         ..request()
     })
     .unwrap();
-    let body = body(&prepared);
-    let headers = prepared.headers.clone();
-    let response = ocr(prepared, headers, body).await.unwrap().into_json();
+    let body = body(&built);
+    let headers = built.headers.clone();
+    let response = ocr(built, headers, body).await.unwrap().into_json();
     handle.join().unwrap();
     assert_eq!(
         response,

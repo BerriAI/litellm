@@ -275,4 +275,32 @@ mod tests {
             Some(FailureStage::AfterProviderResponse)
         );
     }
+
+    #[test]
+    fn request_build_and_pre_call_failures_are_replayable() {
+        for success_count in [1, 2] {
+            let mut program = CallProgram::new(ProgramOptions {
+                asynchronous: false,
+                internal_call: false,
+            });
+            for _ in 0..success_count {
+                program.advance(Outcome::Success, observations()).unwrap();
+            }
+            let failure = program.advance(Outcome::Failure, observations()).unwrap();
+            assert_eq!(failure.commitment, Commitment::Replayable);
+            assert_eq!(failure.failure_stage, Some(FailureStage::BeforeProvider));
+        }
+    }
+
+    #[test]
+    fn request_build_has_its_own_action_kind() {
+        assert_eq!(
+            actions_for(Operation::BuildRequest)[0].kind,
+            ActionKind::RequestBuild
+        );
+        assert_eq!(
+            actions_for(Operation::Send)[0].kind,
+            ActionKind::ProviderCall
+        );
+    }
 }

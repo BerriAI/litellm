@@ -116,7 +116,7 @@ fn validate_environment(
     Ok((headers, auth))
 }
 
-pub(super) fn prepare_provider_request(
+pub(super) fn build_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
     let (headers, auth) = validate_environment(&request, &request.model, request.config)?;
@@ -144,27 +144,27 @@ pub(super) fn prepare_provider_request(
     })
 }
 
-pub async fn prepare_callback_request(
+pub async fn build_pre_call_request(
     request: ChatCompletionsRequest<'_>,
-) -> Result<super::types::ChatCallbackRequest, Error> {
+) -> Result<super::types::ChatPreCallRequest, Error> {
     use super::transformation::PreCallBody;
-    use super::types::{ChatBodySnapshot, ChatCallbackRequest, ChatEndpoint};
+    use super::types::{ChatBodySnapshot, ChatEndpoint, ChatPreCallRequest};
 
-    let prepared = prepare_provider_request(resolve_request(request)?)?;
+    let built = build_provider_request(resolve_request(request)?)?;
     let endpoint = ChatEndpoint {
-        model: prepared.model.clone(),
-        config: prepared.config,
-        url: prepared.url.clone(),
-        timeout: prepared.timeout,
+        model: built.model.clone(),
+        config: built.config,
+        url: built.url.clone(),
+        timeout: built.timeout,
     };
-    match prepared.config.pre_call_body() {
+    match built.config.pre_call_body() {
         PreCallBody::Live => {
-            let mut generated = prepared
+            let mut generated = built
                 .body
                 .as_object()
                 .cloned()
                 .ok_or_else(|| Error::InvalidRequest("chat body must be an object".into()))?;
-            let parameter_fields = prepared
+            let parameter_fields = built
                 .optional_params
                 .keys()
                 .filter(|name| generated.contains_key(*name))
@@ -173,20 +173,20 @@ pub async fn prepare_callback_request(
             for name in &parameter_fields {
                 generated.remove(name);
             }
-            Ok(ChatCallbackRequest::Live {
+            Ok(ChatPreCallRequest::Live {
                 endpoint,
                 generated,
                 parameter_fields,
-                headers: prepared.upstream_headers,
+                headers: built.upstream_headers,
             })
         }
         PreCallBody::Serialized => {
-            let logging_body = serde_json::to_string(&prepared.body).map_err(|error| {
+            let logging_body = serde_json::to_string(&built.body).map_err(|error| {
                 Error::InvalidRequest(format!("could not encode chat request: {error}"))
             })?;
             let body = logging_body.as_bytes().to_vec();
-            let headers = super::handler::signed_headers(&prepared, &body).await?;
-            Ok(ChatCallbackRequest::Serialized {
+            let headers = super::handler::signed_headers(&built, &body).await?;
+            Ok(ChatPreCallRequest::Serialized {
                 snapshot: ChatBodySnapshot { endpoint, body },
                 logging_body,
                 headers,

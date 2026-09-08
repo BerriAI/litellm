@@ -616,9 +616,10 @@ class _ChatCompletionsBindings(NativeLifecycleBindings, Protocol):
     Lifecycle: Callable[
         [dict[str, object], bool, bool], NativeLifecycle
     ]  # mutable-ok: native bridge retains and updates Python argument objects
-    prepare: Callable[
+    build_request: Callable[
         [dict[str, object], object], object
     ]  # mutable-ok: native bridge retains and updates Python argument objects
+    pre_call: Callable[[object], None]
     send: Callable[[object], Awaitable[Mapping[str, object]]]
     send_sync: Callable[[object], Mapping[str, object]]
     terminal_record: Callable[[object], Mapping[str, object]]
@@ -664,10 +665,13 @@ class _ChatCompletionsHost:
         self.current = await deployment_pre(self.current, "acompletion")
         self.current[LOGGING_OBJECT_KEY] = self.logger
 
-    def prepare(self) -> None:
+    def build_request(self) -> None:
         if self.logger is None:
             raise RuntimeError("chat completions logging was not initialized")
-        self.state = self.bindings.prepare(self.current, self.logger)
+        self.state = self.bindings.build_request(self.current, self.logger)
+
+    def pre_call(self) -> None:
+        self.bindings.pre_call(self.state)
 
     def send_sync(self) -> None:
         model_response: Final = self.arguments["model_response"]
