@@ -130,6 +130,7 @@ async def test_generic_guardrail_logging_only_verdict_is_exported_over_http(
     await recorder.wait_for_async("async_log_success_event")
     await drain_logging()
     await provider.wait_for_requests(3)
+    assert len(provider.requests) == 3
 
     scan: Final = provider.requests[1]
     assert scan.path == "/beta/litellm_basic_guardrail_api"
@@ -147,6 +148,9 @@ async def test_generic_guardrail_logging_only_verdict_is_exported_over_http(
     else:
         assert response["content"][0]["text"] == route.response_text
     assert "guardrails" not in provider.requests[0].body
+    # The async OCR callback may finish its transport cleanup after the test body.
+    # Request cardinality was verified above, before releasing the fixture.
+    provider.expected_requests = None
 
 
 @pytest.mark.asyncio
