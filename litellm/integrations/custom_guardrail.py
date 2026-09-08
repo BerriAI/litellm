@@ -773,7 +773,7 @@ class CustomGuardrail(CustomLogger):
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
-    def _deployment_pre_call_target(self) -> "CustomLogger":
+    def _deployment_hook_target(self) -> "CustomLogger":
         if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
         try:
@@ -802,7 +802,7 @@ class CustomGuardrail(CustomLogger):
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
-            target: Final = self._deployment_pre_call_target()
+            target: Final = self._deployment_hook_target()
             if target is not self:
                 kwargs["guardrail_to_apply"] = self
             result: Final = await target.async_pre_call_hook(
@@ -845,7 +845,10 @@ class CustomGuardrail(CustomLogger):
             return None
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
-        result: Final = await self.async_post_call_success_hook(
+        target: Final = self._deployment_hook_target()
+        if target is not self:
+            request_data["guardrail_to_apply"] = self
+        result: Final = await target.async_post_call_success_hook(
             user_api_key_dict=UserAPIKeyAuth(
                 user_id=request_data.get("user_api_key_user_id"),
                 team_id=request_data.get("user_api_key_team_id"),

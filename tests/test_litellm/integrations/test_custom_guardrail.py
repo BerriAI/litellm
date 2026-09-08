@@ -2610,3 +2610,28 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
         )
 
         assert result is replacement
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_interface_modifies_deployment_response(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.types.utils import ModelResponse
+
+        class ReplacingGuardrail(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                assert input_type == "response"
+                return {**inputs, "texts": ["filtered response"]}
+
+        guardrail = ReplacingGuardrail(
+            guardrail_name="test-guardrail",
+            event_hook=GuardrailEventHooks.post_call,
+        )
+        response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "original response"}}])
+
+        result = await guardrail.async_post_call_success_deployment_hook(
+            request_data={"guardrails": ["test-guardrail"]},
+            response=response,
+            call_type=CallTypes.acompletion,
+        )
+
+        assert result is response
+        assert response.choices[0].message.content == "filtered response"
