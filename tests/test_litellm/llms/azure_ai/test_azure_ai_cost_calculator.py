@@ -138,6 +138,18 @@ class TestAzureModelRouterFlatCost:
         assert prompt_cost == pytest.approx(1000 * ROUTER_FEE_PER_TOKEN, rel=1e-9)
         assert completion_cost_usd == 0.0
 
+    def test_unmapped_router_deployment_name_charges_the_fee_over_cached_prompt_tokens_too(self) -> None:
+        usage = Usage(
+            prompt_tokens=2000,
+            completion_tokens=800,
+            total_tokens=2800,
+            cache_read_input_tokens=500,
+            cache_creation_input_tokens=200,
+        )
+        prompt_cost, completion_cost_usd = cost_per_token(model="azure-model-router", usage=usage)
+        assert prompt_cost == pytest.approx(2000 * ROUTER_FEE_PER_TOKEN, rel=1e-9)
+        assert completion_cost_usd == 0.0
+
     def test_router_deployment_name_as_both_names_charges_the_fee_once(self) -> None:
         usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
         prompt_cost, completion_cost_usd = cost_per_token(
