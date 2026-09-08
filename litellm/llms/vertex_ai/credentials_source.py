@@ -6,6 +6,7 @@ it is decides what a failure means, so the two are told apart by the shape of th
 each failure is returned as its own case instead of collapsing into one parse error.
 """
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, NoReturn, TypeAlias
@@ -80,7 +81,7 @@ def _read_json_file(path: str) -> _VertexCredentialsFile:
     return VertexCredentialsJson(parsed)
 
 
-def is_inline_credentials_json(credentials: str) -> bool:
+def _is_inline_credentials_json(credentials: str) -> bool:
     """Whether *credentials* carries the JSON itself rather than a path to a file holding it."""
     return credentials.lstrip().startswith("{")
 
@@ -92,7 +93,11 @@ def load_vertex_credentials_source(credentials: str) -> VertexCredentialsSource:
     failure recognisable: `os.path.exists()` answers False for an unreadable path as well as
     an absent one, so both used to reach the inline branch and be reported as malformed JSON.
     """
-    if not is_inline_credentials_json(credentials):
+    inline_first: Final = _is_inline_credentials_json(credentials)
+    verbose_logger.debug(
+        "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s", not inline_first, os.getcwd()
+    )
+    if not inline_first:
         return _read_json_file(credentials)
 
     inline: Final = _parse_json_object(credentials)

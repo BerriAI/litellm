@@ -6,7 +6,6 @@ Handles Authentication and generating request urls for Vertex AI and Google AI S
 
 import asyncio
 import json
-import os
 import threading
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
@@ -28,7 +27,6 @@ from .common_utils import (
 )
 from .credentials_source import (
     VertexCredentialsJson,
-    is_inline_credentials_json,
     load_vertex_credentials_source,
     raise_vertex_credentials_failure,
 )
@@ -134,11 +132,6 @@ class VertexBase:
         if credentials is not None:
             if isinstance(credentials, str):
                 source: Final = load_vertex_credentials_source(credentials)
-                verbose_logger.debug(
-                    "Vertex: Loading vertex credentials, is_file_path=%s, current dir %s",
-                    not is_inline_credentials_json(credentials),
-                    os.getcwd(),
-                )
                 if not isinstance(source, VertexCredentialsJson):
                     raise_vertex_credentials_failure(source)
                 json_obj: Mapping[str, object] = source.value
