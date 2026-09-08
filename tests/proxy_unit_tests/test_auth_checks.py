@@ -163,7 +163,7 @@ async def test_can_key_call_model(model, expect_to_work):
     if expect_to_work:
         await can_key_call_model(**args)
     else:
-        with pytest.raises(Exception, match='key not allowed to access model\\. This key can only access') as e:
+        with pytest.raises(Exception, match='key not allowed to access model\\. Tried to access') as e:
             await can_key_call_model(**args)
 
         print(e)
@@ -943,7 +943,7 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
             llm_router=router,
         )
     else:
-        with pytest.raises(Exception, match='key not allowed to access model\\. This key can only access') as e:
+        with pytest.raises(Exception, match='key not allowed to access model\\. Tried to access') as e:
             await can_key_call_model(
                 model=model,
                 llm_model_list=llm_model_list,
