@@ -1,11 +1,13 @@
 """Unit tests for litellm.proxy.guardrails.auto_router_shunt."""
 
 import json
+import re
 from typing import Any
 
 import pytest
 
 from litellm.proxy.guardrails.auto_router_shunt import (
+    _CALLER_OWNS_TOOL_NAME_KEY,
     BULK_READ_TOOL_NAME,
     CODE_WRITE_TOOL_NAME,
     ShuntConfig,
@@ -612,3 +614,81 @@ class TestUnarmedStreamsAreNotBuffered:
             request_data={"model": "not-a-shunt-router"},
         )
         assert [chunk async for chunk in out] == chunks
+
+
+# The armed streaming path had no coverage at all, which is how a missing await on the worker
+# call reached a live proxy. The fixture below is a real Anthropic SSE stream captured from
+# claude-sonnet-5 through the proxy, trimmed and with the tool_use switched back to the `Read`
+# the model actually emits before shunt rewrites it.
+_READ_SSE_STREAM: list[bytes] = [
+    b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_01","type":"message",'
+    b'"role":"assistant","model":"claude-sonnet-5","content":[],"stop_reason":null,'
+    b'"usage":{"input_tokens":10,"output_tokens":1}}}\n\n',
+    b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+    b'"content_block":{"type":"tool_use","id":"toolu_01","name":"Read","input":{}}}\n\n',
+    b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"input_json_delta","partial_json":"{\\"file_path\\": \\"litellm/router.py\\"}"}}\n\n',
+    b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},'
+    b'"usage":{"output_tokens":20}}\n\n',
+    b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+]
+
+
+def _armed_request_data(**extra: Any) -> dict[str, Any]:
+    """The request-dict fields the rewrite needs: the model that resolves the marker, and the
+    real request URL the generated curl is pointed at (stamped by litellm_pre_call_utils)."""
+    return {
+        "model": "shunt",
+        "proxy_server_request": {"url": "http://localhost:4000/v1/messages"},
+        **extra,
+    }
+
+
+class TestArmedStreamingRewrite:
+    async def _stream(self, chunks):
+        for chunk in chunks:
+            yield chunk
+
+    async def _run(self, monkeypatch, request_data):
+        router = _FakeRouter([_marker({"auto_router_shunt_min_lines": 350})])
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+        guardrail = ShuntGuardrail()
+        out = guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=_FAKE_USER_API_KEY_DICT,
+            response=self._stream(_READ_SSE_STREAM),
+            request_data=request_data,
+        )
+        collected = [chunk async for chunk in out]
+        return b"".join(chunk if isinstance(chunk, bytes) else str(chunk).encode() for chunk in collected).decode()
+
+    @pytest.mark.asyncio
+    async def test_an_untargeted_read_becomes_a_bounded_bash_command(self, monkeypatch):
+        result = await self._run(monkeypatch, _armed_request_data())
+        assert '"name": "Bash"' in result or '"name":"Bash"' in result
+        assert "Read" not in result.split("content_block_start")[1].split("content_block_stop")[0]
+
+    @pytest.mark.asyncio
+    async def test_the_streamed_tool_input_reassembles_into_the_bounded_command(self, monkeypatch):
+        """The rewritten input arrives as input_json_delta fragments. A client concatenates
+        them and parses the result, so the fragments must reassemble into valid JSON carrying
+        the conditional, not just contain the right substrings somewhere in the stream."""
+        result = await self._run(monkeypatch, _armed_request_data())
+        fragments = re.findall(r'"partial_json":\s*"((?:[^"\\]|\\.)*)"', result)
+        assert fragments, "the rewritten stream carried no input_json_delta fragments"
+        command = json.loads("".join(json.loads(f'"{f}"') for f in fragments))["command"]
+        assert "wc -l" in command
+        assert "-gt 350" in command
+        assert "/v1/bulk_read" in command
+        assert "litellm/router.py" in command
+
+    @pytest.mark.asyncio
+    async def test_a_caller_owned_tool_name_leaves_the_stream_alone(self, monkeypatch):
+        """When the caller already owns a `Read` tool of their own, shunt must not touch it,
+        the same carve-out the non-streaming hook applies."""
+        from litellm.proxy.guardrails.auto_router_shunt import caller_owns_shunt_tool_name
+
+        assert callable(caller_owns_shunt_tool_name)
+        result = await self._run(monkeypatch, _armed_request_data(**{_CALLER_OWNS_TOOL_NAME_KEY: True}))
+        assert '"name":"Read"' in result or '"name": "Read"' in result
+        assert "wc -l" not in result
