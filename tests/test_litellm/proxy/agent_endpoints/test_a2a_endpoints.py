@@ -425,8 +425,6 @@ async def _invoke_message_method(
     user_api_key_dict,
     add_litellm_data=None,
 ) -> dict:
-    """Run invoke_agent_a2a for message/send or message/stream against a mocked backend
-    and return the ``request_id`` and ``agent_extra_headers`` the backend call received."""
     from fastapi.responses import JSONResponse
 
     class MessageSendParams:
@@ -512,10 +510,6 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_forward_caller_identity_headers(method: str):
-    """message/send and message/stream must forward X-LiteLLM-User-Id and
-    X-LiteLLM-Team-Id, same as the tasks/* methods, so a downstream agent can scope
-    resources to the authenticated caller on the primary conversational path -- not
-    only on secondary task-management calls."""
     from litellm.proxy._types import UserAPIKeyAuth
 
     mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
@@ -531,10 +525,6 @@ async def test_message_methods_forward_caller_identity_headers(method: str):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_caller_identity_headers_cannot_be_spoofed(method: str):
-    """A client must not be able to override X-LiteLLM-User-Id / X-LiteLLM-Team-Id by
-    including x-a2a-<agent>-x-litellm-user-id in their request headers. The authenticated
-    identity must always win, matching the existing guarantee for tasks/* (see
-    test_caller_identity_headers_cannot_be_spoofed_via_forwarded_headers)."""
     from litellm.proxy._types import UserAPIKeyAuth
 
     mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
@@ -558,9 +548,6 @@ async def test_message_methods_caller_identity_headers_cannot_be_spoofed(method:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_forward_key_bound_identity_not_pre_call_rewrite(method: str):
-    """Pre-call processing (add_litellm_data_to_request -> user_header_mappings) rewrites
-    user_api_key_dict.user_id from a client-supplied header. The identity forwarded to the
-    agent must be the one bound to the API key at auth time, captured before that rewrite."""
     from litellm.proxy._types import UserAPIKeyAuth
 
     mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
