@@ -1,9 +1,84 @@
-import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
+import { test as base, expect, type APIRequestContext, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH, MOCK_PRESIDIO_URL } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
-import { CHAT_MODEL_A, masterKey, rootPath, waitForSpendLogByPrompt } from "../../helpers/traffic";
+import { CHAT_MODEL_A, MOCK_RESPONSE_TEXT, masterKey, rootPath, waitForSpendLog } from "../../helpers/traffic";
 import { openPlayground, selectModel, sendButton, onlyVisible } from "../../helpers/playground";
+
+const test = base.extend<{ guardrailName: string }>({
+  guardrailName: async ({ request }, use) => {
+    const name = `e2e-presidio-story-${Date.now()}`;
+    try {
+      await use(name);
+    } finally {
+      const res = await request.get(`${rootPath()}/v2/guardrails/list`, {
+        headers: { Authorization: `Bearer ${masterKey()}` },
+      });
+      expect(res.ok(), `guardrail cleanup lookup failed (${res.status()})`).toBe(true);
+      const body: { guardrails: { guardrail_id: string; guardrail_name: string }[] } = await res.json();
+      for (const guardrail of body.guardrails.filter((row) => row.guardrail_name === name)) {
+        const deleted = await request.delete(`${rootPath()}/guardrails/${guardrail.guardrail_id}`, {
+          headers: { Authorization: `Bearer ${masterKey()}` },
+        });
+        expect(deleted.ok(), `guardrail cleanup failed (${deleted.status()})`).toBe(true);
+      }
+    }
+  },
+});
+
+interface SpendLog {
+  request_id: string;
+  proxy_server_request?: { messages?: { role: string; content: string }[] };
+  metadata?: {
+    guardrail_information?: {
+      guardrail_name: string;
+      guardrail_mode: string;
+      guardrail_status: string;
+      guardrail_provider: string;
+    }[];
+  };
+}
+
+async function readSpendLog(request: APIRequestContext, requestId: string, timeoutMs = 60_000): Promise<SpendLog> {
+  await waitForSpendLog(request, requestId, timeoutMs);
+  const res = await request.get(`${rootPath()}/spend/logs?request_id=${encodeURIComponent(requestId)}`, {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+  });
+  expect(res.ok(), `spend log read failed (${res.status()})`).toBe(true);
+  const rows: SpendLog[] = await res.json();
+  expect(rows).toHaveLength(1);
+  expect(rows[0].request_id).toBe(requestId);
+  return rows[0];
+}
+
+async function waitForGuardrailExecution(request: APIRequestContext, guardrailName: string): Promise<void> {
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    const res = await request.post(`${rootPath()}/v1/chat/completions`, {
+      headers: { Authorization: `Bearer ${masterKey()}` },
+      data: {
+        model: CHAT_MODEL_A,
+        messages: [{ role: "user", content: "Presidio readiness check." }],
+        guardrails: [guardrailName],
+        stream: false,
+      },
+    });
+    expect(res.ok(), `Presidio readiness request failed (${res.status()}): ${await res.text()}`).toBe(true);
+    const body: { id: string } = await res.json();
+    expect(body.id).toBeTruthy();
+    const row = await readSpendLog(request, body.id, Math.max(1, deadline - Date.now()));
+    const run = row.metadata?.guardrail_information?.find(
+      (record) => record.guardrail_name === guardrailName && record.guardrail_mode === "pre_call",
+    );
+    if (run) {
+      expect(run.guardrail_provider).toBe("presidio");
+      expect(run.guardrail_status).toBe("success");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  throw new Error(`Presidio guardrail ${guardrailName} never executed on the serving proxy`);
+}
 
 const RAW_EMAIL = "jane.doe@example.com";
 const RAW_PHONE = "555-867-5309";
@@ -63,14 +138,14 @@ async function deleteGuardrail(page: PlaywrightPage, guardrailName: string): Pro
 }
 
 test.describe("Presidio PII guardrail, end to end from the dashboard", () => {
-  test.use({ storageState: ADMIN_STORAGE_PATH });
+  test.use({ storageState: ADMIN_STORAGE_PATH, trace: "retain-on-failure" });
 
-  test("masks PII sent from the Playground and shows the run in Logs", async ({ page, request }) => {
-    const guardrailName = `e2e-presidio-story-${Date.now()}`;
+  test("masks PII sent from the Playground and shows the run in Logs", async ({ page, request, guardrailName }) => {
     const marker = `case-ref-${Math.random().toString(36).slice(2, 10)}`;
     const prompt = `${marker}. Email me at ${RAW_EMAIL} or call ${RAW_PHONE}.`;
 
     await createPresidioGuardrail(page, guardrailName);
+    await waitForGuardrailExecution(request, guardrailName);
 
     await openPlayground(page);
     await selectModel(page, CHAT_MODEL_A);
@@ -85,35 +160,39 @@ test.describe("Presidio PII guardrail, end to end from the dashboard", () => {
     const input = onlyVisible(page.getByPlaceholder("Type your message", { exact: false }));
     await expect(input).toBeVisible({ timeout: 15_000 });
 
-    await expect
-      .poll(
-        async () => {
-          await input.fill(prompt);
-          await sendButton(page).click();
-          const res = await request.get(`${rootPath()}/spend/logs`, {
-            headers: { Authorization: `Bearer ${masterKey()}` },
-          });
-          if (!res.ok()) return false;
-          const rows: { metadata?: { applied_guardrails?: string[] } }[] = await res.json();
-          return (Array.isArray(rows) ? rows : []).some((row) =>
-            (row.metadata?.applied_guardrails ?? []).includes(guardrailName),
-          );
-        },
-        {
-          message: `the playground never produced a request that ran ${guardrailName}`,
-          timeout: 90_000,
-          intervals: [5_000],
-        },
-      )
-      .toBe(true);
-
-    const requestId = await waitForSpendLogByPrompt(request, marker);
-
-    const stored = await request.get(`${rootPath()}/spend/logs?request_id=${requestId}`, {
-      headers: { Authorization: `Bearer ${masterKey()}` },
-    });
-    expect(stored.ok(), `spend log read failed: ${stored.status()}`).toBe(true);
-    const storedBody = JSON.stringify(await stored.json());
+    await input.fill(prompt);
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        (res) => res.request().method() === "POST" && /\/chat\/completions$/.test(new URL(res.url()).pathname),
+      ),
+      sendButton(page).click(),
+    ]);
+    const responseBody = await response.text();
+    expect(response.ok(), `Playground request failed (${response.status()}): ${responseBody}`).toBe(true);
+    expect(response.request().postDataJSON().messages).toEqual([{ role: "user", content: prompt }]);
+    expect(responseBody).toContain(MOCK_RESPONSE_TEXT);
+    const chunks: { id?: string; error?: unknown }[] = responseBody
+      .split("\n")
+      .filter((line) => line.startsWith("data: ") && line.trim() !== "data: [DONE]")
+      .map((line) => JSON.parse(line.slice(6)));
+    expect(chunks.some((chunk) => chunk.error), `Playground stream failed: ${responseBody}`).toBe(false);
+    const requestId = chunks.find((chunk) => chunk.id)?.id ?? "";
+    expect(requestId, "Playground stream has no completion ID").toBeTruthy();
+    const stored = await readSpendLog(request, requestId);
+    expect(stored.metadata?.guardrail_information).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          guardrail_name: guardrailName,
+          guardrail_mode: "pre_call",
+          guardrail_provider: "presidio",
+          guardrail_status: "success",
+        }),
+      ]),
+    );
+    expect(stored.proxy_server_request?.messages).toEqual([
+      { role: "user", content: `${marker}. Email me at <EMAIL_ADDRESS> or call <PHONE_NUMBER>.` },
+    ]);
+    const storedBody = JSON.stringify(stored);
     expect(storedBody, "the raw email reached the spend log, so the prompt was stored unmasked").not.toContain(
       RAW_EMAIL,
     );
