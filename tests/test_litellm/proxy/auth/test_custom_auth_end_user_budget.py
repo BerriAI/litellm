@@ -379,7 +379,7 @@ async def test_builder_stamps_end_user_rpm_limit_on_cache_hit():
             raise AssertionError("DB fetch must not be reached on a cache hit")
 
         with (
-            patch(
+            patch(  # test-quality-ok: must intercept cache-layer to simulate cache-hit without a real Redis/DB
                 "litellm.proxy.auth.resolvers.store.IdentityStore._resolve_key",
                 side_effect=resolve_side_effect,
             ),
@@ -389,18 +389,18 @@ async def test_builder_stamps_end_user_rpm_limit_on_cache_hit():
             # NOT get updated with end_user_params at the bottom of the builder,
             # making the unconditional update_valid_token_with_end_user_params
             # call the only place where the limits reach the returned token.
-            patch(
+            patch(  # test-quality-ok: must control DB return to isolate cache-hit path without a real DB
                 "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
-            patch(
+            patch(  # test-quality-ok: must supply end_user_id without a real request/DB round-trip
                 "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
                 new_callable=AsyncMock,
                 return_value="alice@example.com",
             ),
             # Simulate max_end_user_budget_id path: default budget provides limits
-            patch(
+            patch(  # test-quality-ok: must return a known budget without a real DB to assert rpm_limit propagation
                 "litellm.proxy.auth.auth_checks.get_default_end_user_budget",
                 new_callable=AsyncMock,
                 return_value=LiteLLM_BudgetTable(rpm_limit=5, tpm_limit=1000),
