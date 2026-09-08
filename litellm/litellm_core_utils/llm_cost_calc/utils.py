@@ -981,7 +981,6 @@ def _calculate_input_cost(
             prompt_tokens_details["audio_length_seconds"],
         )
 
-    ### QUERY COUNT COST
     if prompt_tokens_details["query_count"]:
         prompt_cost += calculate_cost_component(
             model_info, "input_cost_per_query", prompt_tokens_details["query_count"]
