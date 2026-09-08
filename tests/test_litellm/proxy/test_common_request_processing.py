@@ -8014,3 +8014,22 @@ class TestDetachedStreamFailureHook:
         await logging_obj._on_detached_stream_failure(failure)
 
         assert [call["original_exception"] for call in recorder.calls] == [failure]
+
+
+def test_passthrough_streaming_headers_drop_upstream_content_length():
+    """The proxy must recalculate framing headers for streamed passthrough bodies."""
+    merged = ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
+        response_headers=httpx.Headers(
+            {
+                "content-type": "application/json",
+                "content-length": "0",
+                "transfer-encoding": "chunked",
+            }
+        ),
+        custom_headers={"x-litellm-model-id": "bedrock/claude"},
+    )
+
+    assert merged["content-type"] == "application/json"
+    assert merged["x-litellm-model-id"] == "bedrock/claude"
+    assert "content-length" not in merged
+    assert "transfer-encoding" not in merged

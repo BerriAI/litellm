@@ -1545,6 +1545,7 @@ class ProxyBaseLLMRequestProcessing:
         excluded_headers: Final = {  # mutable-ok: set of header names to exclude from forwarding
             "transfer-encoding",
             "content-encoding",
+            "content-length",
             "set-cookie",
             "connection",
             "keep-alive",
