@@ -51,7 +51,7 @@ def _sign_get_request(
     except ImportError:
         raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-    request: Final = AWSRequest(method="GET", url=url, data=None, headers=dict(headers))
+    request: Final = AWSRequest(method="GET", url=url, data=None, headers=headers)
     SigV4Auth(credentials, "bedrock", aws_region_name).add_auth(request)
     return request.prepare()
 

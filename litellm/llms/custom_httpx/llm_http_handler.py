@@ -1742,6 +1742,12 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        logging_obj.post_call(
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
+
         return self._transform_ocr_response(
             provider_config=provider_config,
             model=model,
@@ -1804,6 +1810,12 @@ class BaseLLMHTTPHandler:
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        logging_obj.post_call(
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
 
         # Use async response transform for async operations
         return await provider_config.async_transform_ocr_response(
