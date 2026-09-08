@@ -246,12 +246,12 @@ class TestCooldownCacheTTLCorrection:
             "timestamp": time.time() - 120.0,
             "cooldown_time": 60.0,
         }
-        cc.cache.in_memory_cache.set_cache(key, expired_value, ttl=600)
+        cc.in_memory_cache.set_cache(key, expired_value, ttl=600)
 
         active = cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
 
         assert active == [], "Expired cooldown entry must not appear in active cooldowns"
-        assert cc.cache.in_memory_cache.get_cache(key) is None, "Expired entry must be evicted from in-memory cache"
+        assert cc.in_memory_cache.get_cache(key) is None, "Expired entry must be evicted from in-memory cache"
 
     def test_active_entry_is_returned(self):
         """
@@ -267,7 +267,7 @@ class TestCooldownCacheTTLCorrection:
             "timestamp": time.time(),
             "cooldown_time": 60.0,
         }
-        cc.cache.in_memory_cache.set_cache(key, active_value, ttl=60)
+        cc.in_memory_cache.set_cache(key, active_value, ttl=60)
 
         active = cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
 
@@ -290,14 +290,14 @@ class TestCooldownCacheTTLCorrection:
             "timestamp": time.time() - (60.0 - remaining),
             "cooldown_time": 60.0,
         }
-        cc.cache.in_memory_cache.set_cache(key, value, ttl=600)
+        cc.in_memory_cache.set_cache(key, value, ttl=600)
 
-        before_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+        before_expiry = cc.in_memory_cache.ttl_dict.get(key)
         assert before_expiry is not None
 
         cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
 
-        after_expiry = cc.cache.in_memory_cache.ttl_dict.get(key)
+        after_expiry = cc.in_memory_cache.ttl_dict.get(key)
         assert after_expiry is not None
         corrected_remaining = after_expiry - time.time()
         assert corrected_remaining <= 60.0, "Corrected TTL must not exceed 60s"
@@ -318,12 +318,12 @@ class TestCooldownCacheTTLCorrection:
             "timestamp": time.time() - 120.0,
             "cooldown_time": 60.0,
         }
-        cc.cache.in_memory_cache.set_cache(key, expired_value, ttl=600)
+        cc.in_memory_cache.set_cache(key, expired_value, ttl=600)
 
         active = await cc.async_get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
 
         assert active == [], "Expired entry must not appear in async active cooldowns"
-        assert cc.cache.in_memory_cache.get_cache(key) is None
+        assert cc.in_memory_cache.get_cache(key) is None
 
 
 class TestFallbackDeploymentCooldown:

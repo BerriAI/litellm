@@ -102,6 +102,8 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 raise BedrockError(
                     status_code=response.status_code,
                     message=error_text,
+                    headers=response.headers,
+                    response=response,
                 )
 
             bedrock_response: Final = response.json()
@@ -124,6 +126,8 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             raise BedrockError(
                 status_code=e.response.status_code,
                 message=e.response.text,
+                headers=e.response.headers,
+                response=e.response,
             )
         except Exception as e:
             verbose_logger.error("Error in CountTokens handler: %s", e)
