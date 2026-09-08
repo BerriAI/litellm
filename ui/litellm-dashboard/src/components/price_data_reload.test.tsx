@@ -75,6 +75,19 @@ describe("PriceDataReload", () => {
     expect(screen.getByText(new Date(provenance.loaded_at).toLocaleString())).toBeInTheDocument();
   });
 
+  it("shows a malformed generated_at stamp as-is instead of Invalid Date", async () => {
+    vi.mocked(getModelCostMapSource).mockResolvedValue({
+      ...remoteSource,
+      ...provenance,
+      generated_at: "yesterday-ish",
+    } as never);
+    render(<PriceDataReload accessToken="sk-test" />);
+
+    expect(await screen.findByText("Generated at:")).toBeInTheDocument();
+    expect(screen.getByText("yesterday-ish")).toBeInTheDocument();
+    expect(screen.queryByText("Invalid Date")).not.toBeInTheDocument();
+  });
+
   it("hides the provenance rows when the loaded map carries no stamp", async () => {
     render(<PriceDataReload accessToken="sk-test" />);
 

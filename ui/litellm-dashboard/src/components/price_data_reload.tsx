@@ -99,11 +99,8 @@ const isValidReloadInterval = (value: number) => {
 
 const formatDateTime = (dateTimeString: string | null) => {
   if (!dateTimeString) return "Never";
-  try {
-    return new Date(dateTimeString).toLocaleString();
-  } catch {
-    return dateTimeString;
-  }
+  const parsed = new Date(dateTimeString);
+  return Number.isNaN(parsed.getTime()) ? dateTimeString : parsed.toLocaleString();
 };
 
 const CostMapProvenanceRows: React.FC<{ sourceInfo: CostMapSourceInfo }> = ({ sourceInfo }) => (
