@@ -9,6 +9,9 @@ on:
   schedule:
     - cron: "0 2 * * *" # daily 02:00 UTC
   workflow_dispatch:
+  # external trigger: POST /repos/<owner>/<repo>/dispatches {"event_type":"dbx-monitor"}
+  repository_dispatch:
+    types: [dbx-monitor]
 
 permissions:
   contents: write
@@ -22,9 +25,9 @@ env:
 
 jobs:
   monitor-db-pricing:
-    # once merged the cron fires on both repos; upstream owns the schedule,
-    # the fork stays dispatch-only so the two never race on the same base
-    if: github.repository == 'BerriAI/litellm' || github.event_name == 'workflow_dispatch'
+    # the merged cron fires on both repos; upstream owns the schedule so the
+    # two never race on the same base. manual triggers run on either repo.
+    if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
