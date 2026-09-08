@@ -147,8 +147,8 @@ pub fn build_provider_request(
 pub async fn build_pre_call_request(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<super::types::ChatPreCallRequest, Error> {
-    use super::transformation::PreCallBody;
     use super::types::{ChatBodySnapshot, ChatEndpoint, ChatPreCallRequest};
+    use crate::lifecycle::RequestBodyBehavior;
 
     let built = build_provider_request(resolve_request(request)?)?;
     let endpoint = ChatEndpoint {
@@ -157,8 +157,8 @@ pub async fn build_pre_call_request(
         url: built.url.clone(),
         timeout: built.timeout,
     };
-    match built.config.pre_call_body() {
-        PreCallBody::Live => {
+    match built.config.request_body_behavior() {
+        RequestBodyBehavior::STRUCTURED_AT_SEND => {
             let mut generated = built
                 .body
                 .as_object()
@@ -173,24 +173,25 @@ pub async fn build_pre_call_request(
             for name in &parameter_fields {
                 generated.remove(name);
             }
-            Ok(ChatPreCallRequest::Live {
+            Ok(ChatPreCallRequest::StructuredAtSend {
                 endpoint,
                 generated,
                 parameter_fields,
                 headers: built.upstream_headers,
             })
         }
-        PreCallBody::Serialized => {
+        RequestBodyBehavior::SERIALIZED_AT_BUILD => {
             let logging_body = serde_json::to_string(&built.body).map_err(|error| {
                 Error::InvalidRequest(format!("could not encode chat request: {error}"))
             })?;
             let body = logging_body.as_bytes().to_vec();
             let headers = super::handler::signed_headers(&built, &body).await?;
-            Ok(ChatPreCallRequest::Serialized {
+            Ok(ChatPreCallRequest::SerializedAtBuild {
                 snapshot: ChatBodySnapshot { endpoint, body },
                 logging_body,
                 headers,
             })
         }
+        _ => Err(Error::Unsupported("chat request body behavior")),
     }
 }

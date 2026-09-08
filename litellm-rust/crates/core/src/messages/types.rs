@@ -56,6 +56,10 @@ pub struct MessagesEndpoint {
 pub struct MessagesBodySnapshot(Value);
 
 impl MessagesEndpoint {
+    pub fn request_body_behavior(&self) -> crate::lifecycle::RequestBodyBehavior {
+        crate::lifecycle::RequestBodyBehavior::STRUCTURED_AT_BUILD
+    }
+
     pub fn url(&self) -> &str {
         &self.url
     }

@@ -73,6 +73,10 @@ fn builds_provider_template_auth_and_url() {
     assert_eq!(built.endpoint.url(), "https://ocr.example/v1/ocr");
     assert_eq!(built.endpoint.timeout_seconds(), 2.0);
     assert_eq!(
+        built.request_body_behavior(),
+        litellm_core::lifecycle::RequestBodyBehavior::STRUCTURED_AT_SEND
+    );
+    assert_eq!(
         built.document_projection,
         OcrDocumentProjection::RetainedDocument
     );

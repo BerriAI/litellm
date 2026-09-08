@@ -168,8 +168,8 @@ fn invoke(
 }
 
 enum PendingChatRequest {
-    Live(litellm_core::chat_completions::types::ChatEndpoint),
-    Serialized(litellm_core::chat_completions::types::ChatBodySnapshot),
+    ReadBodyAtSend(litellm_core::chat_completions::types::ChatEndpoint),
+    BodySnapshot(litellm_core::chat_completions::types::ChatBodySnapshot),
 }
 
 #[pyfunction]
@@ -215,7 +215,7 @@ fn build_request(
         core_error_to_pyerr,
     )?;
     let (body, pending, header_values) = match built {
-        ChatPreCallRequest::Live {
+        ChatPreCallRequest::StructuredAtSend {
             endpoint,
             generated,
             parameter_fields,
@@ -230,15 +230,19 @@ fn build_request(
                     body.set_item(&name, params.get_item(&name)?)?;
                 }
             }
-            (body.into_any(), PendingChatRequest::Live(endpoint), headers)
+            (
+                body.into_any(),
+                PendingChatRequest::ReadBodyAtSend(endpoint),
+                headers,
+            )
         }
-        ChatPreCallRequest::Serialized {
+        ChatPreCallRequest::SerializedAtBuild {
             snapshot,
             logging_body,
             headers,
         } => (
             logging_body.into_pyobject(py)?.into_any(),
-            PendingChatRequest::Serialized(snapshot),
+            PendingChatRequest::BodySnapshot(snapshot),
             headers,
         ),
     };
@@ -247,7 +251,7 @@ fn build_request(
         headers.set_item(name, value)?;
     }
     let headers = match &pending {
-        PendingChatRequest::Live(_) => {
+        PendingChatRequest::ReadBodyAtSend(_) => {
             match bag
                 .get_item("extra_headers")?
                 .filter(|value| !value.is_none())
@@ -259,7 +263,7 @@ fn build_request(
                 None => headers.into_any(),
             }
         }
-        PendingChatRequest::Serialized(_) => py
+        PendingChatRequest::BodySnapshot(_) => py
             .import("botocore.awsrequest")?
             .getattr("HeadersDict")?
             .call1((headers,))?,
@@ -333,10 +337,10 @@ fn take_request(py: Python<'_>, state: &Py<ChatCompletionsState>) -> PyResult<Ow
         (pending, context, roots.body(py), roots.headers(py))
     };
     let snapshot = match pending {
-        PendingChatRequest::Live(endpoint) => endpoint
+        PendingChatRequest::ReadBodyAtSend(endpoint) => endpoint
             .capture_body(from_py(&body)?)
             .map_err(core_error_to_pyerr)?,
-        PendingChatRequest::Serialized(snapshot) => snapshot,
+        PendingChatRequest::BodySnapshot(snapshot) => snapshot,
     };
     let headers = headers
         .call_method0("items")?

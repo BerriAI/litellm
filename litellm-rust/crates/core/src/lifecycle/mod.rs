@@ -4,6 +4,7 @@ pub mod execution;
 pub mod machine;
 pub mod ocr;
 pub mod program;
+pub mod request_body;
 mod streaming;
 pub mod terminal;
 pub mod types;
@@ -16,6 +17,7 @@ pub use execution::{
 };
 pub use machine::{Lifecycle, LifecycleRoute};
 pub use program::{Commitment, FailureStage};
+pub use request_body::{BodyReadPoint, CallbackBodyView, RequestBodyBehavior};
 pub use streaming::{
     BytesStream, StreamingCall, StreamingCompletion, StreamingMetadata, StreamingObserver,
     StreamingSource,

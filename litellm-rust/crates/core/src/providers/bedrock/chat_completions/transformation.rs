@@ -105,8 +105,8 @@ fn has_blank_text(message: &ChatMessage) -> bool {
 }
 
 impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
-    fn pre_call_body(&self) -> crate::chat_completions::transformation::PreCallBody {
-        crate::chat_completions::transformation::PreCallBody::Serialized
+    fn request_body_behavior(&self) -> crate::lifecycle::RequestBodyBehavior {
+        crate::lifecycle::RequestBodyBehavior::SERIALIZED_AT_BUILD
     }
 
     fn complete_url(

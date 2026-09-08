@@ -1,4 +1,5 @@
 pub mod audio_transcription;
+pub mod auth;
 pub mod chat_completions;
 pub mod constants;
 pub mod error;

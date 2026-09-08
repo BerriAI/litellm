@@ -37,7 +37,7 @@ core/src/messages/
   mod.rs             # pub async fn messages(..) -> Result<.., Error>  (+ _stream for SSE)
   types.rs           # request/response types
   transformation.rs  # the provider template trait
-  prepare.rs         # provider resolution, auth headers, URL
+  request.rs         # provider resolution, auth headers, URL and body construction
   handler.rs         # the provider call
   client.rs          # the shared reqwest client
 ```
@@ -101,6 +101,8 @@ errors are language-neutral.
 
 ```
 core must not depend on PyO3, Axum or gateway integration types
+cloud-auth crates own reusable native credential and signing mechanisms
+core owns provider precedence, header policy and authorization timing
 Tower/Axum types stop at the gateway adapter boundary
 provider transformation, auth and I/O remain in core
 request-scoped host state belongs to a call session

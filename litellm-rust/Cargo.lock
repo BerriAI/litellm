@@ -1424,6 +1424,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-auth-aws"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-sts",
+ "aws-sigv4",
+ "aws-smithy-runtime-api",
+ "aws-types",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-config"
 version = "0.1.0"
 dependencies = [
@@ -1437,16 +1451,11 @@ dependencies = [
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
- "aws-config",
- "aws-credential-types",
- "aws-sdk-sts",
- "aws-sigv4",
- "aws-smithy-runtime-api",
- "aws-types",
  "base64",
  "bytes",
  "futures-channel",
  "futures-util",
+ "litellm-auth-aws",
  "rand 0.8.7",
  "reqwest",
  "rstest",
@@ -1454,7 +1463,6 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",

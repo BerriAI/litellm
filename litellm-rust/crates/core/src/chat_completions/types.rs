@@ -70,13 +70,13 @@ pub struct SettledChatRequest {
 }
 
 pub enum ChatPreCallRequest {
-    Live {
+    StructuredAtSend {
         endpoint: ChatEndpoint,
         generated: Map<String, Value>,
         parameter_fields: Vec<String>,
         headers: Vec<(String, String)>,
     },
-    Serialized {
+    SerializedAtBuild {
         snapshot: ChatBodySnapshot,
         logging_body: String,
         headers: Vec<(String, String)>,

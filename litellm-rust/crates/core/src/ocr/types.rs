@@ -67,6 +67,12 @@ pub struct OcrPreCallRequest {
     pub parameter_fields: &'static [&'static str],
 }
 
+impl OcrPreCallRequest {
+    pub fn request_body_behavior(&self) -> crate::lifecycle::RequestBodyBehavior {
+        crate::lifecycle::RequestBodyBehavior::STRUCTURED_AT_SEND
+    }
+}
+
 pub struct OcrEndpoint {
     pub(super) model: String,
     pub(super) custom_llm_provider: String,
