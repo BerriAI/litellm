@@ -4839,3 +4839,112 @@ def test_delete_file_answers_400_for_an_id_outside_the_configured_bucket(mocker:
 
     assert response.status_code == 400, response.text
     assert "configured storage bucket" in response.json()["error"]["message"]
+
+
+def _bedrock_batch_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+            },
+        ]
+    )
+
+
+RAW_S3_FILE_ID: Final = "s3://my-bucket/litellm-batch-outputs/job-123/abc/input.jsonl.out"
+
+
+@pytest.mark.parametrize("route_prefix", ("/bedrock/v1/files", "/v1/files", "/files"))
+def test_delete_file_answers_403_for_a_raw_cloud_id_from_a_non_admin_key(
+    mocker: MockerFixture, monkeypatch, route_prefix: str
+):
+    from urllib.parse import quote
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    bedrock_router = _bedrock_batch_router()
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", bedrock_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+    afile_delete = mocker.AsyncMock()
+    monkeypatch.setattr(litellm, "afile_delete", afile_delete)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        models=["bedrock-claude"],
+    )
+
+    try:
+        response = client.delete(
+            f"{route_prefix}/{quote(RAW_S3_FILE_ID, safe='')}?model=bedrock-claude",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 403, response.text
+    assert "proxy admin" in response.json()["error"]["message"]
+    afile_delete.assert_not_called()
+
+
+def test_delete_file_forwards_a_raw_cloud_id_from_a_proxy_admin_key(mocker: MockerFixture, monkeypatch):
+    from urllib.parse import quote
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    bedrock_router = _bedrock_batch_router()
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", bedrock_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    captured_kwargs: dict = {}
+
+    async def _mock_afile_delete(**kwargs):
+        captured_kwargs.update(kwargs)
+        return OpenAIFileObject(
+            id=RAW_S3_FILE_ID,
+            object="file",
+            bytes=2,
+            created_at=1234567890,
+            filename="input.jsonl.out",
+            purpose="batch_output",
+            status="processed",
+        )
+
+    monkeypatch.setattr(litellm, "afile_delete", _mock_afile_delete)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.delete(
+            f"/bedrock/v1/files/{quote(RAW_S3_FILE_ID, safe='')}?model=bedrock-claude",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    assert captured_kwargs.get("file_id") == RAW_S3_FILE_ID
+    assert captured_kwargs.get("custom_llm_provider") == "bedrock"
+    proxy_logging_obj.post_call_failure_hook.assert_not_called()

@@ -1285,6 +1285,11 @@ async def delete_file(
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         )
+        if is_managed_cloud_storage_uri(file_id) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Raw cloud storage file ids can only be deleted by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
+            )
 
         custom_llm_provider: Final = (
             provider
