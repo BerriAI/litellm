@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
 from botocore.credentials import RefreshableCredentials
 
 REFRESH_RELEASE_TIMEOUT_SECONDS: Final = 2.0
+REFRESH_START_TIMEOUT_SECONDS: Final = 10.0
 
 
 class EventLoopProbe:
@@ -47,6 +49,9 @@ class EventLoopProbe:
         )
 
     async def release_refresh_from_the_loop(self) -> None:
+        deadline: Final = time.monotonic() + REFRESH_START_TIMEOUT_SECONDS
         while not self.refresh_started.is_set():
+            if time.monotonic() > deadline:
+                raise TimeoutError("signing finished without ever starting a credential refresh")
             await asyncio.sleep(0.005)
         self.loop_served.set()

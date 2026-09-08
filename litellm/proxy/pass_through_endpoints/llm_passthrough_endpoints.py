@@ -86,9 +86,6 @@ from litellm.utils import ProviderConfigManager
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
 if TYPE_CHECKING:
-    from botocore.awsrequest import AWSPreparedRequest
-    from botocore.credentials import Credentials
-
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.router import Router
 
@@ -1134,6 +1131,7 @@ async def bedrock_proxy_route(
     )
 
     # Add or update query parameters
+    from litellm.llms.bedrock.base_aws_llm import sign_aws_json_post
     from litellm.llms.bedrock.chat import BedrockConverseLLM
 
     bedrock_llm: Final = BedrockConverseLLM()
@@ -1143,7 +1141,7 @@ async def bedrock_proxy_route(
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
     prepped: Final = await asyncio.to_thread(
-        _sign_aws_json_post,
+        sign_aws_json_post,
         get_credentials=bedrock_llm.get_credentials,
         service_name="bedrock",
         aws_region_name=aws_region_name,
@@ -1176,25 +1174,6 @@ async def bedrock_proxy_route(
     )
 
     return received_value
-
-
-def _sign_aws_json_post(
-    get_credentials: Callable[[], Credentials],
-    service_name: str,
-    aws_region_name: str | None,
-    url: str,
-    body: str,
-    headers: Mapping[str, str],
-) -> AWSPreparedRequest:
-    try:
-        from botocore.auth import SigV4Auth
-        from botocore.awsrequest import AWSRequest
-    except ImportError:
-        raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.")
-
-    aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
-    SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
-    return aws_request.prepare()
 
 
 COMPREHEND_MEDICAL_TARGET_PREFIX: Final = "ComprehendMedical_20181030"
@@ -1257,11 +1236,11 @@ async def comprehend_medical_proxy_route(
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
 
-    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, sign_aws_json_post
 
     target_url: Final = f"https://comprehendmedical.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
     prepped: Final = await asyncio.to_thread(
-        _sign_aws_json_post,
+        sign_aws_json_post,
         get_credentials=partial(BaseAWSLLM().get_credentials, aws_region_name=aws_region_name),
         service_name="comprehendmedical",
         aws_region_name=aws_region_name,

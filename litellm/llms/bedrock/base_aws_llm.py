@@ -1671,6 +1671,25 @@ class BaseAWSLLM:
         return request_headers_dict, request.body
 
 
+def sign_aws_json_post(
+    get_credentials: Callable[[], Credentials],
+    service_name: str,
+    aws_region_name: str | None,
+    url: str,
+    body: str,
+    headers: Mapping[str, str],
+) -> AWSPreparedRequest:
+    try:
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+    except ImportError:
+        raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.")
+
+    aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
+    SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
+    return aws_request.prepare()
+
+
 _SignParams = ParamSpec("_SignParams")
 _SignedRequest = TypeVar("_SignedRequest")
 
