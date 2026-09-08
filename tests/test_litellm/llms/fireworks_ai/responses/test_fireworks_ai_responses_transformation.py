@@ -162,7 +162,7 @@ def test_responses_call_forwards_previous_response_id_and_store() -> None:
     assert body["input"][0]["call_id"] == "call_abc123"
 
 
-def test_responses_call_hoists_developer_items_into_one_leading_system_message() -> None:
+def test_responses_call_folds_developer_items_into_instructions() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
@@ -175,14 +175,14 @@ def test_responses_call_hoists_developer_items_into_one_leading_system_message()
             api_key="fw-test-key",
         )
     _, _, body = _sent_request(client)
+    assert body["instructions"] == "Answer with exactly one word."
     assert tuple(body["input"]) == (
-        {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
         {"role": "user", "content": "Hi there"},
         {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
     )
 
 
-def test_responses_call_folds_instructions_and_developer_item_into_one_leading_system_message() -> None:
+def test_responses_call_folds_instructions_and_developer_item_into_instructions_with_reasoning_replayed() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
@@ -208,16 +208,10 @@ def test_responses_call_folds_instructions_and_developer_item_into_one_leading_s
             api_key="fw-test-key",
         )
     _, _, body = _sent_request(client)
-    assert "instructions" not in body
+    assert body["instructions"] == (
+        "You are a coding agent running in the Codex CLI.\n\n<permissions instructions>read-only</permissions instructions>"
+    )
     assert tuple(body["input"]) == (
-        {
-            "role": "system",
-            "content": (
-                "You are a coding agent running in the Codex CLI.\n\n"
-                "<permissions instructions>read-only</permissions instructions>"
-            ),
-            "type": "message",
-        },
         {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
         {"id": "rs_1", "type": "reasoning", "summary": [{"type": "summary_text", "text": "A trivial question."}]},
         {
@@ -231,41 +225,103 @@ def test_responses_call_folds_instructions_and_developer_item_into_one_leading_s
     )
 
 
-def test_responses_call_keeps_non_text_developer_parts_on_the_leading_system_message() -> None:
+def test_responses_call_folds_instructions_and_developer_item_with_previous_response_id() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
             model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
-            instructions="Answer with one word.",
+            instructions="You are a terse assistant.",
             input=[  # mutable-ok: the Responses API takes input as a JSON list
-                {
-                    "role": "developer",
-                    "content": [
-                        {"type": "input_text", "text": "Match the style of this reference image."},
-                        {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"},
-                    ],
-                },
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "user", "content": "And of Spain?"},
+            ],
+            previous_response_id="resp_0e946f2d46bf4b49bf8b29ff78083583",
+            store=True,
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert body["instructions"] == "You are a terse assistant.\n\nAnswer with exactly one word."
+    assert body["previous_response_id"] == "resp_0e946f2d46bf4b49bf8b29ff78083583"
+    assert tuple(body["input"]) == ({"role": "user", "content": "And of Spain?"},)
+
+
+def test_responses_call_keeps_a_closing_developer_item_after_an_assistant_turn_in_place() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
+    assistant_turn: Final = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "Paris.", "annotations": []}],
+    }
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
+            instructions="Be terse.",
+            input=[  # mutable-ok: the Responses API takes input as a JSON list
+                {"role": "developer", "content": "Answer with exactly one word."},
+                {"role": "user", "content": "What is the capital of France?"},
+                assistant_turn,
+                {"role": "developer", "content": "Now restate it in French."},
+            ],
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert body["instructions"] == "Be terse.\n\nAnswer with exactly one word."
+    assert tuple(body["input"]) == (
+        {"role": "user", "content": "What is the capital of France?"},
+        assistant_turn,
+        {"role": "system", "content": "Now restate it in French.", "type": "message"},
+    )
+
+
+def test_responses_call_keeps_a_mid_conversation_system_item_in_place() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            input=[  # mutable-ok: the Responses API takes input as a JSON list
+                {"role": "user", "content": "Hi there"},
+                {"role": "system", "content": "Switch to French."},
                 {"role": "user", "content": "What is the capital of France?"},
             ],
-            store=False,
             api_key="fw-test-key",
         )
     _, _, body = _sent_request(client)
     assert "instructions" not in body
     assert tuple(body["input"]) == (
-        {
-            "role": "system",
-            "content": [
-                {"type": "input_text", "text": "Answer with one word.\n\nMatch the style of this reference image."},
-                {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"},
-            ],
-            "type": "message",
-        },
+        {"role": "user", "content": "Hi there"},
+        {"role": "system", "content": "Switch to French."},
         {"role": "user", "content": "What is the capital of France?"},
     )
 
 
-def test_responses_call_turns_string_input_with_instructions_into_system_then_user_messages() -> None:
+def test_responses_call_keeps_a_developer_item_with_non_text_parts_in_place_as_a_system_item() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
+    developer_item: Final = {
+        "role": "developer",
+        "content": [
+            {"type": "input_text", "text": "Match the style of this reference image."},
+            {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"},
+        ],
+    }
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
+            instructions="Answer with one word.",
+            input=[developer_item, {"role": "user", "content": "What is the capital of France?"}],  # mutable-ok: JSON list
+            store=False,
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert body["instructions"] == "Answer with one word."
+    assert tuple(body["input"]) == (
+        {"role": "system", "content": developer_item["content"], "type": "message"},
+        {"role": "user", "content": "What is the capital of France?"},
+    )
+
+
+def test_responses_call_forwards_string_input_and_instructions_unchanged() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
@@ -275,10 +331,24 @@ def test_responses_call_turns_string_input_with_instructions_into_system_then_us
             api_key="fw-test-key",
         )
     _, _, body = _sent_request(client)
-    assert "instructions" not in body
-    assert tuple(body["input"]) == (
+    assert body["instructions"] == "Answer with exactly one word."
+    assert body["input"] == "What is the capital of France?"
+
+
+def test_transform_request_forwards_non_string_instructions_and_input_untouched() -> None:
+    developer_item: Final = {"role": "developer", "content": "Answer with exactly one word."}
+    user_item: Final = {"role": "user", "content": "What is the capital of France?"}
+    request: Final = FireworksAIResponsesAPIConfig().transform_responses_api_request(
+        model="accounts/fireworks/models/kimi-k3",
+        input=cast(ResponseInputParam, [developer_item, user_item]),  # mutable-ok: JSON list
+        response_api_optional_request_params={"instructions": ["not", "a", "string"]},  # mutable-ok: base takes a dict
+        litellm_params=GenericLiteLLMParams(),
+        headers={},  # mutable-ok: base takes a dict
+    )
+    assert request["instructions"] == ["not", "a", "string"]
+    assert tuple(request["input"]) == (
         {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
-        {"role": "user", "content": "What is the capital of France?"},
+        user_item,
     )
 
 
@@ -305,8 +375,8 @@ def test_responses_call_maps_pydantic_developer_items_and_replays_pydantic_outpu
             model="fireworks_ai/accounts/fireworks/models/kimi-k3", input=pydantic_input, api_key="fw-test-key"
         )
     _, _, body = _sent_request(client)
+    assert body["instructions"] == "Answer with exactly one word."
     assert tuple(body["input"]) == (
-        {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
         {"id": "rs_1", "summary": [], "type": "reasoning"},
         {
             "id": "fc_1",
