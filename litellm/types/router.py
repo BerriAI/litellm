@@ -104,6 +104,22 @@ class RetryPolicy(BaseModel):
     RateLimitErrorRetries: int | None = None
     ContentPolicyViolationErrorRetries: int | None = None
     InternalServerErrorRetries: int | None = None
+    ServiceUnavailableErrorRetries: int | None = None
+    DefaultRetries: int | None = None
+
+
+OptionalPreCallChecks = list[
+    Literal[
+        "prompt_caching",
+        "router_budget_limiting",
+        "responses_api_deployment_check",
+        "deployment_affinity",
+        "session_affinity",
+        "forward_client_headers_by_model_group",
+        "enforce_model_rate_limits",
+        "encrypted_content_affinity",
+    ]
+]
 
 
 class UpdateRouterConfig(BaseModel):
@@ -128,6 +144,7 @@ class UpdateRouterConfig(BaseModel):
     model_group_alias: dict[str, str | dict] | None = {}
     enable_tag_filtering: bool | None = None
     tag_routing_prefix: str | None = None
+    optional_pre_call_checks: OptionalPreCallChecks | None = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -343,6 +360,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     auto_router_default_model: str | None = None
     auto_router_embedding_model: str | None = None
     auto_router_max_input_chars: int | None = None
+    # Compression policy for the two hops of a routed request. Both unset means the
+    # request's own compression guardrails apply to both, as they always have.
+    auto_router_routing_compression: str | None = None
+    auto_router_model_compression: str | None = None
 
     # complexity-router params
     complexity_router_config: dict | None = None
@@ -869,18 +890,16 @@ class FallbackAccessCheck(Protocol):
     async def __call__(self, *, model: str, request_kwargs: Mapping[str, object], llm_router: "Router") -> bool: ...
 
 
-OptionalPreCallChecks = list[
-    Literal[
-        "prompt_caching",
-        "router_budget_limiting",
-        "responses_api_deployment_check",
-        "deployment_affinity",
-        "session_affinity",
-        "forward_client_headers_by_model_group",
-        "enforce_model_rate_limits",
-        "encrypted_content_affinity",
-    ]
-]
+class AutoRouterCapabilityLimit(Protocol):
+    """
+    Resolves how many complexity routers may claim each licensed capability right now; None means unlimited.
+
+    The Router calls it on every registration and limit query instead of caching the answer, so the
+    proxy can keep the limit on its license object (re-verified on config load) rather than hand
+    over a snapshot.
+    """
+
+    def __call__(self) -> int | None: ...
 
 
 class LiteLLM_RouterFileObject(TypedDict, total=False):

@@ -3988,6 +3988,78 @@ async def test_pass_through_request_streaming_upstream_error_returned_unchanged(
     assert failure_call_kwargs["original_exception"].status_code == 403
 
 
+class _UpstreamDroppingMidStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b'data: {"id": "chatcmpl-1", "choices": [{"delta": {"content": "hi"}}]}\n\n'
+        raise httpx.ReadError("upstream dropped the connection mid-stream")
+
+
+async def _relay_everything(body_iterator) -> list:
+    return [chunk async for chunk in body_iterator]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_mid_stream_upstream_drop_fires_failure_hook():
+    """
+    Regression: a 200 stream whose upstream dies mid-body used to end with no
+    proxy-level failure hook at all, so the request left no spend row, no
+    failure metric, and no alert; the pre-stream 4xx/5xx path already fires it.
+    """
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=_UpstreamDroppingMidStream(), headers={"content-type": "text/event-stream"})
+
+    real_handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(None)},
+    )
+    cache_dict = litellm.in_memory_llm_clients_cache.cache_dict
+    cache_key = next(key for key, cached in cache_dict.items() if cached is real_handler)
+    cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value=None)
+    mock_proxy_logging.get_proxy_hook = MagicMock(return_value=None)
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.scope = {"path": "/relay-chat"}
+    mock_request.url = MagicMock()
+    mock_request.url.path = "/relay-chat"
+    mock_request.body = AsyncMock(return_value=b'{"model": "gpt-5.6", "stream": true}')
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams({})
+
+    try:
+        with patch(  # test-quality-ok: proxy_logging_obj is a proxy_server module global read inside pass_through_request; there is no injection seam
+            "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+        ):
+            response = await pass_through_request(
+                request=mock_request,
+                target="http://target-api.com/v1/chat/completions",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+                stream=True,
+            )
+            with pytest.raises(httpx.ReadError):
+                await _relay_everything(response.body_iterator)
+            await asyncio.sleep(0)
+    finally:
+        cache_dict[cache_key] = real_handler
+
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+    failure_call_kwargs = mock_proxy_logging.post_call_failure_hook.call_args.kwargs
+    assert isinstance(failure_call_kwargs["original_exception"], httpx.ReadError)
+    request_data = failure_call_kwargs["request_data"]
+    assert request_data["litellm_call_id"]
+    assert request_data["model"] == "gpt-5.6"
+    assert isinstance(request_data["litellm_logging_obj"], LiteLLMLoggingObj)
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_non_streaming_success_unchanged():
     """Success (2xx) passthrough behavior must remain unchanged by the error fix."""
@@ -5730,3 +5802,38 @@ async def test_pass_through_request_leaves_cost_router_logger_working():
         verbose_logger.removeHandler(recorder)
 
     assert not raised, f"cost router logger raised on the passthrough logging params: {raised[0].exc_info}"
+
+
+@pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
+def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key: str):
+    """The omit marker is proxy-owned: only the pre-call policy may set it. A pass-through body that carries
+    it in its own metadata must not null out SpendLogs.session_id on a request the proxy never omitted."""
+    from litellm.constants import SESSION_ID_OMITTED_METADATA_KEY
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_session_id_for_spend_log
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={client_metadata_key: {SESSION_ID_OMITTED_METADATA_KEY: True}},
+        litellm_call_id="lit-6694-call-id",
+    )
+
+    metadata = kwargs["litellm_params"]["metadata"]
+    assert SESSION_ID_OMITTED_METADATA_KEY not in metadata
+    assert (
+        _get_session_id_for_spend_log(
+            kwargs={},
+            metadata=metadata,
+            standard_logging_payload={"trace_id": "per-call-random-trace-id"},
+            omit_when_missing=bool(metadata.get(SESSION_ID_OMITTED_METADATA_KEY)),
+        )
+        == "per-call-random-trace-id"
+    )

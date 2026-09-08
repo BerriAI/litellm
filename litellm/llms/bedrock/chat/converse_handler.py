@@ -1,4 +1,6 @@
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -19,9 +21,25 @@ from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
-from ..base_aws_llm import BaseAWSLLM, Credentials
+from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
 from ..common_utils import BedrockError, _get_all_bedrock_regions
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
+
+
+def _sigv4_principal(credentials: Credentials | None) -> Mapping[str, str]:
+    if credentials is None:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (
+                ("aws_access_key_id", credentials.access_key),
+                ("aws_secret_access_key", credentials.secret_key),
+                ("aws_session_token", credentials.token),
+            )
+            if value is not None
+        }
+    )
 
 
 def make_sync_call(
@@ -95,7 +113,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         stream,
         optional_params: dict,
         litellm_params: dict,
-        credentials: Credentials,
+        credentials: Credentials | None,
         logger_fn=None,
         headers={},
         client: AsyncHTTPHandler | None = None,
@@ -167,7 +185,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         stream,
         optional_params: dict,
         litellm_params: dict,
-        credentials: Credentials,
+        credentials: Credentials | None,
         logger_fn=None,
         headers: dict = {},
         client: AsyncHTTPHandler | None = None,
@@ -331,17 +349,21 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
+        credentials: Final[Credentials | None] = (
+            None
+            if bedrock_bearer_token(api_key) is not None
+            else self.get_credentials(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_region_name=aws_region_name,
+                aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
+                aws_role_name=aws_role_name,
+                aws_web_identity_token=aws_web_identity_token,
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_external_id=aws_external_id,
+            )
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -368,19 +390,13 @@ class BedrockConverseLLM(BaseAWSLLM):
         # The Rust core owns the whole call for the subset it accepts. Ask
         # before transforming so whichever path runs emits pre_call once, and
         # hand down the credentials, region and endpoint this handler already
-        # resolved so both paths sign as the same principal.
+        # resolved so both paths sign as the same principal. Bearer-token auth
+        # resolves no SigV4 principal at all, and each path reads that token
+        # itself.
         rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
             **optional_params,
-            **{  # mutable-ok: merged into its mutable parent above
-                key: value
-                for key, value in (
-                    ("aws_access_key_id", credentials.access_key),
-                    ("aws_secret_access_key", credentials.secret_key),
-                    ("aws_session_token", credentials.token),
-                    ("aws_region_name", aws_region_name),
-                )
-                if value is not None
-            },
+            **_sigv4_principal(credentials),
+            "aws_region_name": aws_region_name,
         }
         serves_via_rust: Final = rust_chat_completions_accepts(
             model=model,

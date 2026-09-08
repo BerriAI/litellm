@@ -35,6 +35,22 @@ class StreamTransformSink:
     holdback_per_choice: dict[int, int] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class StreamingScanKey:
+    """What a streaming guardrail round would hand to ``apply_guardrail``. Two keys
+    compare equal when the round would scan the same content again; ``stream_ended``
+    stays out of the comparison and only says whether the handler is on its
+    end-of-stream path, where an empty payload is still scanned today."""
+
+    texts: tuple[str, ...]
+    tool_calls: tuple[str, ...] = ()
+    stream_ended: bool = field(default=False, compare=False)
+
+    @property
+    def has_nothing_to_scan(self) -> bool:
+        return not self.stream_ended and not any(self.texts) and not self.tool_calls
+
+
 class BaseTranslation(ABC):
     delivers_ended_stream_text_rewrites: ClassVar[bool] = False
     """Whether ``process_output_streaming_response`` accepts
@@ -46,7 +62,7 @@ class BaseTranslation(ABC):
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
         user_api_key_dict: Any | None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Transform user_api_key_dict to a metadata dict with prefixed keys.
 
@@ -69,7 +85,7 @@ class BaseTranslation(ABC):
             return {}
 
         # Transform keys to be prefixed with 'user_api_key_'
-        transformed: Final = {}
+        transformed: Final[dict[str, object]] = {}
         for key, value in user_dict.items():
             # Skip None values and internal fields
             if value is None or key.startswith("_"):
@@ -164,11 +180,14 @@ class BaseTranslation(ABC):
         """
         return responses_so_far
 
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        return None
+
     def build_block_sse_chunks(
         self,
         exc: "ModifyResponseException",
         stream_started: bool = False,
-        responses_so_far: Sequence[Any] | None = None,
+        responses_so_far: Sequence[object] | None = None,
     ) -> Sequence[bytes] | None:
         """
         Build the streaming chunks that deliver a guardrail block message and
@@ -191,8 +210,8 @@ class BaseTranslation(ABC):
     def build_stream_error_items(
         self,
         exc: "HTTPException",
-        responses_so_far: Sequence[Any] | None = None,
-    ) -> Sequence[Any] | None:
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
         """
         Build the stream items that surface a guardrail HTTPException (a block
         with the default exception-on-block config, or a failed scan) after the

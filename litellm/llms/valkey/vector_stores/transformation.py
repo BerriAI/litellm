@@ -15,7 +15,10 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm.llms.base_llm.vector_store.transformation import BaseDirectVectorStoreConfig
+from litellm.llms.base_llm.vector_store.transformation import (
+    BaseDirectVectorStoreConfig,
+    VectorStoreEmbeddingExecutor,
+)
 from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
 from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
@@ -213,6 +216,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: "LiteLLMLoggingObj",
         litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         params: Final = _ValkeySearchParams.model_validate(litellm_params)
@@ -222,10 +226,18 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             embedding_field=params.embedding_field,
             text_field=params.text_field,
         )
-        embedding_response: Final = self.embedding_fn(
-            model=params.require_embedding_model(),
-            input=[query_text],  # mutable-ok: litellm.embedding's input contract is a list
-            **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
+        embedding_response: Final = (
+            embedding_executor.embed(
+                params.require_embedding_model(),
+                query_text,
+                params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
+            )
+            if embedding_executor is not None
+            else self.embedding_fn(
+                model=params.require_embedding_model(),
+                input=[query_text],  # mutable-ok: the injected embedding callable requires list input
+                **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
+            )
         )
         vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}  # mutable-ok: redis-py API
 
@@ -252,6 +264,7 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: "LiteLLMLoggingObj",
         litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         params: Final = _ValkeySearchParams.model_validate(litellm_params)
@@ -261,10 +274,18 @@ class ValkeyVectorStoreConfig(BaseDirectVectorStoreConfig):
             embedding_field=params.embedding_field,
             text_field=params.text_field,
         )
-        embedding_response: Final = await self.aembedding_fn(
-            model=params.require_embedding_model(),
-            input=[query_text],  # mutable-ok: litellm.embedding's input contract is a list
-            **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
+        embedding_response: Final = (
+            await embedding_executor.aembed(
+                params.require_embedding_model(),
+                query_text,
+                params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG,
+            )
+            if embedding_executor is not None
+            else await self.aembedding_fn(
+                model=params.require_embedding_model(),
+                input=[query_text],  # mutable-ok: the injected embedding callable requires list input
+                **(params.litellm_embedding_config or _EMPTY_EMBEDDING_CONFIG),
+            )
         )
         vec_params: Final = {"vec": pack_vector(embedding_response.data[0]["embedding"])}  # mutable-ok: redis-py API
 

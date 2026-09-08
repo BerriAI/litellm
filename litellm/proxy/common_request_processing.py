@@ -3,7 +3,6 @@ import contextlib
 import json
 import logging
 import math
-import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
@@ -18,7 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 
 import litellm
-from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
@@ -62,6 +61,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_sse_stream_with_keepalive_pings,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
+from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging, _check_and_merge_model_level_guardrails
 from litellm.router import Router
@@ -468,6 +468,42 @@ def _getattr_object(value: object, name: str, default: object = None) -> object:
     return getattr(value, name, default)
 
 
+_OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
+    {
+        status.HTTP_401_UNAUTHORIZED: "authentication_error",
+        status.HTTP_403_FORBIDDEN: "permission_error",
+        status.HTTP_429_TOO_MANY_REQUESTS: "rate_limit_error",
+    }
+)
+
+
+def _error_status_code(exc: object, default: int) -> int:
+    """The HTTP status an exception carries, or ``default`` when it carries none."""
+    carried: Final = _getattr_object(exc, "status_code")
+    return carried if isinstance(carried, int) and not isinstance(carried, bool) else default
+
+
+def _openai_error_type(exc: object, status_code: int) -> str:
+    """OpenAI types ``error.type`` as a required string, so an exception carrying none
+    falls back to the type its status code stands for."""
+    carried: Final = _getattr_object(exc, "type")
+    if isinstance(carried, str):
+        return carried
+    mapped: Final = _OPENAI_ERROR_TYPE_BY_STATUS.get(status_code)
+    if mapped is not None:
+        return mapped
+    if status_code < status.HTTP_500_INTERNAL_SERVER_ERROR:
+        return "invalid_request_error"
+    return "internal_server_error"
+
+
+def _openai_error_param(exc: object) -> str | None:
+    """OpenAI types ``error.param`` as nullable, so an exception carrying none
+    serializes as JSON ``null``."""
+    carried: Final = _getattr_object(exc, "param")
+    return carried if isinstance(carried, str) else None
+
+
 class _UpstreamHttpResponse(Protocol):
     @property
     def status_code(self) -> int: ...
@@ -541,11 +577,12 @@ def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, s
     message, structured_fields = serialize_http_exception_detail(raw_detail)
     existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
     merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
+    error_status: Final = _error_status_code(exc, status.HTTP_400_BAD_REQUEST)
     return ProxyException(
         message=message,
-        type=getattr(exc, "type", "None"),
-        param=getattr(exc, "param", "None"),
-        code=getattr(exc, "status_code", status.HTTP_400_BAD_REQUEST),
+        type=_openai_error_type(exc, error_status),
+        param=_openai_error_param(exc),
+        code=error_status,
         provider_specific_fields=merged_fields,
         headers=headers,
     )
@@ -719,7 +756,7 @@ class _UpstreamClosingStreamingResponse(StreamingResponse):
         content: AsyncGenerator[str, None],
         *,
         media_type: str | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, str] | None = None,
         status_code: int = status.HTTP_200_OK,
         upstream_generator: AsyncGenerator[str, None] | None = None,
     ) -> None:
@@ -828,25 +865,22 @@ def sse_error_payload(exc: BaseException) -> tuple[int, Mapping[str, object]]:
     are byte-identical.
     """
     # Preserve status code from HTTPException (e.g. guardrail blocks)
-    error_status: Final = getattr(exc, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
+    error_status: Final = _error_status_code(exc, status.HTTP_500_INTERNAL_SERVER_ERROR)
     raw_detail: Final = _getattr_object(exc, "detail", "Error processing stream start")
     message, structured_fields = serialize_http_exception_detail(raw_detail)
 
     existing_fields: Final = getattr(exc, "provider_specific_fields", None) or {}
     merged_fields: Final = {**existing_fields, **structured_fields} if structured_fields else (existing_fields or None)
 
-    # Built in one statement then given its one optional key, rather than spread
-    # conditionally: the spread form costs two extra dict constructions, which
-    # type-discipline-budget.json's LIT002 ceiling has no room for.
     error_obj: Final = {
         "message": message,
-        "type": getattr(exc, "type", "None"),
-        "param": getattr(exc, "param", "None"),
+        "type": _openai_error_type(exc, error_status),
+        "param": _openai_error_param(exc),
         "code": str(error_status),
     }
-    if merged_fields:
-        error_obj["provider_specific_fields"] = merged_fields
-    return error_status, error_obj
+    if not merged_fields:
+        return error_status, error_obj
+    return error_status, {**error_obj, "provider_specific_fields": merged_fields}
 
 
 def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
@@ -854,25 +888,39 @@ def _sse_error_frames(error_obj: Mapping[str, object]) -> tuple[str, str]:
     return f"data: {json.dumps({'error': error_obj})}\n\n", "data: [DONE]\n\n"
 
 
+def _sse_stream_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    """`headers` plus the two that stop reverse proxies from buffering SSE (issue #28384)."""
+    return MappingProxyType({**headers, **_TTFT_KEEPALIVE_HEADERS})
+
+
+async def _resolve_stream_headers(
+    headers: Mapping[str, str], refresh_headers: Callable[[], Awaitable[Mapping[str, str]]] | None
+) -> Mapping[str, str]:
+    if refresh_headers is None:
+        return headers
+    try:
+        return await refresh_headers()
+    except Exception as e:  # noqa: BLE001  # a stream whose first chunk is already paid for must not fail over its headers
+        verbose_proxy_logger.exception("Error refreshing streaming response headers: %s", e)
+        return headers
+
+
 async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
-    headers: dict,
+    headers: Mapping[str, str],
     default_status_code: int = status.HTTP_200_OK,
     request: Request | None = None,
+    refresh_headers: Callable[[], Awaitable[Mapping[str, str]]] | None = None,
 ) -> StreamingResponse | JSONResponse:
     """
     Create streaming response, checking if the first chunk is an error.
     If the first chunk is an error, return a standard JSON error response.
     Otherwise, return StreamingResponse and stream all content.
+
+    ``refresh_headers`` is consulted once the first chunk has been buffered, for
+    callers whose headers can only be known then.
     """
-    # Tell buffering reverse proxies (nginx, ingress-nginx, Envoy) to flush SSE
-    # immediately instead of releasing the whole stream in one batch (issue #28384).
-    streaming_headers: Final = {
-        **headers,
-        "Cache-Control": "no-cache",
-        "X-Accel-Buffering": "no",
-    }
     first_chunk_value: str | None = None
     final_status_code = default_status_code
 
@@ -883,6 +931,7 @@ async def create_response(
 
         # Now get the first chunk from the actual generator
         first_chunk_value = await _buffer_first_chunk_honoring_disconnect(generator, request)
+        resolved_headers: Final = await _resolve_stream_headers(headers, refresh_headers)
 
         if first_chunk_value is not None:
             try:
@@ -909,7 +958,7 @@ async def create_response(
                     return JSONResponse(
                         status_code=final_status_code,
                         content={"error": error_dict},
-                        headers=headers,
+                        headers=resolved_headers,
                     )
             except Exception as e:
                 verbose_proxy_logger.debug("Error parsing first chunk value: %s", e)
@@ -923,7 +972,7 @@ async def create_response(
                 "error": {
                     "message": _CLIENT_DISCONNECT_DETAIL,
                     "type": "client_disconnect",
-                    "param": "None",
+                    "param": None,
                     "code": str(LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED),
                 }
             },
@@ -938,7 +987,7 @@ async def create_response(
         return StreamingResponse(
             empty_gen(),
             media_type=media_type,
-            headers=streaming_headers,
+            headers=_sse_stream_headers(await _resolve_stream_headers(headers, refresh_headers)),
             status_code=default_status_code,
         )
     except Exception as e:
@@ -954,7 +1003,7 @@ async def create_response(
         return StreamingResponse(
             error_gen_message(),
             media_type=media_type,
-            headers=streaming_headers,
+            headers=_sse_stream_headers(await _resolve_stream_headers(headers, refresh_headers)),
             status_code=error_status,
         )
 
@@ -976,7 +1025,7 @@ async def create_response(
     return _UpstreamClosingStreamingResponse(
         combined_generator(),
         media_type=media_type,
-        headers=streaming_headers,
+        headers=_sse_stream_headers(resolved_headers),
         status_code=final_status_code,
         upstream_generator=generator,
     )
@@ -1501,7 +1550,7 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     def _merge_passthrough_streaming_headers(
         response_headers: httpx.Headers | dict | None,
-        custom_headers: dict,
+        custom_headers: Mapping[str, str],
     ) -> dict:
         """
         Merge upstream passthrough headers with proxy/custom headers.
@@ -1971,6 +2020,12 @@ class ProxyBaseLLMRequestProcessing:
             trust_client_model_info=False,
         )
 
+        # An auto router with its own compression policy is authoritative for this
+        # request: suppress every other compression guardrail and arm whichever one
+        # the policy names for the model call, before those guardrails get a chance
+        # to run below.
+        await _arm_auto_router_compression(data=self.data, llm_router=llm_router)
+
         self.data = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=self.data,
@@ -2103,14 +2158,45 @@ class ProxyBaseLLMRequestProcessing:
         return fallback_model_group
 
     @staticmethod
-    def _get_model_id_from_response(hidden_params: dict, data: dict) -> str:
+    def _get_model_id_from_response(hidden_params: Mapping[str, object], data: Mapping[str, object]) -> str:
         """Extract model_id from hidden_params with fallback to litellm_metadata."""
         model_id = hidden_params.get("model_id", None) or ""
         if not model_id:
-            litellm_metadata: Final = data.get("litellm_metadata", {}) or {}
-            model_info: Final = litellm_metadata.get("model_info", {}) or {}
-            model_id = model_info.get("id", "") or ""
-        return model_id
+            litellm_metadata: Final = data.get("litellm_metadata")
+            model_info: Final = litellm_metadata.get("model_info") if isinstance(litellm_metadata, Mapping) else None
+            model_id = (model_info.get("id") or "") if isinstance(model_info, Mapping) else ""
+        return str(model_id) if model_id else ""
+
+    def _stream_response_headers(
+        self,
+        *,
+        hidden_params: Mapping[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        logging_obj: LiteLLMLoggingObj,
+        version: str | None,
+        callback_headers: Mapping[str, str],
+    ) -> Mapping[str, str]:
+        """The streaming response headers describing `hidden_params`' deployment."""
+        return MappingProxyType(
+            {
+                **ProxyBaseLLMRequestProcessing.get_custom_headers(
+                    user_api_key_dict=user_api_key_dict,
+                    call_id=logging_obj.litellm_call_id,
+                    model_id=self._get_model_id_from_response(hidden_params, self.data),
+                    cache_key=hidden_params.get("cache_key") or "",
+                    api_base=hidden_params.get("api_base") or "",
+                    version=version,
+                    response_cost=hidden_params.get("response_cost") or "",
+                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+                    fastest_response_batch_completion=hidden_params.get("fastest_response_batch_completion"),
+                    request_data=self.data,
+                    hidden_params=hidden_params,
+                    litellm_logging_obj=logging_obj,
+                    **(hidden_params.get("additional_headers") or MappingProxyType({})),
+                ),
+                **callback_headers,
+            }
+        )
 
     @staticmethod
     def _get_deployment_model_name(
@@ -2379,31 +2465,32 @@ class ProxyBaseLLMRequestProcessing:
             if self._is_streaming_request(
                 data=self.data, is_streaming_request=is_streaming_request
             ) or self._is_streaming_response(response):  # use generate_responses to stream responses
-                custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
-                    user_api_key_dict=user_api_key_dict,
-                    call_id=logging_obj.litellm_call_id,
-                    model_id=model_id,
-                    cache_key=cache_key,
-                    api_base=api_base,
-                    version=version,
-                    response_cost=response_cost,
-                    model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
-                    fastest_response_batch_completion=fastest_response_batch_completion,
-                    request_data=self.data,
-                    hidden_params=hidden_params,
-                    litellm_logging_obj=logging_obj,
-                    **additional_headers,
-                )
-
                 # Call response headers hook for streaming success
-                callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                stream_callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
                     data=self.data,
                     user_api_key_dict=user_api_key_dict,
                     response=response,
                     request_headers=dict(request.headers),
                 )
-                if callback_headers:
-                    custom_headers.update(callback_headers)
+                custom_headers: Final = self._stream_response_headers(
+                    hidden_params=hidden_params,
+                    user_api_key_dict=user_api_key_dict,
+                    logging_obj=logging_obj,
+                    version=version,
+                    callback_headers=stream_callback_headers or MappingProxyType({}),
+                )
+
+                async def refresh_stream_headers() -> Mapping[str, str]:
+                    """`custom_headers` rebuilt for whichever deployment served the stream."""
+                    if not getattr(response, "fallback_headers_adopted", False):
+                        return custom_headers
+                    return self._stream_response_headers(
+                        hidden_params=get_hidden_params_dict(response),
+                        user_api_key_dict=user_api_key_dict,
+                        logging_obj=logging_obj,
+                        version=version,
+                        callback_headers=stream_callback_headers or MappingProxyType({}),
+                    )
 
                 # Preserve the original client-requested model (pre-alias mapping) for downstream
                 # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
@@ -2487,6 +2574,11 @@ class ProxyBaseLLMRequestProcessing:
                     # This handles cases like websearch_interception agentic loop
                     # which returns a non-streaming dict even for streaming requests
                     if self._is_streaming_response(response):
+                        self._arm_detached_stream_failure_hook(
+                            logging_obj=logging_obj,
+                            user_api_key_dict=user_api_key_dict,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
                         selected_data_generator = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
                             response=response,
                             user_api_key_dict=user_api_key_dict,
@@ -2536,6 +2628,7 @@ class ProxyBaseLLMRequestProcessing:
                         media_type="text/event-stream",
                         headers=custom_headers,
                         request=request,
+                        refresh_headers=refresh_stream_headers,
                     )
 
             ### CALL HOOKS ### - modify outgoing data
@@ -2842,6 +2935,34 @@ class ProxyBaseLLMRequestProcessing:
             ),
         )
 
+    def _arm_detached_stream_failure_hook(
+        self,
+        logging_obj: LiteLLMLoggingObj,
+        user_api_key_dict: "UserAPIKeyAuth",
+        proxy_logging_obj: ProxyLogging,
+    ) -> None:
+        """Let a stream that fails after the client left still reach ``post_call_failure_hook``.
+
+        The client-facing generator reports a mid-stream failure itself, but once
+        the client disconnects that generator is gone and the detached upstream
+        drain is the only code that sees the provider error. It fires this closure
+        so the failed spend is still written and the budget reservation released;
+        a replacement error the hook raises has no client left to reach.
+        """
+        request_data: Final = self.data
+
+        async def _on_detached_stream_failure(exc: Exception) -> None:
+            try:
+                await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=exc,
+                    request_data=request_data,
+                )
+            except HTTPException:
+                return
+
+        logging_obj._on_detached_stream_failure = _on_detached_stream_failure
+
     def _is_streaming_response(self, response: Any) -> bool:
         """
         Check if the response object is actually a streaming response by inspecting its type.
@@ -2959,7 +3080,7 @@ class ProxyBaseLLMRequestProcessing:
         response: Any,
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
-        custom_headers: dict,
+        custom_headers: Mapping[str, str],
         request_headers: dict[str, str],
     ) -> Response | None:
         if not self._has_post_call_guardrails_for_passthrough():
@@ -3417,9 +3538,9 @@ class ProxyBaseLLMRequestProcessing:
         else:
             _code = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            message=redact_internal_details_from_client_message(getattr(e, "message", error_msg)),
+            type=_openai_error_type(e, _code),
+            param=_openai_error_param(e),
             openai_code=getattr(e, "code", None),
             code=_code,
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
@@ -3629,13 +3750,12 @@ class ProxyBaseLLMRequestProcessing:
 
             if isinstance(e, HTTPException):
                 raise e
-            error_traceback: Final = _redact_string(traceback.format_exc())
-            error_msg: Final = f"{e}\n\n{error_traceback}"
+            stream_error_status: Final = _error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)
             proxy_exception: Final = ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                message=redact_internal_details_from_client_message(getattr(e, "message", str(e))),
+                type=_openai_error_type(e, stream_error_status),
+                param=_openai_error_param(e),
+                code=stream_error_status,
             )
             stream_completed = True
             yield serialize_error(proxy_exception)

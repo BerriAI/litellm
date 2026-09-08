@@ -2,7 +2,7 @@ import asyncio
 import copy
 import datetime
 import json
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import AsyncGenerator, Callable, Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -375,6 +375,75 @@ class TestProxyBaseLLMRequestProcessing:
         # audit body, which needs to stay plain-JSON-serializable end to end.
         assert "litellm_logging_obj" not in persisted_body
         json.dumps(persisted_body)
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_arms_auto_router_compression_before_guardrails(
+        self, monkeypatch
+    ):
+        """arm_pre_call must run before pre_call_hook: an auto router's own compression
+        policy has to be in `data["metadata"]` (naming the model-side guardrail so it
+        runs even if it isn't default_on) by the time guardrails see the request."""
+        from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.proxy.guardrails import guardrail_registry
+
+        # The model hop is only armed for a name that resolves to an active compression
+        # guardrail, so arming it has to have a real one to resolve to.
+        class _FakeCompressionGuardrail(CustomGuardrail):
+            pass
+
+        monkeypatch.setitem(guardrail_registry.guardrail_class_registry, "headroom", _FakeCompressionGuardrail)
+        active_guardrail = _FakeCompressionGuardrail(guardrail_name="headroom-model")
+        litellm.logging_callback_manager.add_litellm_callback(active_guardrail)
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return {"model": "smart-router", "messages": [{"role": "user", "content": "hi"}]}
+
+        seen_metadata: dict = {}
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            seen_metadata.update(data.get("metadata") or {})
+            return data
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+
+        fake_llm_router = MagicMock()
+        fake_llm_router.get_model_list.return_value = [
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "auto_router_routing_compression": "none",
+                    "auto_router_model_compression": "headroom-model",
+                },
+            }
+        ]
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+
+        try:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=mock_proxy_config,
+                route_type="acompletion",
+                llm_router=fake_llm_router,
+            )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_all_lists(active_guardrail)
+
+        assert seen_metadata.get("guardrails") == ["headroom-model"]
 
     def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
         mock_set_active_span_tag = MagicMock(return_value=True)
@@ -1540,8 +1609,8 @@ class TestCommonRequestProcessingHelpers:
         expected_error_data = {
             "error": {
                 "message": "Error processing stream start",
-                "type": "None",
-                "param": "None",
+                "type": "internal_server_error",
+                "param": None,
                 "code": str(status.HTTP_500_INTERNAL_SERVER_ERROR),
             }
         }
@@ -1569,8 +1638,8 @@ class TestCommonRequestProcessingHelpers:
         expected_error_data = {
             "error": {
                 "message": "Content blocked by guardrail",
-                "type": "None",
-                "param": "None",
+                "type": "invalid_request_error",
+                "param": None,
                 "code": "400",
             }
         }
@@ -1739,6 +1808,146 @@ class TestCommonRequestProcessingHelpers:
         custom_headers = {"X-Custom-Header": "TestValue"}
         response = await create_response(mock_generator(), "text/event-stream", custom_headers)
         assert response.headers["x-custom-header"] == "TestValue"
+
+    async def test_create_streaming_response_refresh_headers_after_first_chunk(self):
+        """LIT-6767: headers a caller can only resolve once the first chunk exists.
+
+        A pre-first-chunk fallback replaces the deployment while the response
+        headers are still uncommitted, so ``refresh_headers`` is consulted after
+        the first chunk is buffered and its result wins.
+        """
+
+        async def mock_generator():
+            yield 'data: {"content": "data"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        refresh_headers: Final = AsyncMock(
+            return_value={"x-litellm-model-id": "fallback-deployment", "llm_provider-x-request-id": "req-FALLBACK"}
+        )
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment", "llm_provider-x-request-id": "req-FAILED"},
+            refresh_headers=refresh_headers,
+        )
+        assert isinstance(response, StreamingResponse)
+        assert refresh_headers.await_count == 1
+        assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+        assert response.headers["llm_provider-x-request-id"] == "req-FALLBACK"
+        # the buffering headers are still applied on top of the refreshed set
+        assert response.headers["x-accel-buffering"] == "no"
+        assert response.headers["cache-control"] == "no-cache"
+
+    async def test_create_streaming_response_refreshes_only_after_the_first_chunk(self):
+        """LIT-6767: the refresh has to be consulted after the generator produced a chunk.
+
+        A pre-first-chunk fallback only repoints the response while that first chunk is
+        being produced, so a refresh consulted any earlier still describes the attempt
+        that failed and the headers go out wrong.
+        """
+        first_chunk_produced: Final = asyncio.Event()
+
+        async def mock_generator():
+            first_chunk_produced.set()
+            yield 'data: {"content": "data"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        async def refresh_headers():
+            served = "fallback-deployment" if first_chunk_produced.is_set() else "failed-deployment"
+            return {"x-litellm-model-id": served}
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+            refresh_headers=refresh_headers,
+        )
+        assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+
+    async def test_create_streaming_response_empty_stream_uses_refreshed_headers(self):
+        """LIT-6767: a fallback that served nothing still gets to name itself.
+
+        The empty-generator branch returns its own StreamingResponse, so it needs the
+        refreshed headers too or the client is told the failed deployment answered.
+        """
+
+        async def mock_generator():
+            return
+            yield  # make it an async generator
+
+        async def refresh_headers():
+            return {"x-litellm-model-id": "fallback-deployment"}
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+            refresh_headers=refresh_headers,
+        )
+        assert isinstance(response, StreamingResponse)
+        assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+        assert response.headers["x-accel-buffering"] == "no"
+
+    async def test_create_streaming_response_without_refresh_headers_is_unchanged(self):
+        """LIT-6767: the default keeps the caller-supplied headers verbatim."""
+
+        async def mock_generator():
+            yield 'data: {"content": "data"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+        )
+        assert response.headers["x-litellm-model-id"] == "failed-deployment"
+
+    async def test_create_streaming_response_refresh_headers_failure_keeps_stream(self):
+        """LIT-6767: the first chunk is already paid for, so a failing refresh
+        falls back to the caller's headers instead of erroring the stream."""
+
+        async def mock_generator():
+            yield 'data: {"content": "data"}\n\n'
+            yield "data: [DONE]\n\n"
+
+        async def refresh_headers():
+            raise RuntimeError("boom")
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+            refresh_headers=refresh_headers,
+        )
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.headers["x-litellm-model-id"] == "failed-deployment"
+        assert await self.consume_stream(response) == [
+            'data: {"content": "data"}\n\n',
+            "data: [DONE]\n\n",
+        ]
+
+    async def test_create_response_first_chunk_error_uses_refreshed_headers(self):
+        """LIT-6767: the JSON error response built from a bad first chunk carries
+        the refreshed headers too, so it cannot describe a deployment that no
+        longer served the request."""
+
+        async def mock_generator():
+            yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
+            yield "data: [DONE]\n\n"
+
+        async def refresh_headers():
+            return {"x-litellm-model-id": "fallback-deployment"}
+
+        response = await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-model-id": "failed-deployment"},
+            refresh_headers=refresh_headers,
+        )
+        assert isinstance(response, JSONResponse)
+        assert response.headers["x-litellm-model-id"] == "fallback-deployment"
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
         """Regression for #28384: every StreamingResponse create_response returns
@@ -1932,6 +2141,104 @@ class TestCommonRequestProcessingHelpers:
             # Since JSONResponse is returned instead of StreamingResponse, streaming tracing should not be triggered
             # tracer.trace should not be called
             assert mock_tracer.trace.call_count == 0
+
+
+def _stringified_none_paths(node: object, path: str = "error") -> tuple[str, ...]:
+    if isinstance(node, dict):
+        return tuple(
+            found
+            for key, value in node.items()
+            for found in _stringified_none_paths(value, f"{path}.{key}")
+        )
+    if isinstance(node, (list, tuple)):
+        return tuple(
+            found
+            for index, value in enumerate(node)
+            for found in _stringified_none_paths(value, f"{path}[{index}]")
+        )
+    return (path,) if node == "None" else ()
+
+
+def _blocked_guardrail_exception() -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={
+            "error": "Violated guardrail policy",
+            "bedrock_guardrail_response": {"action": "GUARDRAIL_INTERVENED"},
+            "guardrailIdentifier": "gf3sc1mzinjw",
+            "guardrailVersion": "DRAFT",
+        },
+    )
+
+
+class TestGuardrailBlockErrorPayloadNeverStringifiesNone:
+    """Regression for LIT-6808: a blocked-guardrail error body carried the literal string
+    "None" for type and param instead of a real error type and JSON null."""
+
+    def test_non_streaming_block_payload_carries_a_real_type_and_null_param(self):
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        payload = json.loads(
+            json.dumps(proxy_exception_from_http_exception(_blocked_guardrail_exception(), {}).to_dict())
+        )
+
+        assert _stringified_none_paths(payload) == ()
+        assert payload["type"] == "invalid_request_error"
+        assert payload["param"] is None
+        assert payload["code"] == "400"
+        assert payload["message"] == "Violated guardrail policy"
+
+    def test_streaming_block_frame_carries_a_real_type_and_null_param(self):
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        error_status, error_obj = sse_error_payload(_blocked_guardrail_exception())
+        frame = json.loads(json.dumps({"error": dict(error_obj)}))
+
+        assert error_status == 400
+        assert _stringified_none_paths(frame["error"]) == ()
+        assert frame["error"]["type"] == "invalid_request_error"
+        assert frame["error"]["param"] is None
+        assert frame["error"]["code"] == "400"
+
+    @pytest.mark.parametrize(
+        "status_code, expected_type",
+        [
+            (400, "invalid_request_error"),
+            (401, "authentication_error"),
+            (403, "permission_error"),
+            (404, "invalid_request_error"),
+            (429, "rate_limit_error"),
+            (500, "internal_server_error"),
+            (503, "internal_server_error"),
+        ],
+    )
+    def test_status_code_decides_the_type_when_the_exception_carries_none(self, status_code, expected_type):
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        payload = proxy_exception_from_http_exception(
+            HTTPException(status_code=status_code, detail="blocked"), {}
+        ).to_dict()
+
+        assert payload["type"] == expected_type
+        assert payload["param"] is None
+
+    def test_a_type_and_param_the_exception_carries_win_over_the_fallback(self):
+        from litellm.proxy.common_request_processing import (
+            proxy_exception_from_http_exception,
+        )
+
+        exc = HTTPException(status_code=400, detail="unknown model")
+        exc.type = "authentication_error"
+        exc.param = "model"
+
+        payload = proxy_exception_from_http_exception(exc, {}).to_dict()
+
+        assert payload["type"] == "authentication_error"
+        assert payload["param"] == "model"
 
 
 class TestExtractErrorFromSSEChunk:
@@ -2999,6 +3306,25 @@ class TestHandleLLMApiExceptionDictDetail:
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
 
+    async def test_blocked_guardrail_error_body_never_carries_the_string_none(self):
+        """Regression for LIT-6808: the error body a blocked request returns must carry a real
+        error type and JSON null rather than the literal string "None"."""
+        proxy_exc = await self._invoke(_blocked_guardrail_exception())
+        payload = json.loads(json.dumps(proxy_exc.to_dict()))
+
+        assert _stringified_none_paths(payload) == ()
+        assert payload["type"] == "invalid_request_error"
+        assert payload["param"] is None
+
+    async def test_unclassified_exception_error_body_never_carries_the_string_none(self):
+        """The same holds on the generic fallback, where nothing carries a type at all."""
+        proxy_exc = await self._invoke(ValueError("Something broke"))
+        payload = json.loads(json.dumps(proxy_exc.to_dict()))
+
+        assert _stringified_none_paths(payload) == ()
+        assert payload["type"] == "internal_server_error"
+        assert payload["param"] is None
+
     async def test_not_found_error_preserves_404(self):
         """NotFoundError with status_code=404 should map to ProxyException code=404."""
         from litellm.exceptions import NotFoundError
@@ -3013,7 +3339,7 @@ class TestHandleLLMApiExceptionDictDetail:
         assert "NotFoundError" in proxy_exc.message
 
     async def test_exception_with_status_code_propagates(self):
-        """Exception with a statically-set status_code should propagate it."""
+        """Exception with a statically-set status_code should propagate it and its message."""
         from litellm.llms.vertex_ai.common_utils import VertexAIError
 
         exc = VertexAIError(
@@ -3022,12 +3348,30 @@ class TestHandleLLMApiExceptionDictDetail:
         )
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "429"
+        assert proxy_exc.message == "Rate limit exceeded"
 
     async def test_exception_without_status_code_defaults_to_500(self):
-        """Exception with no status_code attribute defaults to 500."""
+        """Exception with no status_code attribute defaults to 500; a message with nothing
+        to redact still reaches the client, since routes raise plain exceptions as validation text."""
         exc = ValueError("Something broke")
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "500"
+        assert proxy_exc.message == "Something broke"
+
+    async def test_unclassified_exception_redacts_internal_details_from_client_message(self):
+        """Regression for LIT-6747: an unclassified exception's credential, path, and host
+        must not reach the client."""
+        exc = RuntimeError(
+            "Failed to connect to postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod "
+            "(config file /etc/litellm/secrets/db.yaml)"
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.code == "500"
+        assert "S3cr3tPGPass" not in proxy_exc.message
+        assert "litellm_internal" not in proxy_exc.message
+        assert "10.20.30.40" not in proxy_exc.message
+        assert "/etc/litellm/secrets/db.yaml" not in proxy_exc.message
+        assert "REDACTED" in proxy_exc.message
 
     async def test_already_normalized_proxy_exception_is_honored(self):
         """A ProxyException raised mid-request (e.g. a guardrail block) is already
@@ -3243,6 +3587,42 @@ class TestStreamCloseOnDisconnect:
         await gen.aclose()
 
         assert upstream.aclosed
+
+    async def test_async_streaming_data_generator_redacts_internal_details_on_error(
+        self,
+    ):
+        """Regression for LIT-6747: a mid-stream exception must not hand its raw text or a
+        traceback to serialize_error."""
+
+        class FailingUpstream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise RuntimeError(
+                    "Failed to connect to postgresql://litellm_internal:S3cr3tPGPass@10.20.30.40:5432/litellm_prod "
+                    "(config file /etc/litellm/secrets/db.yaml)"
+                )
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        captured: list = []
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=FailingUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: captured.append(e) or "data: error\n\n",
+        )
+
+        await gen.__anext__()
+
+        assert len(captured) == 1
+        message = captured[0].message
+        assert "S3cr3tPGPass" not in message
+        assert "10.20.30.40" not in message
+        assert "/etc/litellm/secrets/db.yaml" not in message
+        assert "Traceback (most recent call last)" not in message
 
     @staticmethod
     def _request_that_disconnects() -> Request:
@@ -7665,3 +8045,217 @@ def test_log_llm_api_exception_traceback_only_for_unexpected_errors(exc, expect_
     records = [r for r in caplog.records if "_handle_llm_api_exception(): Exception occured" in r.getMessage()]
     assert len(records) == 1
     assert (records[0].exc_info is not None) is expect_traceback
+
+
+class _FailureHookRecorder:
+    """Stands in for ProxyLogging.post_call_failure_hook, recording what the detached-failure closure hands it."""
+
+    def __init__(self, raises: Optional[Exception] = None):
+        self.calls = []
+        self._raises = raises
+
+    async def post_call_failure_hook(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._raises is not None:
+            raise self._raises
+
+
+class TestDetachedStreamFailureHook:
+    """
+    Regression for LIT-3798. A streaming /v1/messages request whose client disconnected
+    before the provider failed mid-stream never reached the proxy's failure hook: the
+    client-facing generator was gone, and the detached upstream drain only fired the
+    logging object's callbacks, so no failure spend row was written and the budget
+    reservation stayed held. base_process_llm_request now arms a closure on the logging
+    object that the detached drain awaits, and that closure runs post_call_failure_hook
+    with the request's key and data.
+    """
+
+    @staticmethod
+    def _logging_obj():
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-lit3798"
+        logging_obj.model_call_details = {}
+        logging_obj._enqueue_deferred_logging = None
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj._on_detached_stream_failure = None
+        return logging_obj
+
+    @staticmethod
+    def _proxy_logging_obj(recorder: _FailureHookRecorder):
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+        proxy_logging_obj.post_call_failure_hook = recorder.post_call_failure_hook
+        return proxy_logging_obj
+
+    @pytest.mark.asyncio
+    async def test_streaming_messages_arms_the_detached_failure_hook(self, monkeypatch):
+        import litellm.proxy.common_request_processing as crp
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        async def _stream():
+            yield b"event: message_start\n\n"
+
+        async def fake_route_request(**kwargs):
+            async def _llm_call():
+                return _stream()
+
+            return _llm_call()
+
+        monkeypatch.setattr(crp, "route_request", fake_route_request)
+        monkeypatch.setattr(litellm, "callbacks", [])
+        recorder = _FailureHookRecorder()
+        logging_obj = self._logging_obj()
+        user_api_key_dict = RealUserAPIKeyAuth(api_key="sk-test")
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"litellm_logging_obj": logging_obj, "model": "claude-sonnet-4-5"}
+        )
+
+        await processing_obj.base_process_llm_request(
+            request=MagicMock(spec=Request, headers={}),
+            fastapi_response=Response(),
+            user_api_key_dict=user_api_key_dict,
+            route_type="anthropic_messages",
+            proxy_logging_obj=self._proxy_logging_obj(recorder),
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=None,
+            llm_router=None,
+            skip_pre_call_logic=True,
+        )
+
+        failure = RuntimeError("upstream died after the client left")
+        await logging_obj._on_detached_stream_failure(failure)
+
+        assert recorder.calls == [
+            {
+                "user_api_key_dict": user_api_key_dict,
+                "original_exception": failure,
+                "request_data": processing_obj.data,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_detached_failure_hook_drops_the_replacement_error_it_cannot_deliver(self):
+        from litellm.proxy._types import UserAPIKeyAuth as RealUserAPIKeyAuth
+
+        recorder = _FailureHookRecorder(raises=HTTPException(status_code=429, detail="budget exceeded"))
+        logging_obj = self._logging_obj()
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"litellm_logging_obj": logging_obj})
+        processing_obj._arm_detached_stream_failure_hook(
+            logging_obj=logging_obj,
+            user_api_key_dict=RealUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=self._proxy_logging_obj(recorder),
+        )
+        failure = RuntimeError("upstream died after the client left")
+
+        await logging_obj._on_detached_stream_failure(failure)
+
+        assert [call["original_exception"] for call in recorder.calls] == [failure]
+
+
+class TestStreamingResponseHeadersFollowFallback:
+    """LIT-6767: the streaming branch has to publish the deployment that served the stream."""
+
+    @staticmethod
+    def _fallback_adopting_stream():
+        class _Stream:
+            def __init__(self) -> None:
+                self._hidden_params = {
+                    "model_id": "failed-deployment",
+                    "api_base": "http://127.0.0.1:20769/v1",
+                    "additional_headers": {"llm_provider-stale-marker": "failed-deployment"},
+                }
+                self.fallback_headers_adopted = False
+
+            def adopt(self) -> None:
+                self._hidden_params = {
+                    "model_id": "served-deployment",
+                    "api_base": "https://api.openai.com",
+                    "additional_headers": {"llm_provider-x-request-id": "req-SERVED"},
+                }
+                self.fallback_headers_adopted = True
+
+        return _Stream()
+
+    @pytest.mark.asyncio
+    async def test_streaming_headers_name_the_deployment_that_served(self, monkeypatch):
+        """A pre-first-chunk fallback repoints the stream while the headers are still
+        uncommitted, so the published headers must describe the fallback, not the attempt
+        the Router picked first."""
+        stream = self._fallback_adopting_stream()
+
+        def select_data_generator(**kwargs):
+            async def generator():
+                stream.adopt()
+                yield 'data: {"choices": [{"delta": {"content": "OK"}}]}\n\n'
+                yield "data: [DONE]\n\n"
+
+            return generator()
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "lit-6767-call"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "oa-midfail", "stream": True, "litellm_logging_obj": logging_obj}
+        )
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(
+            side_effect=lambda data, user_api_key_dict, response: response
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-callback-header": "kept"}
+        )
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                return stream
+
+            return call()
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing, "route_request", fake_route_request
+        )
+
+        result = await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=select_data_generator,
+            is_streaming_request=True,
+            skip_pre_call_logic=True,
+        )
+
+        assert isinstance(result, StreamingResponse)
+        assert result.headers["x-litellm-model-id"] == "served-deployment"
+        assert result.headers["x-litellm-model-api-base"] == "https://api.openai.com"
+        assert result.headers["llm_provider-x-request-id"] == "req-SERVED"
+        assert "llm_provider-stale-marker" not in result.headers
+        assert result.headers["x-callback-header"] == "kept"
+
+
+class TestPassthroughHeadersAcceptImmutableMappings:
+    """LIT-6767: the streaming branch now hands the passthrough helpers an immutable mapping."""
+
+    def test_merge_passthrough_streaming_headers_accepts_a_read_only_mapping(self):
+        merged = ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
+            response_headers=httpx.Headers({"content-type": "text/event-stream", "transfer-encoding": "chunked"}),
+            custom_headers=MappingProxyType({"x-litellm-model-id": "served-deployment"}),
+        )
+
+        assert merged["x-litellm-model-id"] == "served-deployment"
+        assert merged["content-type"] == "text/event-stream"
+        # the excluded hop-by-hop header is still dropped
+        assert "transfer-encoding" not in merged

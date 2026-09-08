@@ -142,6 +142,8 @@ class _PrismaDictableRow(Protocol):
 
 class _PrismaJWTKeyMappingRow(Protocol):
     token: str
+    jwt_claim_name: str
+    jwt_claim_value: str
 
 
 class _PrismaModelDumpRow(Protocol):
@@ -2350,6 +2352,13 @@ async def _backfill_null_user_email(
     return updated_row
 
 
+class UserNotFoundError(ValueError):
+    """The user row is provably absent, as opposed to merely unreadable, so a caller that reads a missing row as no user-level limits can key on it without also swallowing a database that would not answer."""
+
+    def __init__(self, user_id: str) -> None:
+        super().__init__(f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call.")
+
+
 @log_db_metrics
 async def get_user_object(
     user_id: str | None,
@@ -2455,7 +2464,7 @@ async def get_user_object(
                         value=None,
                         last_db_access_time=last_db_access_time,
                     )
-                raise Exception
+                raise UserNotFoundError(user_id=user_id)
 
         if response.organization_memberships is not None and len(response.organization_memberships) > 0:
             # dump each organization membership to type LiteLLM_OrganizationMembershipTable
@@ -2491,7 +2500,9 @@ async def get_user_object(
         )
 
         return _response
-    except Exception as e:  # if user not in db
+    except UserNotFoundError:
+        raise
+    except Exception as e:
         _log_budget_lookup_failure("user", e)
         raise ValueError(
             f"User doesn't exist in db. 'user_id'={user_id}. Create user via `/user/new` call. Got error - {e}"
@@ -3466,6 +3477,23 @@ async def _fetch_key_object_from_db_with_reconnect(
         raise
 
 
+def jwt_key_mapping_cache_key(jwt_claim_name: str, jwt_claim_value: str) -> str:
+    """Cache key under which ``_resolve_jwt_to_virtual_key`` stores a JWT-claim-to-key mapping."""
+    return f"jwt_key_mapping:{jwt_claim_name}:{jwt_claim_value}"
+
+
+@log_db_metrics
+async def get_jwt_key_mapping_cache_keys_for_token(
+    hashed_token: str,
+    prisma_client: PrismaClient,
+) -> tuple[str, ...]:
+    """Cache keys of every JWT claim mapped to the given virtual key."""
+    mappings: Final = await _jwt_key_mapping_table(JWTKeyMappingRepository(prisma_client)).find_many(
+        where={"token": hashed_token}
+    )
+    return tuple(jwt_key_mapping_cache_key(m.jwt_claim_name, m.jwt_claim_value) for m in mappings)
+
+
 @log_db_metrics
 async def get_jwt_key_mapping_object(
     jwt_claim_name: str,
@@ -4136,6 +4164,79 @@ async def _granted_model_lists(
     )
 
 
+async def _user_object_or_none(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLM_UserTable | None:
+    try:
+        return await get_user_object(
+            user_id=valid_token.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except UserNotFoundError:
+        return None
+
+
+async def enforced_model_allowlists(
+    valid_token: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> tuple[Sequence[str], ...]:
+    """One model allowlist per level that ``common_checks`` enforces on a request from this identity."""
+    key_models: Final = _resolve_key_models_for_auth_check(valid_token=valid_token)
+    if prisma_client is None:
+        return (key_models, tuple(valid_token.team_models or ()))
+    team_object: Final = (
+        None
+        if valid_token.team_id is None
+        else await get_team_object(
+            team_id=valid_token.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+    user_object: Final = (
+        None
+        if team_object is not None
+        else await _user_object_or_none(
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+    project_object: Final = (
+        None
+        if valid_token.project_id is None
+        else await get_project_object(
+            project_id=valid_token.project_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    )
+    return (
+        key_models,
+        team_object.models if team_object is not None else (),
+        await _team_member_granted_models(
+            valid_token=valid_token,
+            team_object=team_object,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        ),
+        user_object.models if user_object is not None else (),
+        project_object.models if project_object is not None else (),
+    )
+
+
 async def collect_matched_model_access_groups(
     model: str | Sequence[str] | None,
     valid_token: UserAPIKeyAuth | None,
@@ -4705,6 +4806,13 @@ async def is_valid_fallback_model(
     return True
 
 
+# The shape abbreviate_api_key writes into LiteLLM_VerificationToken.key_name. The
+# last four characters are only barred from being whitespace or a control code,
+# because a custom key's can be anything else, punctuation and non-ASCII included;
+# a real key is at least MINIMUM_CUSTOM_KEY_LENGTH long, so it never fullmatches.
+_MASKED_KEY_NAME_RE: Final = re.compile(r"sk-\.\.\.(?:[^\s\x00-\x1f\x7f-\x9f]{4})?")
+
+
 def _apply_budget_exceeded_throttle(valid_token: UserAPIKeyAuth) -> bool:
     """
     Throttle an over-budget key instead of blocking it, when the key opted in
@@ -4785,10 +4893,15 @@ async def _virtual_key_max_budget_check(
         if math.isfinite(valid_token.max_budget) and spend >= valid_token.max_budget:
             if _apply_budget_exceeded_throttle(valid_token):
                 return
-            # name the key in the error so operators don't have to reverse-map
-            # spend back to a key; key_name is the masked form (last 4 chars)
+            # This message is returned to the caller, and key_name has no enforced
+            # shape (a direct DB write bypasses abbreviate_api_key), so echo it only
+            # when it still looks masked and fall back to the alias otherwise.
             key_label: Final = valid_token.key_alias or "key"
-            key_descriptor: Final = f"{key_label} ({valid_token.key_name})" if valid_token.key_name else key_label
+            key_descriptor: Final = (
+                f"{key_label} ({valid_token.key_name})"
+                if valid_token.key_name and _MASKED_KEY_NAME_RE.fullmatch(valid_token.key_name)
+                else key_label
+            )
             raise litellm.BudgetExceededError(
                 current_cost=spend,
                 max_budget=valid_token.max_budget,
@@ -5776,7 +5889,7 @@ async def vector_store_access_check(
     vector_store_ids_to_run: Final = litellm.vector_store_registry.get_vector_store_ids_to_run(
         non_default_params=request_body, tools=request_body.get("tools", None)
     )
-    if vector_store_ids_to_run is None:
+    if not vector_store_ids_to_run:
         verbose_proxy_logger.debug("Vector store to run not found, skipping vector store access check")
         return True
 
