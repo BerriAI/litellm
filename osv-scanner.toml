@@ -7,3 +7,8 @@ reason = "diskcache has no fixed release published; remove this entry once one e
 id = "GHSA-h7x2-h6g9-p789"
 ignoreUntil = 2026-09-14
 reason = "mlflow has no fixed release published; remove this entry once one exists"
+
+[[IgnoredVulns]]
+id = "GHSA-82fw-gwwq-j7x9"
+ignoreUntil = 2026-10-08
+reason = "vitest/@vitest/mocker path traversal (CVSS 5.9, dev-only test runner). The only fix is vitest 4.1.11 (published 2026-08-18), a major upgrade off 3.2.6 that breaks the ui-unit-tests --poolOptions CLI flags and ~1800 test-file type errors in build-ui; needs a dedicated vitest 3->4 migration PR, bump possible as soon as that lands"

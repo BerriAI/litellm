@@ -18,6 +18,9 @@ const nextConfig = {
   basePath: "",
   assetPrefix: "/litellm-asset-prefix",
   trailingSlash: true,
+  experimental: {
+    useTypeScriptCli: false,
+  },
   turbopack: {
     // Must be absolute; "." is no longer allowed
     root: __dirname,
