@@ -8,7 +8,6 @@
 //!   `axum` are gated behind the `server` feature, which the `litellm-ai-gateway`
 //!   binary turns on.
 
-pub mod audio_transcription;
 pub mod io;
 
 #[cfg(feature = "server")]
