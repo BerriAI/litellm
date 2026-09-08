@@ -31,6 +31,9 @@ BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
 
+# OpenAI models on Mantle served from the /openai/v1 base; gpt-oss stays on /v1.
+OPENAI_V1_FAMILY_RE: Final = re.compile(r"^openai\.gpt-(?!oss)")
+
 
 def resolve_mantle_bearer_token(api_key: str | None) -> str | None:
     return api_key or get_secret_str("BEDROCK_MANTLE_API_KEY") or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
@@ -145,7 +148,13 @@ def mantle_base_segment(model: str | None, model_cost: dict) -> str:
     /openai/v1 base (.../openai/v1/responses and .../openai/v1/chat/completions);
     every other model including gpt-oss uses the standard /v1 base. The segment is
     the base for the model's whole OpenAI-compatible surface, so both the chat and
-    responses configs derive from it -- there is no separate model-name rule.
+    responses configs derive from it. When the flag is absent (no price-map entry,
+    or a bare entry the Router registers for an unmapped deployment) a family rule
+    keeps day-0 OpenAI model IDs working before their cost-map entry lands: every
+    openai.gpt-* model except gpt-oss is on /openai/v1.
     """
     entry: Final = model_cost.get(f"bedrock_mantle/{model}", {})
-    return "openai/v1" if entry.get("use_openai_responses_path") is True else "v1"
+    flag: Final = entry.get("use_openai_responses_path")
+    if flag is None:
+        return "openai/v1" if model and OPENAI_V1_FAMILY_RE.match(model) else "v1"
+    return "openai/v1" if flag is True else "v1"

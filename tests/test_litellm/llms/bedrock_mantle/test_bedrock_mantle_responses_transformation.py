@@ -1188,7 +1188,8 @@ class TestBedrockMantleResponsesRegistry:
 class TestMantleBaseSegment:
     """The wire-path helper is data-driven from the price-map
     use_openai_responses_path flag (NOT a model-name match): flagged models are on
-    the /openai/v1 base, everything else on /v1. An unmapped model defaults to /v1.
+    the /openai/v1 base, everything else on /v1. An unmapped model defaults to /v1
+    unless it is a non-gpt-oss openai.gpt-* ID, which falls back to /openai/v1.
     """
 
     @pytest.mark.parametrize(
@@ -1215,6 +1216,19 @@ class TestMantleBaseSegment:
             ),
             ("openai.gpt-oss-120b", {}, "v1"),
             (None, {}, "v1"),
+            # unmapped openai.gpt-* (not gpt-oss) -> family fallback to /openai/v1
+            ("openai.gpt-daybreak-blue-5.6-sol", {}, "openai/v1"),
+            ("openai.gpt-5.7", {}, "openai/v1"),
+            ("openai.gpt-oss-safeguard-20b", {}, "v1"),
+            ("somelab.unmapped", {}, "v1"),
+            # the Router registers a bare {} entry for unmapped deployments; the
+            # family fallback must still apply, while an explicit False wins
+            ("openai.gpt-5.7", {"bedrock_mantle/openai.gpt-5.7": {}}, "openai/v1"),
+            (
+                "openai.gpt-5.7",
+                {"bedrock_mantle/openai.gpt-5.7": {"use_openai_responses_path": False}},
+                "v1",
+            ),
         ],
     )
     def test_base_segment(self, model, model_cost, expected):
