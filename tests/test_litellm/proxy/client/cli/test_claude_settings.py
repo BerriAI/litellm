@@ -1,6 +1,7 @@
 import json
 import shlex
 import stat
+import sys
 import time
 from unittest.mock import patch
 
@@ -328,6 +329,7 @@ class TestConflictingOwnersOfTheSettingsFile:
 
 
 class TestDoesNotDestroyUserOwnedStructure:
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlink creation needs elevation or Developer Mode on Windows")
     def test_writes_through_a_symlinked_settings_file(self, tmp_path, lite_on_path):
         """os.replace() swaps the symlink for a regular file, detaching a dotfiles repo.
 
