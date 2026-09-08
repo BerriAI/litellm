@@ -24,6 +24,11 @@ from litellm.litellm_core_utils.token_counter import (
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
+from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    assert_loop_stayed_free,
+    timed_with_loop_lags,
+    warm_tokenizer,
+)
 from tests.test_litellm.litellm_core_utils.messages_with_counts import (
     MESSAGES_TEXT,
     MESSAGES_WITH_IMAGES,
@@ -127,30 +132,15 @@ def test_valid_chunk_size_config_is_honoured(monkeypatch):
         importlib.reload(litellm.constants)
 
 
-async def _loop_wake_lags(until: asyncio.Event) -> tuple[float, ...]:
-    async def wake_lag() -> float:
-        started: Final = time.perf_counter()
-        await asyncio.sleep(0.001)
-        return time.perf_counter() - started - 0.001
-
-    return tuple([await wake_lag() for _ in iter(until.is_set, True)])
-
-
 async def test_huggingface_count_in_a_worker_thread_leaves_the_event_loop_free():
-    counted: Final = asyncio.Event()
+    warm_tokenizer("claude-fable-5")
 
-    async def count_off_the_loop() -> tuple[int, float]:
-        started: Final = time.perf_counter()
-        try:
-            tokens: Final = await asyncify(token_counter_new)(model="claude-fable-5", text=text * 100)
-            return tokens, time.perf_counter() - started
-        finally:
-            counted.set()
-
-    (tokens, took), lags = await asyncio.gather(count_off_the_loop(), _loop_wake_lags(counted))
+    tokens, took, lags = await timed_with_loop_lags(
+        lambda: asyncify(token_counter_new)(model="claude-fable-5", text=text * 100)
+    )
 
     assert tokens > 0
-    assert max(lags) < took / 4, f"the event loop stalled {max(lags):.3f}s during a {took:.3f}s count"
+    assert_loop_stayed_free(took, lags)
 
 
 @pytest.mark.parametrize("max_exact_chars", [64, 1_000, 2_500])
