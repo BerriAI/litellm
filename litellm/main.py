@@ -5398,15 +5398,13 @@ def completion(
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
-        allowed_openai_params: Final[list[str] | None] = cast(
-            list[str] | None,
-            (
-                [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
-                if responses_api_model_info.get("mode") == "responses"
-                and not skip_responses_api_bridge
-                and "reasoning_effort" not in (kwargs.get("allowed_openai_params") or [])
-                else kwargs.get("allowed_openai_params")
-            ),
+        bridges_to_responses_api: Final = (
+            responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
+        )
+        allowed_openai_params: Final[list[str] | None] = (
+            [*(kwargs.get("allowed_openai_params") or []), "reasoning_effort"]
+            if bridges_to_responses_api
+            else kwargs.get("allowed_openai_params")
         )
         optional_param_args: Final = {
             "functions": functions,
