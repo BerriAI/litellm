@@ -13108,7 +13108,9 @@ class Router:
         input: str | list | None = None,
     ) -> Optional["PreRoutingHookResponse"]:
         configured_callbacks: list[Any] = []
-        if hasattr(self, "optional_callbacks") and isinstance(self.optional_callbacks, list):  # guard-ok: type discipline
+        if hasattr(self, "optional_callbacks") and isinstance(
+            self.optional_callbacks, list
+        ):  # guard-ok: type discipline
             configured_callbacks.extend(self.optional_callbacks)
         if hasattr(self, "callbacks") and isinstance(self.callbacks, list):  # guard-ok: type discipline
             configured_callbacks.extend(self.callbacks)
@@ -13134,11 +13136,7 @@ class Router:
         raw_input = (
             input
             if input is not None
-            else (
-                messages
-                if messages is not None
-                else (request_kwargs.get("input") or request_kwargs.get("messages"))
-            )
+            else (messages if messages is not None else (request_kwargs.get("input") or request_kwargs.get("messages")))
         )
         extracted_model_id = EncryptedContentAffinityCheck._extract_model_id_from_input(raw_input)
         if not extracted_model_id:
@@ -13161,7 +13159,9 @@ class Router:
                 tiers_dict = cfg_obj.get("tiers")
                 if isinstance(tiers_dict, dict):
                     allowed_models.update(str(v) for v in tiers_dict.values() if v)
-            def_model_obj = getattr(strategy_params, "complexity_router_default_model", None)  # guard-ok: type discipline
+            def_model_obj = getattr(
+                strategy_params, "complexity_router_default_model", None
+            )  # guard-ok: type discipline
             if isinstance(def_model_obj, str) and def_model_obj:
                 allowed_models.add(def_model_obj)
 
@@ -13181,12 +13181,14 @@ class Router:
                     (
                         getattr(c, "litellm_params", {}).get("model_id") == extracted_model_id
                         if isinstance(getattr(c, "litellm_params", None), dict)  # guard-ok: type discipline
-                        else getattr(getattr(c, "litellm_params", None), "model_id", None) == extracted_model_id  # guard-ok: type discipline
+                        else getattr(getattr(c, "litellm_params", None), "model_id", None)
+                        == extracted_model_id  # guard-ok: type discipline
                     )
                     or (
                         getattr(c, "model_info", {}).get("id") == extracted_model_id
                         if isinstance(getattr(c, "model_info", None), dict)  # guard-ok: type discipline
-                        else getattr(getattr(c, "model_info", None), "id", None) == extracted_model_id  # guard-ok: type discipline
+                        else getattr(getattr(c, "model_info", None), "id", None)
+                        == extracted_model_id  # guard-ok: type discipline
                     )
                     for c in candidates
                 ):
