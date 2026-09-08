@@ -1481,6 +1481,103 @@ async def test_post_call_success_hook_runs_pipeline_on_retrieved_background_resp
     assert seen["response"] is response
 
 
+def _output_passing_callbacks() -> list[CustomGuardrail]:
+    class OutputPassingGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            return response
+
+    return [OutputPassingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)]
+
+
+def _claimed_post_call_pipeline_data(*policy_names: str, extra_guardrails: dict[str, list[str]] | None = None):
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+    step = {"guardrail": "gr-post", "on_pass": "allow", "on_fail": "block"}
+    get_policy_registry().load_policies(
+        {
+            policy_name: {
+                "guardrails": {"add": ["gr-post", *(extra_guardrails or {}).get(policy_name, [])]},
+                "pipeline": {"mode": "post_call", "steps": [step]},
+            }
+            for policy_name in policy_names
+        }
+    )
+    pipeline = GuardrailPipeline(mode="post_call", steps=[PipelineStep(**step)])
+    return {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {
+            "_guardrail_pipelines": [(policy_name, pipeline) for policy_name in policy_names],
+            "_pipeline_managed_guardrails": {"gr-post"},
+            "applied_policies": list(policy_names),
+            "applied_guardrails": ["gr-post", *(g for gs in (extra_guardrails or {}).values() for g in gs)],
+            "policy_sources": {policy_name: "model:m" for policy_name in policy_names},
+        },
+    }
+
+
+@pytest.fixture
+def clear_policy_registry():
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+    yield
+    get_policy_registry().clear()
+
+
+@pytest.mark.asyncio
+async def test_pending_background_response_withdraws_the_deferred_policy_claims(
+    proxy_logging, make_user_api_key_auth, monkeypatch, clear_policy_registry
+):
+    monkeypatch.setattr(litellm, "callbacks", _output_blocking_callbacks({}))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _claimed_post_call_pipeline_data("response-governance")
+
+    out = await proxy_logging.post_call_success_hook(
+        data=data, response=_background_response("queued"), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert out.status == "queued"
+    assert "applied_policies" not in data["metadata"]
+    assert "policy_sources" not in data["metadata"]
+    assert "applied_guardrails" not in data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_pending_background_response_keeps_the_claim_of_a_policy_that_runs_outside_its_pipeline(
+    proxy_logging, make_user_api_key_auth, monkeypatch, clear_policy_registry
+):
+    monkeypatch.setattr(litellm, "callbacks", _output_blocking_callbacks({}))
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _claimed_post_call_pipeline_data(
+        "input-and-output-governance", "response-governance", extra_guardrails={"input-and-output-governance": ["gr-pre"]}
+    )
+
+    await proxy_logging.post_call_success_hook(
+        data=data, response=_background_response("in_progress"), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert data["metadata"]["applied_policies"] == ["input-and-output-governance"]
+    assert data["metadata"]["applied_guardrails"] == ["gr-pre"]
+    assert data["metadata"]["policy_sources"] == {"input-and-output-governance": "model:m"}
+
+
+@pytest.mark.asyncio
+async def test_retrieved_background_response_keeps_the_policy_claim_once_its_pipeline_ran(
+    proxy_logging, make_user_api_key_auth, monkeypatch, clear_policy_registry
+):
+    monkeypatch.setattr(litellm, "callbacks", _output_passing_callbacks())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _claimed_post_call_pipeline_data("response-governance")
+
+    await proxy_logging.post_call_success_hook(
+        data=data, response=_background_response("completed", text="fine"), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert data["metadata"]["applied_policies"] == ["response-governance"]
+    assert data["metadata"]["policy_sources"] == {"response-governance": "model:m"}
+    assert data["metadata"]["applied_guardrails"] == ["gr-post"]
+
+
 @pytest.mark.asyncio
 async def test_pre_call_hook_stays_quiet_on_background_request_with_post_call_pipeline(
     proxy_logging, make_user_api_key_auth, monkeypatch, caplog

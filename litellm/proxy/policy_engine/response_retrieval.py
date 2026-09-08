@@ -1,6 +1,7 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
 
@@ -29,14 +30,23 @@ PolicyPipelines: TypeAlias = tuple[tuple[str, GuardrailPipeline], ...]
 _POLICY_PIPELINES_ADAPTER: Final = TypeAdapter(PolicyPipelines)
 
 
-def _model_group_for_response_id(response_id: object, llm_router: "Router | None") -> str | None:
-    if llm_router is None or not isinstance(response_id, str):
-        return None
-    model_id: Final = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
+@dataclass(frozen=True, slots=True)
+class UngovernedRetrieval:
+    reason: Literal["no router", "response id names no deployment", "deployment no longer in the router"]
+
+
+def _model_group_for_response_id(response_id: object, llm_router: "Router | None") -> str | UngovernedRetrieval:
+    if llm_router is None:
+        return UngovernedRetrieval("no router")
+    model_id: Final = (
+        ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id) if isinstance(response_id, str) else None
+    )
     if model_id is None:
-        return None
+        return UngovernedRetrieval("response id names no deployment")
     deployment: Final = llm_router.get_deployment(model_id)
-    return deployment.model_name if deployment is not None else None
+    if deployment is None:
+        return UngovernedRetrieval("deployment no longer in the router")
+    return deployment.model_name
 
 
 def _retrieval_context(
@@ -78,7 +88,12 @@ def attach_post_call_pipelines_to_retrieval(
     if not get_policy_registry().is_initialized():
         return
     model_group: Final = _model_group_for_response_id(data.get("response_id"), llm_router)
-    if model_group is None:
+    if isinstance(model_group, UngovernedRetrieval):
+        verbose_proxy_logger.warning(
+            "Policy engine: background response %s is retrieved without its post_call policy pipelines (%s)",
+            data.get("response_id"),
+            model_group.reason,
+        )
         return
     context: Final = _retrieval_context(data, user_api_key_dict, model_group)
     post_call_pipelines, policy_sources = _post_call_pipelines_for_context(context)
