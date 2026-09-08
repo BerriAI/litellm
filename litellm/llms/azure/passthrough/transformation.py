@@ -15,7 +15,7 @@ from litellm.llms.base_llm.passthrough.transformation import (
     strip_leading_model_segment,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse
+from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse, ResponsesTerminalEvent
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, EmbeddingResponse, ImageResponse
 
@@ -50,18 +50,19 @@ OPENAI_RELAY_SHAPES: Final = (
 )
 
 
-def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> ResponsesAPIResponse | None:
+def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> ResponsesTerminalEvent | None:
+    """A streaming logging object assembles the logged response from the terminal event, not from its body."""
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 
-    terminal_response: Final = OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(
+    terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(
         all_chunks=list(all_chunks)
     )
-    if terminal_response is None:
+    if terminal_event is None:
         return None
     logging_obj.call_type = (
         RESPONSES_RELAY_SHAPE.call_type.value
     )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
-    return terminal_response
+    return terminal_event
 
 
 class AzurePassthroughConfig(BasePassthroughConfig):
