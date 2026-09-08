@@ -1667,9 +1667,7 @@ class CustomStreamWrapper:
                 # usage model loses prompt_tokens_details with it: cached_tokens
                 # disappear and cached input is billed at the full input rate.
                 usage_from_chunk = chunk.usage
-                if not isinstance(usage_from_chunk, Usage) and hasattr(
-                    usage_from_chunk, "model_dump"
-                ):
+                if not isinstance(usage_from_chunk, Usage) and hasattr(usage_from_chunk, "model_dump"):
                     usage_fields = usage_from_chunk.model_dump()
                     # Do NOT adopt a provider-reported cost. `cost` IS a declared
                     # field on litellm Usage and cost tracking bills it as the
