@@ -13,6 +13,13 @@ import {
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
 import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
+import { hydrateCustomDimensions } from "@/components/add_model/custom_dimensions";
+import {
+  hydrateDimensionWeights,
+  hydrateTierBoundaries,
+  hydrateTokenThresholds,
+  hydrateReasoningOverrideMinScore,
+} from "@/components/add_model/heuristic_scoring_knobs";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -293,6 +300,11 @@ export const buildPresetPrefill = (
       tier_distance_penalty: config.tier_distance_penalty,
       adaptive_eligible: config.adaptive_eligible,
       return_raw_model_name: config.return_raw_model_name,
+      dimension_weights: hydrateDimensionWeights(config.dimension_weights),
+      custom_dimensions: hydrateCustomDimensions(config.custom_dimensions),
+      tier_boundaries: hydrateTierBoundaries(config.tier_boundaries),
+      token_thresholds: hydrateTokenThresholds(config.token_thresholds),
+      reasoning_override_min_score: hydrateReasoningOverrideMinScore(config.reasoning_override_min_score),
       enable_context_window_escalation: config.enable_context_window_escalation,
       context_window_escalation_buffer: config.context_window_escalation_buffer,
     },
