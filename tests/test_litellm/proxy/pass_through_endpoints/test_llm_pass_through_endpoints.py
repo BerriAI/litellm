@@ -4999,7 +4999,11 @@ class TestPassthroughRouterModelBudgetReservation:
 
         monkeypatch.setattr(proxy_server, "llm_router", RecordingRouter())
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
-        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+        monkeypatch.setattr(
+            ep,
+            "is_passthrough_request_using_router_model",
+            lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
         return captured
 
     def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -5098,7 +5102,11 @@ class TestAzureRouterModelStreamingDispatch:
 
         monkeypatch.setattr(proxy_server, "llm_router", StreamingRouter())
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
-        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+        monkeypatch.setattr(
+            ep,
+            "is_passthrough_request_using_router_model",
+            lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
 
         request = MagicMock(spec=Request)
         request.method = "POST"
@@ -5158,7 +5166,11 @@ class TestAzureRouterModelStreamingKeepalive:
 
         monkeypatch.setattr(proxy_server, "llm_router", StreamingRouter())
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
-        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+        monkeypatch.setattr(
+            ep,
+            "is_passthrough_request_using_router_model",
+            lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
 
         request = MagicMock(spec=Request)
         request.method = "POST"
@@ -5225,7 +5237,11 @@ class TestRouterModelRelayUpstreamContract:
 
         monkeypatch.setattr(proxy_server, "llm_router", router)
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
-        monkeypatch.setattr(ep, "is_passthrough_request_using_router_model", lambda *a, **k: True)
+        monkeypatch.setattr(
+            ep,
+            "is_passthrough_request_using_router_model",
+            lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
 
     def _recording_router(self, captured: list[dict]):
         class RecordingRouter:
@@ -5327,3 +5343,113 @@ async def test_bedrock_count_tokens_error_forwards_provider_headers():
 
     assert exc_info.value.status_code == 500
     assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-count-tokens-500"
+
+
+class _AzureGroupRouter:
+    def __init__(self, captured: list[dict]) -> None:
+        self.captured = captured
+
+    def get_model_names(self, team_id=None):
+        return ["gpt", "other-group"]
+
+    def get_model_list(self, model_name=None, team_id=None):
+        rows = [
+            {"model_name": "gpt", "litellm_params": {"model": "azure_ai/gpt-5.4-mini", "api_key": "k"}},
+            {"model_name": "other-group", "litellm_params": {"model": "azure/gpt-5.4", "api_key": "k"}},
+        ]
+        return [row for row in rows if model_name is None or row["model_name"] == model_name]
+
+    async def allm_passthrough_route(self, **kwargs):
+        self.captured.append(kwargs)
+        return httpx.Response(200, json={"ok": True})
+
+
+class TestAzureRelayDeploymentSegment:
+    """A key allowed one model group must not reach another deployment by naming it in the
+    ``openai/deployments/<x>`` segment while the group segment picks the credential."""
+
+    @pytest.mark.parametrize(
+        "endpoint, expected",
+        [
+            ("gpt/openai/deployments/gpt/chat/completions", None),
+            ("openai/deployments/gpt/chat/completions", None),
+            ("gpt/openai/deployments/gpt-5.4-mini/chat/completions", None),
+            ("gpt/models/chat/completions", None),
+            ("gpt/openai/deployments/gpt-5.4/chat/completions", "gpt-5.4"),
+            ("gpt/openai/deployments/other-group/chat/completions", "other-group"),
+            ("openai/deployments/victim/gpt/chat/completions", "victim"),
+        ],
+    )
+    def test_foreign_azure_deployment_names_a_segment_outside_the_group(self, endpoint, expected):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import foreign_azure_deployment
+
+        assert foreign_azure_deployment(endpoint, "gpt", _AzureGroupRouter([])) == expected
+
+    @pytest.mark.parametrize(
+        "endpoint, expected",
+        [
+            ("other-group/openai/deployments/other-group/chat/completions", "other-group"),
+            ("openai/deployments/gpt/chat/completions", "gpt"),
+            ("openai/deployments/my-azure-deployment/chat/completions", None),
+            ("gpt", None),
+        ],
+    )
+    def test_azure_router_model_in_endpoint_matches_the_relay_decision(self, endpoint, expected):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import azure_router_model_in_endpoint
+
+        assert azure_router_model_in_endpoint(endpoint, _AzureGroupRouter([])) == expected
+
+    def _install(self, monkeypatch, body: dict) -> list[dict]:
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+
+        captured: list[dict] = []
+
+        async def fake_get_request_body(_request):
+            return body
+
+        monkeypatch.setattr(proxy_server, "llm_router", _AzureGroupRouter(captured))
+        monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
+        return captured
+
+    def _request(self) -> Request:
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.headers = {"content-type": "application/json"}
+        request.query_params = {}
+        return request
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_rejects_a_deployment_the_group_does_not_serve(self, monkeypatch):
+        from fastapi import HTTPException
+
+        captured = self._install(monkeypatch, {"model": "gpt", "messages": []})
+
+        with pytest.raises(HTTPException) as exc_info:
+            await azure_proxy_route(
+                endpoint="gpt/openai/deployments/gpt-5.4/chat/completions",
+                request=self._request(),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token", models=["gpt"]),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "gpt-5.4" in exc_info.value.detail["error"]
+        assert captured == []
+
+    @pytest.mark.asyncio
+    async def test_azure_relay_dispatches_the_group_and_its_own_deployment_name(self, monkeypatch):
+        captured = self._install(monkeypatch, {"model": "gpt", "messages": []})
+
+        for endpoint in (
+            "gpt/openai/deployments/gpt/chat/completions",
+            "gpt/openai/deployments/gpt-5.4-mini/chat/completions",
+        ):
+            await azure_proxy_route(
+                endpoint=endpoint,
+                request=self._request(),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token", models=["gpt"]),
+            )
+
+        assert [call["model"] for call in captured] == ["gpt", "gpt"]

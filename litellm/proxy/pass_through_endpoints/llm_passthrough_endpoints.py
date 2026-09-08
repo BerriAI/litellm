@@ -78,6 +78,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
+from litellm.types.router import LiteLLMParamsTypedDict
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
@@ -118,6 +119,37 @@ def is_passthrough_request_using_router_model(request_body: dict, llm_router: li
         return is_known_model(model, llm_router)
     except Exception:
         return False
+
+
+def azure_router_model_in_endpoint(endpoint: str, llm_router: litellm.Router | None) -> str | None:
+    parts: Final = endpoint.split("/")
+    if len(parts) < 2:
+        return None
+    return next((part for part in parts if is_known_model(part, llm_router)), None)
+
+
+AZURE_DEPLOYMENT_SEGMENT: Final = re.compile(r"(?<![^/])openai/deployments/([^/]+)")
+
+
+def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
+    model: Final = litellm_params.get("model", "")
+    try:
+        return get_llm_provider(model=model, custom_llm_provider=litellm_params.get("custom_llm_provider"))[0]
+    except litellm.BadRequestError:
+        return model
+
+
+def foreign_azure_deployment(endpoint: str, model_group: str, llm_router: litellm.Router) -> str | None:
+    match: Final = AZURE_DEPLOYMENT_SEGMENT.search(endpoint)
+    if match is None:
+        return None
+    deployment: Final = match.group(1)
+    if deployment == model_group:
+        return None
+    served: Final = frozenset(
+        _deployment_model_name(row["litellm_params"]) for row in llm_router.get_model_list(model_name=model_group) or ()
+    )
+    return None if deployment in served else deployment
 
 
 def is_passthrough_request_streaming(request_body: object) -> bool:
@@ -1523,6 +1555,15 @@ async def _relay_azure_router_model(
     is_streaming_request: bool,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
+    foreign_deployment: Final = foreign_azure_deployment(endpoint, model, llm_router)
+    if foreign_deployment is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"deployment '{foreign_deployment}' in the path is not served by model group '{model}'; "
+                "put the model group name in the deployments segment"
+            },
+        )
     try:
         result: Final = await llm_router.allm_passthrough_route(
             model=model,

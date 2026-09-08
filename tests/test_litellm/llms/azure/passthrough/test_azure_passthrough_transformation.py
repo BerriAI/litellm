@@ -334,12 +334,12 @@ def test_azure_passthrough_url_rewrites_the_model_group_only_as_a_whole_segment(
         api_base="https://my-resource.openai.azure.com",
         api_key="key",
         model="gpt-4.1-mini",
-        endpoint="gpt/openai/deployments/gpt-4o/chat/completions",
+        endpoint="gpt/openai/deployments/gpt-4.1-mini/chat/completions",
         request_query_params={"api-version": "2024-10-21"},
         litellm_params={"litellm_metadata": {"model_group": "gpt"}},
     )
 
-    assert str(url) == "https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21"
+    assert str(url) == "https://my-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2024-10-21"
 
 
 @pytest.mark.parametrize(

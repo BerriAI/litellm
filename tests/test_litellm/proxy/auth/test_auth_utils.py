@@ -528,6 +528,38 @@ def test_get_model_from_request_bedrock_unparseable_endpoint_keeps_body_model():
     )
 
 
+def _azure_relay_router():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://a.services.ai.azure.com", "api_key": "k"},
+            },
+            {
+                "model_name": "other-group",
+                "litellm_params": {"model": "azure/gpt-5.4", "api_base": "https://b.openai.azure.com", "api_key": "k"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/azure_ai/other-group/openai/deployments/other-group/chat/completions", {"model": "gpt"}, "other-group"),
+        ("/azure_ai/other-group/models/chat/completions", {}, "other-group"),
+        ("/azure/openai/deployments/gpt/chat/completions", {"model": "other-group"}, "gpt"),
+        ("/azure/openai/deployments/gpt/chat/completions", {}, "gpt"),
+        ("/azure/openai/deployments/my-azure-deployment/chat/completions", {"model": "gpt"}, "gpt"),
+        ("/azure_ai/gpt", {"model": "other-group"}, "other-group"),
+    ],
+)
+def test_get_model_from_request_azure_relay_routes_use_the_model_group_in_the_path(route, request_data, expected):
+    assert get_model_from_request(request_data=request_data, route=route, llm_router=_azure_relay_router()) == expected
+
+
 def test_get_model_from_request_includes_file_endpoint_header_model():
     assert (
         get_model_from_request(
