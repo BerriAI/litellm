@@ -538,12 +538,16 @@ def _warn_background_skips_post_call_pipelines(data: Mapping[str, object]) -> No
     )
 
 
-def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> bool:
-    unsupported: Final = tuple(
+def _pipeline_unsupported_streaming_guardrails(pipeline: "GuardrailPipeline") -> tuple[str, ...]:
+    return tuple(
         dict.fromkeys(
             step.guardrail for step in pipeline.steps if not _pipeline_step_supports_streaming(step.guardrail)
         )
     )
+
+
+def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> bool:
+    unsupported: Final = _pipeline_unsupported_streaming_guardrails(pipeline)
     if not unsupported:
         return True
     verbose_proxy_logger.warning(
@@ -573,13 +577,12 @@ def _streamable_post_call_pipelines(
     post_call_pipelines: Final = _post_call_pipelines(request_data)
     if not post_call_pipelines:
         return ()
-    route: Final = user_api_key_dict.request_route
-    if route and resolve_endpoint_translation(user_api_key_dict, None) is None:
+    if not _route_has_endpoint_translation(user_api_key_dict):
         verbose_proxy_logger.warning(
             "Policies with post_call guardrail pipelines cannot scan streaming responses on route %s yet "
             "(no endpoint guardrail translation); the stream skips the pipelines and their guardrails run "
             "on their own: %s",
-            route,
+            user_api_key_dict.request_route,
             ", ".join(policy_name for policy_name, _pipeline in post_call_pipelines),
         )
         return ()
@@ -587,6 +590,30 @@ def _streamable_post_call_pipelines(
         (policy_name, pipeline)
         for policy_name, pipeline in post_call_pipelines
         if _pipeline_is_streamable(policy_name, pipeline)
+    )
+
+
+def _route_has_endpoint_translation(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return not user_api_key_dict.request_route or resolve_endpoint_translation(user_api_key_dict, None) is not None
+
+
+def stream_gated_guardrail_names(
+    request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+) -> frozenset[str]:
+    """
+    The guardrails whose post_call pipelines gate a streaming response on this
+    route: the selection ``_streamable_post_call_pipelines`` makes, without its
+    warnings, so the post-call pass deferred to the end of the stream skips
+    exactly the guardrails the pipelines already ran and no others.
+    """
+    if not _route_has_endpoint_translation(user_api_key_dict):
+        return frozenset()
+    return _pipeline_step_guardrail_names(
+        tuple(
+            (policy_name, pipeline)
+            for policy_name, pipeline in _post_call_pipelines(request_data)
+            if not _pipeline_unsupported_streaming_guardrails(pipeline)
+        )
     )
 
 
