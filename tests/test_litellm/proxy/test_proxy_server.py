@@ -3167,6 +3167,47 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
 
 
 @pytest.mark.asyncio
+async def test_startup_initializes_string_callbacks_after_all_litellm_settings_load(tmp_path, monkeypatch):
+    from litellm.integrations.s3_v2 import S3Logger
+    from litellm.litellm_core_utils import litellm_logging
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  success_callback:\n"
+        "    - s3_v2\n"
+        "  failure_callback:\n"
+        "    - s3_v2\n"
+        "  s3_callback_params:\n"
+        "    s3_bucket_name: ordering-regression-bucket\n"
+        "    s3_region_name: us-west-2\n"
+    )
+
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "s3_callback_params", None)
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
+    await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+    ProxyLogging(user_api_key_cache=MagicMock())._init_litellm_callbacks(llm_router=None)
+
+    success_loggers = [cb for cb in litellm._async_success_callback if isinstance(cb, S3Logger)]
+    failure_loggers = [cb for cb in litellm._async_failure_callback if isinstance(cb, S3Logger)]
+    assert len(success_loggers) == 1
+    assert len(failure_loggers) == 1
+    assert success_loggers[0].s3_bucket_name == "ordering-regression-bucket"
+    assert success_loggers[0].s3_region_name == "us-west-2"
+    assert "s3_v2" not in litellm.success_callback
+    assert "s3_v2" not in litellm.failure_callback
+
+
+@pytest.mark.asyncio
 async def test_load_config_max_budget_env_var_coerced_to_float(tmp_path, monkeypatch):
     """
     max_budget configured as os.environ/MAX_BUDGET resolves to a string;
