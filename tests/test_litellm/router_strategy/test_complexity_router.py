@@ -1512,6 +1512,7 @@ class TestRouterComplexityDeploymentMethods:
     def test_the_shipped_rubric_and_default_prompt_stay_free(self) -> None:
         """Only an operator-written prompt is gated: picking a shipped rubric preset, or writing no
         prompt at all, leaves a router unmetered, so several of them register under a ceiling of one."""
+
         def rubric(model_name: str, model_id: str, preset: str | None) -> dict[str, object]:
             llm_config: dict[str, object] = {"model": "gpt-4o-mini"}
             if preset is not None:
@@ -1648,6 +1649,7 @@ class TestRouterComplexityDeploymentMethods:
     def test_renaming_built_in_tiers_is_not_a_custom_tier_set(self) -> None:
         """tier_labels renames the built-in ladder without defining one, so it stays ungated: two such
         routers register under a ceiling of one."""
+
         def labeled(model_name: str, model_id: str) -> dict[str, object]:
             row = self._router_row(model_name, model_id, "heuristic")
             row["litellm_params"]["complexity_router_config"]["tier_labels"] = {"SIMPLE": "Cheap", "MEDIUM": "Standard"}
@@ -2521,9 +2523,7 @@ class TestLLMClassifier:
         assert outcome.classifier_cost == pytest.approx(1.35e-05)
 
     @pytest.mark.asyncio
-    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(
-        self, llm_classifier_config
-    ):
+    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(self, llm_classifier_config):
         real_router = Router(
             model_list=[
                 {
@@ -2566,9 +2566,7 @@ class TestLLMClassifier:
         assert real_router.total_calls["openai/mock-backup-classifier"] == 0
 
     @pytest.mark.asyncio
-    async def test_aclassify_enforces_total_classifier_deadline(
-        self, mock_router_instance, llm_classifier_config
-    ):
+    async def test_aclassify_enforces_total_classifier_deadline(self, mock_router_instance, llm_classifier_config):
         cancelled = asyncio.Event()
 
         async def slow_classifier(**_kwargs: object) -> None:
@@ -12415,9 +12413,7 @@ class TestTierHealthFailover:
                     llm_provider="",
                 )
             filtered = (*cooling, *blocked, *excluded)
-            healthy = [
-                {"model_name": model, "model_info": {"id": i}} for i in ids_by_model[model] if i not in filtered
-            ]
+            healthy = [{"model_name": model, "model_info": {"id": i}} for i in ids_by_model[model] if i not in filtered]
             if not healthy:
                 raise RouterRateLimitError(
                     model=model, cooldown_time=60.0, enable_pre_call_checks=False, cooldown_list=[]
@@ -12846,9 +12842,7 @@ class TestTierHealthFailover:
         assert all(probed is not request_kwargs for probed in router.litellm_router_instance.probed_kwargs)
 
     @pytest.mark.asyncio
-    async def test_a_peer_whose_every_deployment_is_over_its_rpm_is_not_a_failover_target(
-        self, mock_router_instance
-    ):
+    async def test_a_peer_whose_every_deployment_is_over_its_rpm_is_not_a_failover_target(self, mock_router_instance):
         """RPM exhaustion is its own verdict from the owner (RouterRateLimitErrorBasic). A peer
         in that state would be rejected downstream, so it cannot be the substitute."""
         from litellm.types.router import RouterRateLimitErrorBasic
@@ -12881,9 +12875,7 @@ class TestTierHealthFailover:
         assert {r.model for r in results} == {"live-c"}
 
     @pytest.mark.asyncio
-    async def test_the_probe_forwards_input_so_window_checks_run_on_input_only_surfaces(
-        self, mock_router_instance
-    ):
+    async def test_the_probe_forwards_input_so_window_checks_run_on_input_only_surfaces(self, mock_router_instance):
         """The Responses API carries its prompt as `input`, never as messages. The owner only
         runs its context-window pre-call check when one of them is present, so dropping `input`
         would silently skip window filtering on that whole surface."""
@@ -12909,9 +12901,7 @@ class TestTierHealthFailover:
         ), "the eligibility probe must forward `input` to the owner"
 
     @pytest.mark.asyncio
-    async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(
-        self, mock_router_instance
-    ):
+    async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(self, mock_router_instance):
         """The owner answers an unconfigured group with BadRequestError. Reading that as live
         would both skip failover off it and let it be chosen as a substitute."""
         router = self._router(
@@ -13100,9 +13090,7 @@ class TestClassifierVision:
         routed as default_fallback on text the request never contained.
         """
         router = self._router(mock_router_instance, vision={"enabled": True})
-        response = await router.async_pre_routing_hook(
-            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
-        )
+        response = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self._turn(IMG_PART))
         assert response.routing_decision["cause"] == "llm_classifier"
         assert response.model == "t-complex"
         assert [block["type"] for block in self._classifier_user_content(mock_router_instance)] == [
@@ -13113,9 +13101,7 @@ class TestClassifierVision:
     @pytest.mark.asyncio
     async def test_image_only_turn_still_falls_back_when_vision_is_off(self, mock_router_instance):
         router = self._router(mock_router_instance, vision={"enabled": False})
-        response = await router.async_pre_routing_hook(
-            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
-        )
+        response = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self._turn(IMG_PART))
         assert response.routing_decision["cause"] == "default_fallback"
         mock_router_instance.acompletion.assert_not_awaited()
 
@@ -13185,9 +13171,7 @@ class TestClassifierVision:
         makes the image the only variable; a margin loose enough to leave the score undecided
         would pass whether or not the guard exists.
         """
-        router = self._router(
-            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
-        )
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
         response = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
         )
@@ -13201,9 +13185,7 @@ class TestClassifierVision:
         self, mock_router_instance, classifier_type, extra, short_circuit_cause
     ):
         """The negative class: same router, same text, no image, and the scorer still decides."""
-        router = self._router(
-            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
-        )
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
         response = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=[{"role": "user", "content": "what is this"}]
         )
@@ -13225,13 +13207,7 @@ NON_REASONING_TIERS: Final = {
 
 
 class TestNonReasoningTier:
-    """The opt-in fifth built-in tier below SIMPLE.
-
-    Two properties carry the feature. A router that did not opt in must be byte-identical to one
-    built before the tier existed, because the tier set feeds the classifier rubric, the wire enum,
-    and the savings baseline, all of which move live routing decisions and spend. A router that did
-    opt in must be able to actually reach the tier and escalate off it.
-    """
+    """The opt-in fifth built-in tier below SIMPLE: inert unless enabled, reachable when it is."""
 
     @staticmethod
     def _router(mock_router_instance, **overrides) -> ComplexityRouter:
@@ -13249,8 +13225,7 @@ class TestNonReasoningTier:
         )
 
     def test_ladder_gains_a_rung_below_simple_only_when_enabled(self):
-        """Tier 0 sits at the bottom. Anywhere else and escalation, the savings baseline, and
-        heuristic_first's 'highest tier' check would all read a different ladder."""
+        """Tier 0 sits at the bottom; anywhere else and escalation and the baseline shift."""
         enabled: Final = ComplexityRouterConfig(
             tiers=dict(NON_REASONING_TIERS),
             enable_non_reasoning_tier=True,
@@ -13261,8 +13236,7 @@ class TestNonReasoningTier:
         assert ComplexityRouterConfig().tier_names() == ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
 
     def test_default_router_is_unchanged_by_the_tier_existing(self):
-        """The regression that matters for every already-deployed router: the enum grew a member,
-        and nothing a four-tier router sends or resolves may change because of it."""
+        """The enum grew a member, and nothing a four-tier router sends or resolves may change."""
         default: Final = ComplexityRouterConfig()
         assert default.enable_non_reasoning_tier is False
         assert "NON_REASONING" not in DEFAULT_COMPLEXITY_CONFIG.tiers
@@ -13272,8 +13246,7 @@ class TestNonReasoningTier:
 
     @pytest.mark.parametrize("preset", tuple(ClassificationRubric))
     def test_rubric_gains_the_bullet_only_when_enabled(self, preset):
-        """Every preset renders one bullet per active tier, so an unset toggle must leave all four
-        shipped rubrics byte-identical while an enabled one must actually describe the new tier."""
+        """An unset toggle leaves every shipped rubric byte-identical; an enabled one adds a bullet."""
         enabled: Final = ComplexityRouterConfig(
             tiers=dict(NON_REASONING_TIERS),
             enable_non_reasoning_tier=True,
@@ -13286,18 +13259,18 @@ class TestNonReasoningTier:
         assert "- NON_REASONING" not in off
 
     def test_enabled_router_puts_the_tier_on_the_classifier_wire(self, mock_router_instance):
-        """The response schema's enum is what the classifier may return; without the new label the
-        tier would be unreachable no matter what the rubric says."""
+        """The schema enum bounds what the classifier may return, whatever the rubric says."""
         router: Final = self._router(mock_router_instance)
         enum: Final = router._classifier_response_format["json_schema"]["schema"]["properties"]["tier"]["enum"]
         assert enum == ["NON_REASONING", "SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
 
     @pytest.mark.asyncio
     async def test_classifier_verdict_routes_to_the_tier_model(self, mock_router_instance):
-        """End to end on the LLM path: the classifier names the tier and the request lands on that
-        tier's model with the decision recording it."""
+        """The classifier names the tier and the request lands on that tier's model."""
         mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "NON_REASONING"}'))
-        router: Final = self._router(mock_router_instance, tiers={**NON_REASONING_TIERS, "NON_REASONING": "cheap-relay"})
+        router: Final = self._router(
+            mock_router_instance, tiers={**NON_REASONING_TIERS, "NON_REASONING": "cheap-relay"}
+        )
         response = await router.async_pre_routing_hook(
             model="test-non-reasoning-router",
             request_kwargs={},
@@ -13308,9 +13281,10 @@ class TestNonReasoningTier:
         assert response.routing_decision["cause"] == "llm_classifier"
 
     @pytest.mark.asyncio
-    async def test_a_four_tier_router_ignores_a_non_reasoning_verdict(self, llm_complexity_router, mock_router_instance):
-        """A classifier that names the tier at a router which never opted in must be an unparseable
-        reply that falls back, not a silent route to a tier the operator did not configure."""
+    async def test_a_four_tier_router_ignores_a_non_reasoning_verdict(
+        self, llm_complexity_router, mock_router_instance
+    ):
+        """Naming the tier at a router that never opted in falls back instead of routing there."""
         mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "NON_REASONING"}'))
         outcome = await llm_complexity_router.aclassify("relay this")
         assert outcome.tier != ComplexityTier.NON_REASONING
@@ -13323,8 +13297,7 @@ class TestNonReasoningTier:
         assert router._escalate_tier(ComplexityTier.REASONING) == ComplexityTier.REASONING
 
     def test_escalation_skips_the_tier_when_unconfigured(self, mock_router_instance):
-        """SIMPLE must still escalate to MEDIUM rather than to the cheaper new rung, or escalation
-        would route below the model the caller would otherwise have received."""
+        """SIMPLE still escalates to MEDIUM, so escalation never routes below the caller's model."""
         router: Final = self._router(
             mock_router_instance,
             tiers={"NON_REASONING": "cheap-relay", "SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
@@ -13332,8 +13305,7 @@ class TestNonReasoningTier:
         assert router._escalate_tier(ComplexityTier.SIMPLE) == ComplexityTier.MEDIUM
 
     def test_tier_zero_is_never_the_savings_baseline(self, mock_router_instance):
-        """Savings are measured against the hardest configured tier. If tier 0 could win that pick,
-        every enabled router's reported savings would invert."""
+        """Savings use the hardest configured tier; tier 0 winning would invert every figure."""
         assert self._router(mock_router_instance)._hardest_tier_models() == ("o1-preview",)
         cheap_only: Final = self._router(
             mock_router_instance, tiers={"NON_REASONING": "cheap-relay", "SIMPLE": "gpt-4o-mini"}
@@ -13356,8 +13328,7 @@ class TestNonReasoningTier:
         ids=["heuristic", "heuristic_v2", "no_model"],
     )
     def test_unreachable_or_unroutable_configs_are_rejected(self, overrides, expected):
-        """The toggle is refused wherever it could not do anything: the heuristic scorers cannot
-        emit the tier, and an unconfigured tier would fall through to the default model."""
+        """Refused where it could do nothing: no scorer emits the tier, no pool routes it."""
         config: Final = {
             "tiers": dict(NON_REASONING_TIERS),
             "enable_non_reasoning_tier": True,
@@ -13386,9 +13357,7 @@ class TestNonReasoningTier:
             )
 
     def test_heuristic_v2_predictions_never_reach_the_new_tier(self, mock_router_instance):
-        """The bundled artifact is trained on four classes, so its 1-based tier index must keep
-        mapping onto SIMPLE..REASONING. Reading the enabled ladder here would shift every
-        prediction down a rung and make REASONING unreachable."""
+        """The four-class artifact's 1-based index must keep mapping onto SIMPLE..REASONING."""
         router: Final = ComplexityRouter(
             model_name="v2-router",
             litellm_router_instance=mock_router_instance,
@@ -13399,8 +13368,6 @@ class TestNonReasoningTier:
         )
         outcome = router._classify_with_heuristic_v2("implement a distributed rate limiter under concurrency")
         assert outcome.tier in TIER_SEVERITY_ORDER
-        # One probability signal per trained class, named for the tier that class means. A ladder
-        # shifted by the new rung would relabel all four and lose REASONING off the end.
         assert tuple(signal.split(":")[1].split("=")[0] for signal in outcome.signals[1:]) == (
             "simple",
             "medium",

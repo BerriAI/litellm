@@ -538,8 +538,7 @@ export const buildComplexityRouterConfig = ({
 
   const payload: ComplexityRouterConfigPayload = {
     tiers,
-    // Only written when on, and never beside a custom tier set: the backend rejects the two
-    // together, and an explicit false on a four-tier router would be a key it never carried.
+    // The backend rejects the flag beside a custom tier set.
     ...(!customTierSet && enableNonReasoningTier && { enable_non_reasoning_tier: true }),
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
     ...(defaultModel?.trim() && { default_model: defaultModel }),

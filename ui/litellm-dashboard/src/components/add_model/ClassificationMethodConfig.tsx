@@ -236,11 +236,8 @@ const ClassifierTypeRadios: React.FC<{
   );
 };
 
-/**
- * The NON_REASONING keys a classifier switch carries forward, or clears. Only the LLM classifier
- * can emit the tier, and the switch is disabled elsewhere, so a flag left set under another
- * classifier would be an unsaveable config the operator could not undo.
- */
+/** The NON_REASONING keys a classifier switch carries forward, or clears for a classifier that
+ * cannot emit the tier. Leaving them set there is a config the backend refuses on save. */
 export const nonReasoningTierFields = (
   classifierType: ClassifierType,
   value: ComplexityRouterConfigValue,

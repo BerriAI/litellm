@@ -56,9 +56,6 @@ DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubri
 LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "heuristic_first", "hybrid"})
 
 
-# Excludes NON_REASONING so an existing router keeps the ladder, rubric and wire labels it already
-# has, and so heuristic_v2 keeps mapping onto the four classes its artifact is trained on. Anywhere
-# `enable_non_reasoning_tier` can reach, read the ladder off the config instead.
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
     ComplexityTier.MEDIUM,
@@ -73,7 +70,6 @@ NON_REASONING_TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
 
 
 def tier_severity_order(non_reasoning_enabled: bool) -> tuple[ComplexityTier, ...]:
-    """The built-in ladder for one router, tier 0 included only when it opted in."""
     return NON_REASONING_TIER_SEVERITY_ORDER if non_reasoning_enabled else TIER_SEVERITY_ORDER
 
 
@@ -1524,8 +1520,7 @@ class ComplexityRouterConfig(BaseModel):
         return self.classifier_type in LLM_CLASSIFIER_TYPES
 
     def active_tier_severity_order(self) -> tuple[ComplexityTier, ...]:
-        """This router's built-in ladder, ascending. Meaningless for a custom tier set, whose
-        severity order is tier_definitions list order over names that are not enum members."""
+        """This router's built-in ladder, ascending; not meaningful for a custom tier set."""
         return tier_severity_order(self.enable_non_reasoning_tier)
 
     def tier_names(self) -> tuple[str, ...]:
@@ -1626,12 +1621,7 @@ class ComplexityRouterConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_non_reasoning_tier(self) -> "ComplexityRouterConfig":
-        """Gate the opt-in fifth tier on the two things that make it reachable and routable.
-
-        The heuristic scorers cannot emit it (the v1 score ladder has no rung below simple_medium
-        and the v2 artifact is trained on four classes), so a router whose classifier can never
-        return the tier would pay for a rubric bullet and a configured pool that no request reaches.
-        """
+        """Require a classifier that can emit the opt-in tier and a model to route it to."""
         non_reasoning_key: Final = ComplexityTier.NON_REASONING.value
         if not self.enable_non_reasoning_tier:
             if not self.has_custom_tiers and non_reasoning_key in self.tiers:
@@ -1834,13 +1824,11 @@ class ComplexityRouterConfig(BaseModel):
         return self.tier_labels.get(tier, "").strip() or tier.value
 
     def labeled_tiers(self) -> tuple[tuple[ComplexityTier, str], ...]:
-        """Every active tier paired with its display name, in ascending severity order."""
+        """Every tier paired with its display name, in ascending severity order."""
         return tuple((tier, self.tier_label(tier)) for tier in self.active_tier_severity_order())
 
     def tier_for_label(self, label: str) -> ComplexityTier | None:
-        """Resolve a display name back to its active tier, case-insensitively, then canonical
-        names. A tier this router did not opt into resolves to None, so a classifier naming
-        NON_REASONING on a four-tier router is an unparseable reply rather than a fifth rung."""
+        """Resolve a display name back to its tier, case-insensitively, then canonical names."""
         folded: Final = label.strip().casefold()
         labeled: Final = self.labeled_tiers()
         return next(

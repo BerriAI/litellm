@@ -5,17 +5,11 @@ import { Switch } from "@/components/ui/switch";
 
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
 
-/**
- * The opt-in fifth tier. Only offered on the LLM classification method, matching the backend: the
- * heuristic scorers cannot produce the tier, so enabling it there would buy a rubric bullet and a
- * model pool that no request ever reaches.
- */
 const NonReasoningTierToggle: React.FC<{
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   available: boolean;
 }> = ({ value, onChange, available }) => {
-  // Off drops the tier's key rather than leaving the empty pool the backend rejects.
   const handleToggle = (enabled: boolean): void => {
     const { NON_REASONING: existingPool, ...keptTiers } = value.tiers;
     const next: ComplexityRouterConfigValue = {

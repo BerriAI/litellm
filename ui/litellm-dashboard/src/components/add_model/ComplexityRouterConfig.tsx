@@ -78,10 +78,7 @@ export const DEFAULT_CLASSIFICATION_MODE: ClassificationMode = "every_request";
  */
 export type ClassificationFrequency = ClassificationMode | "session";
 
-/**
- * NON_REASONING is optional because it is the opt-in fifth tier: a router that never enabled it
- * stores no such key, and hydrating one in would send an empty pool the backend rejects.
- */
+/** NON_REASONING is optional: a router that never enabled it stores no such key. */
 export type ComplexityTiers = {
   SIMPLE: string[];
   MEDIUM: string[];
@@ -362,10 +359,7 @@ export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>
 
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
-  /**
-   * Opt into the NON_REASONING tier below SIMPLE. Off means the router keeps the four-tier ladder
-   * it has always had, so an existing router's rubric and tier decisions cannot move under it.
-   */
+  /** Opt into the NON_REASONING tier below SIMPLE; off keeps the four-tier ladder. */
   enable_non_reasoning_tier?: boolean;
   custom_tier_set?: CustomTierSet;
   tier_labels?: ComplexityTierLabels;
@@ -510,7 +504,6 @@ export const TIER_DESCRIPTIONS: Record<
   },
 };
 
-/** Every built-in tier name, including the opt-in one, for label and membership checks. */
 export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>;
 
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
@@ -523,9 +516,7 @@ export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
 
 /**
  * Tiers the heuristic_first threshold may name. The top tier is excluded because it would short
- * circuit every request and leave the classifier unreachable, which the backend rejects. So is
- * NON_REASONING, which the backend refuses alongside heuristic_first because the local scorer
- * cannot produce it.
+ * circuit every request and leave the classifier unreachable, which the backend rejects.
  */
 export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_ORDER.slice(0, -1);
 

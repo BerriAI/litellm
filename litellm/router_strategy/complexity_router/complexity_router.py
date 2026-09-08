@@ -100,12 +100,7 @@ else:
 
 
 class TierClassification(BaseModel):
-    """Structured response schema for the LLM-based complexity classifier.
-
-    The four-tier ladder, which is what a router that did not opt into NON_REASONING sends. The
-    enum actually put on the wire is rebuilt per router from `classifier_wire_labels`, so a
-    five-tier or renamed ladder widens it there rather than here.
-    """
+    """Structured response schema for the LLM-based complexity classifier."""
 
     tier: Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
 

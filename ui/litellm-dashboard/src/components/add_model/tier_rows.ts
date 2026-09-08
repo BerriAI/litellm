@@ -4,13 +4,9 @@ import type { TierModelParams, TierModelParamsByTier } from "./complexity_router
 
 export const TIER_ORDER: ComplexityTier[] = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
-/** Every built-in tier name, so a stored NON_REASONING row is recognized as built-in either way. */
 export const ALL_BUILT_IN_TIERS: ComplexityTier[] = ["NON_REASONING", ...TIER_ORDER];
 
-/**
- * The ladder one router renders, ascending. NON_REASONING is tier 0 and appears only when enabled,
- * which is what keeps an existing four-tier router's form, payload, and rubric unchanged.
- */
+/** The ladder one router renders, ascending; NON_REASONING appears only when enabled. */
 export const tierOrderFor = (enableNonReasoningTier: boolean | undefined): ComplexityTier[] =>
   enableNonReasoningTier ? ALL_BUILT_IN_TIERS : TIER_ORDER;
 
