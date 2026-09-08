@@ -1721,4 +1721,5 @@ async def test_afile_delete_bedrock_unified_id_end_to_end(monkeypatch):
     assert route.called
     assert route.calls[0].request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
     assert response.id == unified_file_id
+    assert response.model_dump() == {"id": unified_file_id, "object": "file", "deleted": True}
     managed_files.delete_unified_file_id.assert_awaited_once_with(unified_file_id, None)

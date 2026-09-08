@@ -263,7 +263,7 @@ def _validate_file_id_against_configured_buckets(
     return validate_against(configured_bucket_names[-1])
 
 
-_REJECTED_FILE_ID_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+_REJECTED_FILE_ID_REQUEST_URL: Final = "https://litellm.ai"
 
 
 def _rejected_file_id(reason: ValueError) -> BedrockError:
@@ -301,13 +301,21 @@ _MANAGED_LISTING_PREFIX_BY_PURPOSE: Final = MappingProxyType(
 )
 
 
-def _managed_listing_prefix(configured_prefix: str, purpose: str | None) -> str:
-    managed_prefix: Final = (
-        _MANAGED_LISTING_PREFIX_BY_PURPOSE.get(purpose, _ANY_MANAGED_LISTING_PREFIX)
-        if purpose
-        else _ANY_MANAGED_LISTING_PREFIX
-    )
+_EMPTY_LISTING_QUERY: Final = (("list-type", "2"), ("max-keys", "0"))
+
+
+def _managed_listing_prefix(configured_prefix: str, purpose: str | None) -> str | None:
+    managed_prefix: Final = _MANAGED_LISTING_PREFIX_BY_PURPOSE.get(purpose) if purpose else _ANY_MANAGED_LISTING_PREFIX
+    if managed_prefix is None:
+        return None
     return f"{configured_prefix}/{managed_prefix}" if configured_prefix else managed_prefix
+
+
+def _listing_query(configured_prefix: str, purpose: str | None) -> tuple[tuple[str, str], ...]:
+    listing_prefix: Final = _managed_listing_prefix(configured_prefix, purpose)
+    if listing_prefix is None:
+        return _EMPTY_LISTING_QUERY
+    return (("list-type", "2"), ("prefix", listing_prefix))
 
 
 def _requested_listing_purpose(litellm_params: Mapping[str, object]) -> str | None:
@@ -316,11 +324,14 @@ def _requested_listing_purpose(litellm_params: Mapping[str, object]) -> str | No
 
 
 def _listing_bucket_name(litellm_params: Mapping[str, object], purpose: str | None) -> str:
-    input_bucket_name: Final = get_configured_s3_bucket_name(litellm_params)
     if purpose != "batch_output":
-        return input_bucket_name
+        return get_configured_s3_bucket_name(litellm_params)
     trusted: Final = _trusted_s3_model_credentials(litellm_params)
-    return trusted.s3_output_bucket_name or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME") or input_bucket_name
+    return (
+        trusted.s3_output_bucket_name
+        or os.getenv("AWS_S3_OUTPUT_BUCKET_NAME")
+        or get_configured_s3_bucket_name(litellm_params)
+    )
 
 
 def _listed_object_created_at(entry: ET.Element) -> int:
@@ -1372,7 +1383,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         )
         target: Final = self._s3_request_target(optional_params=optional_params, litellm_params=litellm_params)
         url: Final = f"{target.endpoint_url}/{bucket_name}/"
-        listing_query: Final = (("list-type", "2"), ("prefix", _managed_listing_prefix(configured_prefix, purpose)))
+        listing_query: Final = _listing_query(configured_prefix, purpose)
         continuation_query: Final = (("continuation-token", continuation_token),) if continuation_token else ()
         query: Final[dict[str, str]] = dict(  # mutable-ok: the base files contract returns the query as a dict
             listing_query + continuation_query
