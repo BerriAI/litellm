@@ -2202,6 +2202,19 @@ class TestGuardrailBlockErrorPayloadNeverStringifiesNone:
         assert frame["error"]["param"] is None
         assert frame["error"]["code"] == "400"
 
+    def test_a_streaming_frame_keeps_the_status_a_proxy_exception_was_raised_with(self):
+        """ProxyException stores its status as the string ``code``, so a 429 raised before the
+        first chunk used to reach the SSE frame as a 500."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.common_request_processing import sse_error_payload
+
+        error_status, error_obj = sse_error_payload(
+            ProxyException(message="Rate limit reached", type="rate_limit_error", param=None, code=429)
+        )
+
+        assert error_status == 429
+        assert (error_obj["type"], error_obj["code"]) == ("rate_limit_error", "429")
+
     @pytest.mark.parametrize(
         "status_code, expected_type",
         [
