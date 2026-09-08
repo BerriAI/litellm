@@ -595,6 +595,10 @@ async def _update_database_and_spend_counters(
     request_tags: list[str] | None = None,
     model_access_groups: Sequence[str] | None = None,
 ) -> bool:
+    if budget_reservation is not None:
+        await _reconcile_budget_reservation_before_db_update(
+            budget_reservation=budget_reservation, response_cost=response_cost
+        )
     try:
         charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key,
@@ -650,6 +654,19 @@ async def _update_database_and_spend_counters(
                 budget_reservation["finalized"] = True
         raise
     return True
+
+
+async def _reconcile_budget_reservation_before_db_update(budget_reservation: dict, response_cost: float) -> None:
+    from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
+
+    try:
+        await reconcile_budget_reservation(
+            budget_reservation=budget_reservation, actual_cost=response_cost, finalize=False
+        )
+    except Exception:
+        verbose_proxy_logger.debug(
+            "Budget reservation reconcile before DB update failed; deferring to counter update", exc_info=True
+        )
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:
