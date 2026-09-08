@@ -3,6 +3,7 @@ pub mod azure_ai;
 #[cfg(feature = "bedrock-auth")]
 pub mod bedrock;
 pub mod mistral;
+pub mod ollama;
 pub mod openai;
 pub mod reducto;
 pub mod vertex_ai;

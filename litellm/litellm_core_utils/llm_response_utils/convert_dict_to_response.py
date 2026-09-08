@@ -701,7 +701,7 @@ def convert_to_model_response_object(
                     finish_reason = "tool_calls"
 
                 ## PROVIDER SPECIFIC FIELDS ##
-                provider_specific_fields = {f: choice[f] for f in choice.keys() - _CHOICES_FIELDS}
+                provider_specific_fields = {f: choice[f] for f in choice.keys() - _CHOICES_FIELDS} or None
 
                 logprobs = choice.get("logprobs", None)
                 enhancements = choice.get("enhancements", None)

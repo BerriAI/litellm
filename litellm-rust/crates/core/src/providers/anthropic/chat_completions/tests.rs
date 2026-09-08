@@ -314,12 +314,13 @@ fn folds_cache_tokens_into_prompt_tokens_like_python() {
     .expect("response transforms");
     assert_eq!(response.usage.prompt_tokens, 18);
     assert_eq!(response.usage.total_tokens, 20);
-    assert_eq!(response.usage.prompt_tokens_details.cached_tokens, 5);
-    assert_eq!(
-        response.usage.prompt_tokens_details.cache_creation_tokens,
-        3
-    );
-    assert_eq!(response.usage.prompt_tokens_details.text_tokens, 10);
+    let details = response
+        .usage
+        .prompt_tokens_details
+        .expect("unexpceted prompt_tokens_details missing");
+    assert_eq!(details.cached_tokens, 5);
+    assert_eq!(details.cache_creation_tokens, 3);
+    assert_eq!(details.text_tokens, 10);
 }
 
 #[test]

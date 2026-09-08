@@ -1,0 +1,22 @@
+model = "ollama-chat"
+temperature = 0.0
+seed = 42
+max_tokens = 256
+
+[[messages]]
+role = "user"
+content = "What is the capital of France? Reply with one word."
+
+[real]
+health_path = "/api/tags"
+
+[proxy]
+config = '''
+model_list:
+  - model_name: ollama-chat
+    litellm_params:
+      model: ollama_chat/qwen3.8:27b
+      api_base: http://localhost:11434
+general_settings:
+  master_key: sk-1234
+'''

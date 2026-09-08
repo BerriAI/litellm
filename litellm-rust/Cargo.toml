@@ -6,6 +6,7 @@ members = [
     "crates/ai-gateway",
     "crates/python-interop",
     "crates/python-bridge",
+    "crates/tests",
 ]
 resolver = "2"
 

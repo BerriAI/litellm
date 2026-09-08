@@ -35,6 +35,14 @@ pub(crate) const AUDIO_TRANSCRIPTION_TIMEOUT_SECS: u64 = 600;
 /// `object` field every non-streaming chat completion response carries.
 pub const CHAT_COMPLETION_OBJECT: &str = "chat.completion";
 
+/// Ollama credential and endpoint env vars, mirrors 
+/// Python's `OllamaModelInfo.get_api_key` / `get_api_base` resolution
+/// in `litellm/llms/ollama/common_utils.py`.
+pub const OLLAMA_API_KEY_ENV: &str = "OLLAMA_API_KEY";
+pub const OLLAMA_API_BASE_ENV: &str = "OLLAMA_API_BASE";
+pub const DEFAULT_OLLAMA_API_BASE: &str = "http://localhost:11434";
+pub const OLLAMA_CHAT_PATH: &str = "/api/chat";
+
 /// Placeholder Python substitutes for empty or whitespace-only message text,
 /// which Anthropic and Bedrock both reject. Must match
 /// `_EMPTY_TEXT_PLACEHOLDER` in
