@@ -2634,6 +2634,20 @@
               ],
               "title": "Mcp Tool Permissions"
             },
+            "mcp_toolsets": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Toolsets"
+            },
             "models": {
               "anyOf": [
                 {
@@ -19867,6 +19881,46 @@
             }
           },
           "summary": "Authorize Complete",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/authorize/flow": {
+        "get": {
+          "operationId": "authorize_flow_authorize_flow_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "flow",
+              "required": true,
+              "schema": {
+                "title": "Flow",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Authorize Flow",
           "tags": [
             "mcp_discoverable"
           ]

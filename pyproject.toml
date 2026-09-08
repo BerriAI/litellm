@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.101.0"
+version = "1.102.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.15"
@@ -67,7 +67,7 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.94",
+    "litellm-proxy-extras==0.4.95",
     "litellm-enterprise==0.1.65",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
@@ -328,7 +328,7 @@ members = ["enterprise", "litellm-proxy-extras"]
 profile = "black"
 
 [tool.commitizen]
-version = "1.101.0"
+version = "1.102.0"
 version_files = [
     "pyproject.toml:^version",
 ]
@@ -340,6 +340,7 @@ markers = [
     "asyncio: mark test as an asyncio test",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",
     "no_parallel: mark test to run sequentially (not in parallel) - typically for memory measurement tests",
+    "requires_rust_extension: public Python contract requiring an enabled, compiled Rust extension",
 ]
 filterwarnings = [
     # Suppress Pydantic serializer warnings from mock server responses (non-critical for memory tests)
