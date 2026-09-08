@@ -3811,7 +3811,7 @@ class _StaleReadEngine:
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
-    spend_log_flush_requested: ClassVar[asyncio.Event] = asyncio.Event()
+    spend_log_flush_requested: "asyncio.Event | None" = None
     spend_log_queue_bytes: ClassVar[int] = 0
     spend_logs_queue_monitor_task: "asyncio.Task[None] | None" = None
     tool_usage_transactions: list["ToolUsageTransaction"] = []
@@ -6537,23 +6537,27 @@ async def enqueue_spend_logs(
         )
 
 
-def request_spend_log_flush() -> None:
-    """Wake the queue monitor now rather than leaving the rows for its next poll.
+def request_spend_log_flush(prisma_client: PrismaClient) -> None:
+    """Wake this client's queue monitor now rather than leaving the rows for its next poll.
 
     The Responses API hands the client an id it can chain from straight away, and that
     lookup reads the DB, so the row cannot sit in this worker's queue for a poll interval.
     Repeated requests coalesce into the monitor's next pass, so the batching holds.
+    A request made before the monitor is running is dropped, and loses nothing: the
+    monitor reads the queue on its first pass, before it ever waits on a request.
     """
-    PrismaClient.spend_log_flush_requested.set()
+    flush_requested: Final = prisma_client.spend_log_flush_requested
+    if flush_requested is not None:
+        flush_requested.set()
 
 
-async def _wait_for_spend_log_flush_request(interval: float) -> bool:
+async def _wait_for_spend_log_flush_request(flush_requested: asyncio.Event, interval: float) -> bool:
     """Wait out ``interval``, returning early and True when a flush was requested."""
     try:
-        await asyncio.wait_for(PrismaClient.spend_log_flush_requested.wait(), timeout=interval)
+        await asyncio.wait_for(flush_requested.wait(), timeout=interval)
     except asyncio.TimeoutError:
         return False
-    PrismaClient.spend_log_flush_requested.clear()
+    flush_requested.clear()
     return True
 
 
@@ -6980,6 +6984,8 @@ async def _monitor_spend_logs_queue(
     max_backoff: Final = 30.0  # Maximum backoff interval in seconds
     backoff_multiplier: Final = 1.5  # Exponential backoff multiplier
     current_interval = base_interval
+    flush_requested: Final = asyncio.Event()
+    prisma_client.spend_log_flush_requested = flush_requested  # rebind-ok: the client owns its monitor's flush signal
 
     verbose_proxy_logger.info(
         "Starting spend logs queue monitor (threshold: %s, poll_interval: %ss)", threshold, base_interval
@@ -7018,7 +7024,7 @@ async def _monitor_spend_logs_queue(
                 # Exponential backoff when no logs to process
                 current_interval = min(current_interval * backoff_multiplier, max_backoff)
 
-            if await _wait_for_spend_log_flush_request(current_interval):
+            if await _wait_for_spend_log_flush_request(flush_requested, current_interval):
                 current_interval = base_interval
         except Exception as e:
             spend_log_error("Error in spend logs queue monitor: %s", str(e), exc=e)
