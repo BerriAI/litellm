@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     _get_status_fields,
     set_callbacks,
 )
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
     LiteLLMRealtimeStreamLoggingObject,
@@ -6410,9 +6411,11 @@ def _responses_ws_logging_obj() -> LitellmLogging:
     )
 
 
-def test_normalize_logging_result_extracts_usage_for_responses_websocket():
+def test_normalize_logging_result_extracts_usage_for_responses_websocket(monkeypatch):
     """LIT-6512: native /v1/responses WebSocket sessions logged $0 spend because the usage
-    carried by stored response.completed events was never extracted."""
+    carried by stored response.completed events was never extracted. The session must cost
+    exactly what the same usage costs over HTTP /v1/responses, discounts included."""
+    monkeypatch.setattr(litellm, "cost_discount_config", {"openai": 0.5})
     logging_obj = _responses_ws_logging_obj()
     events = [
         {"type": "response.created", "response": {}},
@@ -6432,13 +6435,25 @@ def test_normalize_logging_result_extracts_usage_for_responses_websocket():
     assert normalized.usage.prompt_tokens == 160
     assert normalized.usage.completion_tokens == 50
 
-    cost = litellm.completion_cost(
+    ws_cost = litellm.completion_cost(
         completion_response=normalized,
         model="gpt-4o",
         call_type=CallTypes.aresponses_websocket.value,
         custom_llm_provider="openai",
     )
-    assert cost > 0
+    http_cost = litellm.completion_cost(
+        completion_response=ResponsesAPIResponse(
+            id="resp-6512",
+            created_at=1700000000,
+            output=[],
+            usage=ResponseAPIUsage(input_tokens=160, output_tokens=50, total_tokens=210),
+        ),
+        model="gpt-4o",
+        call_type=CallTypes.aresponses.value,
+        custom_llm_provider="openai",
+    )
+    assert ws_cost > 0
+    assert ws_cost == http_cost
 
 
 def test_normalize_logging_result_bills_incomplete_responses_websocket_turns():

@@ -187,7 +187,6 @@ _SEARCH_CALL_TYPES: Final = frozenset(
 )
 
 _AREALTIME_CALL_TYPE: Final = CallTypes.arealtime.value
-_ARESPONSES_WEBSOCKET_CALL_TYPE: Final = CallTypes.aresponses_websocket.value
 _MCP_CALL_TYPE: Final = CallTypes.call_mcp_tool.value
 
 
@@ -1581,7 +1580,7 @@ def completion_cost(
                     )
 
                     return _final_cost
-                elif call_type in (_AREALTIME_CALL_TYPE, _ARESPONSES_WEBSOCKET_CALL_TYPE) and isinstance(
+                elif call_type == _AREALTIME_CALL_TYPE and isinstance(
                     completion_response, LiteLLMRealtimeStreamLoggingObject
                 ):
                     if cost_per_token_usage_object is None or custom_llm_provider is None:
