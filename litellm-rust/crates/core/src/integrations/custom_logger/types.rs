@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
@@ -56,7 +57,7 @@ impl std::fmt::Display for CallType {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct CallbackTiming {
     pub start_time: f64,
     pub end_time: f64,

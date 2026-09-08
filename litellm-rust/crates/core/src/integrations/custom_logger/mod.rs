@@ -96,6 +96,36 @@ impl CustomLoggerRunner {
     }
 }
 
+impl crate::call_lifecycle::TerminalDispatcher for CustomLoggerRunner {
+    fn dispatch<'a>(&'a self, terminal: &'a crate::lifecycle::TerminalRecord) -> LogFuture<'a> {
+        Box::pin(async move {
+            let details = ModelCallDetails::from(terminal);
+            let response = CallbackValue::new(
+                match &terminal.projection {
+                    crate::lifecycle::RouteProjection::Ocr { .. } => "ocr",
+                    crate::lifecycle::RouteProjection::Messages { .. } => "messages",
+                    crate::lifecycle::RouteProjection::ChatCompletions { .. } => "chat_completion",
+                    crate::lifecycle::RouteProjection::Audio { .. } => "audio",
+                    crate::lifecycle::RouteProjection::Realtime { .. } => "realtime",
+                    crate::lifecycle::RouteProjection::ResponsesWs { .. } => "responses_websocket",
+                },
+                terminal.projection.value().clone(),
+            );
+            match terminal.classification {
+                crate::lifecycle::TerminalClassification::Success => {
+                    self.async_log_success_event(&details, &response, terminal.timing)
+                        .await;
+                }
+                crate::lifecycle::TerminalClassification::Failure { .. } => {
+                    self.async_log_failure_event(&details, Some(&response), terminal.timing)
+                        .await;
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +331,38 @@ mod tests {
 
         assert!(runner.is_empty());
         assert_eq!(report, CallbackDispatchReport::default());
+    }
+
+    #[tokio::test]
+    async fn terminal_dispatcher_fans_out_shared_record() {
+        use crate::call_lifecycle::TerminalDispatcher;
+        use crate::integrations::types::Usage;
+        use crate::lifecycle::terminal::CostInputs;
+        use crate::lifecycle::{RouteProjection, TerminalClassification, TerminalRecord};
+
+        let logger = Arc::new(RecordingCustomLogger::default());
+        let runner = CustomLoggerRunner::new(vec![logger.clone()]);
+        let terminal = TerminalRecord {
+            call_id: "call-ocr".to_string(),
+            trace_id: Some("req-ocr".to_string()),
+            attempt: 1,
+            call_type: "ocr".to_string(),
+            model: "mistral-ocr-latest".to_string(),
+            provider: "mistral".to_string(),
+            timing: CallbackTiming::new(10.0, 11.5),
+            usage: Usage::default(),
+            cost_inputs: CostInputs::default(),
+            classification: TerminalClassification::Success,
+            projection: RouteProjection::Ocr {
+                value: json!({"pages": []}),
+            },
+        };
+
+        runner.dispatch(&terminal).await.expect("dispatch succeeds");
+
+        assert_eq!(logger.events().len(), 1);
+        assert_eq!(logger.events()[0].hook, "async_log_success_event");
+        assert_eq!(logger.events()[0].response_object.as_deref(), Some("ocr"));
     }
 
     #[test]

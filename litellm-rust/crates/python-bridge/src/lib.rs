@@ -1,6 +1,5 @@
 mod diagnostics;
 mod errors;
-mod execution;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
 mod marshal;
@@ -106,7 +105,6 @@ mod tests {
                 "chat_completions",
                 "achat_completions",
                 "ResponsesWebSocketConnection",
-                "gil_stats",
             ];
 
             let public_names: Vec<String> = module

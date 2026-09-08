@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::errors::core_error_to_pyerr;
+use litellm_python_interop::run_async;
 
 #[pyfunction]
 fn gateway_messages<'py>(
@@ -17,7 +18,7 @@ fn gateway_messages<'py>(
         api_base,
         body,
     );
-    crate::execution::run_async(
+    run_async(
         py,
         crate::function_trace::capture(future),
         core_error_to_pyerr,

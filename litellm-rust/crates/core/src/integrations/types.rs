@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 /// Cumulative token usage for a realtime session.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -65,7 +65,7 @@ pub struct StandardLoggingPayload {
 
 /// Cost-attribution keys. The replayer maps these into litellm_params.metadata,
 /// which the spend-logs builder reads to set user / team_id / organization_id.
-#[derive(Clone, Debug, Serialize, Default)]
+#[derive(Clone, Debug, Serialize, Default, PartialEq)]
 pub struct StandardLoggingMetadata {
     pub user_api_key_hash: Option<String>, // -> SpendLogs.api_key
     pub user_api_key_user_id: Option<String>, // -> SpendLogs.user

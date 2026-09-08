@@ -31,7 +31,7 @@ macro_rules! bridge_route {
                 $($required_name,)*
                 $($optional_name),*
             })?;
-            $crate::execution::run_sync(py, future, $map_error)
+            litellm_python_interop::run_sync(py, future, $map_error)
         }
 
         #[pyfunction]
@@ -46,7 +46,7 @@ macro_rules! bridge_route {
                 $($required_name,)*
                 $($optional_name),*
             })?;
-            $crate::execution::run_async(py, future, $map_error)
+            litellm_python_interop::run_async(py, future, $map_error)
         }
 
         pub(super) fn register(
@@ -75,7 +75,7 @@ macro_rules! bridge_route {
                     $($required_name,)*
                     $($optional_name),*
                 })?;
-                $crate::execution::run_sync(
+                litellm_python_interop::run_sync(
                     py,
                     $crate::function_trace::capture(future),
                     $map_error,
@@ -94,7 +94,7 @@ macro_rules! bridge_route {
                     $($required_name,)*
                     $($optional_name),*
                 })?;
-                $crate::execution::run_async(
+                litellm_python_interop::run_async(
                     py,
                     $crate::function_trace::capture(future),
                     $map_error,

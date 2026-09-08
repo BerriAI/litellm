@@ -13,7 +13,7 @@ dials OpenAI upstream, and splices the two sockets frame-by-frame.
 | litellm-core | The LiteLLM SDK in Rust — per-route entrypoints (`messages::messages()`) that resolve the provider, transform, and make the call; plus types, provider transforms, and the router. |
 | litellm-config | Config-loading boundary. Returns resolved deployments and optionally delegates loading to Python. |
 | litellm-ai-gateway | The Axum server (behind the `server` feature) and WebSocket hosts. Translates HTTP/WS to core entrypoints; no provider handlers. |
-| litellm-python-interop | Domain-neutral PyO3 foundation for GIL handling and typed Python/Serde conversion. |
+| litellm-python-interop | Domain-neutral PyO3 foundation: typed Python/Serde conversion, retained callbacks, and sync/async Python↔Tokio execution. |
 | litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. |
 
 Dependency direction is acyclic: config depends on core, the gateway depends on config and core, and the Python bridge depends on the domain layers and Python interop.

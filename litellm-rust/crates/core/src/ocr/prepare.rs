@@ -38,7 +38,7 @@ fn request_config(
     Ok((provider, config))
 }
 
-pub(super) fn admission_capabilities(request: &OcrRequest) -> Result<(), Error> {
+pub(crate) fn admission_capabilities(request: &OcrRequest) -> Result<(), Error> {
     check_admission_capabilities(request, &|key| std::env::var(key).ok())
 }
 

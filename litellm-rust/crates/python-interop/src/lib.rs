@@ -1,9 +1,5 @@
-mod callback;
-mod constants;
-mod gil;
+mod execution;
 mod marshal;
 
-pub use callback::{InvocationMode, InvocationOutcome, PreparedCall};
-pub use constants::AWAIT_ADAPTER_FILENAME;
-pub use gil::{release_count, release_gil};
+pub use execution::{run_async, run_async_value, run_sync, run_sync_value};
 pub use marshal::{Pythonized, from_py, panic_to_pyerr, to_py};

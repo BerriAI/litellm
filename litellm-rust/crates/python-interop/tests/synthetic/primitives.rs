@@ -2,7 +2,7 @@ use rstest::rstest;
 use serde_json::{Value, json};
 use serial_test::parallel;
 
-use litellm_python_interop::{from_py, release_count, release_gil, to_py};
+use litellm_python_interop::{from_py, to_py};
 
 use crate::support::python::{InitializedPython, initialized_python};
 
@@ -17,14 +17,4 @@ fn serde_values_round_trip_through_python(#[from(initialized_python)] python: &I
 
         assert_eq!(actual, expected);
     });
-}
-
-#[rstest]
-#[parallel(python_interpreter)]
-fn release_gil_runs_work_and_records_it(#[from(initialized_python)] python: &InitializedPython) {
-    let before = release_count();
-    let result = python.attach(|py| release_gil(py, || 42));
-
-    assert_eq!(result, 42);
-    assert_eq!(release_count(), before + 1);
 }

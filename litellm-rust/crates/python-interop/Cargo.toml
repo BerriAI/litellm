@@ -10,14 +10,13 @@ autotests = false
 name = "synthetic"
 path = "tests/synthetic/mod.rs"
 
-[[test]]
-name = "integration"
-path = "tests/integration/mod.rs"
-
 [dependencies]
+futures-util.workspace = true
 pyo3.workspace = true
+pyo3-async-runtimes.workspace = true
 pythonize.workspace = true
 serde.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

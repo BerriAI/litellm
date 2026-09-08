@@ -3,35 +3,34 @@ use std::panic::AssertUnwindSafe;
 use std::time::Duration;
 
 use futures_util::FutureExt;
-use litellm_core::error::Error;
-use litellm_python_interop::{Pythonized, panic_to_pyerr, release_gil};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use serde::Serialize;
 use tokio::runtime::{Handle, Runtime};
 use tokio::time::{self, MissedTickBehavior};
 
-pub(crate) fn run_sync<T, F>(
+use crate::marshal::Pythonized;
+use crate::marshal::panic_to_pyerr;
+
+pub fn run_sync<T, E, F>(
     py: Python<'_>,
     future: F,
-    map_error: fn(Error) -> PyErr,
+    map_error: fn(E) -> PyErr,
 ) -> PyResult<Py<PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
+    F: Future<Output = Result<T, E>> + Send + 'static,
 {
     let result = run_sync_value(py, future, map_error)?;
     Pythonized(result).into_pyobject(py).map(Bound::unbind)
 }
 
-pub(crate) fn run_sync_value<T, F>(
-    py: Python<'_>,
-    future: F,
-    map_error: fn(Error) -> PyErr,
-) -> PyResult<T>
+pub fn run_sync_value<T, E, F>(py: Python<'_>, future: F, map_error: fn(E) -> PyErr) -> PyResult<T>
 where
     T: Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
+    F: Future<Output = Result<T, E>> + Send + 'static,
 {
     run_sync_value_on(
         py,
@@ -41,15 +40,16 @@ where
     )
 }
 
-fn run_sync_value_on<T, F>(
+fn run_sync_value_on<T, E, F>(
     py: Python<'_>,
     runtime: &Runtime,
     future: F,
-    map_error: fn(Error) -> PyErr,
+    map_error: fn(E) -> PyErr,
 ) -> PyResult<T>
 where
     T: Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
+    F: Future<Output = Result<T, E>> + Send + 'static,
 {
     if Handle::try_current().is_ok() {
         return Err(PyRuntimeError::new_err(
@@ -57,18 +57,19 @@ where
         ));
     }
 
-    let result = release_gil(py, move || runtime.block_on(wait_for_sync_result(future)))?;
+    let result = py.detach(move || runtime.block_on(wait_for_sync_result(future)))?;
     map_core_result(result, map_error)
 }
 
-pub(crate) fn run_async<T, F>(
+pub fn run_async<T, E, F>(
     py: Python<'_>,
     future: F,
-    map_error: fn(Error) -> PyErr,
+    map_error: fn(E) -> PyErr,
 ) -> PyResult<Bound<'_, PyAny>>
 where
     T: Serialize + Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
+    F: Future<Output = Result<T, E>> + Send + 'static,
 {
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
         let result = catch_future_panic(future).await?;
@@ -77,16 +78,20 @@ where
     })
 }
 
-pub(crate) async fn run_async_value<T, F>(future: F, map_error: fn(Error) -> PyErr) -> PyResult<T>
+pub async fn run_async_value<T, E, F>(future: F, map_error: fn(E) -> PyErr) -> PyResult<T>
 where
     T: Send + 'static,
-    F: Future<Output = Result<T, Error>> + Send + 'static,
+    E: Send + 'static,
+    F: Future<Output = Result<T, E>> + Send + 'static,
 {
     let result = catch_future_panic(future).await?;
     map_core_result(result, map_error)
 }
 
-fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -> PyResult<T> {
+fn map_core_result<T, E>(result: Result<T, E>, map_error: fn(E) -> PyErr) -> PyResult<T>
+where
+    E: Send + 'static,
+{
     match result {
         Ok(value) => Ok(value),
         Err(error) => Err(
@@ -96,9 +101,9 @@ fn map_core_result<T>(result: Result<T, Error>, map_error: fn(Error) -> PyErr) -
     }
 }
 
-async fn catch_future_panic<T, F>(future: F) -> PyResult<Result<T, Error>>
+async fn catch_future_panic<T, E, F>(future: F) -> PyResult<Result<T, E>>
 where
-    F: Future<Output = Result<T, Error>>,
+    F: Future<Output = Result<T, E>>,
 {
     AssertUnwindSafe(future)
         .catch_unwind()
@@ -106,9 +111,9 @@ where
         .map_err(panic_to_pyerr)
 }
 
-async fn wait_for_sync_result<T, F>(future: F) -> PyResult<Result<T, Error>>
+async fn wait_for_sync_result<T, E, F>(future: F) -> PyResult<Result<T, E>>
 where
-    F: Future<Output = Result<T, Error>>,
+    F: Future<Output = Result<T, E>>,
 {
     let future = catch_future_panic(future);
     tokio::pin!(future);
@@ -142,11 +147,18 @@ mod tests {
 
     use super::*;
 
-    fn runtime_error(error: Error) -> PyErr {
-        PyRuntimeError::new_err(error.to_string())
+    #[derive(Debug)]
+    enum TestError {
+        InvalidRequest(&'static str),
     }
 
-    fn panicking_error_mapper(_error: Error) -> PyErr {
+    fn runtime_error(error: TestError) -> PyErr {
+        PyRuntimeError::new_err(match error {
+            TestError::InvalidRequest(message) => message,
+        })
+    }
+
+    fn panicking_error_mapper(_error: TestError) -> PyErr {
         panic!("error mapper panicked")
     }
 
@@ -258,7 +270,7 @@ mod tests {
 
         let error = runtime.block_on(async {
             Python::attach(|py| {
-                run_sync::<bool, _>(py, async { Ok(true) }, runtime_error)
+                run_sync::<bool, _, _>(py, async { Ok(true) }, runtime_error)
                     .expect_err("sync route should reject a nested Tokio runtime")
             })
         });
@@ -294,9 +306,9 @@ mod tests {
     fn sync_runner_maps_a_panicked_future() {
         Python::initialize();
         Python::attach(|py| {
-            let error = run_sync::<bool, _>(
+            let error = run_sync::<bool, _, _>(
                 py,
-                poll_fn(|_| -> Poll<Result<bool, Error>> { panic!("route future panicked") }),
+                poll_fn(|_| -> Poll<Result<bool, TestError>> { panic!("route future panicked") }),
                 runtime_error,
             )
             .expect_err("panicked route should become a Python exception");
@@ -310,9 +322,9 @@ mod tests {
     fn sync_runner_maps_a_panicked_error_mapper() {
         Python::initialize();
         Python::attach(|py| {
-            let error = run_sync::<bool, _>(
+            let error = run_sync::<bool, _, _>(
                 py,
-                async { Err(Error::InvalidRequest("invalid".to_string())) },
+                async { Err(TestError::InvalidRequest("invalid")) },
                 panicking_error_mapper,
             )
             .expect_err("panicked mapper should become a Python exception");
@@ -337,7 +349,7 @@ mod tests {
     #[test]
     fn sync_runner_supports_concurrent_callers_on_the_shared_runtime() {
         Python::initialize();
-        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
         let callers: Vec<_> = (0..2)
             .map(|_| {
                 let barrier = Arc::clone(&barrier);
@@ -348,9 +360,11 @@ mod tests {
                             run_sync(
                                 py,
                                 async move {
-                                    Ok(tokio::time::timeout(Duration::from_secs(2), barrier.wait())
+                                    let barrier = barrier;
+                                    tokio::task::spawn_blocking(move || barrier.wait())
                                         .await
-                                        .is_ok())
+                                        .map(|_| true)
+                                        .map_err(|_| TestError::InvalidRequest("join"))
                                 },
                                 runtime_error,
                             ),

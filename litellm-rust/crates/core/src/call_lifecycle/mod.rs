@@ -2,6 +2,7 @@ use std::future::Future;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::Error;
+use crate::lifecycle::ActionResult;
 
 pub mod types;
 
@@ -9,6 +10,39 @@ pub use types::{
     CallLifecycleContext, CallLifecyclePhase, CallLifecyclePhaseTiming, CallLifecycleRequest,
     CallLifecycleTiming,
 };
+
+pub trait RequestPolicy<InitialReq, ProviderReq>: Send + Sync {
+    type PreCallFuture<'a>: Future<Output = ActionResult<InitialReq, Error>> + Send + 'a
+    where
+        Self: 'a,
+        InitialReq: 'a,
+        ProviderReq: 'a;
+
+    type DuringCallFuture<'a>: Future<Output = ActionResult<ProviderReq, Error>> + Send + 'a
+    where
+        Self: 'a,
+        InitialReq: 'a,
+        ProviderReq: 'a;
+
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        request: InitialReq,
+    ) -> Self::PreCallFuture<'a>;
+
+    fn async_during_call_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        request: InitialReq,
+    ) -> Self::DuringCallFuture<'a>;
+}
+
+pub trait TerminalDispatcher: Send + Sync {
+    fn dispatch<'a>(
+        &'a self,
+        terminal: &'a crate::lifecycle::TerminalRecord,
+    ) -> crate::integrations::custom_logger::LogFuture<'a>;
+}
 
 pub trait CallLifecycleHooks<InitialReq, ProviderReq, Resp>: Send + Sync {
     type PreCallFuture<'a>: Future<Output = Result<InitialReq, Error>> + Send + 'a
@@ -94,6 +128,21 @@ impl<'a> CallLifecycle<'a> {
         ProviderFuture: Future<Output = Result<Resp, Error>>,
     {
         let context = request.lifecycle_context();
+        self.run(context, request, hooks, provider_call).await
+    }
+
+    pub async fn run_result<InitialReq, ProviderReq, Resp, Hooks, ProviderCall, ProviderFuture>(
+        &self,
+        context: CallLifecycleContext,
+        request: InitialReq,
+        hooks: &Hooks,
+        provider_call: ProviderCall,
+    ) -> Result<Resp, Error>
+    where
+        Hooks: CallLifecycleHooks<InitialReq, ProviderReq, Resp>,
+        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
+        ProviderFuture: Future<Output = Result<Resp, Error>>,
+    {
         self.run(context, request, hooks, provider_call).await
     }
 

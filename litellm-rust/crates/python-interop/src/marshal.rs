@@ -18,7 +18,8 @@ pub fn to_py<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
 where
     T: Serialize + ?Sized,
 {
-    pythonize::pythonize(py, value)
+    catch_unwind(AssertUnwindSafe(|| pythonize::pythonize(py, value)))
+        .map_err(panic_to_pyerr)?
         .map(Bound::unbind)
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }

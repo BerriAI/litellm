@@ -8,18 +8,16 @@ use litellm_core::ocr::lifecycle::{
 };
 use litellm_core::ocr::types::{OcrDocumentProjection, OcrRequest, PreparedOcr};
 use litellm_core::routing_utils::provider::get_custom_llm_provider;
-use litellm_python_interop::{
-    InvocationMode, InvocationOutcome, PreparedCall, Pythonized, from_py, to_py,
-};
+use litellm_python_interop::{Pythonized, from_py, to_py};
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::{PyTraverseError, PyVisit};
 use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::PyDict;
 use serde_json::Value;
 
 use crate::errors::core_error_to_pyerr;
-use crate::execution::{run_async_value, run_sync_value};
+use litellm_python_interop::{run_async_value, run_sync_value};
 
 #[pyclass]
 struct OcrState {
@@ -305,32 +303,24 @@ fn invoke(
         let machine = machine.borrow(py);
         (machine.machine.operation(), machine.asynchronous)
     };
-    let (method, mode) = match operation {
-        Operation::Setup => ("setup", InvocationMode::Direct),
-        Operation::DeploymentPre => ("deployment_pre", InvocationMode::Await),
-        Operation::Prepare => ("prepare", InvocationMode::Direct),
-        Operation::Send if asynchronous => ("send", InvocationMode::Await),
-        Operation::Send => ("send_sync", InvocationMode::Direct),
-        Operation::DeploymentSuccess => ("deployment_success", InvocationMode::Await),
-        Operation::DeploymentFailure => ("deployment_failure", InvocationMode::Await),
-        Operation::SyncSuccess => ("sync_success", InvocationMode::Direct),
-        Operation::AsyncSuccess => ("async_success", InvocationMode::Direct),
-        Operation::SyncSuccessIfNeeded => ("sync_success_if_needed", InvocationMode::Direct),
-        Operation::SyncFailure => ("sync_failure", InvocationMode::Direct),
-        Operation::AsyncFailure => ("async_failure", InvocationMode::Await),
-        Operation::Restore => ("restore", InvocationMode::Direct),
+    let (method, awaiting) = match operation {
+        Operation::Setup => ("setup", false),
+        Operation::DeploymentPre => ("deployment_pre", true),
+        Operation::Prepare => ("prepare", false),
+        Operation::Send if asynchronous => ("send", true),
+        Operation::Send => ("send_sync", false),
+        Operation::DeploymentSuccess => ("deployment_success", true),
+        Operation::DeploymentFailure => ("deployment_failure", true),
+        Operation::SyncSuccess => ("sync_success", false),
+        Operation::AsyncSuccess => ("async_success", false),
+        Operation::SyncSuccessIfNeeded => ("sync_success_if_needed", false),
+        Operation::SyncFailure => ("sync_failure", false),
+        Operation::AsyncFailure => ("async_failure", true),
+        Operation::Restore => ("restore", false),
         Operation::Complete(_) => return Err(PyRuntimeError::new_err("OCR lifecycle is complete")),
     };
-    let call = PreparedCall::new(
-        mode,
-        host.getattr(py, method)?,
-        PyTuple::empty(py).unbind(),
-        None,
-    );
-    match call.invoke(py)? {
-        InvocationOutcome::Returned(value) => Ok((false, value)),
-        InvocationOutcome::Awaitable(value) => Ok((true, value)),
-    }
+    let value = host.getattr(py, method)?.call0(py)?;
+    Ok((awaiting, value))
 }
 
 #[pyfunction]

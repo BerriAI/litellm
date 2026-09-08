@@ -6,6 +6,7 @@ pub mod constants;
 pub mod error;
 pub mod http_utils;
 pub mod integrations;
+pub mod lifecycle;
 pub mod messages;
 #[cfg(any(feature = "observability", test))]
 pub mod observability;
