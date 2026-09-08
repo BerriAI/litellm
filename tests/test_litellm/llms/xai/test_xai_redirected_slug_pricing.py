@@ -110,6 +110,7 @@ def test_redirected_slug_carries_the_target_tier_rates(cost_map: dict, slug: str
     entry = cost_map[slug]
     for field in TIER_COST_FIELDS:
         assert entry[field] == target[field], field
+    assert {k for k in entry if "_above_" in k} == {k for k in target if "_above_" in k}
 
 
 def test_both_cost_maps_agree_on_the_redirected_slugs():
