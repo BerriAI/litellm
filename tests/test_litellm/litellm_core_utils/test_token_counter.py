@@ -154,7 +154,7 @@ async def test_huggingface_count_in_a_worker_thread_leaves_the_event_loop_free()
 
 
 @pytest.mark.parametrize("max_exact_chars", [64, 1_000, 2_500])
-def test_count_above_the_cap_samples_the_whole_string_and_scales(max_exact_chars):
+def test_count_above_the_cap_samples_the_whole_string_and_scales(max_exact_chars: int):
     count_exactly: Final = MagicMock(side_effect=lambda chunk: chunk.count("a") + len(chunk))
     front_heavy: Final = "a" * 1_000 + "b" * 4_000
     exact: Final = 1_000 + len(front_heavy)
@@ -188,7 +188,7 @@ def test_token_counter_applies_the_default_cap():
     ("configured", "expected"),
     [("2048", 2048), ("0", 4_000_000), ("not-an-int", 4_000_000)],
 )
-def test_max_exact_chars_config_is_honoured(monkeypatch, configured, expected):
+def test_max_exact_chars_config_is_honoured(monkeypatch: pytest.MonkeyPatch, configured: str, expected: int):
     monkeypatch.setenv("TOKEN_COUNTER_MAX_EXACT_CHARS", configured)
     try:
         assert importlib.reload(litellm.constants).TOKEN_COUNTER_MAX_EXACT_CHARS == expected
