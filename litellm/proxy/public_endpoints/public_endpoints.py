@@ -534,9 +534,6 @@ async def get_autorouter_presets(
     "/public/autorouter_presets",
     tags=["public", "auto router"],  # mutable-ok: FastAPI route tags take a list
     response_model=dict[str, AutoRouterPresetRecord],
-    # An optional tier a preset does not set must not reach the dashboard as a null pool, which the
-    # template picker would render as an empty tier row the operator never asked for.
-    response_model_exclude_none=True,
 )
 async def get_public_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
     """

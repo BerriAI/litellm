@@ -190,8 +190,15 @@ describe("the opt-in non-reasoning tier", () => {
   });
 
   it("renders an enabled tier with no models as an empty row rather than crashing", () => {
+    const emptyTierZeroRow: ActiveTierRow = {
+      id: "NON_REASONING",
+      name: "NON_REASONING",
+      definition: "",
+      models: [],
+      params: {},
+    };
     const rows = activeTierRows({ tiers, enable_non_reasoning_tier: true });
-    expect(rows[0]).toEqual({ id: "NON_REASONING", name: "NON_REASONING", definition: "", models: [], params: {} });
+    expect(rows[0]).toEqual(emptyTierZeroRow);
   });
 
   it("counts as a built-in name either way, so a custom set cannot claim the name", () => {

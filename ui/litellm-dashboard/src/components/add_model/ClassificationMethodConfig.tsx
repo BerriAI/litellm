@@ -236,6 +236,22 @@ const ClassifierTypeRadios: React.FC<{
   );
 };
 
+/**
+ * The NON_REASONING keys a classifier switch should carry forward, or clear. Leaving the flag set
+ * under a classifier that cannot emit the tier produces a config the backend refuses on save, and
+ * the switch is disabled there, so the operator would have no way to undo it.
+ */
+export const nonReasoningTierFields = (
+  classifierType: ClassifierType,
+  value: ComplexityRouterConfigValue,
+): Pick<ComplexityRouterConfigValue, "enable_non_reasoning_tier" | "tiers"> => {
+  if (classifierType === "llm") {
+    return { enable_non_reasoning_tier: value.enable_non_reasoning_tier, tiers: value.tiers };
+  }
+  const { NON_REASONING: _cleared, ...keptTiers } = value.tiers;
+  return { enable_non_reasoning_tier: undefined, tiers: keptTiers };
+};
+
 const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   value,
   onChange,
@@ -287,6 +303,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
           : undefined,
       hybrid_boundary_margin:
         classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
+      // Only the LLM classifier can produce NON_REASONING, and the backend rejects the flag
+      // beside any other type. Clearing it here (with the tier's own pool) is what keeps a
+      // switch away from LLM from stranding a config that can never be saved.
+      ...nonReasoningTierFields(classifierType, value),
     };
     onChange(nextValue);
   };

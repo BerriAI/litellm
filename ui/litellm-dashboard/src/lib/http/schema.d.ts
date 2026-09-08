@@ -23573,22 +23573,16 @@ export interface components {
         };
         /**
          * AutoRouterPresetTiers
-         * @description The built-in tiers the dashboard's preset prefill can apply.
+         * @description Exactly the four built-in tiers the dashboard's preset prefill can apply.
          *
          *     extra="forbid" on purpose: a tier name this dashboard cannot apply would grey out or crash the
-         *     picker, so such a catalog is rejected wholesale and the bundled one serves instead. NON_REASONING
-         *     is optional rather than required so this proxy accepts both a catalog that ships the opt-in fifth
-         *     tier and the four-tier catalogs that predate it. It stays None when unset rather than defaulting
-         *     to an empty pool, so a four-tier preset serves the tier set it was published with instead of
-         *     growing a key the dashboard would render as an empty fifth tier row.
+         *     picker, so such a catalog is rejected wholesale and the bundled one serves instead.
          */
         AutoRouterPresetTiers: {
             /** Complex */
             COMPLEX: string[];
             /** Medium */
             MEDIUM: string[];
-            /** Non Reasoning */
-            NON_REASONING?: string[] | null;
             /** Reasoning */
             REASONING: string[];
             /** Simple */

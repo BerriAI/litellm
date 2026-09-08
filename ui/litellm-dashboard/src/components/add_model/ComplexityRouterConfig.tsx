@@ -5,6 +5,8 @@ import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
 import { AffinityControls } from "./AffinityControls";
+import NonReasoningTierToggle from "./NonReasoningTierToggle";
+import TierConfigIntro from "./TierConfigIntro";
 import TierRowSelect from "./TierRowSelect";
 import { ModalityRoutingControls } from "./ModalityRoutingControls";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,6 +22,7 @@ import {
   MAX_TIER_COUNT,
   MAX_TIER_DEFINITION_CHARS,
   MAX_TIER_NAME_CHARS,
+  ALL_BUILT_IN_TIERS,
   MIN_TIER_COUNT,
   TIER_ORDER,
   activeTierName,
@@ -200,33 +203,9 @@ const defaultModelPlaceholderFor = (derivedDefaultModel: string | undefined, isC
 };
 
 const builtInTierInfo = (rowId: string): { label: string; description: string; examples: string } | undefined => {
-  const builtIn = TIER_ORDER.find((tier) => tier === rowId);
+  const builtIn = ALL_BUILT_IN_TIERS.find((tier) => tier === rowId);
   return builtIn ? TIER_DESCRIPTIONS[builtIn] : undefined;
 };
-
-const tierConfigIntroText = (value: ComplexityRouterConfigValue): string => {
-  if (value.classifier_type === "heuristic_v2") {
-    return "The complexity router classifies each request with a calibrated local four-tier model (no API calls). Configure which model(s) handle each tier.";
-  }
-  if (heuristicScoringRole(value) === "never") {
-    return "The complexity router classifies each request with your classifier model and routes it to that tier. Configure which model(s) handle each tier.";
-  }
-  return "The complexity router automatically classifies requests by complexity using rule-based scoring (no API calls, <1ms latency). Configure which model(s) handle each tier.";
-};
-
-const TierConfigIntro: React.FC<{ value: ComplexityRouterConfigValue }> = ({ value }) => (
-  <>
-    <span className="block mb-6 text-muted-foreground">{tierConfigIntroText(value)}</span>
-
-    <span className="block mb-4 text-xs text-muted-foreground">
-      {restrictedBy(value, "displayNames")?.reason ??
-        "Rename a tier to use your own vocabulary in the dashboard and your spend logs. Renaming doesn't change how requests are classified, and callers never see these names."}
-      {!value.custom_tier_set &&
-        usesLlmClassifier(value.classifier_type) &&
-        " Your classifier model reads these names, so clearer ones can sharpen its choices."}
-    </span>
-  </>
-);
 
 const TierSetToolbar: React.FC<{
   editing: boolean;
@@ -534,13 +513,6 @@ export const TIER_DESCRIPTIONS: Record<
 /** Every built-in tier name, including the opt-in one, for label and membership checks. */
 export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>;
 
-/**
- * The four-tier ladder in ascending severity, which is what a router sends unless it opted into
- * NON_REASONING. Mirrors TIER_SEVERITY_ORDER in the backend config; use tierOrderFor to get the
- * ladder one router actually renders.
- */
-export const BUILT_IN_TIER_ORDER: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
-
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
 
@@ -555,42 +527,7 @@ export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
  * NON_REASONING, which the backend refuses alongside heuristic_first because the local scorer
  * cannot produce it.
  */
-export const HEURISTIC_FIRST_MAX_TIER_KEYS = BUILT_IN_TIER_ORDER.slice(0, -1);
-
-/**
- * The opt-in fifth tier. Only offered on the LLM classification method, matching the backend: the
- * heuristic scorers cannot produce the tier, so enabling it there would buy a rubric bullet and a
- * model pool that no request ever reaches.
- */
-const NonReasoningTierToggle: React.FC<{
-  value: ComplexityRouterConfigValue;
-  onChange: (value: ComplexityRouterConfigValue) => void;
-  available: boolean;
-}> = ({ value, onChange, available }) => (
-  <>
-    <div className="flex items-center gap-2 mt-4 mb-2">
-      <Switch
-        checked={value.enable_non_reasoning_tier === true}
-        disabled={!available}
-        onCheckedChange={(enabled) => {
-          const { NON_REASONING: _dropped, ...keptTiers } = value.tiers;
-          onChange({
-            ...value,
-            enable_non_reasoning_tier: enabled ? true : undefined,
-            tiers: enabled ? { ...keptTiers, NON_REASONING: value.tiers.NON_REASONING ?? [] } : keptTiers,
-          });
-        }}
-        aria-label="Add a non-reasoning tier"
-      />
-      <strong className="font-semibold">Add a non-reasoning tier</strong>
-    </div>
-    <span className="block text-xs mb-3 text-muted-foreground">
-      Adds NON_REASONING below Simple, for operational agent traffic that relays or reformats information rather than
-      reasoning about it. Escalation still moves up out of it when a request needs more.
-      {!available && " Requires the LLM classification method."}
-    </span>
-  </>
-);
+export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_ORDER.slice(0, -1);
 
 const PlanModeOverrideControls: React.FC<{
   value: ComplexityRouterConfigValue;

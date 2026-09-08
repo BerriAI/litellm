@@ -78,6 +78,7 @@ def tier_severity_order(non_reasoning_enabled: bool) -> tuple[ComplexityTier, ..
     """The built-in ladder for one router, tier 0 included only when it opted in."""
     return NON_REASONING_TIER_SEVERITY_ORDER if non_reasoning_enabled else TIER_SEVERITY_ORDER
 
+
 DEFAULT_TIER_DISTANCE_PENALTY: Final[float] = 0.5
 
 DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE: Final[int] = 3

@@ -2334,9 +2334,7 @@ class ComplexityRouter(CustomLogger):
                 distance = 0
             else:
                 model_tiers = self._model_tiers.get(model, (classified_tier,))
-                distance = min(
-                    abs(severity_order.index(model_tier) - classified_idx) for model_tier in model_tiers
-                )
+                distance = min(abs(severity_order.index(model_tier) - classified_idx) for model_tier in model_tiers)
             score = quality_weight * quality_sample + cost_weight * cost_score - penalty_weight * distance
             candidate_scores.append(
                 {
