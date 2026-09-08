@@ -62,6 +62,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
@@ -3771,6 +3772,11 @@ class Router:
         # (possibly still-pending) failure event to do it.
         refund_stale_reservation_before_retry(self.cache, kwargs)
         set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=deployment_has_io_token_limits(deployment))
+
+        kwargs[metadata_variable_name].setdefault(
+            ROUTING_REQUEST_TAGS_METADATA_KEY,
+            tuple(_get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)),
+        )
 
         ## DEPLOYMENT-LEVEL TAGS
         deployment_tags: Final = deployment.get("litellm_params", {}).get("tags")

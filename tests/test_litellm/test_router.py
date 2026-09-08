@@ -40,7 +40,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
 )
 from litellm.router_strategy import simple_shuffle
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, RetryPolicy
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -6130,6 +6130,50 @@ def test_update_kwargs_with_deployment_no_tags():
 
     # No tags key should be added if deployment has no tags
     assert "tags" not in kwargs["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_narrow_tag_filtered_group_to_failed_deployments_tags():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tagged-group",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "fake-key",
+                    "tags": ["free"],
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000001,
+                    "mock_response": "litellm.ContextWindowExceededError",
+                },
+                "model_info": {"id": "tagged-failing"},
+            },
+            {
+                "model_name": "tagged-group",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "fake-key",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.001,
+                    "mock_response": "ok",
+                },
+                "model_info": {"id": "untagged-healthy"},
+            },
+        ],
+        routing_strategy="cost-based-routing",
+        enable_tag_filtering=True,
+        num_retries=2,
+        retry_after=0,
+        retry_policy=RetryPolicy(BadRequestErrorRetries=2),
+    )
+    metadata: Final[dict[str, object]] = {}
+
+    response = await router.acompletion(
+        model="tagged-group", messages=[{"role": "user", "content": "hi"}], metadata=metadata
+    )
+
+    assert response._hidden_params["model_id"] == "untagged-healthy"
+    assert metadata["tags"] == ["free"]
 
 
 def test_update_kwargs_with_deployment_merges_tools():
