@@ -64,10 +64,6 @@ DYNAMIC_HEADERS_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynami
     )
 )
 
-#: Callback name → per-request OTLP endpoint resolver. Only integrations whose
-#: destination host varies per tenant appear here (newrelic's region table, the
-#: Langfuse host a key or team was configured with); for everyone else the
-#: preset's endpoint is authoritative.
 DYNAMIC_ENDPOINT_BY_CALLBACK: Final[Mapping[str, Callable[[StandardCallbackDynamicParams], str | None]]] = (
     MappingProxyType(
         {
