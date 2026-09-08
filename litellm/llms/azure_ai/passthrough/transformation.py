@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
-    from litellm.types.utils import CostResponseTypes
 
 
 EMPTY_QUERY: Final[Mapping[str, object]] = MappingProxyType({})
@@ -111,8 +110,8 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         if base_target_url is None:
             raise ValueError("Azure AI api base not found: set `api_base` on the deployment or AZURE_AI_API_BASE")
 
-        root: Final = foundry_root(base_target_url)
         native_endpoint: Final = strip_leading_model_segment(endpoint, (model, model_group_from(litellm_params)))
+        root: Final = foundry_root(base_target_url).removesuffix(f"/{native_endpoint.strip('/')}")
         query_params: Final = relay_query_params(
             request_query_params, api_version_from(litellm_params), base_target_url
         )
@@ -200,7 +199,7 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         model: str,
         custom_llm_provider: str,
         endpoint: str,
-    ) -> CostResponseTypes | None:
+    ) -> LoggedRelayResponse | None:
         from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
 
         return AzurePassthroughConfig().handle_logging_collected_chunks(

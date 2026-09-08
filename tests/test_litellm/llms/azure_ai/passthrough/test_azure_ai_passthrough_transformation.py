@@ -86,6 +86,22 @@ def test_api_base_that_already_ends_in_models_is_cut_back_to_the_foundry_root():
     assert base == FOUNDRY_BASE
 
 
+def test_full_url_api_base_that_already_ends_with_the_native_path_is_not_doubled():
+    model_router_url = "https://my-resource.cognitiveservices.azure.com/openai/deployments/model-router/chat/completions"
+
+    url, base = AzureAIPassthroughConfig().get_complete_url(
+        api_base=f"{model_router_url}?api-version=2025-01-01-preview",
+        api_key="key",
+        model="model_router/model-router",
+        endpoint="model-router/chat/completions",
+        request_query_params=None,
+        litellm_params={"litellm_metadata": {"model_group": "model-router"}},
+    )
+
+    assert str(url) == f"{model_router_url}?api-version=2025-01-01-preview"
+    assert base == "https://my-resource.cognitiveservices.azure.com/openai/deployments/model-router"
+
+
 def test_parse_relay_under_a_models_api_base_targets_the_foundry_root():
     url, _ = AzureAIPassthroughConfig().get_complete_url(
         api_base=f"{FOUNDRY_BASE}/models",
@@ -490,3 +506,44 @@ def test_streaming_chat_completion_chunks_are_costed_like_azure():
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "hi"
     assert response.usage.total_tokens == 4
+
+
+def test_streaming_responses_chunks_through_a_router_relay_are_costed_like_azure():
+    completed = {
+        "type": "response.completed",
+        "sequence_number": 2,
+        "response": {
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "gpt-5.4-mini",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100},
+        },
+    }
+    logging_obj = _relay_logging_obj("gpt-5.4-mini", FOUNDRY_BASE)
+
+    response = AzureAIPassthroughConfig().handle_logging_collected_chunks(
+        all_chunks=["event: response.completed", "data: " + json.dumps(completed)],
+        litellm_logging_obj=logging_obj,
+        model="gpt-5.4-mini",
+        custom_llm_provider="azure_ai",
+        endpoint="gpt/openai/responses",
+    )
+    info = litellm.get_model_info("azure_ai/gpt-5.4-mini")
+
+    assert response is not None
+    assert response.usage.output_tokens == 100
+    assert logging_obj.call_type == "aresponses"
+    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(
+        1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
+    )
