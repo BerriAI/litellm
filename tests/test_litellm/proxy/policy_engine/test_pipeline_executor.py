@@ -158,9 +158,104 @@ class ContentCheckGuardrail(CustomGuardrail):
         return None
 
 
+class RecordingGuardrail(CustomGuardrail):
+    """Mock guardrail that records guardrail information into request metadata, then blocks or passes."""
+
+    def __init__(self, guardrail_name: str, scan_raw_request: bool = False, block: bool = True):
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook="pre_call",
+            default_on=True,
+            scan_raw_request=scan_raw_request,
+        )
+        self.block = block
+
+    def should_run_guardrail(self, data, event_type) -> bool:
+        return True
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"detected": ["aws_access_key"]},
+            request_data=data,
+            guardrail_status="guardrail_intervened" if self.block else "success",
+        )
+        if self.block:
+            raise HTTPException(status_code=400, detail="Content policy violation")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan_raw_request", [False, True])
+@pytest.mark.parametrize("on_fail", ["block", "modify_response"])
+async def test_terminal_block_carries_guardrail_information_to_request(monkeypatch, scan_raw_request, on_fail):
+    """
+    Spend logging and the Guardrails Monitor read standard_logging_guardrail_information
+    off the caller's request dict. A blocking step records it on the executor's
+    working copy (or the raw-request snapshot), so the terminal result must carry it
+    back onto the request or the block is never counted.
+    """
+    guard = RecordingGuardrail(guardrail_name="credentials-api-keys", scan_raw_request=scan_raw_request)
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+    data = {
+        "messages": [{"role": "user", "content": "key AKIAIOSFODNN7EXAMPLE"}],
+        "metadata": {"user_api_key_hash": "abc"},
+    }
+
+    result = await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="credentials-api-keys", on_fail=on_fail, on_pass="next")],
+        mode="pre_call",
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="baseline-pii-protection",
+        raw_request_snapshot={"messages": data["messages"], "metadata": {"user_api_key_hash": "abc"}},
+    )
+
+    assert result.terminal_action == on_fail
+    recorded = data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_name"] for entry in recorded] == ["credentials-api-keys"]
+    assert recorded[0]["guardrail_status"] == "guardrail_intervened"
+    assert data["metadata"]["user_api_key_hash"] == "abc"
+    assert "guardrails" not in data["metadata"]
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_terminal_block_merges_guardrail_information_without_duplicates(monkeypatch):
+    """A scan_raw_request step evaluates a deep copy of the request taken before the pipeline
+    ran, so entries recorded before that appear in both dicts and must be carried back once,
+    while entries an earlier step recorded on the working request must be kept."""
+    first = RecordingGuardrail(guardrail_name="pii-scan", block=False)
+    second = RecordingGuardrail(guardrail_name="credentials-api-keys", scan_raw_request=True)
+    monkeypatch.setattr(litellm, "callbacks", [first, second])
+    earlier = {"guardrail_name": "earlier-guard", "guardrail_status": "success"}
+    data = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    data["metadata"]["standard_logging_guardrail_information"] = [earlier]
+
+    result = await PipelineExecutor.execute_steps(
+        steps=[
+            PipelineStep(guardrail="pii-scan", on_fail="block", on_pass="next"),
+            PipelineStep(guardrail="credentials-api-keys", on_fail="block", on_pass="next"),
+        ],
+        mode="pre_call",
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="baseline-pii-protection",
+        raw_request_snapshot={
+            "messages": data["messages"],
+            "metadata": {"standard_logging_guardrail_information": [dict(earlier)]},
+        },
+    )
+
+    assert result.terminal_action == "block"
+    recorded = data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_name"] for entry in recorded] == ["earlier-guard", "pii-scan", "credentials-api-keys"]
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
