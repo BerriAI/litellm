@@ -2267,6 +2267,64 @@ async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(
 
 
 @pytest.mark.asyncio
+async def test_reconcile_before_db_update_does_not_double_count_when_flush_lands_between_passes(
+    spend_counter_state,
+):
+    """The early reconcile (before the spend row is enqueued) reseeds from a DB
+    floor that cannot yet include this request. When the periodic flush commits
+    the row before increment_spend_counters runs its second reconcile, the
+    applied_adjustment early-return must keep the counter from adding the cost
+    a second time."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
+
+    counter_cache, _ = spend_counter_state
+    counter_key = "spend:team_member:user-flush:team-flush"
+    redis_cache = _ExpiringRedisCache()
+    counter_cache.redis_cache = redis_cache
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=0.6)
+
+    reservation = {
+        "reserved_cost": 0.6,
+        "entries": [
+            {
+                "counter_key": counter_key,
+                "entity_type": "TeamMember",
+                "entity_id": "user-flush:team-flush",
+                "reserved_cost": 0.6,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    with patch.object(  # test-quality-ok: the reseed reads the DB floor through a Prisma client the test has no seam for
+        ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.3)
+    ):
+        await reconcile_budget_reservation(
+            budget_reservation=reservation, actual_cost=0.05, finalize=False
+        )
+
+    assert redis_cache.store[counter_key] == pytest.approx(0.35)
+    assert reservation["entries"][0]["applied_adjustment"] == pytest.approx(-0.55)
+    assert reservation["finalized"] is False
+
+    with patch.object(  # test-quality-ok: the flush landing between the passes makes the DB floor include this request
+        ps.SpendCounterReseed, "from_db", AsyncMock(return_value=0.35)
+    ):
+        await ps.increment_spend_counters(
+            token="key-flush",
+            team_id="team-flush",
+            user_id="user-flush",
+            response_cost=0.05,
+            budget_reservation=reservation,
+        )
+
+    assert redis_cache.store[counter_key] == pytest.approx(0.35)
+    assert reservation["finalized"] is True
+
+
+@pytest.mark.asyncio
 async def test_should_invalidate_reserved_counters_after_persisted_spend_failure(
     spend_counter_state,
 ):
