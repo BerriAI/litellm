@@ -8340,7 +8340,7 @@ class TestBackgroundResponseRetrievalGovernance:
         )
         return router
 
-    async def _pre_call(self, route_type: str, monkeypatch) -> dict:
+    async def _pre_call(self, route_type: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
         client_facing_response_id = "resp_opaque-client-facing-id"

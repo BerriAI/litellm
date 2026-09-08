@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Mapping
 
 import pytest
 
@@ -76,14 +77,16 @@ def policy_engine():
     attachment_registry.clear()
 
 
-def _retrieval_data(model_id: str) -> dict:
+def _retrieval_data(model_id: str) -> dict[str, object]:
     return {"response_id": _encoded_response_id(model_id), "litellm_metadata": {}}
 
 
-def _attached_pipelines(data: dict) -> tuple[tuple[str, str], ...]:
+def _attached_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
+    bucket = data["litellm_metadata"]
+    assert isinstance(bucket, dict)
     return tuple(
         (policy_name, ",".join(step.guardrail for step in pipeline.steps))
-        for policy_name, pipeline in data["litellm_metadata"]["_guardrail_pipelines"]
+        for policy_name, pipeline in bucket["_guardrail_pipelines"]
     )
 
 
