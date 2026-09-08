@@ -3222,6 +3222,12 @@ async def increment_spend_counter(counter_key: str, increment: float):
     return await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
 
 
+async def refresh_spend_counter_ttl(counter_key: str) -> bool:
+    if spend_counter_cache.redis_cache is None:
+        return False
+    return await spend_counter_cache.redis_cache.async_refresh_ttl(key=counter_key)
+
+
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
     if spend_counter_cache.redis_cache is not None:
         try:
