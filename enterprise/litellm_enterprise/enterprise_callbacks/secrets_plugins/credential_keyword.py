@@ -1,7 +1,3 @@
-"""
-This plugin searches for credential-shaped values assigned to a credential-named key.
-"""
-
 import re
 from collections.abc import Generator, Mapping
 from typing import Final
@@ -15,10 +11,6 @@ _LOWERCASE_WORD_SEQUENCE: Final = re.compile(r"[a-z]+(?:[-._/][a-z]+)+")
 
 
 class CredentialKeywordDetector(KeywordDetector):  # pyright: ignore[reportUntypedBaseClass]  # detect_secrets ships no type information
-    """Yields the values ``KeywordDetector`` matches that are one credential-shaped token of
-    at least ``minimum_length`` characters, dropping the ones that name a credential rather
-    than holding one."""
-
     secret_type = "Credential Keyword"
 
     def __init__(

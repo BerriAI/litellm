@@ -329,6 +329,9 @@ def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
             "      api_key: aB3dE6gH9jK2mN5p\n",
             "aB3dE6gH9jK2mN5p",
         ),
+        ("api_key: >\n  aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
+        ("api_key: |-\n  aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
+        ("secret= \\\n    aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
     ],
     ids=[
         "flat-assignment",
@@ -338,6 +341,9 @@ def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
         "prose-after",
         "prose-both-sides",
         "indented-config",
+        "yaml-folded-block",
+        "yaml-literal-block",
+        "backslash-continuation",
     ],
 )
 def test_scan_message_still_sees_assignments_sharing_a_message_with_a_vendor_key(
