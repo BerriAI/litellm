@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import threading
@@ -22,7 +23,9 @@ from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
     BaseAWSLLM,
     Boto3CredentialsInfo,
+    sign_request_off_loop_if_aws,
 )
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 # Global variable for the base_aws_llm.py file path
 
@@ -3215,3 +3218,24 @@ class TestGetRequestHeadersResign:
             extra_headers={"Authorization": "Bearer foo"},
         )
         assert prepped.headers["Authorization"] == "Bearer foo"
+
+
+@pytest.mark.asyncio
+async def test_sign_request_off_loop_if_aws_keeps_the_loop_serving_while_credentials_refresh():
+    """Regression for issue #40165: an AWS provider's signing (and the botocore credential refresh
+    inside it) must run off the event loop, so other requests keep being served meanwhile."""
+    probe = EventLoopProbe()
+
+    def sign(headers: dict[str, str]) -> dict[str, str]:
+        request = AWSRequest(
+            method="POST", url="https://bedrock-runtime.us-west-2.amazonaws.com/", data="{}", headers=headers
+        )
+        SigV4Auth(probe.credentials(), "bedrock", "us-west-2").add_auth(request)
+        return dict(request.headers)
+
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+    signed = await sign_request_off_loop_if_aws(BaseAWSLLM(), sign, headers={"Content-Type": "application/json"})
+    await release
+
+    assert "Authorization" in signed
+    assert probe.served_during_refresh is True

@@ -295,7 +295,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
                 data=prepped.body,
                 headers=prepped.headers,
             )
-            SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth(aws_request)
+            await asyncio.to_thread(SigV4Auth(credentials, "sqs", self.sqs_region_name).add_auth, aws_request)
 
             signed_headers: Final = dict(aws_request.headers.items())
 

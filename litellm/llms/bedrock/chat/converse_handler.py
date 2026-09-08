@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -136,7 +137,8 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         data: Final = json.dumps(request_data)
 
-        prepped: Final = self.get_request_headers(
+        prepped: Final = await asyncio.to_thread(
+            self.get_request_headers,
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
             extra_headers=headers,
@@ -206,7 +208,8 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
         data: Final = json.dumps(request_data)
 
-        prepped: Final = self.get_request_headers(
+        prepped: Final = await asyncio.to_thread(
+            self.get_request_headers,
             credentials=credentials,
             aws_region_name=litellm_params.get("aws_region_name") or "us-west-2",
             extra_headers=headers,

@@ -5,6 +5,7 @@ Sends JSON-RPC envelopes directly to AgentCore endpoints, bypassing the
 completion bridge that would otherwise strip the envelope.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final
@@ -45,7 +46,8 @@ class BedrockAgentCoreA2AHandler:
         Returns:
             A2A JSON-RPC response dict from the AgentCore agent
         """
-        url, headers, body = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+        url, headers, body = await asyncio.to_thread(
+            BedrockAgentCoreA2ATransformation.get_url_and_signed_request,
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
@@ -91,7 +93,8 @@ class BedrockAgentCoreA2AHandler:
         Yields:
             A2A streaming response events from the AgentCore agent
         """
-        url, headers, body = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+        url, headers, body = await asyncio.to_thread(
+            BedrockAgentCoreA2ATransformation.get_url_and_signed_request,
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
