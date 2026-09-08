@@ -4,7 +4,12 @@ from typing import TYPE_CHECKING, Final
 from urllib.parse import unquote
 
 import httpx
-from openai.types.responses import EasyInputMessageParam, ResponseInputItemParam
+from openai.types.responses import (
+    EasyInputMessageParam,
+    ResponseInputContentParam,
+    ResponseInputItemParam,
+    ResponseInputTextParam,
+)
 from pydantic import TypeAdapter
 
 from litellm.llms.fireworks_ai.common_utils import (
@@ -35,27 +40,42 @@ def _session_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object
 _instructions_adapter: Final = TypeAdapter[str | None](str | None)
 
 
-def _instruction_text(item: ResponseInputItemParam) -> str | None:
+def _instruction_parts(item: ResponseInputItemParam) -> tuple[ResponseInputContentParam, ...] | None:
     if "role" not in item or (item["role"] != "system" and item["role"] != "developer"):
         return None
     content: Final = item["content"]
     if isinstance(content, str):
-        return content
-    return "\n\n".join(part["text"] for part in content if part["type"] == "input_text")
+        return (ResponseInputTextParam(type="input_text", text=content),)
+    return tuple(content)
+
+
+def _leading_system_content(
+    instructions: str | None, parts: tuple[ResponseInputContentParam, ...]
+) -> str | list[ResponseInputContentParam]:
+    text: Final = "\n\n".join(
+        chunk for chunk in (instructions, *(part["text"] for part in parts if part["type"] == "input_text")) if chunk
+    )
+    non_text: Final = tuple(part for part in parts if part["type"] != "input_text")
+    if not non_text:
+        return text
+    return [ResponseInputTextParam(type="input_text", text=text), *non_text] if text else list(non_text)
 
 
 def _with_single_leading_system_item(
     input: str | ResponseInputParam, instructions: str | None
 ) -> str | ResponseInputParam:
     items: Final = () if isinstance(input, str) else tuple(input)
-    instruction_texts: Final = tuple(text for text in (instructions, *map(_instruction_text, items)) if text)
-    if not instruction_texts:
+    instruction_parts: Final = tuple(
+        part for item_parts in map(_instruction_parts, items) if item_parts is not None for part in item_parts
+    )
+    content: Final = _leading_system_content(instructions, instruction_parts)
+    if not content:
         return input
-    leading: Final = EasyInputMessageParam(role="system", content="\n\n".join(instruction_texts), type="message")
+    leading: Final = EasyInputMessageParam(role="system", content=content, type="message")
     rest: Final = (
         (EasyInputMessageParam(role="user", content=input),)
         if isinstance(input, str)
-        else tuple(item for item in items if _instruction_text(item) is None)
+        else tuple(item for item in items if _instruction_parts(item) is None)
     )
     return [leading, *rest]
 

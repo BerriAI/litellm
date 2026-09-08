@@ -231,6 +231,40 @@ def test_responses_call_folds_instructions_and_developer_item_into_one_leading_s
     )
 
 
+def test_responses_call_keeps_non_text_developer_parts_on_the_leading_system_message() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
+            instructions="Answer with one word.",
+            input=[  # mutable-ok: the Responses API takes input as a JSON list
+                {
+                    "role": "developer",
+                    "content": [
+                        {"type": "input_text", "text": "Match the style of this reference image."},
+                        {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"},
+                    ],
+                },
+                {"role": "user", "content": "What is the capital of France?"},
+            ],
+            store=False,
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert "instructions" not in body
+    assert tuple(body["input"]) == (
+        {
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Answer with one word.\n\nMatch the style of this reference image."},
+                {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"},
+            ],
+            "type": "message",
+        },
+        {"role": "user", "content": "What is the capital of France?"},
+    )
+
+
 def test_responses_call_turns_string_input_with_instructions_into_system_then_user_messages() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
