@@ -672,11 +672,19 @@ def load_credentials_from_list(kwargs: dict):
     CredentialAccessor: Final = getattr(sys.modules[__name__], "CredentialAccessor")
 
     credential_name: Final = kwargs.get("litellm_credential_name")
-    if credential_name and litellm.credential_list:
-        credential_accessor: Final[Mapping[str, object]] = CredentialAccessor.get_credential_values(credential_name)
-        for key, value in credential_accessor.items():
-            if key not in kwargs:
-                kwargs[key] = value
+    if not credential_name:
+        return
+    credential: Final = CredentialAccessor.find_credential(credential_name)
+    if credential is None:
+        verbose_logger.warning(
+            "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
+            credential_name,
+            len(litellm.credential_list),
+        )
+        return
+    for key, value in credential.credential_values.items():
+        if key not in kwargs:
+            kwargs[key] = value
 
 
 def get_dynamic_callbacks(
@@ -2805,6 +2813,13 @@ def supports_reasoning(model: str, custom_llm_provider: str | None = None) -> bo
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning")
 
 
+def supports_none_reasoning_effort(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model accepts reasoning effort "none" and return a boolean value.
+    """
+    return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_none_reasoning_effort")
+
+
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports native structured outputs and return a boolean value.
@@ -4889,7 +4904,7 @@ def _get_deployment_order(deployment: dict | Any) -> int | None:
     return order
 
 
-def _get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
+def get_order_filtered_deployments(healthy_deployments: list[dict], target_order: int | None = None) -> list:
     if target_order is not None:
         return [d for d in healthy_deployments if _get_deployment_order(d) == target_order]
 
@@ -4908,7 +4923,7 @@ def _get_order_filtered_deployments(healthy_deployments: list[dict], target_orde
     return healthy_deployments
 
 
-def _get_excluded_filtered_deployments(
+def get_excluded_filtered_deployments(
     healthy_deployments: list[dict],
     excluded_deployment_ids: Iterable[str] | None = None,
 ) -> list:
@@ -4919,10 +4934,12 @@ def _get_excluded_filtered_deployments(
     across the remaining deployments in the same model group after one of them
     has failed.
 
-    If the filter would leave no deployments, an empty list is returned so the
-    caller raises its usual no-deployments error and the weighted-failover
-    helper falls through to the cross-group fallback path. Returning the
-    original unfiltered list here would re-include the just-failed deployment.
+    If the filter would leave no deployments, an empty list is returned and the
+    caller decides what that means. Weighted failover lets it raise the usual
+    no-deployments error and fall through to the cross-group fallback path; the
+    retry skip in `async_get_healthy_deployments` deliberately falls back to the
+    unfiltered list, so a request every deployment refused still comes back with
+    the provider's own error rather than a no-deployments one.
     """
     if not excluded_deployment_ids:
         return healthy_deployments
@@ -5210,13 +5227,16 @@ def _strip_openai_finetune_model_name(model_name: str) -> str:
     input: ft:gpt-3.5-turbo:my-org:custom_suffix:id
     output: ft:gpt-3.5-turbo
 
+    input: ft:gpt-4o-2024-08-06:my-org::id (OpenAI leaves the suffix empty when none was set)
+    output: ft:gpt-4o-2024-08-06
+
     Args:
     model_name (str): The full model name
 
     Returns:
     str: The stripped model name
     """
-    return re.sub(r"(:[^:]+){3}$", "", model_name)
+    return re.sub(r"(:[^:]*){3}$", "", model_name)
 
 
 def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
@@ -8685,6 +8705,8 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
+        elif litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
             # Both decisions are data-driven from the model's price-map entry, with
             # no model-name logic. Capability (can it serve Responses?) comes from
@@ -9451,6 +9473,12 @@ class ProviderConfigManager:
             )
 
             return MinimaxTextToSpeechConfig()
+        elif litellm.LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.audio_speech.transformation import (
+                MistralTextToSpeechConfig,
+            )
+
+            return MistralTextToSpeechConfig()
         elif litellm.LlmProviders.AWS_POLLY == provider:
             from litellm.llms.aws_polly.text_to_speech.transformation import (
                 AWSPollyTextToSpeechConfig,

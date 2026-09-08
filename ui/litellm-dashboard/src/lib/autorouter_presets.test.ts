@@ -87,6 +87,19 @@ describe("autorouter_presets", () => {
     }
   });
 
+  it("keeps every preset free of custom dimensions, so applying one never adds scoring rows", () => {
+    for (const { complexity_router_config: config } of getAllPresets()) {
+      expect(config.custom_dimensions).toBeUndefined();
+    }
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    expect(buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.custom_dimensions).toBeUndefined();
+  });
+
+  it("resets both scoring overrides when the form falls back to an empty prefill", () => {
+    expect(buildEmptyPrefill().complexityRouterConfig.custom_dimensions).toBeUndefined();
+    expect(buildEmptyPrefill().complexityRouterConfig.dimension_weights).toBeUndefined();
+  });
+
   it("carries a preset's session affinity idle window into the prefilled form state", () => {
     const config = getPresetByKey("anthropic_family")!.complexity_router_config;
     const prefill = buildPresetPrefill({ ...config, session_affinity_ttl_seconds: 300 }, groupsOnly([]));
@@ -94,6 +107,21 @@ describe("autorouter_presets", () => {
     expect(
       buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.session_affinity_ttl_seconds,
     ).toBeUndefined();
+  });
+
+  it("carries a preset's stored weights and custom dimensions into the prefill without rebalancing them", () => {
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    const weights = { codePresence: 0.4 };
+    const dimension = { name: "domain", weight: 0.9, keywords: ["orbitmesh"] };
+    const prefill = buildPresetPrefill(
+      { ...config, dimension_weights: weights, custom_dimensions: [dimension] },
+      groupsOnly([]),
+    ).complexityRouterConfig;
+    expect(prefill.dimension_weights).toEqual(weights);
+    expect(prefill.custom_dimensions).toEqual([{ ...dimension, id: "stored-0" }]);
+    const plain = buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig;
+    expect(plain.dimension_weights).toBeUndefined();
+    expect(plain.custom_dimensions).toBeUndefined();
   });
 
   it("keeps the model-family presets on the heuristic classifier", () => {

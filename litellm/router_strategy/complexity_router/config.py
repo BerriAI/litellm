@@ -5,12 +5,20 @@ Contains default keyword lists, weights, tier boundaries, and configuration clas
 All values are configurable via proxy config.yaml.
 """
 
-from collections.abc import Mapping
+import math
+import re
+import warnings
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation, field_serializer, field_validator, model_validator
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", DeprecationWarning)
+    import sre_constants
+    import sre_parse
 
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.types.router import AdaptiveRouterWeights, ClassifierPlugin, RoutingPlugin
@@ -569,6 +577,125 @@ class ClassifierLLMConfig(BaseModel):
         return self
 
 
+MAX_CUSTOM_PATTERN_REPEAT: Final[int] = 64
+MAX_CUSTOM_PATTERN_WORK: Final[int] = 2048
+MAX_CUSTOM_DIMENSIONS_WORK: Final[int] = 8192
+MAX_CUSTOM_PATTERN_DEPTH: Final[int] = 16
+CUSTOM_PATTERN_SCAN_CHARS: Final[int] = 2048
+
+_ATOM_OPCODES: Final = frozenset(
+    {sre_constants.LITERAL, sre_constants.NOT_LITERAL, sre_constants.ANY, sre_constants.IN, sre_constants.CATEGORY}
+)
+_REPEAT_OPCODES: Final = frozenset({sre_constants.MAX_REPEAT, sre_constants.MIN_REPEAT})
+
+
+class _PatternCost(NamedTuple):
+    paths: int
+    steps: int
+
+
+def _atom_steps(node: object) -> int:
+    if isinstance(node, tuple) and len(node) == 2 and node[0] is sre_constants.IN:
+        return 1 + len(node[1])
+    return 1
+
+
+def _repeat_cost(argument: object) -> _PatternCost | str:
+    if not isinstance(argument, tuple) or len(argument) != 3:
+        return "unsupported repeat structure"
+    low, high, body = argument
+    if high > MAX_CUSTOM_PATTERN_REPEAT or len(body) != 1 or body[0][0] not in _ATOM_OPCODES:
+        return "requires a single character or class repeated at most 64 times; use {n,m} instead of *, + or {n,}"
+    choices: Final = high - low + 1
+    return _PatternCost(choices, 1 + high * _atom_steps(body[0]) + choices)
+
+
+def _node_cost(node: object, depth: int) -> _PatternCost | str:
+    if not isinstance(node, tuple) or len(node) != 2:
+        return "unsupported regex structure"
+    opcode, argument = node
+    if opcode in _ATOM_OPCODES or opcode is sre_constants.AT:
+        return _PatternCost(1, _atom_steps(node))
+    if opcode is sre_constants.SUBPATTERN:
+        return _sequence_cost(argument[-1], depth + 1)
+    if opcode is sre_constants.BRANCH:
+        costs: Final = tuple(_sequence_cost(branch, depth + 1) for branch in argument[1])
+        refused: Final = next((cost for cost in costs if isinstance(cost, str)), None)
+        if refused is not None:
+            return refused
+        return _PatternCost(
+            sum(cost.paths for cost in costs if isinstance(cost, _PatternCost)),
+            len(costs) + sum(cost.steps for cost in costs if isinstance(cost, _PatternCost)),
+        )
+    if opcode in _REPEAT_OPCODES:
+        return _repeat_cost(argument)
+    return "contains an unsupported regex construct"
+
+
+def _sequence_cost(nodes: Iterable[object], depth: int) -> _PatternCost | str:
+    if depth > MAX_CUSTOM_PATTERN_DEPTH:
+        return "nests deeper than 16 levels"
+    costs: Final = tuple(_node_cost(node, depth) for node in nodes)
+    refused: Final = next((cost for cost in costs if isinstance(cost, str)), None)
+    if refused is not None:
+        return refused
+    valid: Final = tuple(cost for cost in costs if isinstance(cost, _PatternCost))
+    # Choices multiply across a sequence; every continuation can execute once per preceding path.
+    total: Final = _PatternCost(
+        math.prod(cost.paths for cost in valid),
+        1 + sum(cost.steps * math.prod(prior.paths for prior in valid[:index]) for index, cost in enumerate(valid)),
+    )
+    if total.steps > MAX_CUSTOM_PATTERN_WORK:
+        return "exceeds the per-pattern regex work budget"
+    return total
+
+
+def custom_pattern_work(pattern: str) -> int | str:
+    try:
+        re.compile(pattern, re.IGNORECASE)
+        parsed: Final = sre_parse.parse(pattern, re.IGNORECASE)
+    except (re.error, RecursionError, OverflowError):
+        return "is not a valid regex"
+    cost: Final = _sequence_cost(tuple(parsed), 0)
+    return cost if isinstance(cost, str) else cost.steps
+
+
+class CustomDimension(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
+    weight: float = Field(gt=0, le=1, allow_inf_nan=False)
+    keywords: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=32)
+    patterns: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] = Field(default=(), max_length=32)
+    scoring_mode: Literal["binary", "match_count"] = Field(
+        default="binary",
+        description=(
+            "'binary' scores 1 when any matcher hits. 'match_count' scores 0.5 when one distinct matcher hits and 1 "
+            "when two or more do; repeated occurrences of one matcher never raise it. Keywords are distinct "
+            "case-insensitively, patterns by source, and a keyword and a pattern are always distinct from each other."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_matchers(self) -> "CustomDimension":
+        matchers: Final = (*self.keywords, *self.patterns)
+        if not matchers or any(not matcher.strip() for matcher in matchers):
+            raise ValueError("custom dimensions require nonblank keywords and/or patterns")
+        if len(matchers) > 32 or sum(map(len, matchers)) > 4096:
+            raise ValueError("custom dimensions allow at most 32 matchers and 4096 matcher characters each")
+        costs: Final = tuple((pattern, custom_pattern_work(pattern)) for pattern in self.patterns)
+        rejected: Final = tuple(f"pattern {pattern!r} {work}" for pattern, work in costs if isinstance(work, str))
+        if rejected:
+            raise ValueError("custom dimension " + "; ".join(rejected))
+        return self
+
+    def pattern_work(self) -> int:
+        """Combined work estimate of the validated patterns."""
+        return sum(
+            work for work in (custom_pattern_work(pattern) for pattern in self.patterns) if isinstance(work, int)
+        )
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -669,6 +796,20 @@ class ComplexityRouterConfig(BaseModel):
     dimension_weights: dict[str, float] = Field(
         default_factory=lambda: DEFAULT_DIMENSION_WEIGHTS.copy(),
         description="Weights for each scoring dimension",
+    )
+
+    custom_dimensions: tuple[CustomDimension, ...] = Field(
+        default=(),
+        max_length=16,
+        description=(
+            "Named dimensions added to the heuristic-v1 score. Each contributes its inline weight once "
+            "when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters; "
+            "scoring_mode 'match_count' instead grades half weight for one distinct matcher and full for two or more. "
+            "Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, "
+            "backreferences and lookarounds are rejected. Conservative work limits include alternation paths, "
+            "repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. "
+            "Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota."
+        ),
     )
 
     # Keyword lists (overridable)
@@ -946,6 +1087,20 @@ class ComplexityRouterConfig(BaseModel):
             "Additional case-sensitive literal sentinels that mark a request as plan mode, on "
             "top of the built-in Claude Code and Copilot ones. For clients whose plan-mode "
             "wording the built-ins don't cover, or after a client release changes its strings."
+        ),
+    )
+    max_tokens_from_tier_model: bool = Field(
+        default=True,
+        description=(
+            "Set max_tokens on every routed request to the output ceiling of the tier model it "
+            "lands on, replacing whatever the caller sent. A caller behind an auto-router cannot "
+            "pick one value that fits every tier: the smallest tier's ceiling starves a bigger "
+            "tier's thinking budget, and a bigger tier's ceiling is rejected by the smallest. The "
+            "ceiling is the smallest max_output_tokens across the tier model's deployments, read "
+            "from each deployment's model_info and then the model cost map; a tier model with a "
+            "deployment whose ceiling is unknown keeps the caller's value. A max_tokens, "
+            "max_completion_tokens or max_output_tokens in the tier's own litellm_params still "
+            "wins. Set false to forward the caller's value unchanged."
         ),
     )
     route_housekeeping_to_cheapest_tier: bool = Field(
@@ -1242,6 +1397,27 @@ class ComplexityRouterConfig(BaseModel):
             raise ValueError(
                 f"classifier_plugin is set but classifier_type is {self.classifier_type!r}; "
                 "the plugin would never run. Set classifier_type 'custom' or remove classifier_plugin"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_custom_dimensions(self) -> "ComplexityRouterConfig":
+        if not self.custom_dimensions:
+            return self
+        if self.classifier_type not in ("heuristic", "heuristic_first", "hybrid"):
+            raise ValueError("custom_dimensions requires classifier_type heuristic, heuristic_first or hybrid")
+        names: Final = tuple(dimension.name.casefold() for dimension in self.custom_dimensions)
+        reserved: Final = frozenset(name.casefold() for name in DEFAULT_DIMENSION_WEIGHTS)
+        weighted: Final = frozenset(name.casefold() for name in self.dimension_weights)
+        if len(frozenset(names)) != len(names) or frozenset(names) & reserved:
+            raise ValueError("custom dimension names must be unique and must not shadow built-in dimensions")
+        if frozenset(names) & weighted:
+            raise ValueError("custom dimension weights must be inline, not in dimension_weights")
+        work: Final = sum(dimension.pattern_work() for dimension in self.custom_dimensions)
+        if work > MAX_CUSTOM_DIMENSIONS_WORK:
+            raise ValueError(
+                f"custom_dimensions regex work estimate is {work}; the limit across the router is "
+                f"{MAX_CUSTOM_DIMENSIONS_WORK}"
             )
         return self
 

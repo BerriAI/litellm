@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -6039,6 +6040,8 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     leaky_body = {"output": {"message": {"content": [{"text": "secret content"}]}}}
 
     class MockResponse:
+        headers = httpx.Headers({"x-amzn-RequestId": "req-parse-failure"})
+
         def json(self):
             return leaky_body
 
@@ -6067,6 +6070,7 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-parse-failure"
 
 
 def test_converse_drops_sampling_params_for_models_that_removed_them():

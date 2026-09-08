@@ -33,8 +33,53 @@ if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
 
 
+_ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+
+
+def error_response_text(response: httpx.Response) -> str:
+    try:
+        return response.text
+    except httpx.ResponseNotRead:
+        return response.reason_phrase
+
+
+def _synthesize_error_response(
+    *, status_code: int, headers: dict[str, object] | httpx.Headers, request: httpx.Request | None
+) -> tuple[httpx.Request, httpx.Response]:
+    error_request: Final = request or httpx.Request(method="POST", url=_ERROR_REQUEST_URL)
+    safe_headers: Final = (
+        headers
+        if isinstance(headers, httpx.Headers)
+        else tuple((key, value) for key, value in headers.items() if isinstance(value, (str, bytes)))
+    )
+    return error_request, httpx.Response(status_code=status_code, headers=safe_headers, request=error_request)
+
+
 class BedrockError(BaseLLMException):
-    pass
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        headers: dict[str, object] | httpx.Headers | None = None,
+        request: httpx.Request | None = None,
+        response: httpx.Response | None = None,
+        body: dict[str, object] | None = None,
+        status_code_is_synthesized: bool = False,
+    ) -> None:
+        error_request, error_response = (
+            _synthesize_error_response(status_code=status_code, headers=headers, request=request)
+            if response is None and headers
+            else (request, response)
+        )
+        super().__init__(
+            status_code=status_code,
+            message=message,
+            headers=headers,
+            request=error_request,
+            response=error_response,
+            body=body,
+            status_code_is_synthesized=status_code_is_synthesized,
+        )
 
 
 _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (

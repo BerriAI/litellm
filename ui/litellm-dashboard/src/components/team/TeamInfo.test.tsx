@@ -2052,6 +2052,19 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     expect(objectPermission.agent_access_groups).toStrictEqual([]);
   });
 
+  it("sends an empty vector_stores array after the last vector store chip is removed", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openEditor(user);
+
+    await user.click(within(screen.getByLabelText("vs-1")).getByRole("button"));
+    expect(screen.queryByLabelText("vs-1")).not.toBeInTheDocument();
+
+    const payload = await save(user);
+
+    const objectPermission = wireBody(payload).object_permission as Record<string, unknown>;
+    expect(objectPermission.vector_stores).toStrictEqual([]);
+  });
+
   it("resends every stored value once both sections are opened", async () => {
     const user = userEvent.setup({ delay: null });
     await openEditor(user);

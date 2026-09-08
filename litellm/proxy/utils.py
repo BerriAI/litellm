@@ -152,7 +152,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.sensitive_data_routing import (
     _PROXY_SensitiveDataRoutingHandler,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_guardrails_from_auth_metadata
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.repositories.budget_repository import BudgetRepository
@@ -177,6 +177,9 @@ from litellm.types.mcp import (
 )
 from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
 from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
+from litellm.utils import (
+    _add_custom_logger_callback_to_specific_event,  # pyright: ignore[reportPrivateUsage]  # only string-to-logger helper
+)
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult
@@ -857,6 +860,14 @@ class ProxyLogging:
                 litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
                 litellm.logging_callback_manager.add_litellm_async_failure_callback(callback)
 
+        # Runs after load_config applied every litellm_settings key: logger __init__s read e.g. s3_callback_params
+        success_callbacks: Final = tuple(cb for cb in litellm.success_callback if isinstance(cb, str))
+        failure_callbacks: Final = tuple(cb for cb in litellm.failure_callback if isinstance(cb, str))
+        for callback in success_callbacks:
+            _add_custom_logger_callback_to_specific_event(callback, "success")
+        for callback in failure_callbacks:
+            _add_custom_logger_callback_to_specific_event(callback, "failure")
+
     async def update_request_status(self, litellm_call_id: str, status: Literal["success", "fail"]):
         # only use this if slack alerting is being used
         if self.alerting is None:
@@ -924,7 +935,13 @@ class ProxyLogging:
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
             "metadata": {"headers": kwargs.get("headers") or {}},
         }
-
+        user_api_key_auth: Final = kwargs.get("user_api_key_auth")
+        if isinstance(user_api_key_auth, UserAPIKeyAuth):
+            add_guardrails_from_auth_metadata(
+                user_api_key_dict=user_api_key_auth,
+                data=synthetic_data,
+                metadata_variable_name="metadata",
+            )
         return synthetic_data
 
     def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
@@ -7206,7 +7223,19 @@ def get_custom_url(request_base_url: str, route: str | None = None) -> str:
     else:
         base_url = request_base_url
 
-    server_root_path: Final = get_server_root_path()
+    # get_request_root_path() returns the prefix the router is actually
+    # resolving this request under: the matched SERVER_ROOT_PATHS entry when
+    # PerRequestRootPathMiddleware ran, otherwise the SERVER_ROOT_PATH scalar.
+    # This keeps the emitted URL under one prefix — the one the client called —
+    # instead of stacking the scalar onto a request already living under a
+    # dynamic prefix (which would produce /tenant-a/legacy/... — a path that
+    # doesn't exist). join_paths()'s tail-dedup then collapses the append when
+    # base_url (i.e. request.base_url) already ends in the same prefix.
+    from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports utils
+        get_request_root_path,
+    )
+
+    server_root_path: Final = get_request_root_path()
     if route is not None:
         if server_root_path != "":
             # First join base_url with server_root_path, then with route
