@@ -3343,15 +3343,15 @@ class ProxyBaseLLMRequestProcessing:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
             from litellm.proxy.utils import (
                 _check_and_merge_model_level_guardrails,
-                pipeline_managed_guardrail_names,
+                stream_gated_guardrail_names,
             )
 
             guardrail_data = _check_and_merge_model_level_guardrails(data=captured_data, llm_router=_global_llm_router)
-            pipeline_managed: Final = pipeline_managed_guardrail_names(captured_data, "post_call")
+            stream_gated: Final = stream_gated_guardrail_names(captured_data, captured_user_api_key_dict)
             for cb in litellm.callbacks:
                 if not isinstance(cb, CustomGuardrail):
                     continue
-                if cb.guardrail_name in pipeline_managed:
+                if cb.guardrail_name in stream_gated:
                     continue
                 if not cb.should_run_guardrail(
                     data=guardrail_data,
