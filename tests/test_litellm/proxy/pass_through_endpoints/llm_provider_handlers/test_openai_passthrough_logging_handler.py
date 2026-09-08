@@ -2083,3 +2083,12 @@ def test_count_relayed_prompt_tokens_charges_only_the_remote_high_detail_image_a
     assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == (
         litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + high_detail_image_token_upper_bound()
     )
+
+
+@pytest.mark.parametrize("scheme", ["HTTPS://", "Http://"])
+def test_count_relayed_prompt_tokens_charges_an_uppercase_scheme_remote_high_detail_image_at_the_upper_bound(scheme):
+    messages = _image_messages(scheme + UNREACHABLE_IMAGE_URL.split("://", 1)[1], "high")
+
+    assert count_relayed_prompt_tokens("gpt-4.1-mini", messages) == (
+        litellm.token_counter(model="gpt-4.1-mini", messages=TEXT_ONLY_MESSAGES) + high_detail_image_token_upper_bound()
+    )

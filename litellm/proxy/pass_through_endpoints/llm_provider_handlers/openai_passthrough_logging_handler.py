@@ -105,7 +105,9 @@ def _is_remote_high_detail_image(part: object) -> bool:
     if not isinstance(image_url, Mapping):
         return False
     url: Final = image_url.get("url")
-    return isinstance(url, str) and url.startswith(("http://", "https://")) and image_url.get("detail") == "high"
+    return (
+        isinstance(url, str) and url.lower().startswith(("http://", "https://")) and image_url.get("detail") == "high"
+    )
 
 
 def _content_parts(message: Mapping[str, object]) -> Sequence[object]:
