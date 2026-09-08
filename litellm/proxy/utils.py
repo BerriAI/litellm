@@ -543,6 +543,16 @@ def _guardrails_outside_pipeline(policy_name: str, pipeline: "GuardrailPipeline"
     return frozenset(resolved.guardrails) - frozenset(step.guardrail for step in pipeline.steps)
 
 
+def _guardrails_run_standalone_pre_call(data: Mapping[str, object]) -> frozenset[str]:
+    return frozenset(
+        callback.guardrail_name
+        for callback in litellm.callbacks
+        if isinstance(callback, CustomGuardrail)
+        and callback.guardrail_name is not None
+        and callback.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
+    )
+
+
 def _without_names(
     bucket: dict[str, object],  # mutable-ok: the applied_* header slots live in the request-state dict hooks write
     slot: str,
@@ -567,7 +577,9 @@ def _withdraw_deferred_claims(
     outside_by_policy: Final = MappingProxyType(
         {policy_name: _guardrails_outside_pipeline(policy_name, pipeline) for policy_name, pipeline in deferred}
     )
-    running_elsewhere: Final = _pipeline_managed_guardrail_names(data, "pre_call").union(*outside_by_policy.values())
+    running_elsewhere: Final = _pipeline_managed_guardrail_names(data, "pre_call").union(
+        _guardrails_run_standalone_pre_call(data), *outside_by_policy.values()
+    )
     withdrawn_policies: Final = frozenset(name for name, outside in outside_by_policy.items() if not outside)
     withdrawn_guardrails: Final = _pipeline_step_guardrail_names(deferred) - running_elsewhere
     _, bucket = get_or_create_metadata_bucket(data)
