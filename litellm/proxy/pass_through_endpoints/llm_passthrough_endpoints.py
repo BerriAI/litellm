@@ -1192,7 +1192,7 @@ def _sign_aws_json_post(
     except ImportError:
         raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.")
 
-    aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
+    aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=headers)
     SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
     return aws_request.prepare()
 
