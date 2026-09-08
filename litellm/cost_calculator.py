@@ -2415,6 +2415,9 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
         )
 
 
+_RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
+
+
 class _ResponsesWsEventResponse(BaseModel):
     usage: Mapping[str, object] | None = None
 
@@ -2435,7 +2438,9 @@ class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
                 event.response.usage
             )
             for event in events
-            if event.type == "response.completed" and event.response is not None and event.response.usage is not None
+            if event.type in _RESPONSES_WS_BILLABLE_EVENT_TYPES
+            and event.response is not None
+            and event.response.usage is not None
         )
 
     @staticmethod
