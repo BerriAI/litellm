@@ -1,11 +1,6 @@
 from base_google_genai_proxy_sdk_test import BaseGoogleGenAIProxySDKTest
 from base_google_test import BaseGoogleGenAITest
-import sys
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 import pytest
 import litellm
 import unittest.mock

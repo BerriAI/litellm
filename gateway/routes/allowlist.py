@@ -54,6 +54,7 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/messages",
     "/v1/skills",
     "/v1/a2a/",
+    "/a2a/",
     # LiteLLM-native LLM surface
     "/v1/rerank",
     "/v2/rerank",
@@ -82,8 +83,10 @@ GATEWAY_PATH_PREFIXES: tuple[str, ...] = (
     "/azure_ai/",
     "/aws/",
     "/bedrock/",
+    "/comprehendmedical",
     "/cohere/",
     "/gemini/",
+    "/gigachat/",
     "/google/",
     "/vertex_ai/",
     "/vertex-ai/",

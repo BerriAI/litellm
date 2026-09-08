@@ -8,14 +8,12 @@ across different providers (OpenAI, xAI, etc.)
 import asyncio
 import json
 import os
-import sys
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple, Union
 
 import pytest
 import websockets
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 

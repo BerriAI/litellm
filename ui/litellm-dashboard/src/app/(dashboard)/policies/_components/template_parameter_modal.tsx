@@ -353,7 +353,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
                   </div>
                 )}
                 {Object.keys(variationsMap).length > 0 && !statusMessage && (
-                  <p className="mt-1 text-xs text-green-600">
+                  <p className="mt-1 text-xs text-success">
                     ✓ {Object.values(variationsMap).flat().length} alternate spellings &amp; variations auto-generated
                     for guardrail matching
                   </p>

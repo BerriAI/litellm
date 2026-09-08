@@ -8,9 +8,10 @@ omits each feature's routes until the feature is warmed.
 
 import asyncio
 import importlib
-import sys
+from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Dict, Tuple
+from typing import TYPE_CHECKING, Final
 
 from starlette.types import Receive, Scope, Send
 
@@ -38,11 +39,11 @@ def _mount_app(prefix: str, attr_name: str = "app") -> Callable[["FastAPI", obje
 class LazyFeature:
     name: str
     module_path: str
-    path_prefixes: Tuple[str, ...]
+    path_prefixes: tuple[str, ...]
     register_fn: Callable[["FastAPI", object], None] = field(default_factory=lambda: _include_router("router"))
     # For routes whose path has a leading parameter (e.g. /{server}/authorize)
     # — startswith can't match those, so the matcher also checks endswith.
-    path_suffixes: Tuple[str, ...] = ()
+    path_suffixes: tuple[str, ...] = ()
     # Keep the stub injected even after load — for mounted ASGI sub-apps
     # whose routes don't appear in the parent app's openapi spec.
     persistent_swagger_stub: bool = False
@@ -51,7 +52,7 @@ class LazyFeature:
         return any(path.startswith(p) for p in self.path_prefixes) or any(path.endswith(s) for s in self.path_suffixes)
 
 
-LAZY_FEATURES: Tuple[LazyFeature, ...] = (
+LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
     LazyFeature(
         name="guardrails",
         module_path="litellm.proxy.guardrails.guardrail_endpoints",
@@ -154,10 +155,13 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
             "/.well-known/oauth-",
             "/.well-known/openid-configuration",
             "/.well-known/jwks.json",
+            "/.well-known/litellm-cli-auth",
             "/authorize",
             "/token",
             "/callback",
             "/register",
+            "/revoke",
+            "/introspect",
         ),
         # Catches the /{mcp_server_name}/authorize|token|register variants.
         path_suffixes=("/authorize", "/token", "/register"),
@@ -264,7 +268,7 @@ class LazyFeatureMiddleware:
         self,
         app,
         fastapi_app: "FastAPI",
-        features: Tuple[LazyFeature, ...] = LAZY_FEATURES,
+        features: tuple[LazyFeature, ...] = LAZY_FEATURES,
     ):
         self.app = app
         self._fastapi_app = fastapi_app
@@ -314,15 +318,15 @@ async def _force_load(app: "FastAPI", feat: LazyFeature) -> bool:
     if not hasattr(app.state, "lazy_loaded"):
         app.state.lazy_loaded = set()
         app.state.lazy_locks = {}
-    lock = app.state.lazy_locks.setdefault(feat.module_path, asyncio.Lock())
+    lock: Final = app.state.lazy_locks.setdefault(feat.module_path, asyncio.Lock())
     async with lock:
         if feat.module_path in app.state.lazy_loaded:
             return False
         try:
             # Import on a thread (heavy modules take 1-3 s). register_fn
             # mutates app.router.routes, so it stays on the loop thread.
-            loop = asyncio.get_running_loop()
-            module = await loop.run_in_executor(None, importlib.import_module, feat.module_path)
+            loop: Final = asyncio.get_running_loop()
+            module: Final = await loop.run_in_executor(None, importlib.import_module, feat.module_path)
             feat.register_fn(app, module)
             app.state.lazy_loaded.add(feat.module_path)
             app.openapi_schema = None
@@ -361,7 +365,7 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
 
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-    router = APIRouter()
+    router: Final = APIRouter()
 
     @router.post(
         "/lazy/warm/{name}",
@@ -369,7 +373,7 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
         dependencies=[Depends(user_api_key_auth)],
     )
     async def warm(name: str):
-        feat = next((f for f in LAZY_FEATURES if f.name == name), None)
+        feat: Final = next((f for f in LAZY_FEATURES if f.name == name), None)
         if feat is None:
             raise HTTPException(404, f"unknown lazy feature: {name}")
         if feat.persistent_swagger_stub:
@@ -377,8 +381,8 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
 
         await _force_load(app, feat)
 
-        feat_routes = [r for r in app.routes if feat.matches(getattr(r, "path", ""))]
-        full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
+        feat_routes: Final = [r for r in app.routes if feat.matches(getattr(r, "path", ""))]
+        full: Final = get_openapi(title=app.title, version=app.version, routes=feat_routes)
         # Force all operations under one tag so they group under a single Swagger
         # section — many lazy modules tag routes inconsistently.
         for path_ops in full.get("paths", {}).values():
@@ -394,20 +398,36 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
     return router
 
 
-def inject_lazy_stubs(schema: Dict) -> Dict:
-    """Inject openapi entries for unloaded features. Uses the snapshot file
-    when available (full route info), otherwise falls back to a single
-    placeholder per feature. Any failure logs and returns the schema unchanged
-    so /openapi.json never 500s on a cosmetic injection bug."""
+def loaded_lazy_modules(app: "FastAPI") -> frozenset[str]:
+    """The set of lazy feature modules whose routers are actually registered
+    on this app (tracked by _force_load), empty before the middleware ever ran.
+    sys.modules is the wrong signal: boot code imports several feature modules
+    (mcp_management, cloudzero, vantage, config_overrides) without mounting
+    their routers, and their stubs must still be injected."""
+    loaded: Final = getattr(app.state, "lazy_loaded", None)
+    if not isinstance(loaded, set):
+        return frozenset()
+    return frozenset(m for m in loaded if isinstance(m, str))
+
+
+def inject_lazy_stubs(
+    schema: dict,
+    loaded_modules: AbstractSet[str],
+    features: tuple[LazyFeature, ...] = LAZY_FEATURES,
+) -> dict:
+    """Inject openapi entries for features not in loaded_modules. Uses the
+    snapshot file when available (full route info), otherwise falls back to a
+    single placeholder per feature. Any failure logs and returns the schema
+    unchanged so /openapi.json never 500s on a cosmetic injection bug."""
     try:
         from litellm.proxy._lazy_openapi_snapshot import load_snapshot
 
-        snapshot = load_snapshot()
-        paths = schema.setdefault("paths", {})
-        schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+        snapshot: Final = load_snapshot()
+        paths: Final = schema.setdefault("paths", {})
+        schemas: Final = schema.setdefault("components", {}).setdefault("schemas", {})
 
-        for feat in LAZY_FEATURES:
-            if feat.module_path in sys.modules and not feat.persistent_swagger_stub:
+        for feat in features:
+            if feat.module_path in loaded_modules and not feat.persistent_swagger_stub:
                 continue
 
             fragment = (snapshot or {}).get(feat.name)
@@ -433,7 +453,7 @@ def inject_lazy_stubs(schema: Dict) -> Dict:
     return schema
 
 
-def lazy_tag_to_prefix() -> Dict[str, str]:
+def lazy_tag_to_prefix() -> dict[str, str]:
     """feature.name -> first prefix, used by the Swagger warmup JS plugin.
     Returns empty when the snapshot is loaded — the plugin is unnecessary
     because /openapi.json already has full route info."""

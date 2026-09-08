@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen } from "../../../../../../tests/test-utils";
-import { EditProjectModal } from "./EditProjectModal";
+import { EditProjectModal, toFormValues } from "./EditProjectModal";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
 const mockMutate = vi.fn();
@@ -71,5 +71,22 @@ describe("EditProjectModal", () => {
   it("should render the project form inside the modal", () => {
     renderWithProviders(<EditProjectModal isOpen={true} project={mockProject} onClose={onClose} />);
     expect(screen.getByTestId("project-base-form")).toBeInTheDocument();
+  });
+
+  it("should prefill input and output TPM limits and keep them out of metadata", () => {
+    const values = toFormValues({
+      ...mockProject,
+      metadata: {
+        model_itpm_limit: { "input-model": 150 },
+        model_otpm_limit: { "output-model": 250 },
+        owner: "platform",
+      },
+    });
+
+    expect(values.modelLimits).toEqual([
+      { model: "input-model", rpm: undefined, tpm: undefined, itpm: 150, otpm: undefined },
+      { model: "output-model", rpm: undefined, tpm: undefined, itpm: undefined, otpm: 250 },
+    ]);
+    expect(values.metadata).toEqual([{ key: "owner", value: "platform" }]);
   });
 });

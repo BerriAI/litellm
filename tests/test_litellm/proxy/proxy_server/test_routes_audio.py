@@ -12,13 +12,16 @@ from __future__ import annotations
 import io
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from litellm.proxy import proxy_server
+from litellm.types.llms.openai import HttpxBinaryResponseContent
 
 
 @pytest.fixture
-def patched_speech(monkeypatch):
+def patched_speech(monkeypatch, request):
+    upstream_content_type = getattr(request, "param", "audio/mpeg")
     monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
     monkeypatch.setattr(
         proxy_server,
@@ -36,15 +39,14 @@ def patched_speech(monkeypatch):
 
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
 
-    class _FakeBinaryResp:
-        async def aiter_bytes(self, chunk_size: int = 8192):
-            async def _gen():
-                yield b"\x00\x01\x02"
-
-            return _gen()
-
     async def _llm_call():
-        return _FakeBinaryResp()
+        return HttpxBinaryResponseContent(
+            httpx.Response(
+                status_code=200,
+                headers={} if upstream_content_type is None else {"content-type": upstream_content_type},
+                content=b"\x00\x01\x02",
+            )
+        )
 
     async def _fake_route_request(*args, **kwargs):
         return _llm_call()
@@ -74,6 +76,24 @@ def patched_speech_error(monkeypatch):
 
     async def _raise(*args, **kwargs):
         raise ValueError("speech boom")
+
+    monkeypatch.setattr(proxy_server, "route_request", _raise)
+    yield
+
+
+@pytest.fixture
+def patched_speech_provider_rejection(monkeypatch, patched_speech_error):
+    import litellm
+
+    async def _raise(*args, **kwargs):
+        raise litellm.BadRequestError(
+            message=(
+                "Gemini TTS only produces raw PCM16 audio, so response_format='mp3' is not supported."
+                " Supported response formats: pcm, wav."
+            ),
+            model="gemini-3.1-flash-tts-preview",
+            llm_provider="gemini",
+        )
 
     monkeypatch.setattr(proxy_server, "route_request", _raise)
     yield
@@ -152,6 +172,35 @@ def test_audio_speech_happy_path(client, auth_as, patched_speech, path):
     }
 
 
+@pytest.mark.parametrize(
+    ("patched_speech", "response_format", "expected_content_type"),
+    [
+        ("audio/wav", "wav", "audio/wav"),
+        ("audio/flac", "flac", "audio/flac"),
+        ("audio/pcm", "pcm", "audio/pcm"),
+        ("audio/wav", "mp3", "audio/wav"),
+        ("application/json", "flac", "audio/flac"),
+        (None, "wav", "audio/wav"),
+        (None, None, "audio/mpeg"),
+    ],
+    indirect=["patched_speech"],
+)
+def test_audio_speech_content_type_matches_audio_format(
+    client, auth_as, patched_speech, response_format, expected_content_type
+):
+    """Regression for LIT-6482: /v1/audio/speech mislabeled wav/flac/pcm as audio/mpeg."""
+    payload = {
+        "model": "tts-1",
+        "input": "Hi",
+        "voice": "alloy",
+        **({} if response_format is None else {"response_format": response_format}),
+    }
+    with auth_as():
+        response = client.post("/v1/audio/speech", json=payload)
+    assert response.status_code == 200
+    assert response.headers.get("content-type", "").split(";")[0] == expected_content_type
+
+
 @pytest.mark.parametrize("path", ["/v1/audio/speech", "/audio/speech"])
 def test_audio_speech_error(client, auth_as, patched_speech_error, path):
     """Pins ``POST /v1/audio/speech`` and ``POST /audio/speech`` (error)."""
@@ -160,6 +209,18 @@ def test_audio_speech_error(client, auth_as, patched_speech_error, path):
         response = client.post(path, json=payload)
     assert response.status_code == 500
     assert len(response.content) > 0
+
+
+def test_audio_speech_bad_request_maps_to_400(client, auth_as, patched_speech_provider_rejection):
+    """Regression for LIT-6501: a BadRequestError from the speech path surfaced as a generic 500."""
+    payload = {"model": "gemini-tts", "input": "Hi", "voice": "Kore", "response_format": "mp3"}
+    with auth_as():
+        response = client.post("/v1/audio/speech", json=payload)
+    assert response.status_code == 400
+    error = response.json()["error"]
+    assert "response_format='mp3'" in error["message"]
+    assert "pcm" in error["message"]
+    assert "wav" in error["message"]
 
 
 @pytest.mark.parametrize("path", ["/v1/audio/transcriptions", "/audio/transcriptions"])

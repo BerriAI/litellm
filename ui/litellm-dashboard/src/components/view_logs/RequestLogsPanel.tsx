@@ -1,29 +1,32 @@
 "use client";
 
+import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useQuery, type UseQueryOptions } from "@tanstack/react-query";
 import type { ColumnFiltersState, OnChangeFn, PaginationState, SortingState } from "@tanstack/react-table";
 import moment from "moment";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { DEFAULT_PAGE_SIZE_OPTIONS } from "@/components/shared/DataTable";
 import { AutoRouterModelGroupsProvider } from "@/components/shared/table_cells";
-import { internalUserRoles } from "../../utils/roles";
+import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import type { KeyResponse } from "../key_team_helpers/key_list";
-import { keyInfoV1Call } from "../networking";
+import { keyInfoV1Call, uiSpendLogsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import type { LogEntry } from "./columns";
-import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import {
   DEFAULT_LOGS_SORTING,
   formatLogsWindow,
   getLogsWindowEndBound,
   LOG_FILTER_IDS,
+  type PaginatedResponse,
   useLogFilterLogic,
 } from "./log_filter_logic";
+import { useLogDetailRouting } from "./logDetailRouting";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LiveTailBanner, LogsTableToolbar } from "./LogsTableToolbar";
 import { RequestLogsTable } from "./RequestLogsTable";
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = DEFAULT_PAGE_SIZE_OPTIONS[0];
 const DEFAULT_INTERVAL = { value: 24, unit: "hours" };
 
 interface RequestLogsPanelProps {
@@ -34,16 +37,11 @@ interface RequestLogsPanelProps {
   isActive: boolean;
 }
 
-interface SessionComposition {
-  llm: number;
-  agent: number;
-  mcp: number;
-}
-
 export default function RequestLogsPanel({ accessToken, token, userRole, userID, isActive }: RequestLogsPanelProps) {
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: PAGE_SIZE });
   const [sorting, setSorting] = useState<SortingState>(DEFAULT_LOGS_SORTING);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [sessionCursors, setSessionCursors] = useState<Record<number, string>>({});
 
   const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
   const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
@@ -52,8 +50,15 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+
+  const {
+    logId: urlLogId,
+    sessionId: urlSessionId,
+    openLog,
+    openSession,
+    selectLog,
+    close: closeUrlLog,
+  } = useLogDetailRouting();
 
   const [isLiveTail, setIsLiveTail] = useState<boolean>(() => {
     const storedValue = sessionStorage.getItem("isLiveTail");
@@ -64,22 +69,39 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
   }, [isLiveTail]);
 
-  const filterByCurrentUser = internalUserRoles.includes(userRole);
+  const [excludeInternalHealthChecks, setExcludeInternalHealthChecks] = useState<boolean>(
+    () => sessionStorage.getItem("excludeInternalHealthChecks") === "true",
+  );
 
-  const { logsQuery, filteredLogs, allTeams } = useLogFilterLogic({
+  useEffect(() => {
+    sessionStorage.setItem("excludeInternalHealthChecks", JSON.stringify(excludeInternalHealthChecks));
+  }, [excludeInternalHealthChecks]);
+
+  const searchTerm = useMemo(() => {
+    const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.SEARCH);
+    return typeof entry?.value === "string" ? entry.value : "";
+  }, [columnFilters]);
+  const [debouncedSearch] = useDebouncedValue(searchTerm, { wait: DEBOUNCE_WAIT_MS });
+  const queryColumnFilters = useMemo<ColumnFiltersState>(() => {
+    const others = columnFilters.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH);
+    return debouncedSearch === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value: debouncedSearch }];
+  }, [columnFilters, debouncedSearch]);
+
+  const { logsQuery, filteredLogs, allTeams, usesSessionCursor } = useLogFilterLogic({
     accessToken,
     token,
     userRole,
     userID,
-    columnFilters,
-    filterByCurrentUser,
+    columnFilters: queryColumnFilters,
     activeTab: isActive ? "request logs" : "inactive",
     isLiveTail,
+    excludeInternalHealthChecks,
     startTime,
     endTime,
     pagination,
     isCustomDate,
     sorting,
+    sessionCursors,
   });
 
   // Follow the table's own last fetch so a live-tail refresh carries the filter
@@ -106,76 +128,107 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
   const { data: selectedKeyInfo } = useQuery(keyInfoQueryOptions);
 
-  const rows = useMemo<LogEntry[]>(() => {
-    const searchedLogs = filteredLogs.data;
-
-    const sessionCompositionById = searchedLogs.reduce<Record<string, SessionComposition>>((acc, log) => {
-      if (!log.session_id) return acc;
-      if (!acc[log.session_id]) {
-        acc[log.session_id] = { llm: 0, agent: 0, mcp: 0 };
-      }
-      if (MCP_CALL_TYPES.includes(log.call_type)) {
-        acc[log.session_id].mcp += 1;
-      } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
-        acc[log.session_id].agent += 1;
-      } else {
-        acc[log.session_id].llm += 1;
-      }
-      return acc;
-    }, {});
-
-    const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
-    for (const log of searchedLogs) {
-      if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
-      const isMcp = MCP_CALL_TYPES.includes(log.call_type);
-      const existing = sessionRepresentativeMap.get(log.session_id);
-      if (!existing || (existing.isMcp && !isMcp)) {
-        sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, isMcp });
-      }
-    }
-
-    return searchedLogs
-      .map((log) => {
-        const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
-        return {
-          ...log,
-          session_llm_count: sessionComposition?.llm ?? undefined,
-          session_mcp_count: sessionComposition?.mcp ?? undefined,
-          session_agent_count: sessionComposition?.agent ?? undefined,
-        };
-      })
-      .filter((log) => {
-        if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
-        return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
+  const urlLogQueryOptions: UseQueryOptions<LogEntry | null> = {
+    queryKey: ["logs", "byId", urlLogId, accessToken],
+    queryFn: async () => {
+      if (urlLogId === null) return null;
+      const window = formatLogsWindow(startTime, endTime, isCustomDate);
+      const response: PaginatedResponse = await uiSpendLogsCall({
+        accessToken,
+        start_date: window.start_date,
+        end_date: window.end_date,
+        page: 1,
+        page_size: 1,
+        params: { request_id: urlLogId },
       });
-  }, [filteredLogs.data]);
+      return response.data.find((log) => log.request_id === urlLogId) ?? null;
+    },
+    enabled: urlLogId !== null && selectedLog?.request_id !== urlLogId,
+    staleTime: Infinity,
+  };
 
-  const searchTerm = useMemo(() => {
-    const entry = columnFilters.find((filter) => filter.id === LOG_FILTER_IDS.REQUEST_ID);
-    return typeof entry?.value === "string" ? entry.value : "";
-  }, [columnFilters]);
+  const { data: urlLog } = useQuery(urlLogQueryOptions);
+
+  const displayLog = useMemo<LogEntry | null>(() => {
+    if (urlLogId === null) return null;
+    if (selectedLog?.request_id === urlLogId) return selectedLog;
+    return filteredLogs.data.find((log) => log.request_id === urlLogId) ?? urlLog ?? null;
+  }, [urlLogId, selectedLog, filteredLogs.data, urlLog]);
+
+  const displaySessionId = useMemo<string | null>(() => {
+    if (urlSessionId !== null) return urlSessionId;
+    if (displayLog?.session_id !== undefined && (displayLog.session_total_count || 1) > 1) {
+      return displayLog.session_id;
+    }
+    return null;
+  }, [urlSessionId, displayLog]);
+
+  const isDrawerOpen = displayLog !== null || displaySessionId !== null;
+
+  const rows: LogEntry[] = filteredLogs.data;
+  const rowsThroughThisPage = pagination.pageIndex * pagination.pageSize + rows.length;
+  const isLastPage =
+    filteredLogs.has_more === false || (filteredLogs.has_more === undefined && rows.length < pagination.pageSize);
+  const rowCount = isLastPage ? rowsThroughThisPage : Math.max(filteredLogs.total, rowsThroughThisPage);
 
   const handleSearchChange = useCallback((value: string) => {
     setColumnFilters((previous) => {
-      const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.REQUEST_ID);
-      return value === "" ? others : [...others, { id: LOG_FILTER_IDS.REQUEST_ID, value }];
+      const others = previous.filter((filter) => filter.id !== LOG_FILTER_IDS.SEARCH);
+      return value === "" ? others : [...others, { id: LOG_FILTER_IDS.SEARCH, value }];
     });
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
   const handleSortingChange = useCallback<OnChangeFn<SortingState>>((updaterOrValue) => {
     setSorting(updaterOrValue);
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
   const handleColumnFiltersChange = useCallback<OnChangeFn<ColumnFiltersState>>((updaterOrValue) => {
     setColumnFilters(updaterOrValue);
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
 
   const resetToFirstPage = useCallback(() => {
+    setSessionCursors({});
     setPagination((previous) => ({ ...previous, pageIndex: 0 }));
   }, []);
+
+  const handlePaginationChange = useCallback<OnChangeFn<PaginationState>>(
+    (updaterOrValue) => {
+      const requested = typeof updaterOrValue === "function" ? updaterOrValue(pagination) : updaterOrValue;
+      if (!usesSessionCursor) {
+        setPagination(requested);
+        return;
+      }
+      if (requested.pageSize !== pagination.pageSize) {
+        setSessionCursors({});
+        setPagination({ ...requested, pageIndex: 0 });
+        return;
+      }
+      if (requested.pageIndex <= pagination.pageIndex) {
+        setPagination(requested);
+        return;
+      }
+      const nextCursor = filteredLogs.next_session_cursor;
+      if (!nextCursor || logsQuery.isPlaceholderData) return;
+      const nextPageIndex = pagination.pageIndex + 1;
+      setSessionCursors((previous) => ({ ...previous, [nextPageIndex]: nextCursor }));
+      setPagination({ ...requested, pageIndex: nextPageIndex });
+    },
+    [usesSessionCursor, pagination, filteredLogs.next_session_cursor, logsQuery.isPlaceholderData],
+  );
+
+  const handleExcludeInternalHealthChecksChange = useCallback(
+    (value: boolean) => {
+      setExcludeInternalHealthChecks(value);
+      resetToFirstPage();
+    },
+    [resetToFirstPage],
+  );
 
   const handleResetFilters = useCallback(() => {
     setColumnFilters([]);
@@ -186,22 +239,33 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
     resetToFirstPage();
   }, [resetToFirstPage]);
 
-  const handleRowClick = useCallback((log: LogEntry) => {
-    const isMultiCallSession = log.session_id !== undefined && (log.session_total_count || 1) > 1;
-    setSelectedSessionId(isMultiCallSession ? log.session_id ?? null : null);
-    setSelectedLog(log);
-    setIsDrawerOpen(true);
-  }, []);
+  const handleRowClick = useCallback(
+    (log: LogEntry) => {
+      setSelectedLog(log);
+      if (log.session_id && (log.session_total_count || 1) > 1) {
+        openSession(log.session_id, log.request_id);
+      } else {
+        openLog(log.request_id);
+      }
+    },
+    [openLog, openSession],
+  );
 
   const handleSessionClick = useCallback(
-    (sessionId: string) => {
-      if (!sessionId) return;
-      const log = rows.find((candidate) => candidate.session_id === sessionId) ?? null;
-      setSelectedSessionId(sessionId);
+    (log: LogEntry) => {
+      if (!log.session_id) return;
       setSelectedLog(log);
-      setIsDrawerOpen(true);
+      openSession(log.session_id, log.request_id);
     },
-    [rows],
+    [openSession],
+  );
+
+  const handleSelectLog = useCallback(
+    (log: LogEntry) => {
+      setSelectedLog(log);
+      selectLog(log.request_id, displaySessionId);
+    },
+    [selectLog, displaySessionId],
   );
 
   const handleKeyHashClick = useCallback((keyHash: string) => {
@@ -230,11 +294,11 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
       <RequestLogsTable
         data={rows}
-        rowCount={filteredLogs.total}
+        rowCount={rowCount}
         isLoading={logsQuery.isLoading}
         isRefreshing={logsQuery.isFetching}
         pagination={pagination}
-        onPaginationChange={setPagination}
+        onPaginationChange={handlePaginationChange}
         sorting={sorting}
         onSortingChange={handleSortingChange}
         columnFilters={columnFilters}
@@ -259,6 +323,8 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
             onSelectedTimeIntervalChange={setSelectedTimeInterval}
             isLiveTail={isLiveTail}
             onIsLiveTailChange={setIsLiveTail}
+            excludeInternalHealthChecks={excludeInternalHealthChecks}
+            onExcludeInternalHealthChecksChange={handleExcludeInternalHealthChecksChange}
             onResetToFirstPage={resetToFirstPage}
             onResetFilters={handleResetFilters}
           />
@@ -267,15 +333,12 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
 
       <LogDetailsDrawer
         open={isDrawerOpen}
-        onClose={() => {
-          setIsDrawerOpen(false);
-          setSelectedSessionId(null);
-        }}
-        logEntry={selectedLog}
-        sessionId={selectedSessionId}
+        onClose={closeUrlLog}
+        logEntry={displayLog}
+        sessionId={displaySessionId}
         accessToken={accessToken}
         allLogs={rows}
-        onSelectLog={setSelectedLog}
+        onSelectLog={handleSelectLog}
         startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
       />
     </AutoRouterModelGroupsProvider>

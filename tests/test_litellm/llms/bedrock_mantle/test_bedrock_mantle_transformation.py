@@ -6,11 +6,8 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
-import os
-import sys
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import httpx
 import pytest
@@ -107,7 +104,7 @@ class TestBedrockMantleConfig:
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
         cfg = BedrockMantleChatConfig()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="api\\.aws\\.attacker\\.example/'\\. Region names must contain only"):
             cfg._get_openai_compatible_provider_info(
                 None,
                 None,
@@ -402,6 +399,46 @@ class TestBedrockMantleChatAuth:
         assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
         assert "/us-west-2/bedrock/aws4_request" not in headers["Authorization"]
 
+    @pytest.mark.parametrize(
+        ("region_params", "env", "expected_region"),
+        [
+            ({"aws_region_name": "us-west-2"}, {}, "us-west-2"),
+            ({}, {"BEDROCK_MANTLE_REGION": "ap-southeast-2"}, "ap-southeast-2"),
+        ],
+    )
+    def test_sigv4_scope_ignores_the_region_segment_of_a_lookalike_host(
+        self, monkeypatch, region_params, env, expected_region
+    ):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_REGION",
+            "BEDROCK_MANTLE_API_BASE",
+            "AWS_REGION",
+            "AWS_REGION_NAME",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        for var, value in env.items():
+            monkeypatch.setenv(var, value)
+
+        cfg = BedrockMantleChatConfig(aws_signer=BaseAWSLLM())
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                **region_params,
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.eu-west-1.api.aws.internal.example.com/openai/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert f"/{expected_region}/bedrock/aws4_request" in headers["Authorization"]
+        assert "/eu-west-1/bedrock/aws4_request" not in headers["Authorization"]
+
     def test_no_bearer_and_no_credentials_raises_value_error(self, monkeypatch):
         from unittest.mock import MagicMock
 
@@ -416,7 +453,7 @@ class TestBedrockMantleChatAuth:
         signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
         cfg = BedrockMantleChatConfig(aws_signer=signer)
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError, match='Bedrock Mantle auth failed: no Bearer token and no usable') as exc:
             cfg.sign_request(
                 headers={},
                 optional_params={"aws_region_name": "us-east-2"},
@@ -488,6 +525,71 @@ class TestBedrockMantleChatAuth:
         assert authorization.startswith("AWS4-HMAC-SHA256")
         assert "/us-east-2/bedrock/aws4_request" in authorization
         assert requests[0]["url"].startswith("https://bedrock-mantle.us-east-2.api.aws")
+
+    def test_completion_per_request_role_reaches_signer_and_not_the_body(self, monkeypatch):
+        from unittest.mock import MagicMock, Mock
+
+        from botocore.credentials import Credentials
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        from litellm.types.utils import ModelResponse
+
+        for var in ("BEDROCK_MANTLE_API_KEY", "AWS_BEARER_TOKEN_BEDROCK", "BEDROCK_MANTLE_API_BASE"):
+            monkeypatch.delenv(var, raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            return_value=Credentials(
+                access_key="ASIAEXAMPLE",
+                secret_key="YXNzdW1lZC1yb2xlLXNlY3JldC1hc3N1bWVk",
+                token="assumed-session-token",
+            )
+        )
+        url = "https://bedrock-mantle.us-east-1.api.aws/openai/v1/chat/completions"
+        client = HTTPHandler(client=httpx.Client())
+        client.post = Mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "google.gemma-4-31b",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+                request=httpx.Request("POST", url),
+            )
+        )
+
+        BaseLLMHTTPHandler().completion(
+            model="google.gemma-4-31b",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base=None,
+            custom_llm_provider="bedrock_mantle",
+            model_response=ModelResponse(),
+            encoding=None,
+            logging_obj=Mock(),
+            optional_params={},
+            timeout=10,
+            litellm_params={
+                "aws_role_name": "arn:aws:iam::000000000000:role/attributed-role",
+                "aws_session_name": "user-123",
+                "aws_region_name": "us-east-1",
+            },
+            acompletion=False,
+            client=client,
+            provider_config=BedrockMantleChatConfig(aws_signer=signer),
+        )
+
+        credential_kwargs = signer.get_credentials.call_args.kwargs
+        assert credential_kwargs["aws_role_name"] == "arn:aws:iam::000000000000:role/attributed-role"
+        assert credential_kwargs["aws_session_name"] == "user-123"
+        sent = client.post.call_args.kwargs
+        assert sent["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert not [key for key in json.loads(sent["data"]) if key.startswith("aws_")]
 
 
 class TestBedrockMantleProjectHeader:

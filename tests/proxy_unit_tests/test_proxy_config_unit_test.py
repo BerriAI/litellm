@@ -1,5 +1,4 @@
 import os
-import sys
 import traceback
 from unittest import mock
 import pytest
@@ -11,13 +10,9 @@ import litellm.proxy.proxy_server
 
 load_dotenv()
 import io
-import os
 
 # this file is to test litellm/proxy
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import logging
 
@@ -55,7 +50,7 @@ async def test_read_config_from_bad_file_path():
     """
     proxy_config_instance = ProxyConfig()
     config_path = "non-existent-file.yaml"
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Config file not found"):
         config = await proxy_config_instance.get_config(config_file_path=config_path)
 
 
@@ -88,25 +83,14 @@ async def test_read_config_file_with_os_environ_vars():
     # Read config
     proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(
-        current_path, "example_config_yaml", "config_with_env_vars.yaml"
-    )
+    config_path = os.path.join(current_path, "example_config_yaml", "config_with_env_vars.yaml")
     config = await proxy_config_instance.get_config(config_file_path=config_path)
     print(config)
 
     # Add assertions
-    assert (
-        config["litellm_settings"]["default_internal_user_params"]["user_role"]
-        == "admin"
-    )
-    assert (
-        config["litellm_settings"]["s3_callback_params"]["s3_aws_access_key_id"]
-        == "1234567890"
-    )
-    assert (
-        config["litellm_settings"]["s3_callback_params"]["s3_aws_secret_access_key"]
-        == "1234567890"
-    )
+    assert config["litellm_settings"]["default_internal_user_params"]["user_role"] == "admin"
+    assert config["litellm_settings"]["s3_callback_params"]["s3_aws_access_key_id"] == "1234567890"
+    assert config["litellm_settings"]["s3_callback_params"]["s3_aws_secret_access_key"] == "1234567890"
 
     for model in config["model_list"]:
         if "azure" in model["litellm_params"]["model"]:
@@ -129,17 +113,13 @@ async def test_basic_include_directive():
     """
     proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(
-        current_path, "example_config_yaml", "config_with_include.yaml"
-    )
+    config_path = os.path.join(current_path, "example_config_yaml", "config_with_include.yaml")
 
     config = await proxy_config_instance.get_config(config_file_path=config_path)
 
     # Verify the included model list was merged
     assert len(config["model_list"]) > 0
-    assert any(
-        model["model_name"] == "included-model" for model in config["model_list"]
-    )
+    assert any(model["model_name"] == "included-model" for model in config["model_list"])
 
     # Verify original config settings remain
     assert config["litellm_settings"]["callbacks"] == ["prometheus"]
@@ -152,9 +132,7 @@ async def test_missing_include_file():
     """
     proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(
-        current_path, "example_config_yaml", "config_with_missing_include.yaml"
-    )
+    config_path = os.path.join(current_path, "example_config_yaml", "config_with_missing_include.yaml")
 
     with pytest.raises(FileNotFoundError):
         await proxy_config_instance.get_config(config_file_path=config_path)
@@ -167,20 +145,14 @@ async def test_multiple_includes():
     """
     proxy_config_instance = ProxyConfig()
     current_path = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(
-        current_path, "example_config_yaml", "config_with_multiple_includes.yaml"
-    )
+    config_path = os.path.join(current_path, "example_config_yaml", "config_with_multiple_includes.yaml")
 
     config = await proxy_config_instance.get_config(config_file_path=config_path)
 
     # Verify models from both included files are present
     assert len(config["model_list"]) == 2
-    assert any(
-        model["model_name"] == "included-model-1" for model in config["model_list"]
-    )
-    assert any(
-        model["model_name"] == "included-model-2" for model in config["model_list"]
-    )
+    assert any(model["model_name"] == "included-model-1" for model in config["model_list"])
+    assert any(model["model_name"] == "included-model-2" for model in config["model_list"])
 
     # Verify original config settings remain
     assert config["litellm_settings"]["callbacks"] == ["prometheus"]
@@ -211,8 +183,7 @@ def test_add_callbacks_from_db_config():
 
     # 1 instance of LangfusePromptManagement should exist in litellm.success_callback
     num_langfuse_instances = sum(
-        isinstance(callback, LangfusePromptManagement)
-        for callback in litellm.success_callback
+        isinstance(callback, LangfusePromptManagement) for callback in litellm.success_callback
     )
     assert num_langfuse_instances == 1
     assert len(litellm.success_callback) == 2
@@ -290,9 +261,7 @@ async def test_json_logs_calls_turn_on_json():
         "litellm_settings": {"json_logs": True},
     }
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False
-    ) as temp_file:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as temp_file:
         yaml.dump(config_content, temp_file)
         temp_file_path = temp_file.name
 
@@ -316,3 +285,71 @@ async def test_json_logs_calls_turn_on_json():
         # Cleanup
         os.unlink(temp_file_path)
         litellm.json_logs = False
+
+
+class TestYamlStorePromptsDbOverride:
+    """
+    Test that YAML store_prompts_in_spend_logs takes precedence over DB-cached value.
+
+    When store_model_in_db=true, LiteLLM persists general_settings to the DB.
+    On periodic reloads, _update_general_settings() must NOT override
+    YAML-explicit values with stale DB values.
+    """
+
+    def _make_proxy_config_with_yaml_keys(self, yaml_keys: set) -> "ProxyConfig":
+        """Helper: create ProxyConfig with pre-populated _yaml_general_settings_keys."""
+        proxy_config = ProxyConfig()
+        proxy_config._yaml_general_settings_keys = yaml_keys
+        return proxy_config
+
+    @pytest.mark.asyncio
+    async def test_yaml_value_takes_precedence_over_db(self):
+        """When YAML sets store_prompts_in_spend_logs=false, DB value (true) should be ignored."""
+        proxy_config = self._make_proxy_config_with_yaml_keys({"store_prompts_in_spend_logs"})
+
+        test_general_settings = {"store_prompts_in_spend_logs": False}
+
+        with mock.patch("litellm.proxy.proxy_server.general_settings", test_general_settings):
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_prompts_in_spend_logs": True},
+            )
+
+        assert test_general_settings["store_prompts_in_spend_logs"] is False
+
+    @pytest.mark.asyncio
+    async def test_db_value_used_when_yaml_does_not_set_key(self):
+        """When YAML does NOT set store_prompts_in_spend_logs, DB value should be used."""
+        proxy_config = self._make_proxy_config_with_yaml_keys({"master_key", "database_url"})
+
+        test_general_settings = {"master_key": "sk-test"}
+
+        with mock.patch("litellm.proxy.proxy_server.general_settings", test_general_settings):
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_prompts_in_spend_logs": True},
+            )
+
+        assert test_general_settings["store_prompts_in_spend_logs"] is True
+
+    @pytest.mark.asyncio
+    async def test_admin_ui_change_works_when_yaml_omits_key(self):
+        """Admin UI change (DB update) should work when YAML doesn't set the key."""
+        proxy_config = self._make_proxy_config_with_yaml_keys({"master_key"})
+
+        test_general_settings = {"master_key": "sk-test"}
+
+        with mock.patch("litellm.proxy.proxy_server.general_settings", test_general_settings):
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_prompts_in_spend_logs": True},
+            )
+            assert test_general_settings["store_prompts_in_spend_logs"] is True
+
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_prompts_in_spend_logs": False},
+            )
+
+        assert test_general_settings["store_prompts_in_spend_logs"] is False
+
+    def test_yaml_general_settings_keys_populated_on_load(self):
+        """_yaml_general_settings_keys should be empty on init."""
+        proxy_config = ProxyConfig()
+        assert proxy_config._yaml_general_settings_keys == set()

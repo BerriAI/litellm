@@ -1202,6 +1202,8 @@ def _fake_user_api_key_auth(
     model_max_budget=None,
     end_user_model_max_budget=None,
     end_user_id=None,
+    user_model_max_budget=None,
+    user_id=None,
     token=None,
 ):
     """Build a minimal stand-in for ``UserAPIKeyAuth`` with just the fields
@@ -1220,6 +1222,8 @@ def _fake_user_api_key_auth(
     auth.model_max_budget = model_max_budget
     auth.end_user_model_max_budget = end_user_model_max_budget
     auth.end_user_id = end_user_id
+    auth.user_model_max_budget = user_model_max_budget
+    auth.user_id = user_id
     auth.token = token
     return auth
 
@@ -1546,6 +1550,78 @@ async def test_summary_model_denied_when_key_over_model_budget():
     mock_call.assert_not_awaited()
     limiter.is_key_within_model_budget.assert_awaited_once()
     assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+
+
+async def test_summary_model_denied_when_user_over_model_budget():
+    """Internal-user per-model budget is enforced for the summary subrequest too.
+
+    This file propagates `user_api_key_user_model_max_budget` into the summary
+    subrequest's metadata, so its spend charges the user's counter. Enforcing
+    only the key and end-user scopes would let compaction increment a counter it
+    can never be refused by, which is the asymmetry this PR exists to remove.
+    """
+    import litellm
+
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
+
+    auth = _fake_user_api_key_auth(
+        key_models=["all-proxy-models"],
+        user_model_max_budget={"claude-haiku-4-5": {"budget_limit": 5}},
+        user_id="user-over-budget",
+        token="hashed-token",
+    )
+
+    limiter = MagicMock()
+    limiter.is_user_within_model_budget = AsyncMock(
+        side_effect=litellm.BudgetExceededError(
+            message="over budget", current_cost=10, max_budget=5
+        )
+    )
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_not_awaited()
+    assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+
+    # The limiter is a mock, so it would accept any kwargs. Pin the call shape and
+    # check it against the real method, or a rename there would keep this test
+    # green while breaking compaction in production.
+    limiter.is_user_within_model_budget.assert_awaited_once_with(
+        user_id="user-over-budget",
+        user_model_max_budget={"claude-haiku-4-5": {"budget_limit": 5}},
+        model="claude-haiku-4-5",
+    )
+    import inspect
+
+    from litellm.proxy.hooks.model_max_budget_limiter import (
+        _PROXY_VirtualKeyModelMaxBudgetLimiter,
+    )
+
+    real_params = inspect.signature(
+        _PROXY_VirtualKeyModelMaxBudgetLimiter.is_user_within_model_budget
+    ).parameters
+    for kwarg in ("user_id", "user_model_max_budget", "model"):
+        assert kwarg in real_params, f"compact.py passes {kwarg}=, which the limiter no longer accepts"
 
 
 async def test_summary_model_denied_when_end_user_over_model_budget():
@@ -2475,3 +2551,57 @@ def test_endpoint_runs_failure_hook_on_500_context_management_error():
     body = response.json()
     assert body["type"] == "error"
     failure_hook.assert_awaited_once()
+
+
+def test_count_effective_tokens_counts_midturn_system_correction():
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _count_effective_tokens,
+    )
+
+    base: List[Dict[str, Any]] = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
+    correction = {
+        "role": "system",
+        "content": [{"type": "text", "text": "use the corrected result " * 20}],
+    }
+
+    without_correction = _count_effective_tokens(
+        model=MODEL, effective_messages=base, compaction_block=None, tools=None
+    )
+    with_correction = _count_effective_tokens(
+        model=MODEL,
+        effective_messages=base + [correction],
+        compaction_block=None,
+        tools=None,
+    )
+
+    assert with_correction > without_correction
+
+
+def test_build_summary_messages_keeps_midturn_system_correction_in_place():
+    from litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact import (
+        _build_summary_messages,
+    )
+
+    summary_messages = _build_summary_messages(
+        effective_messages=[
+            {"role": "user", "content": "original question"},
+            {"role": "system", "content": "use the corrected result"},
+            {"role": "assistant", "content": "acknowledged"},
+        ],
+        prompt="summarize the conversation",
+        system="caller system prompt",
+    )
+
+    assert [m["role"] for m in summary_messages] == [
+        "system",
+        "user",
+        "system",
+        "assistant",
+        "user",
+    ]
+    assert summary_messages[0]["content"] == "caller system prompt"
+    assert summary_messages[2]["content"] == "use the corrected result"
+    assert summary_messages[-1]["content"] == "summarize the conversation"
