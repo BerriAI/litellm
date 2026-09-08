@@ -29,7 +29,7 @@ class NeedlepathGuardrailOptionalParams(BaseModel):
     operating_point: str | None = Field(
         default=None,
         description=(
-            "Immutable engine label sent with every request. Defaults to 'np-2026-07-r2'. "
+            "Immutable engine label sent with every request. Defaults to 'np-2026-08-r4'. "
             "Pinned rather than inherited from the service default, so what this guardrail "
             "sends does not change underneath a deployment."
         ),

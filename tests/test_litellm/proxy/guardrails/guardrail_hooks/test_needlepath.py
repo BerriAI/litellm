@@ -84,7 +84,7 @@ def _select_response(
         "tokens_before": 900,
         "tokens_after": tokens_after,
         "tokens_saved": 780,
-        "policy_version": "np-2026-07-r2",
+        "policy_version": "np-2026-08-r4",
         "gate": {"engaged": True, "reason": "engage:needle"} if gate is None else gate,
     }
     if not omit_rendered_context:
@@ -138,7 +138,7 @@ def test_init_defaults():
     assert g.min_chars_to_select == DEFAULT_MIN_CHARS_TO_SELECT == 500
     assert g.max_context_tokens == DEFAULT_MAX_CONTEXT_TOKENS == 4000
     # Pinned, not inherited from the service default.
-    assert g.operating_point == DEFAULT_OPERATING_POINT == "np-2026-07-r2"
+    assert g.operating_point == DEFAULT_OPERATING_POINT == "np-2026-08-r4"
 
 
 def test_init_rejects_non_http_api_base():
@@ -176,7 +176,7 @@ async def test_apply_guardrail_replaces_tool_output_with_rendered_context(
     assert payload["task"]["prompt"] == 'edgar_search: {"cik": "0000320193"}'
     assert payload["budget"] == {
         "max_context_tokens": 4000,
-        "operating_point": "np-2026-07-r2",
+        "operating_point": "np-2026-08-r4",
     }
     assert payload["render"] is True
     assert payload["render_format"] == "plain"
