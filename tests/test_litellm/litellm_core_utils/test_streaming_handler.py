@@ -1113,9 +1113,9 @@ def _incomplete_openai_chat_chunk() -> ModelResponseStream:
     )
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure", "hosted_vllm"])
 @pytest.mark.asyncio
-async def test_async_openai_chat_clean_eof_without_finish_reason_raises_midstream_fallback(
+async def test_async_openai_compatible_chat_clean_eof_without_finish_reason_raises_midstream_fallback(
     logging_obj: Logging, custom_llm_provider: str
 ):
     """An OpenAI-compatible stream without a provider finish reason must fail at clean EOF."""
@@ -1143,8 +1143,8 @@ async def test_async_openai_chat_clean_eof_without_finish_reason_raises_midstrea
     assert response.received_finish_reason is None
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
-def test_sync_openai_chat_clean_eof_without_finish_reason_raises_midstream_fallback(
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure", "hosted_vllm"])
+def test_sync_openai_compatible_chat_clean_eof_without_finish_reason_raises_midstream_fallback(
     logging_obj: Logging, custom_llm_provider: str
 ):
     """The synchronous OpenAI-compatible stream must fail at clean EOF too."""

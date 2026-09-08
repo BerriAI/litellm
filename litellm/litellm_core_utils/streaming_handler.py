@@ -243,6 +243,7 @@ class CustomStreamWrapper:
         self.make_call = make_call
         self.custom_llm_provider = custom_llm_provider
         self.is_mock = is_mock
+        self.uses_openai_chat_stream = False
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
@@ -1501,6 +1502,7 @@ class CustomStreamWrapper:
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
         else:  # openai / azure chat model
+            self.uses_openai_chat_stream = True
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
@@ -1880,7 +1882,7 @@ class CustomStreamWrapper:
     def _should_fail_on_clean_eof(self) -> bool:
         return (
             not self.is_mock
-            and self.custom_llm_provider in _OPENAI_AZURE_CHAT_PROVIDERS
+            and (self.custom_llm_provider in _OPENAI_AZURE_CHAT_PROVIDERS or self.uses_openai_chat_stream)
             and self.received_finish_reason is None
             and self.intermittent_finish_reason is None
         )
