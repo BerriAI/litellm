@@ -299,12 +299,22 @@ async def image_edit_api(
     if mask_files:
         data["mask"] = mask_files
 
-    for _field in ("image", "mask"):
-        if _field in data and isinstance(data[_field], str):
-            raise HTTPException(
-                status_code=422,
-                detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
-            )
+    invalid_image_fields: Final = tuple(
+        field
+        for field in ("image", "mask")
+        if field in data
+        and isinstance(data[field], str)
+        and not (
+            data[field].startswith("http://")
+            or data[field].startswith("https://")
+            or data[field].startswith("data:image/")
+        )
+    )
+    if invalid_image_fields:
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{invalid_image_fields[0]}' must be a multipart file, http(s) URL, or data:image URI.",
+        )
 
     # Ensure prompt exists in data (default to None for models that don't require it)
     if "prompt" not in data:

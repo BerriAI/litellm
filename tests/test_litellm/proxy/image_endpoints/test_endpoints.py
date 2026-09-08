@@ -167,3 +167,51 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
 
     assert response.status_code == 200
     assert captured["n"] == "two"
+
+
+def test_image_edit_http_url_is_accepted(monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        data={
+            "model": "grok-imagine-image",
+            "prompt": "make it night",
+            "image": "https://imgen.x.ai/source.jpeg",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["image"] == "https://imgen.x.ai/source.jpeg"
+
+
+def test_image_edit_data_uri_is_accepted(monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        data={
+            "model": "grok-imagine-image",
+            "prompt": "make it red",
+            "image": "data:image/jpeg;base64,abc",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["image"] == "data:image/jpeg;base64,abc"
+
+
+def test_image_edit_plain_string_image_is_rejected(monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        data={
+            "model": "grok-imagine-image",
+            "prompt": "make it red",
+            "image": "not-a-url-or-file",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "multipart file" in response.json()["detail"]

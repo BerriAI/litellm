@@ -9136,6 +9136,12 @@ class ProviderConfigManager:
             )
 
             return get_modelscope_image_generation_config(model)
+        elif LlmProviders.XAI == provider:
+            from litellm.llms.xai.image_generation import (
+                get_xai_image_generation_config,
+            )
+
+            return get_xai_image_generation_config(model)
         return None
 
     @staticmethod
@@ -9163,6 +9169,10 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.XAI == provider:
+            from litellm.llms.xai.videos.transformation import XAIVideoConfig
+
+            return XAIVideoConfig()
         elif LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 
@@ -9287,6 +9297,10 @@ class ProviderConfigManager:
             )
 
             return get_openrouter_image_edit_config(model)
+        elif LlmProviders.XAI == provider:
+            from litellm.llms.xai.image_edit.transformation import XAIImageEditConfig
+
+            return XAIImageEditConfig()
         return None
 
     @staticmethod

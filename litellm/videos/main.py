@@ -30,6 +30,51 @@ from litellm.videos.utils import VideoGenerationRequestUtils
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
 
 
+def _litellm_provider_from_cost_entry(info: object) -> str | None:
+    if isinstance(info, dict):
+        catalog_provider: Final = info.get("litellm_provider")
+        if isinstance(catalog_provider, str) and catalog_provider:
+            return catalog_provider
+    return None
+
+
+def _provider_from_prefixed_model(model: str) -> str | None:
+    if "/" not in model:
+        return None
+    try:
+        _, provider, _, _ = get_llm_provider(model=model)
+    except Exception:
+        return None
+    return provider
+
+
+def _custom_llm_provider_from_model(model: str) -> str | None:
+    return (
+        _provider_from_prefixed_model(model)
+        or _litellm_provider_from_cost_entry(litellm.model_cost.get(model))
+        or _litellm_provider_from_cost_entry(litellm.model_cost.get(f"xai/{model}"))
+        or ("xai" if model.startswith("grok-imagine-video") else None)
+    )
+
+
+def _provider_for_video_id(
+    video_id: str,
+    custom_llm_provider: str | None,
+    model: object | None = None,
+) -> str:
+    if custom_llm_provider is not None:
+        return custom_llm_provider
+    decoded: Final = decode_video_id_with_provider(video_id)
+    from_id: Final = decoded.get("custom_llm_provider")
+    if from_id:
+        return from_id
+    if isinstance(model, str) and model:
+        from_model: Final = _custom_llm_provider_from_model(model)
+        if from_model:
+            return from_model
+    return "openai"
+
+
 ##### Video Generation #######################
 @client
 async def avideo_generation(
@@ -317,10 +362,9 @@ def video_content(
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("async_call", False) is True
 
-        # Try to decode provider from video_id if not explicitly provided
-        if custom_llm_provider is None:
-            decoded: Final = decode_video_id_with_provider(video_id)
-            custom_llm_provider = decoded.get("custom_llm_provider") or "openai"
+        custom_llm_provider = _provider_for_video_id(
+            video_id, custom_llm_provider, kwargs.get("model")
+        )
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -412,10 +456,9 @@ async def avideo_content(
         loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
-        # Try to decode provider from video_id if not explicitly provided
-        if custom_llm_provider is None:
-            decoded: Final = decode_video_id_with_provider(video_id)
-            custom_llm_provider = decoded.get("custom_llm_provider") or "openai"
+        custom_llm_provider = _provider_for_video_id(
+            video_id, custom_llm_provider, kwargs.get("model")
+        )
 
         func: Final = partial(
             video_content,
@@ -1019,10 +1062,9 @@ def video_status(
             response: Final = VideoObject(**mock_response)
             return response
 
-        # Try to decode provider from video_id if not explicitly provided
-        if custom_llm_provider is None:
-            decoded: Final = decode_video_id_with_provider(video_id)
-            custom_llm_provider = decoded.get("custom_llm_provider") or "openai"
+        custom_llm_provider = _provider_for_video_id(
+            video_id, custom_llm_provider, kwargs.get("model")
+        )
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
