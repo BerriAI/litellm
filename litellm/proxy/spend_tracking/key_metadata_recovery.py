@@ -38,20 +38,23 @@ ORDER BY token, deleted_at DESC
 _SPEND_LOG_ALIAS_SQL: Final = """
 SELECT DISTINCT ON (api_key)
     api_key AS digest,
-    metadata->>'user_api_key_alias' AS key_alias,
-    COALESCE(NULLIF(team_id, ''), metadata->>'user_api_key_team_id') AS team_id,
-    COALESCE(NULLIF("user", ''), metadata->>'user_api_key_user_id') AS user_id
-FROM "LiteLLM_SpendLogs"
-WHERE api_key = ANY($1::text[])
-  AND "startTime" >= $2::timestamp
-  AND "startTime" < $3::timestamp
-  AND COALESCE(
-        metadata->>'user_api_key_alias',
-        NULLIF("user", ''),
-        metadata->>'user_api_key_user_id',
-        NULLIF(team_id, ''),
-        metadata->>'user_api_key_team_id'
-      ) IS NOT NULL
+    key_alias,
+    team_id,
+    user_id,
+    MIN(user_id) OVER (PARTITION BY api_key) AS first_owner,
+    MAX(user_id) OVER (PARTITION BY api_key) AS last_owner
+FROM (
+    SELECT api_key,
+        "startTime",
+        NULLIF(metadata->>'user_api_key_alias', '') AS key_alias,
+        COALESCE(NULLIF(team_id, ''), NULLIF(metadata->>'user_api_key_team_id', '')) AS team_id,
+        COALESCE(NULLIF("user", ''), NULLIF(metadata->>'user_api_key_user_id', '')) AS user_id
+    FROM "LiteLLM_SpendLogs"
+    WHERE api_key = ANY($1::text[])
+      AND "startTime" >= $2::timestamp
+      AND "startTime" < $3::timestamp
+) named
+WHERE COALESCE(key_alias, user_id, team_id) IS NOT NULL
 ORDER BY api_key, "startTime" DESC
 """
 
@@ -72,7 +75,16 @@ class _TokenDigestRow(BaseModel):
     user_id: str | None = None
 
 
+class _SpendLogDigestRow(_TokenDigestRow):
+    first_owner: str | None = None
+    last_owner: str | None = None
+
+    def unanimous_owner(self) -> str | None:
+        return self.user_id if self.first_owner == self.last_owner else None
+
+
 _TOKEN_DIGEST_ROWS: Final = TypeAdapter(tuple[_TokenDigestRow, ...])
+_SPEND_LOG_DIGEST_ROWS: Final = TypeAdapter(tuple[_SpendLogDigestRow, ...])
 _CACHED_KEY_METADATA: Final = TypeAdapter(KeyMetadataDict)
 _SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
     max_size_in_memory=SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
@@ -235,9 +247,10 @@ async def _query_spend_log_metadata(
         return None
     return MappingProxyType(
         {
-            row.digest: KeyMetadataDict(key_alias=row.key_alias, team_id=row.team_id, user_id=row.user_id)
-            for row in _TOKEN_DIGEST_ROWS.validate_python(rows)
-            if row.digest in digests and (row.key_alias or row.user_id or row.team_id)
+            row.digest: KeyMetadataDict(key_alias=row.key_alias, team_id=row.team_id, user_id=owner)
+            for row in _SPEND_LOG_DIGEST_ROWS.validate_python(rows)
+            for owner in (row.unanimous_owner(),)
+            if row.digest in digests and (row.key_alias or owner or row.team_id)
         }
     )
 
@@ -270,11 +283,10 @@ async def _spend_log_metadata_one_query_at_a_time(
         fresh: Final = (
             await _query_spend_log_metadata(prisma_client, pending, window) if pending else _EMPTY_KEY_METADATA
         )
-        if fresh is None:
-            return settled
+        found: Final = fresh if fresh is not None else _EMPTY_KEY_METADATA
         for digest in pending:
-            _remember_spend_log_metadata(cache, digest, window, fresh.get(digest))
-        return MappingProxyType({**settled, **fresh})
+            _remember_spend_log_metadata(cache, digest, window, found.get(digest))
+        return MappingProxyType({**settled, **found})
 
 
 async def recover_key_metadata_from_spend_logs(
