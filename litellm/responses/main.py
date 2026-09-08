@@ -17,6 +17,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
 from litellm.constants import request_timeout
 from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
@@ -1253,7 +1254,7 @@ def responses(
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=allowed_openai_params,
-            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
+            drop_params=normalize_drop_params(request_drop_params),
         )
 
         litellm_logging_obj.update_from_kwargs(
@@ -2081,7 +2082,7 @@ def compact_responses(
             responses_api_provider_config=responses_api_provider_config,
             response_api_optional_params=response_api_optional_params,
             allowed_openai_params=None,
-            drop_params=request_drop_params if isinstance(request_drop_params, bool) else None,
+            drop_params=normalize_drop_params(request_drop_params),
         )
 
         # Pre Call logging

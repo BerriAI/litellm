@@ -408,9 +408,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     @field_validator("drop_params", mode="before")
     @classmethod
-    def coerce_drop_params(cls, value: object) -> object:
+    def coerce_drop_params(cls, value: object) -> bool | str | None:
         normalized: Final = normalize_drop_params(value)
-        return value if normalized is None else normalized
+        if normalized is not None:
+            return normalized
+        return value if isinstance(value, str) else None
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

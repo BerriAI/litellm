@@ -1,5 +1,4 @@
 import pytest
-from pydantic import ValidationError
 
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
@@ -109,6 +108,6 @@ def test_drop_params_coerces_flags_and_keeps_unresolved_strings(value, expected)
     assert GenericLiteLLMParams(drop_params=value).drop_params == expected
 
 
-def test_drop_params_rejects_non_flag_non_string_values():
-    with pytest.raises(ValidationError):
-        GenericLiteLLMParams(drop_params=2)
+@pytest.mark.parametrize("value", [2, 2.5, [], {}])
+def test_drop_params_ignores_non_flag_non_string_values(value):
+    assert GenericLiteLLMParams(drop_params=value).drop_params is None

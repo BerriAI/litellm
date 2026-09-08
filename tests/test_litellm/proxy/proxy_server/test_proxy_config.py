@@ -2431,6 +2431,49 @@ def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(m
     assert deployment.litellm_params.drop_params is True
 
 
+def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_params(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+
+    def db_model(model_id, drop_params):
+        return SimpleNamespace(
+            model_id=model_id,
+            model_name="gpt-5-nano",
+            model_info={"id": model_id},
+            litellm_params={
+                "model": encrypt_value_helper(value="openai/gpt-5-nano"),
+                "drop_params": encrypt_value_helper(value=drop_params),
+            },
+            blocked=False,
+        )
+
+    added = pc._add_deployment(db_models=[db_model("bad-row", 2), db_model("good-after", "true")])
+    deployments = [call.kwargs["deployment"] for call in fake_router.upsert_deployment.call_args_list]
+
+    assert added == 2
+    assert [d.litellm_params.drop_params for d in deployments] == [None, True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured, expected", [("true", True), ("false", False)])
+async def test_ProxyConfig_load_config_turns_litellm_settings_drop_params_string_into_bool(
+    tmp_path, monkeypatch, configured, expected
+):
+    f = tmp_path / "c.yaml"
+    f.write_text(f'model_list: []\nlitellm_settings:\n  drop_params: "{configured}"\n')
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", not expected)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.drop_params is expected
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig.decrypt_model_list_from_db
 # ---------------------------------------------------------------------------

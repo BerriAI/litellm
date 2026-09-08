@@ -279,6 +279,7 @@ from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_ty
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_litellm_metadata_from_kwargs,
+    normalize_drop_params,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -5508,6 +5509,8 @@ class ProxyConfig:
 
                     parse_budget_reset_time(value)
                     setattr(litellm, key, value)
+                elif key == "drop_params":
+                    litellm.drop_params = bool(normalize_drop_params(value))
                 else:
                     verbose_proxy_logger.debug(
                         "%s setting litellm.%s=%s%s",
