@@ -9,15 +9,27 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
-from tests.test_litellm_rust.ocr_test_server import OCRTestServer, ResponseSpec
+from tests.test_litellm_rust.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
 
 DOCUMENT: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
 MODEL: Final = "mistral/mistral-ocr-latest"
+OCR_RESPONSE: Final = {
+    "pages": [{"index": 0, "markdown": "native OCR response", "images": [], "dimensions": None}],
+    "model": "mistral-ocr-latest",
+    "usage_info": {"pages_processed": 1, "doc_size_bytes": 3},
+}
 
 
-def call_ocr(server: OCRTestServer, callbacks: list[CustomLogger], **kwargs: object):
+@pytest.fixture
+def ocr_server(recording_server: RecordingServer) -> RecordingServer:
+    recording_server.default_response = ResponseSpec(body=OCR_RESPONSE)
+    return recording_server
+
+
+def call_ocr(server: RecordingServer, callbacks: list[CustomLogger], **kwargs: object):
     return litellm.ocr(
         model=MODEL,
         document=dict(DOCUMENT),
@@ -28,7 +40,7 @@ def call_ocr(server: OCRTestServer, callbacks: list[CustomLogger], **kwargs: obj
     )
 
 
-async def call_aocr(server: OCRTestServer, callbacks: list[CustomLogger], **kwargs: object):
+async def call_aocr(server: RecordingServer, callbacks: list[CustomLogger], **kwargs: object):
     return await litellm.aocr(
         model=MODEL,
         document=dict(DOCUMENT),
@@ -47,7 +59,7 @@ def request_headers(kwargs: dict) -> dict:
     return kwargs["additional_args"]["headers"]
 
 
-def test_pre_call_receives_expected_provider_request(ocr_server: OCRTestServer) -> None:
+def test_pre_call_receives_expected_provider_request(ocr_server: RecordingServer) -> None:
     observations: Final = []
 
     class Observe(CustomLogger):
@@ -70,7 +82,7 @@ def test_pre_call_receives_expected_provider_request(ocr_server: OCRTestServer) 
 
 @pytest.mark.parametrize("raise_after_edit", [False, True])
 def test_pre_call_body_edits_reach_later_callbacks_and_provider(
-    ocr_server: OCRTestServer, raise_after_edit: bool
+    ocr_server: RecordingServer, raise_after_edit: bool
 ) -> None:
     observed: Final = []
 
@@ -90,7 +102,7 @@ def test_pre_call_body_edits_reach_later_callbacks_and_provider(
     assert ocr_server.requests[0].body["include_image_base64"] is True
 
 
-def test_pre_call_header_edits_reach_later_callbacks_and_provider(ocr_server: OCRTestServer) -> None:
+def test_pre_call_header_edits_reach_later_callbacks_and_provider(ocr_server: RecordingServer) -> None:
     observed: Final = []
 
     class Edit(CustomLogger):
@@ -107,7 +119,7 @@ def test_pre_call_header_edits_reach_later_callbacks_and_provider(ocr_server: OC
     assert ocr_server.requests[0].headers["x-audit-tag"] == "reviewed"
 
 
-def test_pre_call_nested_mutation_updates_retained_references(ocr_server: OCRTestServer) -> None:
+def test_pre_call_nested_mutation_updates_retained_references(ocr_server: RecordingServer) -> None:
     original: Final = dict(DOCUMENT)
     replacement_url: Final = "data:application/pdf;base64,ZGVm"
     retained: Final = []
@@ -133,7 +145,7 @@ def test_pre_call_nested_mutation_updates_retained_references(ocr_server: OCRTes
     assert ocr_server.requests[0].body["document"]["document_url"] == replacement_url
 
 
-def test_pre_call_field_replacement_preserves_original_references(ocr_server: OCRTestServer) -> None:
+def test_pre_call_field_replacement_preserves_original_references(ocr_server: RecordingServer) -> None:
     original: Final = dict(DOCUMENT)
     replacement: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,ZGVm"}
     retained: Final = []
@@ -157,7 +169,7 @@ def test_pre_call_field_replacement_preserves_original_references(ocr_server: OC
     assert ocr_server.requests[0].body["document"] == replacement
 
 
-def test_pre_call_body_rebinding_does_not_replace_inflight_request(ocr_server: OCRTestServer) -> None:
+def test_pre_call_body_rebinding_does_not_replace_inflight_request(ocr_server: RecordingServer) -> None:
     observed: Final = []
 
     class Rebind(CustomLogger):
@@ -174,7 +186,7 @@ def test_pre_call_body_rebinding_does_not_replace_inflight_request(ocr_server: O
     assert ocr_server.requests[0].body == {"model": "mistral-ocr-latest", "document": DOCUMENT}
 
 
-def test_queued_payload_observes_later_callback_mutations(ocr_server: OCRTestServer) -> None:
+def test_queued_payload_observes_later_callback_mutations(ocr_server: RecordingServer) -> None:
     queued: Final = []
 
     class QueuePayload(CustomLogger):
@@ -190,7 +202,7 @@ def test_queued_payload_observes_later_callback_mutations(ocr_server: OCRTestSer
     assert queued[0]["queued-edit"] is True
 
 
-def test_callback_copies_preserve_expected_sharing(ocr_server: OCRTestServer) -> None:
+def test_callback_copies_preserve_expected_sharing(ocr_server: RecordingServer) -> None:
     copies: Final = {}
     replacement_url: Final = "data:application/pdf;base64,ZGVm"
 
@@ -212,7 +224,7 @@ def test_callback_copies_preserve_expected_sharing(ocr_server: OCRTestServer) ->
     assert json.loads(copies["serialized"])["document"]["document_url"] == "data:application/pdf;base64,YWJj"
 
 
-def test_pre_call_state_reaches_terminal_callbacks(ocr_server: OCRTestServer) -> None:
+def test_pre_call_state_reaches_terminal_callbacks(ocr_server: RecordingServer) -> None:
     token: Final = object()
     terminal_tokens: queue.SimpleQueue[object] = queue.SimpleQueue()
     finished: Final = threading.Event()
@@ -232,36 +244,27 @@ def test_pre_call_state_reaches_terminal_callbacks(ocr_server: OCRTestServer) ->
 
 
 @pytest.mark.asyncio
-async def test_success_callbacks_receive_expected_context_and_response(ocr_server: OCRTestServer) -> None:
-    observations: Final = []
-    finished: Final = asyncio.Event()
-
-    class Observe(CustomLogger):
-        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-            observations.append(
-                (
-                    kwargs["call_type"],
-                    kwargs["litellm_call_id"],
-                    kwargs["litellm_params"]["metadata"]["source"],
-                    response_obj.pages[0].markdown,
-                )
-            )
-            finished.set()
+async def test_success_callbacks_receive_expected_context_and_response(ocr_server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
 
     await call_aocr(
         ocr_server,
-        [Observe()],
+        [recorder],
         litellm_call_id="ocr-success",
         metadata={"source": "callback-test"},
     )
-    await asyncio.wait_for(finished.wait(), timeout=10)
+    events: Final = await recorder.wait_for_async("async_log_success_event")
 
-    assert observations == [("aocr", "ocr-success", "callback-test", "native OCR response")]
+    assert len(events) == 1
+    assert events[0].call_type == "aocr"
+    assert events[0].kwargs["litellm_call_id"] == "ocr-success"
+    assert events[0].kwargs["litellm_params"]["metadata"]["source"] == "callback-test"
+    assert events[0].response.pages[0].markdown == "native OCR response"
 
 
 @pytest.mark.asyncio
-async def test_failure_callbacks_receive_expected_context_and_error(ocr_server: OCRTestServer) -> None:
-    ocr_server.enqueue(ResponseSpec(status=500, body={"message": "provider unavailable"}))
+async def test_failure_callbacks_receive_expected_context_and_error(ocr_server: RecordingServer) -> None:
+    ocr_server.enqueue(ResponseSpec(body={"message": "provider unavailable"}, status=500))
     observations: Final = []
 
     class Observe(CustomLogger):
@@ -280,7 +283,7 @@ async def test_failure_callbacks_receive_expected_context_and_error(ocr_server: 
     assert all(observation[3] is None for observation in observations)
 
 
-def test_background_callback_can_mutate_retained_state_after_return(ocr_server: OCRTestServer) -> None:
+def test_background_callback_can_mutate_retained_state_after_return(ocr_server: RecordingServer) -> None:
     release: Final = threading.Event()
     finished: Final = threading.Event()
     retained: Final = []
@@ -306,15 +309,14 @@ def test_background_callback_can_mutate_retained_state_after_return(ocr_server: 
 
 
 @pytest.mark.asyncio
-async def test_pre_call_runs_in_callers_execution_context(ocr_server: OCRTestServer) -> None:
+async def test_pre_call_runs_in_callers_execution_context(ocr_server: RecordingServer) -> None:
     caller_loop: Final = asyncio.get_running_loop()
     caller_thread: Final = threading.current_thread()
-    observations: Final = []
+    recorder: Final = RecordingLogger()
 
-    class Observe(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            observations.append((asyncio.get_running_loop(), threading.current_thread()))
+    await call_aocr(ocr_server, [recorder])
 
-    await call_aocr(ocr_server, [Observe()])
-
-    assert observations == [(caller_loop, caller_thread)]
+    events: Final = recorder.wait_for("log_pre_api_call")
+    assert len(events) == 1
+    assert events[0].loop is caller_loop
+    assert events[0].thread is caller_thread

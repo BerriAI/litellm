@@ -1,4 +1,5 @@
 import json
+import copy
 import threading
 import time
 from collections.abc import Iterator
@@ -7,12 +8,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
 import pytest
-
-OCR_RESPONSE: Final = {
-    "pages": [{"index": 0, "markdown": "native OCR response", "images": [], "dimensions": None}],
-    "model": "mistral-ocr-latest",
-    "usage_info": {"pages_processed": 1, "doc_size_bytes": 3},
-}
 
 
 @dataclass
@@ -25,17 +20,19 @@ class RecordedRequest:
 
 @dataclass
 class ResponseSpec:
+    body: object
     status: int = 200
-    body: object = field(default_factory=lambda: dict(OCR_RESPONSE))
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
+    events: tuple[tuple[str, object], ...] = ()
 
 
 @dataclass
-class OCRTestServer:
+class RecordingServer:
     server: ThreadingHTTPServer
     requests: list[RecordedRequest]
     responses: list[ResponseSpec]
+    default_response: ResponseSpec
 
     @property
     def base_url(self) -> str:
@@ -47,7 +44,7 @@ class OCRTestServer:
 
 
 @pytest.fixture
-def ocr_server() -> Iterator[OCRTestServer]:
+def recording_server() -> Iterator[RecordingServer]:
     requests: list[RecordedRequest] = []
     responses: list[ResponseSpec] = []
 
@@ -64,12 +61,16 @@ def ocr_server() -> Iterator[OCRTestServer]:
                     body=body,
                 )
             )
-            response: Final = responses.pop(0) if responses else ResponseSpec()
+            response: Final = responses.pop(0) if responses else copy.deepcopy(recording_server.default_response)
             if response.delay:
                 time.sleep(response.delay)
-            payload: Final = json.dumps(response.body).encode()
+            payload: Final = (
+                b"".join(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in response.events)
+                if response.events
+                else json.dumps(response.body).encode()
+            )
             self.send_response(response.status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", "text/event-stream" if response.events else "application/json")
             self.send_header("Content-Length", str(len(payload)))
             for name, value in response.headers.items():
                 self.send_header(name, value)
@@ -89,7 +90,13 @@ def ocr_server() -> Iterator[OCRTestServer]:
     thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     thread.start()
     try:
-        yield OCRTestServer(server=server, requests=requests, responses=responses)
+        recording_server = RecordingServer(
+            server=server,
+            requests=requests,
+            responses=responses,
+            default_response=ResponseSpec(body={}),
+        )
+        yield recording_server
     finally:
         server.shutdown()
         server.server_close()

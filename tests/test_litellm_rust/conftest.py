@@ -9,11 +9,11 @@ import litellm
 from litellm.rust_bridge import ocr as native_ocr
 from litellm.rust_bridge.configuration import reset_rust_configuration
 from litellm.rust_bridge.configuration import rust_enabled
-from tests.test_litellm_rust.ocr_test_server import ocr_server  # noqa: F401  # pytest fixture export
+from tests.test_litellm_rust.recording_server import recording_server  # noqa: F401  # pytest fixture export
 
 
 @pytest.fixture(autouse=True)
-def isolate_rust_ocr_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def isolate_rust_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     callback_attributes: Final = (
         "callbacks",
         "input_callback",
@@ -27,7 +27,7 @@ def isolate_rust_ocr_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     original_cache: Final = litellm.cache
     for attribute in callback_attributes:
         getattr(litellm, attribute).clear()
-    litellm.cache = None
+    litellm.cache = None  # test-quality-ok: isolate the process-global cache from native extension tests
     reset_rust_configuration()
     litellm.rust(True)
     python_ocr: Final = litellm.ocr
@@ -58,7 +58,7 @@ def isolate_rust_ocr_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         target = getattr(litellm, attribute)
         target.clear()
         target.extend(callbacks)
-    litellm.cache = original_cache
+    litellm.cache = original_cache  # test-quality-ok: restore the process-global cache after native extension tests
     reset_rust_configuration()
 
 
