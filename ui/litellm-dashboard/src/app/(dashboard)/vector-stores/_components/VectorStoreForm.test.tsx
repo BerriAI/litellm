@@ -69,10 +69,11 @@ describe("VectorStoreForm", () => {
   });
 });
 
-const MONGODB_URI = "mongodb+srv://user:pass@cluster0.mongodb.net";
+const MONGODB_SIDECAR_URL = "http://mongodb-sidecar:8080";
 
 const MONGODB_REQUIRED_FORM_VALUES = {
-  mongodb_connection_string: MONGODB_URI,
+  api_base: MONGODB_SIDECAR_URL,
+  api_key: "sidecar-test-key",
   mongodb_database: "sample_mflix",
   mongodb_collection: "embedded_movies",
   embedding_model: "text-embedding-ada-002",
@@ -127,7 +128,8 @@ describe("buildVectorStoreLitellmParams", () => {
       mongodb_num_candidates: "200",
     };
     const expected = {
-      mongodb_connection_string: MONGODB_URI,
+      api_base: MONGODB_SIDECAR_URL,
+      api_key: "sidecar-test-key",
       mongodb_database: "sample_mflix",
       mongodb_collection: "embedded_movies",
       mongodb_embedding_field: "plot_embedding",
@@ -142,6 +144,7 @@ describe("buildVectorStoreLitellmParams", () => {
   it("sends only mongodb fields when an earlier provider left values in the form", () => {
     const formValues = {
       ...MONGODB_REQUIRED_FORM_VALUES,
+      mongodb_connection_string: "mongodb://obsolete-credentials",
       valkey_host: "left-over-from-valkey.example.com",
       valkey_port: "6379",
       aws_region_name: "us-west-2",
@@ -152,7 +155,8 @@ describe("buildVectorStoreLitellmParams", () => {
     expect(params).not.toHaveProperty("valkey_host");
     expect(params).not.toHaveProperty("valkey_port");
     expect(params).not.toHaveProperty("aws_region_name");
-    expect(params.mongodb_connection_string).toBe(MONGODB_URI);
+    expect(params.api_base).toBe(MONGODB_SIDECAR_URL);
+    expect(params).not.toHaveProperty("mongodb_connection_string");
   });
 
   it("omits a blank mongodb_num_candidates so litellm picks its own candidate count", () => {

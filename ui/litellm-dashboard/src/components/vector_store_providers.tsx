@@ -14,7 +14,7 @@ export enum VectorStoreProviders {
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
   Milvus = "Milvus",
-  MongoDB = "MongoDB Atlas",
+  MongoDB = "MongoDB (BETA)",
   Valkey = "Valkey",
 }
 
@@ -175,18 +175,25 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
   ],
   mongodb: [
     {
-      name: "mongodb_connection_string",
-      label: "Connection String",
-      tooltip:
-        "The full MongoDB connection string for your Atlas cluster, including the database user and password. Copy it from Atlas under Connect, Drivers (e.g. mongodb+srv://user:password@cluster.mongodb.net)",
-      placeholder: "mongodb+srv://user:password@cluster.mongodb.net",
+      name: "api_base",
+      label: "Sidecar URL",
+      tooltip: "The URL of your separately deployed MongoDB sidecar. Configure MongoDB credentials in the sidecar",
+      placeholder: "http://mongodb-sidecar:8080",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "api_key",
+      label: "Sidecar API Key",
+      tooltip: "The MONGODB_SIDECAR_API_KEY configured in your MongoDB sidecar",
+      placeholder: "Enter sidecar API key",
       required: true,
       type: "password",
     },
     {
       name: "mongodb_database",
       label: "Database",
-      tooltip: "The Atlas database holding the collection you want to search",
+      tooltip: "The MongoDB database holding the collection you want to search",
       placeholder: "sample_mflix",
       required: true,
       type: "text",
@@ -194,7 +201,7 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
     {
       name: "mongodb_collection",
       label: "Collection",
-      tooltip: "The collection your Atlas Vector Search index was built on",
+      tooltip: "The collection your MongoDB Vector Search index was built on",
       placeholder: "embedded_movies",
       required: true,
       type: "text",
@@ -212,7 +219,7 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       name: "mongodb_embedding_field",
       label: "Vector Field Name",
       tooltip:
-        "The field in each document that holds its embedding. It must match the path your Atlas Vector Search index was created on (default: embedding)",
+        "The field in each document that holds its embedding. It must match the path your MongoDB Vector Search index was created on (default: embedding)",
       placeholder: "embedding",
       required: false,
       type: "text",
@@ -232,7 +239,7 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       name: "mongodb_num_candidates",
       label: "Candidates Considered",
       tooltip:
-        "How many nearest neighbours Atlas examines before returning the top results. Higher is more accurate and slower. Leave blank to let LiteLLM scale it with the requested result count",
+        "How many nearest neighbours MongoDB examines before returning the top results. Higher is more accurate and slower. Leave blank to let LiteLLM scale it with the requested result count",
       placeholder: "100",
       required: false,
       type: "text",
