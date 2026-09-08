@@ -93,6 +93,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
+    get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
 )
@@ -156,6 +157,8 @@ from litellm.proxy.hooks.sensitive_data_routing import (
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_guardrails_from_auth_metadata
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
+from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.table_repositories import (
@@ -533,16 +536,65 @@ def _is_pending_background_response(response: LLMResponseTypes) -> bool:
     return isinstance(response, ResponsesAPIResponse) and response.status in _PENDING_BACKGROUND_RESPONSE_STATUSES
 
 
-def _log_deferred_post_call_pipelines(data: Mapping[str, object], response: ResponsesAPIResponse) -> None:
-    policy_names: Final = tuple(policy_name for policy_name, _pipeline in _post_call_pipelines(data))
-    if not policy_names:
+def _guardrails_outside_pipeline(policy_name: str, pipeline: "GuardrailPipeline") -> frozenset[str]:
+    resolved: Final = PolicyResolver.resolve_policy_guardrails(
+        policy_name=policy_name, policies=get_policy_registry().get_all_policies()
+    )
+    return frozenset(resolved.guardrails) - frozenset(step.guardrail for step in pipeline.steps)
+
+
+def _without_names(
+    bucket: dict,  # mutable-ok: the applied_* header slots live in the request-state dict every hook writes in place
+    slot: str,
+    names: frozenset[str],
+) -> None:
+    claimed: Final = bucket.get(slot)
+    if not isinstance(claimed, list):
+        return
+    remaining: Final = [name for name in claimed if name not in names]
+    if remaining:
+        bucket[slot] = remaining
+    else:
+        bucket.pop(slot)
+
+
+def _withdraw_deferred_claims(
+    data: dict,  # mutable-ok: same request-payload shape as post_call_success_hook's data
+    deferred: Sequence[tuple[str, "GuardrailPipeline"]],
+) -> None:
+    outside_by_policy: Final = MappingProxyType(
+        {policy_name: _guardrails_outside_pipeline(policy_name, pipeline) for policy_name, pipeline in deferred}
+    )
+    running_elsewhere: Final = _pipeline_managed_guardrail_names(data, "pre_call").union(*outside_by_policy.values())
+    withdrawn_policies: Final = frozenset(name for name, outside in outside_by_policy.items() if not outside)
+    withdrawn_guardrails: Final = _pipeline_step_guardrail_names(deferred) - running_elsewhere
+    _, bucket = get_or_create_metadata_bucket(data)
+    _without_names(bucket, "applied_policies", withdrawn_policies)
+    _without_names(bucket, "applied_guardrails", withdrawn_guardrails)
+    sources: Final = bucket.get("policy_sources")
+    if not isinstance(sources, dict):
+        return
+    remaining_sources: Final = {name: reason for name, reason in sources.items() if name not in withdrawn_policies}
+    if remaining_sources:
+        bucket["policy_sources"] = remaining_sources
+    else:
+        bucket.pop("policy_sources")
+
+
+def _defer_post_call_pipelines(
+    data: dict,  # mutable-ok: same request-payload shape as post_call_success_hook's data
+    response: ResponsesAPIResponse,
+) -> None:
+    deferred: Final = _post_call_pipelines(data)
+    if not deferred:
         return
     verbose_proxy_logger.debug(
         "Post_call guardrail pipelines wait for background response %s (status=%s) to be retrieved complete: %s",
         response.id,
         response.status,
-        ", ".join(policy_names),
+        ", ".join(policy_name for policy_name, _pipeline in deferred),
     )
+    _withdraw_deferred_claims(data, deferred)
 
 
 def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> bool:
@@ -2939,7 +2991,7 @@ class ProxyLogging:
         response: LLMResponseTypes,
     ) -> LLMResponseTypes | None:
         if _is_pending_background_response(response):
-            _log_deferred_post_call_pipelines(data, response)
+            _defer_post_call_pipelines(data, response)
             return None
         _, pipeline_response = await self._maybe_execute_pipelines(
             data=data,

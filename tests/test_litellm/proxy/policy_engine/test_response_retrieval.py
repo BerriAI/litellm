@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from litellm.proxy._types import UserAPIKeyAuth
@@ -128,30 +130,48 @@ def test_already_attached_policy_is_not_attached_twice(policy_engine):
     assert data["litellm_metadata"]["applied_policies"] == ["response-governance"]
 
 
+def _ungoverned_retrieval_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "retrieved without its post_call policy pipelines" in record.getMessage()
+    ]
+
+
 @pytest.mark.parametrize(
-    "response_id",
-    ["resp_plain_upstream_id", _encoded_response_id("deployment-missing-from-router"), None],
+    ("response_id", "reason"),
+    [
+        ("resp_plain_upstream_id", "response id names no deployment"),
+        (_encoded_response_id("deployment-missing-from-router"), "deployment no longer in the router"),
+        (None, "response id names no deployment"),
+    ],
 )
-def test_unresolvable_response_id_attaches_nothing(policy_engine, response_id):
+def test_unresolvable_response_id_attaches_nothing_and_warns(policy_engine, caplog, response_id, reason):
     data = {"response_id": response_id, "litellm_metadata": {}}
 
-    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
 
     assert data == {"response_id": response_id, "litellm_metadata": {}}
+    assert [message.endswith(f"({reason})") for message in _ungoverned_retrieval_warnings(caplog)] == [True]
 
 
-def test_without_a_router_attaches_nothing(policy_engine):
+def test_without_a_router_attaches_nothing_and_warns(policy_engine, caplog):
     data = _retrieval_data(GOVERNED_MODEL_ID)
 
-    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=None)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=None)
 
     assert data == _retrieval_data(GOVERNED_MODEL_ID)
+    assert [message.endswith("(no router)") for message in _ungoverned_retrieval_warnings(caplog)] == [True]
 
 
-def test_without_policy_engine_attaches_nothing():
+def test_without_policy_engine_attaches_nothing_quietly(caplog):
     get_policy_registry().clear()
     data = _retrieval_data(GOVERNED_MODEL_ID)
 
-    attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=None)
 
     assert data == _retrieval_data(GOVERNED_MODEL_ID)
+    assert _ungoverned_retrieval_warnings(caplog) == []
