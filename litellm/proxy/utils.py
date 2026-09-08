@@ -3279,17 +3279,12 @@ class ProxyLogging:
 
     @staticmethod
     def _discard_deferred_stream_logging_for_failure(request_data: dict) -> None:
-        """Discard the deferred stream-complete dispatch when the stream ends in
-        a failure (e.g. an end-of-stream guardrail block raising out of the
-        callback chain). The deferred dispatch is the success logging path —
-        firing it here would record the blocked request as a success callback
-        and a ``status=success`` spend row before the outer generator's
-        ``post_call_failure_hook`` writes the failure row. The CSW shape parks
-        ``(assembled ModelResponse, cache_hit)``; record its partial usage so
-        the failure row bills what the stream consumed instead of zero. The
-        native /v1/messages and responses shapes park ``(coroutine,)`` and
-        still need the flush (no success row is produced without it), so they
-        keep the existing fire behaviour.
+        """Drop the parked success dispatch when the stream ends in an exception.
+
+        The CSW shape parks ``(assembled ModelResponse, cache_hit)``: its usage is
+        carried onto the logging object so the failure row bills what the stream
+        consumed. The native /v1/messages and responses shapes park a logging
+        coroutine with no recoverable usage, so they keep firing as before.
         """
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if logging_obj is None:
