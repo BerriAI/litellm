@@ -4,17 +4,19 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use litellm_core::Error;
 use litellm_core::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
 use litellm_core::responses::types::ResponsesWsEvent;
 use litellm_core::responses::websocket::ResponsesWebSocketProviderConfig;
-use litellm_core::{CoreError, CoreResult};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::{AUTHORIZATION, HeaderName};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+use crate::io::tls::connect_upstream;
 
 use crate::constants::{
     DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS, DEFAULT_RESPONSES_WS_IDLE_TIMEOUT_SECS,
@@ -37,51 +39,49 @@ impl ResponsesWebSocketConnection {
         url: &str,
         headers: &HashMap<String, String>,
         timeout: Option<Duration>,
-    ) -> CoreResult<Self> {
+    ) -> Result<Self, Error> {
         let mut request = url
             .into_client_request()
-            .map_err(|error| CoreError::Network(error.to_string()))?;
+            .map_err(|error| Error::Network(error.to_string()))?;
         for (name, value) in headers {
             let header_name = name
                 .parse::<HeaderName>()
-                .map_err(|error| CoreError::InvalidRequest(error.to_string()))?;
+                .map_err(|error| Error::InvalidRequest(error.to_string()))?;
             let header_value = HeaderValue::from_str(value)
-                .map_err(|error| CoreError::InvalidRequest(error.to_string()))?;
+                .map_err(|error| Error::InvalidRequest(error.to_string()))?;
             request.headers_mut().insert(header_name, header_value);
         }
-        let connect = connect_async(request);
+        let connect = connect_upstream(request);
         let result = match timeout {
             Some(timeout) => tokio::time::timeout(timeout, connect).await.map_err(|_| {
-                CoreError::Network("Responses WebSocket connection timed out".to_string())
+                Error::Network("Responses WebSocket connection timed out".to_string())
             })?,
             None => connect.await,
         };
-        let (socket, _) = result.map_err(|error| match error {
-            tokio_tungstenite::tungstenite::Error::Http(response) => CoreError::Http {
+        let (socket, _) = result.map_err(|error| match *error {
+            tokio_tungstenite::tungstenite::Error::Http(response) => Error::Http {
                 status: response.status().as_u16(),
                 body: String::new(),
             },
-            other => CoreError::Network(other.to_string()),
+            other => Error::Network(other.to_string()),
         })?;
         Ok(Self {
             socket: Arc::new(Mutex::new(Some(socket))),
         })
     }
 
-    pub async fn send_text(&self, text: String) -> CoreResult<()> {
+    pub async fn send_text(&self, text: String) -> Result<(), Error> {
         let mut socket = self.socket.lock().await;
         let Some(socket) = socket.as_mut() else {
-            return Err(CoreError::Network(
-                "Responses WebSocket is closed".to_string(),
-            ));
+            return Err(Error::Network("Responses WebSocket is closed".to_string()));
         };
         socket
             .send(Message::Text(text))
             .await
-            .map_err(|error| CoreError::Network(error.to_string()))
+            .map_err(|error| Error::Network(error.to_string()))
     }
 
-    pub async fn recv_text(&self) -> CoreResult<Option<String>> {
+    pub async fn recv_text(&self) -> Result<Option<String>, Error> {
         let mut socket_guard = self.socket.lock().await;
         let Some(socket) = socket_guard.as_mut() else {
             return Ok(None);
@@ -90,27 +90,27 @@ impl ResponsesWebSocketConnection {
             Some(Ok(Message::Text(text))) => Ok(Some(text)),
             Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
                 .map(Some)
-                .map_err(|error| CoreError::InvalidResponse(error.to_string())),
+                .map_err(|error| Error::InvalidResponse(error.to_string())),
             Some(Ok(Message::Close(_))) | None => Ok(None),
             Some(Ok(_)) => Ok(None),
-            Some(Err(error)) => Err(CoreError::Network(error.to_string())),
+            Some(Err(error)) => Err(Error::Network(error.to_string())),
         }
     }
 
-    pub async fn close(&self) -> CoreResult<()> {
+    pub async fn close(&self) -> Result<(), Error> {
         let mut socket = self.socket.lock().await;
         if let Some(socket) = socket.as_mut() {
             socket
                 .close(None)
                 .await
-                .map_err(|error| CoreError::Network(error.to_string()))?;
+                .map_err(|error| Error::Network(error.to_string()))?;
         }
         *socket = None;
         Ok(())
     }
 }
 
-pub(crate) fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
+pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
     api_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -120,38 +120,38 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> CoreResult<String> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
-        .ok_or_else(|| CoreError::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
 }
 
 async fn dial_upstream(
     model: &str,
     api_key: &str,
     api_base: Option<&str>,
-) -> CoreResult<ResponsesUpstreamWs> {
+) -> Result<ResponsesUpstreamWs, Error> {
     let url = OPENAI_RESPONSES_WS_CONFIG.complete_websocket_url(api_base, model);
     let mut request = url
         .as_str()
         .into_client_request()
-        .map_err(|error| CoreError::Network(error.to_string()))?;
+        .map_err(|error| Error::Network(error.to_string()))?;
     request.headers_mut().insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|error| CoreError::Auth(error.to_string()))?,
+            .map_err(|error| Error::Auth(error.to_string()))?,
     );
     let result = tokio::time::timeout(
         Duration::from_secs(DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS),
-        connect_async(request),
+        connect_upstream(request),
     )
     .await
-    .map_err(|_| CoreError::Network("Responses WebSocket connection timed out".to_string()))?;
+    .map_err(|_| Error::Network("Responses WebSocket connection timed out".to_string()))?;
     result
         .map(|(socket, _)| socket)
-        .map_err(|error| match error {
-            tokio_tungstenite::tungstenite::Error::Http(response) => CoreError::Http {
+        .map_err(|error| match *error {
+            tokio_tungstenite::tungstenite::Error::Http(response) => Error::Http {
                 status: response.status().as_u16(),
                 body: String::new(),
             },
-            other => CoreError::Network(other.to_string()),
+            other => Error::Network(other.to_string()),
         })
 }
 
@@ -166,7 +166,7 @@ impl ResponsesWebSocketStreaming {
         observe: impl FnMut(&ResponsesWsEvent) + Send,
         client_in: In,
         client_out: Out,
-    ) -> CoreResult<()>
+    ) -> Result<(), Error>
     where
         In: Stream<Item = ResponsesWsEvent> + Unpin + Send,
         Out: Sink<ResponsesWsEvent> + Unpin + Send,
@@ -193,7 +193,7 @@ pub(crate) async fn splice<In, Out>(
     mut observe: impl FnMut(&ResponsesWsEvent) + Send,
     mut client_in: In,
     mut client_out: Out,
-) -> CoreResult<()>
+) -> Result<(), Error>
 where
     In: Stream<Item = ResponsesWsEvent> + Unpin + Send,
     Out: Sink<ResponsesWsEvent> + Unpin + Send,
@@ -210,18 +210,18 @@ where
                     .events
                 {
                     let payload = serde_json::to_string(&outbound)
-                        .map_err(|error| CoreError::InvalidResponse(error.to_string()))?;
+                        .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                     upstream_tx.send(Message::Text(payload))
                         .await
-                        .map_err(|error| CoreError::Network(error.to_string()))?;
+                        .map_err(|error| Error::Network(error.to_string()))?;
                 }
             }
             message = upstream_rx.next() => {
                 let Some(message) = message else { break };
-                match message.map_err(|error| CoreError::Network(error.to_string()))? {
+                match message.map_err(|error| Error::Network(error.to_string()))? {
                     Message::Text(text) => {
                         let event = serde_json::from_str::<ResponsesWsEvent>(&text)
-                            .map_err(|error| CoreError::InvalidResponse(error.to_string()))?;
+                            .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                         observe(&event);
                         for outbound in OPENAI_RESPONSES_WS_CONFIG
                             .transform_ws_response(&event, model)?
@@ -229,7 +229,7 @@ where
                         {
                             client_out.send(outbound)
                                 .await
-                                .map_err(|error| CoreError::Network(error.to_string()))?;
+                                .map_err(|error| Error::Network(error.to_string()))?;
                         }
                     }
                     Message::Close(_) => break,
@@ -252,7 +252,7 @@ pub async fn async_responses_websocket<In, Out>(
     mut observe: impl FnMut(&ResponsesWsEvent) + Send,
     client_in: In,
     client_out: Out,
-) -> CoreResult<()>
+) -> Result<(), Error>
 where
     In: Stream<Item = ResponsesWsEvent> + Unpin + Send,
     Out: Sink<ResponsesWsEvent> + Unpin + Send,
@@ -267,11 +267,11 @@ where
             .events
         {
             let payload = serde_json::to_string(&outbound)
-                .map_err(|error| CoreError::InvalidResponse(error.to_string()))?;
+                .map_err(|error| Error::InvalidResponse(error.to_string()))?;
             upstream_tx
                 .send(Message::Text(payload))
                 .await
-                .map_err(|error| CoreError::Network(error.to_string()))?;
+                .map_err(|error| Error::Network(error.to_string()))?;
         }
     }
     ResponsesWebSocketStreaming::bidirectional_forward(
@@ -296,7 +296,7 @@ pub async fn responses_ws<In, Out>(
     observe: impl FnMut(&ResponsesWsEvent) + Send,
     client_in: In,
     client_out: Out,
-) -> CoreResult<()>
+) -> Result<(), Error>
 where
     In: Stream<Item = ResponsesWsEvent> + Unpin + Send,
     Out: Sink<ResponsesWsEvent> + Unpin + Send,
@@ -325,6 +325,29 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
+
+    /// The Responses dial has to reach a `wss://` upstream without a process-wide
+    /// crypto provider installed, which is what dialing through `io::tls` buys.
+    #[tokio::test]
+    async fn dial_upstream_over_wss_reports_an_error_instead_of_panicking() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let port = listener
+            .local_addr()
+            .expect("read the bound address")
+            .port();
+        tokio::spawn(async move {
+            while let Ok((stream, _peer)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+
+        let result =
+            dial_upstream("gpt-5", "sk-test", Some(&format!("wss://127.0.0.1:{port}"))).await;
+
+        assert!(matches!(result, Err(Error::Network(_))));
+    }
 
     async fn websocket_base() -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -514,7 +537,7 @@ mod tests {
         )
         .await
         .expect_err("status error");
-        assert!(matches!(error, CoreError::Http { status: 401, .. }));
+        assert!(matches!(error, Error::Http { status: 401, .. }));
         server.await.expect("server task");
     }
 
@@ -543,7 +566,7 @@ mod tests {
         )
         .await
         .expect_err("status error");
-        assert!(matches!(error, CoreError::Http { status: 500, .. }));
+        assert!(matches!(error, Error::Http { status: 500, .. }));
         server.await.expect("server task");
     }
 }

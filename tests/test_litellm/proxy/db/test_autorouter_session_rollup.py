@@ -9,13 +9,15 @@ request-time transaction builder and the flush contract with an injected fake cl
 import asyncio
 import json
 from datetime import datetime
+from types import SimpleNamespace
+from typing import Final
 
 import httpx
 import pytest
 
 from litellm.proxy.db.autorouter_session_rollup import (
-    AutoRouterTurnTransaction,
     UPSERT_AUTOROUTER_SESSION_SQL,
+    AutoRouterTurnTransaction,
     build_autorouter_turn_transaction,
     flush_autorouter_turn_transactions,
 )
@@ -70,6 +72,7 @@ class TestBuildTransaction:
             total_tokens=100,
             spend=0.01,
             saved_spend=0.02,
+            classifier_cost=0.0,
             covered=True,
             cache_hit=True,
             cache_ttl_seconds=300,
@@ -105,6 +108,34 @@ class TestBuildTransaction:
     def test_a_decision_that_never_mentions_tier_records_no_tier(self):
         transaction = _build()
         assert transaction is not None and transaction.tier is None
+
+    def test_a_priced_classifier_rides_the_turns_spend(self):
+        """The classifier row is excluded from the rollup, so its charge lands here,
+        folded once into the turn that paid for it (GH #38816)."""
+        transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "classifier_cost": 0.005}))
+        assert transaction is not None and transaction.spend == pytest.approx(0.015)
+        assert transaction.classifier_cost == 0.005
+        assert transaction.spend - transaction.classifier_cost == pytest.approx(0.01)
+        assert transaction.saved_spend == 0.02
+
+    @pytest.mark.parametrize(
+        "decision_extra", [{}, {"classifier_cost": 0.0}, {"classifier_cost": "bogus"}, {"classifier_cost": True}]
+    )
+    def test_an_unpriced_classifier_leaves_the_spend_alone(self, decision_extra: dict):
+        transaction = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, **decision_extra}))
+        assert transaction is not None and transaction.spend == pytest.approx(0.01)
+        assert transaction.classifier_cost == 0.0
+        assert transaction.saved_spend == 0.02
+
+    def test_every_turn_carries_its_own_classifier_charge(self):
+        first = _build(metadata=_metadata(routing_decision={**ROUTING_DECISION, "classifier_cost": 0.005}))
+        second = _build(
+            payload=_payload(startTime="2026-08-01T12:01:00", spend=0.02),
+            metadata=_metadata(routing_decision={**ROUTING_DECISION, "classifier_cost": 0.007}),
+        )
+        assert first is not None and first.spend == pytest.approx(0.015)
+        assert second is not None and second.spend == pytest.approx(0.027)
+        assert (first.classifier_cost, second.classifier_cost) == (0.005, 0.007)
 
     def test_router_name_falls_back_to_the_payload_model_group(self):
         transaction = _build(metadata=_metadata(routing_decision={"router_type": "complexity"}))
@@ -195,6 +226,7 @@ def _transaction(
         total_tokens=100,
         spend=0.01,
         saved_spend=0.02,
+        classifier_cost=0.005,
         covered=True,
         cache_hit=False,
         cache_ttl_seconds=None,
@@ -218,8 +250,21 @@ class TestFlush:
         sql, params = client.db.calls[0]
         assert sql == UPSERT_AUTOROUTER_SESSION_SQL
         assert params == (
-            "k1", "s1", "live-auto", "complexity", "bedrock/haiku",
-            "2026-08-01T12:00:00", 100, 0.01, 0.02, 1, 0, None, 0, "medium",
+            "k1",
+            "s1",
+            "live-auto",
+            "complexity",
+            "bedrock/haiku",
+            "2026-08-01T12:00:00",
+            100,
+            0.01,
+            0.02,
+            0.005,
+            1,
+            0,
+            None,
+            0,
+            "medium",
         )
 
     def test_a_connect_error_retries_the_same_statement(self):
@@ -245,28 +290,31 @@ class TestFlush:
 
 class TestEnqueueSeam:
     @pytest.mark.asyncio
-    async def test_update_database_seam_enqueues_only_auto_routed_success(self, monkeypatch: pytest.MonkeyPatch):
-        import litellm
+    @pytest.mark.parametrize("classifier_cost", [0.005, 0.0, None])
+    async def test_update_database_seam_enqueues_only_auto_routed_success(self, classifier_cost: float | None):
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
-        from litellm.proxy.utils import PrismaClient
 
-        monkeypatch.setattr(litellm, "autorouter_savings_baseline_model", None)
-        monkeypatch.setattr(PrismaClient, "autorouter_turn_transactions", [])
-        writer = DBSpendUpdateWriter()
-        fake_prisma = type("P", (), {})()
-        fake_prisma._autorouter_turn_transactions_lock = asyncio.Lock()
-        fake_prisma.autorouter_turn_transactions = []
+        writer: Final = DBSpendUpdateWriter()
+        fake_prisma: Final = SimpleNamespace(
+            _autorouter_turn_transactions_lock=asyncio.Lock(), autorouter_turn_transactions=[]
+        )
+        metadata: Final = _metadata(
+            routing_decision={**ROUTING_DECISION, "classifier_cost": classifier_cost}, autorouter_savings=-0.003
+        )
+        for payload in (
+            _payload(metadata=json.dumps(metadata)),
+            _payload(metadata=json.dumps({"usage_object": {"prompt_tokens": 9}})),
+            _payload(status="failure", metadata=json.dumps(metadata)),
+            _payload(metadata=json.dumps({**metadata, "internal_call_origin": "autorouter_classifier"})),
+        ):
+            await writer._enqueue_autorouter_turn_transaction(payload=payload, prisma_client=fake_prisma)
 
-        routed = _payload()
-        routed["metadata"] = json.dumps(_metadata())
-        await writer._enqueue_autorouter_turn_transaction(payload=routed, prisma_client=fake_prisma)
-
-        plain = _payload()
-        plain["metadata"] = json.dumps({"usage_object": {"prompt_tokens": 9}})
-        await writer._enqueue_autorouter_turn_transaction(payload=plain, prisma_client=fake_prisma)
-
-        assert [t.router_name for t in fake_prisma.autorouter_turn_transactions] == ["live-auto"]
-        assert fake_prisma.autorouter_turn_transactions[0].saved_spend == 0.0
+        assert len(fake_prisma.autorouter_turn_transactions) == 1
+        transaction: Final = fake_prisma.autorouter_turn_transactions[0]
+        assert transaction.router_name == "live-auto"
+        assert transaction.spend == pytest.approx(0.01 + (classifier_cost or 0.0))
+        assert transaction.classifier_cost == (classifier_cost or 0.0)
+        assert transaction.saved_spend == -0.003
 
 
 def test_every_drain_trigger_reads_the_one_queue_census_owner():
@@ -275,7 +323,12 @@ def test_every_drain_trigger_reads_the_one_queue_census_owner():
     from litellm.proxy import utils as proxy_utils
 
     owner_source = inspect.getsource(proxy_utils._total_queued_spend_transactions)
-    for queue in ("spend_log_transactions", "tool_usage_transactions", "autorouter_turn_transactions"):
+    for queue in (
+        "spend_log_transactions",
+        "tool_usage_transactions",
+        "autorouter_turn_transactions",
+        "pending_shadow_eval_funnel_events",
+    ):
         assert queue in owner_source, queue
     for site in (proxy_utils.update_spend, proxy_utils.update_spend_logs_job, proxy_utils._monitor_spend_logs_queue):
         assert "_total_queued_spend_transactions" in inspect.getsource(site), site.__name__

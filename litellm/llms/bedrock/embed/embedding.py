@@ -6,7 +6,7 @@ import copy
 import json
 import urllib.parse
 from collections.abc import Callable
-from typing import Any, Final, get_args
+from typing import TYPE_CHECKING, Final, get_args, overload
 
 import httpx
 
@@ -26,7 +26,7 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.types.utils import EmbeddingResponse, LlmProviders
 
-from ..base_aws_llm import BaseAWSLLM
+from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
 from ..common_utils import BedrockError
 from .amazon_nova_transformation import AmazonNovaEmbeddingConfig
 from .amazon_titan_g1_transformation import AmazonTitanG1Config
@@ -37,16 +37,30 @@ from .amazon_titan_v2_transformation import AmazonTitanV2Config
 from .cohere_transformation import BedrockCohereEmbeddingConfig
 from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
 
 class BedrockEmbedding(BaseAWSLLM):
+    @overload
+    def _load_credentials(
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        bearer_token: None = None,
+    ) -> tuple[Credentials, str]: ...
+
+    @overload
+    def _load_credentials(
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        bearer_token: str,
+    ) -> tuple[None, str]: ...
+
     def _load_credentials(
         self,
         optional_params: dict,
-    ) -> tuple[Any, str]:
-        try:
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        bearer_token: str | None = None,
+    ) -> tuple[Credentials | None, str]:
         ## CREDENTIALS ##
         # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
         aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
@@ -58,6 +72,7 @@ class BedrockEmbedding(BaseAWSLLM):
         aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
         aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
+        aws_external_id: Final = optional_params.pop("aws_external_id", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -74,16 +89,21 @@ class BedrockEmbedding(BaseAWSLLM):
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
+        credentials: Final[Credentials | None] = (
+            None
+            if bearer_token is not None
+            else self.get_credentials(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_region_name=aws_region_name,
+                aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
+                aws_role_name=aws_role_name,
+                aws_web_identity_token=aws_web_identity_token,
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_external_id=aws_external_id,
+            )
         )
         return credentials, aws_region_name
 
@@ -112,7 +132,12 @@ class BedrockEmbedding(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -141,7 +166,12 @@ class BedrockEmbedding(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=err.response.text,
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -228,12 +258,12 @@ class BedrockEmbedding(BaseAWSLLM):
         client: HTTPHandler | None,
         timeout: float | httpx.Timeout | None,
         batch_data: list[dict],
-        credentials: Any,
+        credentials: Credentials | None,
         extra_headers: dict | None,
         endpoint_url: str,
         aws_region_name: str,
         model: str,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
@@ -296,12 +326,12 @@ class BedrockEmbedding(BaseAWSLLM):
         client: AsyncHTTPHandler | None,
         timeout: float | httpx.Timeout | None,
         batch_data: list[dict],
-        credentials: Any,
+        credentials: Credentials | None,
         extra_headers: dict | None,
         endpoint_url: str,
         aws_region_name: str,
         model: str,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         provider: BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
         api_key: str | None = None,
         is_async_invoke: bool | None = False,
@@ -378,7 +408,9 @@ class BedrockEmbedding(BaseAWSLLM):
         litellm_params: dict,
         api_key: str | None = None,
     ) -> EmbeddingResponse:
-        credentials, aws_region_name = self._load_credentials(optional_params)
+        credentials, aws_region_name = self._load_credentials(
+            optional_params, bearer_token=bedrock_bearer_token(api_key)
+        )
 
         ### TRANSFORMATION ###
         unencoded_model_id: Final = optional_params.pop("model_id", None) or model  # default to model if not passed

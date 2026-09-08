@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from typing import Final, Literal
+from urllib.parse import urlparse
 
 import litellm
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
@@ -8,6 +9,14 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
+
+
+def is_foundry_model_inference_base(api_base: str) -> bool:
+    parsed: Final = urlparse(api_base)
+    host: Final = parsed.hostname
+    if host is None or not host.endswith(".services.ai.azure.com"):
+        return False
+    return "/openai/deployments" not in parsed.path
 
 
 def get_azure_ai_entra_token(litellm_params: Mapping[str, object] | None = None) -> str | None:
@@ -51,6 +60,9 @@ def get_azure_ai_auth_headers(
     )
 
 
+AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: Final = "azure_model_router_selected_model"
+
+
 class AzureFoundryModelInfo(BaseLLMModelInfo):
     """Model info for Azure AI / Azure Foundry models."""
 
@@ -81,6 +93,41 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         ):
             return "model_router"
         return "default"
+
+    @staticmethod
+    def get_model_router_selected_model(hidden_params: Mapping[str, object] | None) -> str | None:
+        """The model Azure Model Router actually served, stamped by ``AzureModelRouterConfig``.
+
+        Reading this beats re-deriving the route from a model string: the stamp is set on the
+        code path that was actually taken, so it holds no matter what the caller named the model.
+        """
+        if not hidden_params:
+            return None
+        selected: Final = hidden_params.get(AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY)
+        if isinstance(selected, str) and selected:
+            return selected
+        return None
+
+    @staticmethod
+    def is_model_router_call(
+        model: str | None = None,
+        hidden_params: Mapping[str, object] | None = None,
+    ) -> bool:
+        """Whether a request went down the Azure Model Router route.
+
+        Prefers the response stamp, then the deployment's litellm model path, and only then the
+        caller-supplied name. The last two go through ``get_azure_ai_route`` so the model-router
+        name heuristic lives in exactly one place.
+        """
+        if AzureFoundryModelInfo.get_model_router_selected_model(hidden_params) is not None:
+            return True
+        deployment_model: Final = (
+            hidden_params.get("litellm_model_name") or hidden_params.get("model") if hidden_params is not None else None
+        )
+        return any(
+            isinstance(candidate, str) and AzureFoundryModelInfo.get_azure_ai_route(candidate) == "model_router"
+            for candidate in (deployment_model, model)
+        )
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:

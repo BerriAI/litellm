@@ -52,6 +52,17 @@ the CLI retries 429s internally until the harness timeout kills it,
 so a saturated upstream usually surfaces as a timeout rather than a
 clean 429."""
 
+TRANSIENT_UPSTREAM_SHAPED_RE = re.compile(
+    r"(?:\b503\b|\b529\b|service[\s_-]?unavailable|overloaded|"
+    r"unable\s+to\s+process\s+your\s+request)",
+    re.IGNORECASE,
+)
+"""Upstream saturation, retried on the same terms as a 429 but deliberately a
+separate pattern: it must not reach the rate-limit summary, whose only remedy is
+lowering our own request rate, which does nothing for a provider that is simply
+out of capacity."""
+
+
 DEFAULT_RATE_LIMIT_RETRIES = int(
     os.environ.get("LITELLM_COMPAT_RATE_LIMIT_RETRIES") or 2
 )
@@ -298,11 +309,27 @@ def is_rate_limit_shaped(outcome: ModelResult) -> bool:
     CLI's stdout text or `api_error_status` are both caught. Passing
     results are never rate-limit-shaped.
     """
+    return _matches_failure_shape(outcome, RATE_LIMIT_SHAPED_RE)
+
+
+def is_transient_upstream_shaped(outcome: ModelResult) -> bool:
+    """Classify an outcome as a retryable upstream-saturation failure: a 503 or
+    529, an "overloaded" marker, or Bedrock's "unable to process your request"."""
+    return _matches_failure_shape(outcome, TRANSIENT_UPSTREAM_SHAPED_RE)
+
+
+def is_retryable_shaped(outcome: ModelResult) -> bool:
+    """Either retryable shape. This, not `is_rate_limit_shaped`, is what the
+    retry loop asks: both shapes clear on their own given time."""
+    return is_rate_limit_shaped(outcome) or is_transient_upstream_shaped(outcome)
+
+
+def _matches_failure_shape(outcome: ModelResult, pattern: "re.Pattern[str]") -> bool:
     if isinstance(outcome, ClaudeCLIError):
-        return bool(RATE_LIMIT_SHAPED_RE.search(str(outcome)))
+        return bool(pattern.search(str(outcome)))
     if outcome.exit_code == 0:
         return False
-    return bool(RATE_LIMIT_SHAPED_RE.search(failure_diagnostic(outcome)))
+    return bool(pattern.search(failure_diagnostic(outcome)))
 
 
 def run_claude_models_parallel(
@@ -333,7 +360,7 @@ def run_claude_models_parallel(
     keep the synchronous CLI driver unchanged so unit tests can keep
     injecting a fake `runner`.
 
-    Rate-limit-shaped failures (see `is_rate_limit_shaped`) are retried
+    Retryable failures (see `is_retryable_shaped`) are retried
     per model up to `rate_limit_retries` times, sleeping
     `rate_limit_backoff_seconds` before each retry so per-minute quota
     windows can reset; both default to the `LITELLM_COMPAT_RATE_LIMIT_*`
@@ -401,10 +428,11 @@ def run_claude_models_parallel(
         started = time.monotonic()
         outcome = _run_once(model)
         for attempt in range(retries):
-            if not is_rate_limit_shaped(outcome):
+            if not is_retryable_shaped(outcome):
                 break
+            shape = "rate-limit" if is_rate_limit_shaped(outcome) else "transient-upstream"
             print(
-                f"[retry] {model}: rate-limit-shaped failure; sleeping "
+                f"[retry] {model}: {shape}-shaped failure; sleeping "
                 f"{backoff:.0f}s before attempt {attempt + 2}/{retries + 1}",
                 file=sys.stderr,
                 flush=True,

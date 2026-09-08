@@ -4,7 +4,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import SpendLogsPayload
+from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.spend_tracking.cold_storage_handler import ColdStorageHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
@@ -27,6 +28,17 @@ else:
 ########################################################
 COLD_STORAGE_HANDLER: Final = ColdStorageHandler()
 ########################################################
+
+
+def _normalize_redacted_tool_call_arguments(message: Message) -> None:
+    """Redaction stores the bare sentinel (invalid JSON) in tool-call arguments;
+    normalize replayed history to "{}" so provider converters can parse it."""
+    for tool_call in message.tool_calls or []:
+        if (function := getattr(tool_call, "function", None)) is not None and function.arguments == REDACTED_BY_LITELLM:
+            function.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+    function_call: Final = message.function_call
+    if function_call is not None and function_call.arguments == REDACTED_BY_LITELLM:
+        function_call.arguments = REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 
 
 class ResponsesSessionHandler:
@@ -143,7 +155,8 @@ class ResponsesSessionHandler:
             model_response: Final = ModelResponse(**_response_output)
             for choice in model_response.choices:
                 if hasattr(choice, "message"):
-                    chat_completion_message_history.append(getattr(choice, "message"))
+                    _normalize_redacted_tool_call_arguments(choice.message)
+                    chat_completion_message_history.append(choice.message)
         return chat_completion_message_history
 
     @staticmethod
@@ -195,7 +208,7 @@ class ResponsesSessionHandler:
         try:
             metadata_str: Final = spend_log.get("metadata", "{}")
             if isinstance(metadata_str, str):
-                metadata_dict: Final = json.loads(metadata_str)
+                metadata_dict: Final[SpendLogsMetadata] = json.loads(metadata_str)
                 return metadata_dict.get("cold_storage_object_key")
             elif isinstance(metadata_str, dict):
                 return metadata_str.get("cold_storage_object_key")

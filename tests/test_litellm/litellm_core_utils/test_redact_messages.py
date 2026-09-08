@@ -350,7 +350,7 @@ class TestPerformRedaction:
         redacted = perform_redaction({}, result)
 
         message = redacted["choices"][0]["message"]
-        assert message["content"] == "redacted-by-litellm"
+        assert message["content"] is None
         tool_call = message["tool_calls"][0]
         assert tool_call["function"]["arguments"] == "redacted-by-litellm"
         assert tool_call["function"]["name"] == "get_weather"
@@ -491,6 +491,76 @@ class TestPerformRedaction:
         assert redacted["output"][0]["arguments"] == "redacted-by-litellm"
         assert redacted["output"][0]["name"] == "get_weather"
 
+    def test_redacts_every_tool_call_in_multi_element_list(self):
+        result = litellm.ModelResponse(
+            id="resp-multi",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "a"}'},
+                            },
+                            {
+                                "id": "call_2",
+                                "type": "function",
+                                "function": {"name": "get_time", "arguments": '{"tz": "b"}'},
+                            },
+                        ],
+                    )
+                )
+            ],
+            model="gpt-4o",
+        )
+
+        redacted = perform_redaction({}, result)
+
+        tool_calls = redacted.choices[0].message.tool_calls
+        assert tool_calls[0].function.arguments == "redacted-by-litellm"
+        assert tool_calls[1].function.arguments == "redacted-by-litellm"
+
+    def test_preserves_none_content_on_tool_call_only_message(self):
+        result = litellm.ModelResponse(
+            id="resp-none",
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": '{"city": "a"}'},
+                            }
+                        ],
+                    )
+                )
+            ],
+            model="gpt-4o",
+        )
+
+        redacted = perform_redaction({}, result)
+
+        assert redacted.choices[0].message.content is None
+
+    def test_redacts_responses_api_function_call_arguments_object(self):
+        output_item = SimpleNamespace(
+            type="function_call",
+            name="get_weather",
+            arguments='{"city": "sensitive-city"}',
+            call_id="call_1",
+        )
+
+        _redact_responses_api_output([output_item])
+
+        assert output_item.arguments == "redacted-by-litellm"
+        assert output_item.name == "get_weather"
+
     def test_redacts_response_output_objects_with_top_level_text(self):
         output_items = [
             SimpleNamespace(text="top-level output"),
@@ -501,6 +571,29 @@ class TestPerformRedaction:
 
         assert output_items[0].text == "redacted-by-litellm"
         assert output_items[1] == "non-dict output item"
+
+    def test_preserves_none_text_in_responses_output(self):
+        from litellm.litellm_core_utils.redact_messages import _redact_responses_api_output_dict
+
+        none_item = SimpleNamespace(type="output_text", text=None, content=[SimpleNamespace(text=None)])
+        real_item = SimpleNamespace(type="output_text", text="real answer", content=[SimpleNamespace(text="real part")])
+
+        _redact_responses_api_output([none_item, real_item])
+
+        assert none_item.text is None
+        assert none_item.content[0].text is None
+        assert real_item.text == "redacted-by-litellm"
+        assert real_item.content[0].text == "redacted-by-litellm"
+
+        none_dict = {"type": "output_text", "text": None, "content": [{"text": None}]}
+        real_dict = {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
+
+        _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
+
+        assert none_dict["text"] is None
+        assert none_dict["content"][0]["text"] is None
+        assert real_dict["text"] == "redacted-by-litellm"
+        assert real_dict["content"][0]["text"] == "redacted-by-litellm"
 
     def test_skips_non_dict_response_output_items(self):
         result = {

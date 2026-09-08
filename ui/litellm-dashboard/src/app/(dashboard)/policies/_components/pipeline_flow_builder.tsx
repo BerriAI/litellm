@@ -227,7 +227,7 @@ const Connector: React.FC<ConnectorProps> = ({ onInsert }) => (
     <div style={{ width: 1, flex: 1, backgroundColor: "var(--color-border)" }} />
     <button
       onClick={onInsert}
-      className="flex items-center justify-center"
+      className="z-raised flex items-center justify-center"
       style={{
         width: 24,
         height: 24,
@@ -235,7 +235,6 @@ const Connector: React.FC<ConnectorProps> = ({ onInsert }) => (
         border: "1px solid var(--color-border)",
         backgroundColor: "var(--color-card)",
         cursor: "pointer",
-        zIndex: 1,
         transition: "all 0.15s ease",
       }}
       onMouseEnter={(e) => {
@@ -1623,20 +1622,7 @@ export const FlowBuilderPage: React.FC<FlowBuilderPageProps> = ({
   };
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: "var(--color-muted)",
-        zIndex: 1000,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}
-    >
+    <div className="flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-muted">
       {/* Header bar */}
       <div
         style={{

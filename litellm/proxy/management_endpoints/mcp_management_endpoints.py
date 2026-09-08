@@ -64,6 +64,9 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
+    id_jag_assertion_capture_gap,
+)
 from litellm.proxy.management_helpers.audit_logs import (
     get_audit_log_changed_by,
     is_audit_logging_enabled,
@@ -133,6 +136,7 @@ if MCP_AVAILABLE:
         delete_mcp_server,
         delete_user_credential,
         delete_user_env_vars,
+        get_all_mcp_servers,
         get_all_mcp_servers_for_user,
         get_draft_mcp_server,
         get_mcp_server,
@@ -189,6 +193,7 @@ if MCP_AVAILABLE:
         UpdateMCPServerRequest,
         UserAPIKeyAuth,
         UserMCPManagementMode,
+        is_per_server_oauth_discovery_eligible,
     )
     from litellm.proxy.auth.user_api_key_auth import (
         _user_api_key_auth_builder,
@@ -199,11 +204,22 @@ if MCP_AVAILABLE:
         populate_request_with_path_params,
     )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    from litellm.proxy.management_endpoints.mcp_connector_import import (
+        ConnectorConversionError,
+        ConvertedConnector,
+        MCPConnectorImportFailure,
+        MCPConnectorImportRequest,
+        MCPConnectorImportResponse,
+        MCPConnectorImportResult,
+        MCPConnectorImportSkipped,
+        convert_connector_entries,
+    )
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import (
         MCP_ADMIN_CONFIG_CREDENTIAL_KEYS,
         MCPAuth,
         MCPCredentials,
+        normalize_upstream_header_name,
     )
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -239,9 +255,42 @@ if MCP_AVAILABLE:
                 detail={"error": error_messages_text},
             )
 
+    def _validate_upstream_token_header(payload: McpServerPayloadLike) -> None:
+        credentials: Final = getattr(payload, "credentials", None)
+        raw: Final = credentials.get("upstream_token_header") if isinstance(credentials, dict) else None
+        if not isinstance(raw, str) or raw == "":
+            return
+        if normalize_upstream_header_name(raw) is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": (
+                        f"Invalid upstream_token_header {raw!r}: must be a valid HTTP header name "
+                        "(RFC 7230 token, e.g. 'esb-oauth')"
+                    )
+                },
+            )
+
     def validate_and_normalize_mcp_server_payload(payload: McpServerPayloadLike) -> None:
         _base_validate_and_normalize_mcp_server_payload(payload)
         _validate_mcp_server_name_fields(payload)
+        _validate_upstream_token_header(payload)
+
+    def warn_if_id_jag_server_outruns_sso(server_id: str | None, auth_type: MCPAuth | str | None) -> None:
+        """Registering an ``oauth2_id_jag`` server under an SSO provider that captures no IdP
+        identity assertion is a dead configuration: nothing here fails, and then every ID-JAG call
+        fails for every user with a message that only ever tells them to sign in again. Say it once,
+        at the moment the admin can still act on it."""
+        if auth_type != MCPAuth.oauth2_id_jag:
+            return
+        gap = id_jag_assertion_capture_gap()
+        if gap is None:
+            return
+        verbose_proxy_logger.warning(
+            "MCP server %s is registered with auth_type=oauth2_id_jag, but %s.",
+            server_id,
+            gap,
+        )
 
     def stamp_omitted_oauth2_flow(payload: NewMCPServerRequest) -> None:
         """Fallback only: fill in oauth2_flow when an oauth2 create omits it.
@@ -739,6 +788,7 @@ if MCP_AVAILABLE:
         ("aws_region_name", "aws_region_name"),
         ("aws_service_name", "aws_service_name"),
         ("upstream_resource", "upstream_resource"),
+        ("upstream_token_header", "upstream_token_header"),
     )
 
     def _has_non_admin_config_credentials(credentials: "MCPCredentials | None") -> bool:
@@ -1593,6 +1643,8 @@ if MCP_AVAILABLE:
                 detail={"error": f"Error creating mcp server: {e}"},
             )
 
+        warn_if_id_jag_server_outruns_sso(new_mcp_server.server_id, new_mcp_server.auth_type)
+
         # Registry refresh is best-effort: the row is already committed, so a
         # failure here (e.g. an unrelated malformed row in the table) must not
         # surface as a 500 and orphan the created server, which would push the
@@ -1606,6 +1658,116 @@ if MCP_AVAILABLE:
             )
 
         return _redact_mcp_credentials(new_mcp_server)
+
+    @router.post(
+        "/server/import",
+        description="Bulk-import MCP connectors from Anthropic mcpServers or mcp_servers JSON",
+        dependencies=(Depends(user_api_key_auth),),
+        response_model=MCPConnectorImportResponse,
+        status_code=status.HTTP_200_OK,
+    )
+    @management_endpoint_wrapper
+    async def import_mcp_servers(
+        payload: MCPConnectorImportRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+    ):
+        """
+        Bulk-import MCP connectors. Accepts the Claude Desktop / Claude Code
+        ``mcpServers`` mapping or the Anthropic Messages API ``mcp_servers``
+        array, creates each entry as a LiteLLM MCP server, and returns
+        per-entry results so partial imports are visible to the caller.
+        """
+        prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                    "error": "User does not have permission to import mcp servers. You can only import mcp servers if you are a PROXY_ADMIN."
+                },
+            )
+
+        conversions: Final = convert_connector_entries(payload)
+        existing_servers: Final = await get_all_mcp_servers(prisma_client)
+        existing_names: Final = frozenset(
+            name for server in existing_servers for name in (server.alias, server.server_name) if name
+        )
+
+        def _classify(
+            index: int, conversion: ConvertedConnector | ConnectorConversionError
+        ) -> ConvertedConnector | ConnectorConversionError | MCPConnectorImportSkipped:
+            if isinstance(conversion, ConnectorConversionError):
+                return conversion
+            alias: Final = conversion.request.alias or ""
+            if alias in existing_names:
+                return MCPConnectorImportSkipped(
+                    name=conversion.name, reason=f"An MCP server named '{alias}' already exists."
+                )
+            earlier_aliases: Final = frozenset(
+                earlier.request.alias or ""
+                for earlier in conversions[:index]
+                if isinstance(earlier, ConvertedConnector)
+            )
+            if alias in earlier_aliases:
+                return MCPConnectorImportSkipped(
+                    name=conversion.name, reason=f"Duplicate connector name '{alias}' in the import payload."
+                )
+            return conversion
+
+        async def _create(
+            conversion: ConvertedConnector,
+        ) -> MCPConnectorImportResult | MCPConnectorImportFailure:
+            try:
+                validate_and_normalize_mcp_server_payload(conversion.request)
+            except HTTPException as e:
+                error_text: Final = (
+                    str(e.detail.get("error", e.detail)) if isinstance(e.detail, dict) else str(e.detail)
+                )
+                return MCPConnectorImportFailure(name=conversion.name, error=error_text)
+            try:
+                created: Final = await create_mcp_server(
+                    prisma_client,
+                    conversion.request,
+                    touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                )
+            except Exception as e:  # noqa: BLE001  # any create failure must become a per-entry error, not a 500
+                verbose_proxy_logger.exception("Error importing mcp server %s: %s", conversion.name, e)
+                return MCPConnectorImportFailure(name=conversion.name, error=str(e))
+            try:
+                await global_mcp_server_manager.add_server(created)
+            except Exception as e:  # noqa: BLE001  # the row is committed; the reload after the loop retries registration
+                verbose_proxy_logger.exception(
+                    "Imported mcp server %s committed but in-memory registration failed: %s", conversion.name, e
+                )
+            return MCPConnectorImportResult(
+                name=conversion.name, server_id=created.server_id, alias=created.alias or ""
+            )
+
+        classified: Final = tuple(_classify(index, conversion) for index, conversion in enumerate(conversions))
+        outcomes: Final = tuple(
+            [
+                await _create(entry) if isinstance(entry, ConvertedConnector) else entry for entry in classified
+            ]  # mutable-ok: await is illegal in a generator expression here
+        )
+
+        imported: Final = tuple(entry for entry in outcomes if isinstance(entry, MCPConnectorImportResult))
+        if imported:
+            try:
+                await global_mcp_server_manager.reload_servers_from_database()
+            except Exception as e:  # noqa: BLE001  # rows are committed; a refresh failure must not surface as a 500
+                verbose_proxy_logger.exception("MCP connector import committed but registry refresh failed: %s", e)
+
+        return MCPConnectorImportResponse(
+            imported=imported,
+            skipped=tuple(entry for entry in outcomes if isinstance(entry, MCPConnectorImportSkipped)),
+            errors=tuple(
+                MCPConnectorImportFailure(name=entry.name, error=entry.error)
+                if isinstance(entry, ConnectorConversionError)
+                else entry
+                for entry in outcomes
+                if isinstance(entry, (ConnectorConversionError, MCPConnectorImportFailure))
+            ),
+        )
 
     @router.post(
         "/server/oauth/session",
@@ -2553,6 +2715,27 @@ if MCP_AVAILABLE:
             old_server_record = None
             old_server_record_read_failed = True
 
+        if payload.per_server_oauth_discovery and (old_server_record is not None or old_server_record_read_failed):
+            relay_eligible: Final = old_server_record is not None and is_per_server_oauth_discovery_eligible(
+                payload.auth_type if "auth_type" in payload_fields_set else old_server_record.auth_type,
+                payload.oauth2_flow if "oauth2_flow" in payload_fields_set else old_server_record.oauth2_flow,
+                (
+                    payload.delegate_auth_to_upstream
+                    if "delegate_auth_to_upstream" in payload_fields_set
+                    else old_server_record.delegate_auth_to_upstream
+                ),
+            )
+            if not relay_eligible:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={  # mutable-ok: FastAPI HTTPException detail requires a plain dict
+                        "error": (
+                            "per_server_oauth_discovery is only supported for auth_type oauth2 with oauth2_flow "
+                            "authorization_code and without delegate_auth_to_upstream."
+                        )
+                    },
+                )
+
         if (
             payload.dcr_bridge
             and payload.auth_type is None
@@ -2586,6 +2769,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server not found, passed server_id={payload.server_id}"},
             )
+        warn_if_id_jag_server_outruns_sso(mcp_server_record_updated.server_id, mcp_server_record_updated.auth_type)
         await global_mcp_server_manager.update_server(mcp_server_record_updated)
 
         # Ensure registry is up to date by reloading from database

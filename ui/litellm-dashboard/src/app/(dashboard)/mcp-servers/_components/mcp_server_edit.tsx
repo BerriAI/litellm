@@ -282,6 +282,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         credentials: isClientForwardedTokenMode(values.auth_type)
           ? preservedAdminCredentials(values.credentials)
           : values.credentials,
+        issuer: values.issuer,
+        authorization_url: values.authorization_url,
+        token_url: values.token_url,
+        registration_url: values.registration_url,
         mcp_access_groups: values.mcp_access_groups || mcpServer.mcp_access_groups,
         static_headers: staticHeaders,
         command: values.command,
