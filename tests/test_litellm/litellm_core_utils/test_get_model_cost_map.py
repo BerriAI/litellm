@@ -310,14 +310,13 @@ def test_openrouter_catalog_costs_match_live_headline_rates(cost_map: dict):
         assert entry["output_cost_per_token"] != stale_out, model
 
 
-def test_get_model_cost_map_stamps_loaded_at(monkeypatch):
+def test_get_model_cost_map_stamps_loaded_at():
     """The load time feeds each pod's reload-due decision; a load that does not stamp it
     would make manual reload requests race the proxy's startup"""
     from datetime import datetime, timezone
 
     from litellm.litellm_core_utils import get_model_cost_map as module
 
-    monkeypatch.setattr(module._cost_map_source_info, "loaded_at", None)
     client, _calls = _mock_client(
         [httpx.Response(200, content=_real_map_bytes())], client_cls=httpx.Client
     )
@@ -560,7 +559,6 @@ async def test_refetch_stamps_loaded_at_on_remote_and_local_reloads(monkeypatch)
     from litellm.litellm_core_utils import get_model_cost_map as module
 
     client, _ = _mock_client([httpx.Response(200, content=_real_map_bytes())])
-    monkeypatch.setattr(module._cost_map_source_info, "loaded_at", None)
     before_remote = datetime.now(timezone.utc)
     await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client)
     remote_loaded_at = module.get_model_cost_map_loaded_at()
@@ -568,7 +566,6 @@ async def test_refetch_stamps_loaded_at_on_remote_and_local_reloads(monkeypatch)
     assert before_remote <= remote_loaded_at <= datetime.now(timezone.utc)
 
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(module._cost_map_source_info, "loaded_at", None)
     before_local = datetime.now(timezone.utc)
     await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0))
     local_loaded_at = module.get_model_cost_map_loaded_at()

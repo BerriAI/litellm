@@ -15,16 +15,15 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_provenance
+
 from .conftest import VOLATILE_KEYS, normalize
 
 # Some response bodies include a "timestamp" — extend the volatile set so
 # dict-equality assertions remain stable.
 _VOLATILE = VOLATILE_KEYS | frozenset({"timestamp"})
 
-_PROVENANCE = {
-    "source_revision": "0123456789abcdef0123456789abcdef01234567",
-    "etag": 'W/"cost-map-etag"',
-}
+_SERVED_ETAG = 'W/"cost-map-etag"'
 _ROOT_COST_MAP = Path(__file__).resolve().parents[4] / "model_prices_and_context_window.json"
 
 
@@ -49,13 +48,6 @@ def _attach_litellm_config(mock_prisma):
     return table
 
 
-def _pin_provenance(monkeypatch):
-    monkeypatch.setattr(
-        "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map_provenance",
-        lambda: dict(_PROVENANCE),
-    )
-
-
 # ---------------------------------------------------------------------------
 # POST /reload/model_cost_map
 # ---------------------------------------------------------------------------
@@ -69,7 +61,6 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 
     table = _attach_litellm_config(mock_prisma)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    _pin_provenance(monkeypatch)
 
     fake_cost_map = {"gpt-4": {"input_cost": 0.03}, "gpt-3.5": {"input_cost": 0.002}}
     monkeypatch.setattr(
@@ -98,7 +89,7 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
         "status": "success",
         "models_count": 2,
         "timestamp": "<VOLATILE>",
-        **_PROVENANCE,
+        **get_model_cost_map_provenance(),
     }
     assert table.upsert.await_count == 1
     update_payload = table.upsert.await_args.kwargs["data"]["update"]
@@ -120,8 +111,8 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
     body = _ROOT_COST_MAP.read_bytes()
-    expected = {"source_revision": git_blob_id(body), "etag": _PROVENANCE["etag"]}
-    served = httpx.Response(200, headers={"ETag": _PROVENANCE["etag"]}, content=body)
+    expected = {"source_revision": git_blob_id(body), "etag": _SERVED_ETAG}
+    served = httpx.Response(200, headers={"ETag": _SERVED_ETAG}, content=body)
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map._default_reload_client",
         lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: served)),
@@ -339,7 +330,6 @@ def test_get_model_cost_map_reload_status_no_db_not_scheduled(
     from litellm.proxy._types import LitellmUserRoles
 
     monkeypatch.setattr(ps, "prisma_client", None)
-    _pin_provenance(monkeypatch)
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")
     assert response.status_code == 200
@@ -348,7 +338,7 @@ def test_get_model_cost_map_reload_status_no_db_not_scheduled(
         "interval_hours": None,
         "last_run": None,
         "next_run": None,
-        **_PROVENANCE,
+        **get_model_cost_map_provenance(),
     }
 
 
@@ -366,7 +356,6 @@ def test_get_model_cost_map_reload_status_scheduled(
     config_row.last_run_at = None
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    _pin_provenance(monkeypatch)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")
@@ -376,7 +365,7 @@ def test_get_model_cost_map_reload_status_scheduled(
         "interval_hours": 12,
         "last_run": None,
         "next_run": None,
-        **_PROVENANCE,
+        **get_model_cost_map_provenance(),
     }
 
 
@@ -396,7 +385,6 @@ def test_get_model_cost_map_reload_status_reports_persisted_last_run(
     config_row.last_run_at = datetime(2024, 1, 1, 6, 0, 0, tzinfo=timezone.utc)
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    _pin_provenance(monkeypatch)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")
@@ -406,7 +394,7 @@ def test_get_model_cost_map_reload_status_reports_persisted_last_run(
         "interval_hours": 6,
         "last_run": "2024-01-01T06:00:00+00:00",
         "next_run": "2024-01-01T12:00:00+00:00",
-        **_PROVENANCE,
+        **get_model_cost_map_provenance(),
     }
 
 
@@ -426,7 +414,6 @@ def test_get_model_cost_map_reload_status_no_config_not_scheduled(
     config_row.last_run_at = None
     table.find_unique = AsyncMock(return_value=config_row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    _pin_provenance(monkeypatch)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/schedule/model_cost_map_reload/status")
@@ -436,7 +423,7 @@ def test_get_model_cost_map_reload_status_no_config_not_scheduled(
         "interval_hours": None,
         "last_run": None,
         "next_run": None,
-        **_PROVENANCE,
+        **get_model_cost_map_provenance(),
     }
 
 
@@ -464,7 +451,7 @@ def test_get_model_cost_map_source_happy(client, auth_as, monkeypatch):
         "is_env_forced": False,
         "fallback_reason": None,
         "loaded_at": "2026-09-07T01:02:03+00:00",
-        **_PROVENANCE,
+        **get_model_cost_map_provenance(),
     }
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map_source_info",
@@ -481,7 +468,7 @@ def test_get_model_cost_map_source_happy(client, auth_as, monkeypatch):
         "is_env_forced": False,
         "fallback_reason": None,
         "loaded_at": "2026-09-07T01:02:03+00:00",
-        **_PROVENANCE,
+        **get_model_cost_map_provenance(),
         "model_count": 3,
     }
 
