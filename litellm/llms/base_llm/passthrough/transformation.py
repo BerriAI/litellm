@@ -1,3 +1,4 @@
+import re
 from abc import abstractmethod
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, Union
@@ -27,7 +28,8 @@ def strip_leading_model_segment(endpoint: str, model_names: tuple[str, ...]) -> 
 
 
 def replace_path_segment(endpoint: str, segment: str, replacement: str) -> str:
-    return "/".join(replacement if part == segment else part for part in endpoint.split("/"))
+    bounded_segment: Final = re.compile(rf"(?<![^/]){re.escape(segment)}(?![^/:])")
+    return bounded_segment.sub(lambda _: replacement, endpoint)
 
 
 class BasePassthroughConfig(BaseLLMModelInfo):

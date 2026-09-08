@@ -5047,27 +5047,39 @@ def test_get_deployment_model_info_base_model_merge_priority():
     print("✓ Base model merge priority test passed!")
 
 
-def test_add_deployment_model_to_endpoint_rewrites_whole_path_segments_only():
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "gpt",
-                "litellm_params": {
-                    "model": "azure_ai/gpt-5.4-mini",
-                    "api_base": "https://my-resource.services.ai.azure.com",
-                    "api_key": "key",
-                },
-            }
-        ],
-    )
+@pytest.mark.parametrize(
+    "model, litellm_params, endpoint, expected",
+    [
+        (
+            "gpt",
+            {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://my-resource.services.ai.azure.com", "api_key": "key"},
+            "gpt/openai/deployments/gpt-4o/chat/completions",
+            "gpt-5.4-mini/openai/deployments/gpt-4o/chat/completions",
+        ),
+        (
+            "aws/anthropic/bedrock-claude",
+            {"model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"},
+            "/model/aws/anthropic/bedrock-claude/invoke",
+            "/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
+        ),
+        (
+            "my-gemini",
+            {"model": "gemini/gemini-3.1-pro-preview", "api_key": "key"},
+            "v1beta/models/my-gemini:streamGenerateContent",
+            "v1beta/models/gemini-3.1-pro-preview:streamGenerateContent",
+        ),
+    ],
+)
+def test_add_deployment_model_to_endpoint_rewrites_the_model_group_only_as_whole_path_segments(
+    model, litellm_params, endpoint, expected
+):
+    router = litellm.Router(model_list=[{"model_name": model, "litellm_params": litellm_params}])
 
     result = router._add_deployment_model_to_endpoint_for_llm_passthrough_route(
-        kwargs={"endpoint": "gpt/openai/deployments/gpt-4o/chat/completions", "custom_llm_provider": "azure_ai"},
-        model="gpt",
-        model_name="azure_ai/gpt-5.4-mini",
+        kwargs={"endpoint": endpoint}, model=model, model_name=litellm_params["model"]
     )
 
-    assert result["endpoint"] == "gpt-5.4-mini/openai/deployments/gpt-4o/chat/completions"
+    assert result["endpoint"] == expected
 
 
 def test_add_deployment_model_to_endpoint_for_llm_passthrough_route():
