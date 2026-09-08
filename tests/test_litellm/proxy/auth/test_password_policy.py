@@ -7,6 +7,7 @@ The breach-check (HIBP) tests inject a real AsyncHTTPHandler wrapping an
 httpx.MockTransport, so no network is touched and nothing is monkeypatched.
 """
 
+import asyncio
 import hashlib
 
 import httpx
@@ -21,6 +22,7 @@ from litellm.proxy.auth.password_policy import (
     get_password_policy,
     validate_password_not_breached,
     validate_password_policy,
+    validate_passwords_bulk,
 )
 
 STRONG_PASSWORD = "Str0ng!Passw0rd"
@@ -268,3 +270,76 @@ async def test_breach_check_fails_open_on_malformed_response_body():
         client=_client_returning(f"{_sha1_upper('password12345')[5:]}:not-a-number"),
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_validate_passwords_bulk_screens_concurrently():
+    """All HIBP lookups for a batch must be in flight at once: each handler
+    call stalls until every expected request has arrived, and a handler that
+    gives up waiting reports the password as breached. Serial awaiting (the
+    old per-user behavior) leaves each earlier request waiting forever for the
+    later ones, so every verdict comes back as a breach and the test fails."""
+    passwords = ("Uniqu3!Passw0rd-a", "Uniqu3!Passw0rd-b", "Uniqu3!Passw0rd-c")
+    suffix_by_prefix = {_sha1_upper(p)[:5]: _sha1_upper(p)[5:] for p in passwords}
+    all_arrived = asyncio.Event()
+    arrivals: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        arrivals.append(request.url.path)
+        if len(arrivals) == len(passwords):
+            all_arrived.set()
+        try:
+            await asyncio.wait_for(all_arrived.wait(), timeout=5)
+        except TimeoutError:
+            return httpx.Response(200, text=f"{suffix_by_prefix[request.url.path.rsplit('/', 1)[-1]]}:1")
+        return httpx.Response(200, text="0000000000000000000000000000000000A:1")
+
+    verdicts = await validate_passwords_bulk(passwords, {}, client=_client_with_transport(handler))
+    assert set(arrivals) == {f"/range/{prefix}" for prefix in suffix_by_prefix}
+    assert all(verdicts[p] is None for p in passwords)
+
+
+@pytest.mark.asyncio
+async def test_validate_passwords_bulk_deduplicates_lookups():
+    """500 users sharing one password must cost exactly one HIBP lookup."""
+    password = "Sh@red-Passw0rd!"
+    request_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(200, text="0000000000000000000000000000000000A:1")
+
+    verdicts = await validate_passwords_bulk((password,) * 500, {}, client=_client_with_transport(handler))
+    assert request_count == 1
+    assert verdicts == {password: None}
+
+
+@pytest.mark.asyncio
+async def test_validate_passwords_bulk_mixed_verdicts():
+    """Weak passwords are rejected without an HIBP lookup; breached ones get
+    the breach error; acceptable ones map to None."""
+    breached = "Br3ached!Passw0rd"
+    clean = "Cl3an!!Passw0rd42"
+    weak = "short1!"
+    breached_sha1 = _sha1_upper(breached)
+    looked_up_prefixes: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        looked_up_prefixes.append(request.url.path.rsplit("/", 1)[-1])
+        if request.url.path == f"/range/{breached_sha1[:5]}":
+            return httpx.Response(200, text=f"{breached_sha1[5:]}:99")
+        return httpx.Response(200, text="0000000000000000000000000000000000A:1")
+
+    verdicts = await validate_passwords_bulk((breached, clean, weak), {}, client=_client_with_transport(handler))
+    assert _sha1_upper(weak)[:5] not in looked_up_prefixes
+    assert verdicts[clean] is None
+    assert "data breaches" in verdicts[breached].message
+    assert verdicts[breached].code == "400"
+    assert "12 characters" in verdicts[weak].message
+
+
+@pytest.mark.asyncio
+async def test_validate_passwords_bulk_empty_batch_makes_no_lookups():
+    verdicts = await validate_passwords_bulk((), {}, client=_client_never_called())
+    assert verdicts == {}
