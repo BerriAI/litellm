@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, UploadFile
 
 import litellm.proxy.shunt_endpoints.endpoints as endpoints_mod
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy.guardrails.auto_router_shunt import ShuntConfig
 from litellm.proxy.guardrails.shunt_capability_token import mint_shunt_capability_token
 from litellm.proxy.shunt_endpoints.endpoints import _caller_from_capability_token, _worker_text
 
@@ -341,3 +342,108 @@ class TestUploadLimits:
         with pytest.raises(ProxyException) as exc_info:
             await endpoints_mod._read_upload_texts([self._upload("bin.dat", b"\xff\xfe\x00binary")])
         assert exc_info.value.code == "400"
+
+
+class TestWorkerConfig:
+    """_worker_config is what stops these endpoints becoming a way to run any model the
+    caller names: the worker model comes from the marker's own config, and a router that
+    isn't shunt-armed is refused outright."""
+
+    def test_no_router_configured_is_a_500(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+        with pytest.raises(ProxyException) as exc_info:
+            endpoints_mod._worker_config("shunt-router", UserAPIKeyAuth(api_key="h"), ())
+        assert exc_info.value.code == "500"
+
+    def test_a_router_without_shunt_armed_is_rejected(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", object())
+        monkeypatch.setattr(endpoints_mod, "shunt_config_for_model", lambda **kwargs: None)
+        with pytest.raises(ProxyException) as exc_info:
+            endpoints_mod._worker_config("plain-router", UserAPIKeyAuth(api_key="h"), ())
+        assert exc_info.value.code == "400"
+        assert "not a shunt-armed auto router" in exc_info.value.message
+
+    def test_the_callers_team_and_tags_scope_the_lookup(self, monkeypatch):
+        """A marker armed only under a tag must resolve here the same way it did when the
+        original request was rewritten, so the lookup has to carry both through."""
+        seen: dict[str, object] = {}
+        fake_router = object()
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+
+        def _spy(**kwargs):
+            seen.update(kwargs)
+            return ShuntConfig(min_lines=350, bulk_read_model="w", code_write_model="w")
+
+        monkeypatch.setattr(endpoints_mod, "shunt_config_for_model", _spy)
+        router, config = endpoints_mod._worker_config(
+            "shunt-router", UserAPIKeyAuth(api_key="h", team_id="team-9"), ("tag-a",)
+        )
+        assert router is fake_router
+        assert config.bulk_read_model == "w"
+        assert seen["team_id"] == "team-9"
+        assert seen["request_tags"] == ("tag-a",)
+        assert seen["model_alias"] == "shunt-router"
+
+
+class TestHandlers:
+    """The two route handlers, exercised directly. Both are thin, but each owns one thing
+    worth pinning: bulk_read pairs every upload with its own filename before the worker sees
+    it, and code_write strips the fences a chat model wraps code in."""
+
+    def _upload(self, name: str, content: bytes) -> UploadFile:
+        return UploadFile(file=io.BytesIO(content), filename=name)
+
+    def _patch(self, monkeypatch, *, worker_reply: str) -> dict[str, object]:
+        captured: dict[str, object] = {}
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", object())
+        monkeypatch.setattr(
+            endpoints_mod,
+            "shunt_config_for_model",
+            lambda **kwargs: ShuntConfig(min_lines=350, bulk_read_model="cheap-read", code_write_model="cheap-write"),
+        )
+
+        async def _fake_worker_text(request, llm_router, **kwargs):
+            captured.update(kwargs)
+            return worker_reply
+
+        monkeypatch.setattr(endpoints_mod, "_worker_text", _fake_worker_text)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_bulk_read_labels_each_file_and_uses_the_configured_read_model(self, monkeypatch):
+        captured = self._patch(monkeypatch, worker_reply="the summary")
+        result = await endpoints_mod.bulk_read(
+            _fake_request(),
+            router_name="shunt-router",
+            question="what do these do",
+            paths=[self._upload("a.py", b"AAA"), self._upload("b.py", b"BBB")],
+            user_api_key_dict=UserAPIKeyAuth(api_key="h"),
+        )
+        assert result == "the summary"
+        assert captured["model"] == "cheap-read"
+        message = captured["message"]
+        assert isinstance(message, str)
+        # Each file's own content must travel under its own name: swapping or dropping a
+        # filename here would silently attribute one file's code to another in the answer.
+        assert "a.py" in message and "AAA" in message
+        assert "b.py" in message and "BBB" in message
+        assert message.index("a.py") < message.index("b.py")
+        assert "what do these do" in message
+
+    @pytest.mark.asyncio
+    async def test_code_write_strips_fences_and_uses_the_configured_write_model(self, monkeypatch):
+        captured = self._patch(monkeypatch, worker_reply="```python\nprint('hi')\n```")
+        result = await endpoints_mod.code_write(
+            _fake_request(),
+            router_name="shunt-router",
+            spec="write a greeter",
+            reference=self._upload("ref.py", b"REFERENCE"),
+            user_api_key_dict=UserAPIKeyAuth(api_key="h"),
+        )
+        # The client redirects this straight into a file, so a stray ``` line would end up
+        # in the written source.
+        assert result == "print('hi')"
+        assert captured["model"] == "cheap-write"
+        message = captured["message"]
+        assert isinstance(message, str)
+        assert "write a greeter" in message and "REFERENCE" in message
