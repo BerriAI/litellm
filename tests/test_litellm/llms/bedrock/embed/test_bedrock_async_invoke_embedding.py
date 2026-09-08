@@ -184,6 +184,44 @@ class TestBedrockAsyncInvokeEmbedding:
             request_url = mock_post.call_args.kwargs.get("url", "")
             assert "/async-invoke" in request_url
 
+    def test_async_invoke_marengo_3_wraps_the_nested_payload_with_the_base_model_id(self):
+        client = HTTPHandler()
+
+        with patch.object(client, "post") as mock_post:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.text = json.dumps(async_invoke_response)
+            mock_response.json = lambda: json.loads(mock_response.text)
+            mock_post.return_value = mock_response
+
+            response = litellm.embedding(
+                model="bedrock/async_invoke/twelvelabs.marengo-embed-3-0-v1:0",
+                input="s3://test-bucket/clip.mp4",
+                client=client,
+                aws_region_name="us-east-1",
+                aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+                api_key="test-bearer-token-12345",
+                input_type="video",
+                embeddingOption=["visual", "audio"],
+                segmentation={"method": "fixed", "fixed": {"durationSec": 6}},
+                output_s3_uri="s3://test-bucket/async-invoke-output/",
+            )
+
+        assert response._hidden_params._invocation_arn == async_invoke_response["invocationArn"]
+        assert mock_post.call_args.kwargs["url"].endswith("/async-invoke")
+        assert json.loads(mock_post.call_args.kwargs["data"]) == {
+            "modelId": "twelvelabs.marengo-embed-3-0-v1:0",
+            "modelInput": {
+                "inputType": "video",
+                "video": {
+                    "mediaSource": {"s3Location": {"uri": "s3://test-bucket/clip.mp4"}},
+                    "segmentation": {"method": "fixed", "fixed": {"durationSec": 6}},
+                    "embeddingOption": ["visual", "audio"],
+                },
+            },
+            "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/async-invoke-output/"}},
+        }
+
     @pytest.mark.asyncio
     async def test_async_invoke_twelvelabs_embedding_async_with_mock(self):
         """Test async invoke embedding with async calls."""

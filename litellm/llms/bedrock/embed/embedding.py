@@ -474,7 +474,7 @@ class BedrockEmbedding(BaseAWSLLM):
         elif provider == "twelvelabs":
             batch_data = []
             for i in input:
-                twelvelabs_request = TwelveLabsMarengoEmbeddingConfig()._transform_request(
+                twelvelabs_request = TwelveLabsMarengoEmbeddingConfig(model=model)._transform_request(
                     input=i,
                     inference_params=inference_params,
                     async_invoke_route=has_async_invoke,

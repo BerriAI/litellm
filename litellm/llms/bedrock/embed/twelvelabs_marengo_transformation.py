@@ -4,13 +4,19 @@ Transformation logic from OpenAI /v1/embeddings format to Bedrock TwelveLabs Mar
 Why separate file? Make it easy to see how transformation works
 
 Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo.html
+Marengo 3.0 docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo-3.html
 """
 
 from typing import Final, cast
 
+from litellm.llms.bedrock.embed.twelvelabs_marengo_3_transformation import (
+    build_marengo_3_request,
+    is_marengo_3_model,
+)
 from litellm.types.llms.bedrock import (
     TWELVELABS_EMBEDDING_INPUT_TYPES,
     TwelveLabsAsyncInvokeRequest,
+    TwelveLabsMarengo3EmbeddingRequest,
     TwelveLabsMarengoEmbeddingRequest,
     TwelveLabsOutputDataConfig,
     TwelveLabsS3Location,
@@ -26,10 +32,13 @@ class TwelveLabsMarengoEmbeddingConfig:
     Supports text, image, video, and audio inputs.
     - InvokeModel: text and image inputs
     - StartAsyncInvoke: video, audio, image, and text inputs
+
+    Marengo 3.0 (model ids containing "marengo-embed-3") nests the input under a key named after inputType and
+    adds the text_image and multi_input input types; that payload is built by build_marengo_3_request.
     """
 
-    def __init__(self) -> None:
-        pass
+    def __init__(self, model: str | None = None) -> None:
+        self.is_marengo_3: Final = is_marengo_3_model(model)
 
     def get_supported_openai_params(self) -> list[str]:
         return [
@@ -41,13 +50,20 @@ class TwelveLabsMarengoEmbeddingConfig:
             "useFixedLengthSec",
             "minClipSec",
             "input_type",
+            "endSec",
+            "segmentation",
+            "embeddingType",
+            "embeddingScope",
+            "inferenceId",
+            "media_source",
+            "media_sources",
         ]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 # TwelveLabs doesn't have encoding_format, but we can map it to embeddingOption
-                if v == "float":
+                if v == "float" and not self.is_marengo_3:
                     optional_params["embeddingOption"] = ["visual-text", "visual-image"]
             elif k == "textTruncate":
                 optional_params["textTruncate"] = v
@@ -56,7 +72,19 @@ class TwelveLabsMarengoEmbeddingConfig:
             elif k == "input_type":
                 # Map input_type to inputType for Bedrock
                 optional_params["inputType"] = v
-            elif k in ["startSec", "lengthSec", "useFixedLengthSec", "minClipSec"]:
+            elif k in (
+                "startSec",
+                "lengthSec",
+                "useFixedLengthSec",
+                "minClipSec",
+                "endSec",
+                "segmentation",
+                "embeddingType",
+                "embeddingScope",
+                "inferenceId",
+                "media_source",
+                "media_sources",
+            ):
                 optional_params[k] = v
         return optional_params
 
@@ -77,7 +105,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         async_invoke_route: bool = False,
         model_id: str | None = None,
         output_s3_uri: str | None = None,
-    ) -> TwelveLabsMarengoEmbeddingRequest | TwelveLabsAsyncInvokeRequest:
+    ) -> TwelveLabsMarengoEmbeddingRequest | TwelveLabsMarengo3EmbeddingRequest | TwelveLabsAsyncInvokeRequest:
         """
         Transform OpenAI-style input to TwelveLabs Marengo format/async-invoke format.
 
@@ -87,19 +115,26 @@ class TwelveLabsMarengoEmbeddingConfig:
         - Video inputs (async-invoke only)
         - Audio inputs (async-invoke only)
         - S3 URLs for all media types (async-invoke only)
+        - Marengo 3.0 only: text_image and multi_input inputs (nested payload)
         """
-        # Get input_type or default to "text"
         input_type: Final = cast(
             TWELVELABS_EMBEDDING_INPUT_TYPES,
             inference_params.get("inputType") or inference_params.get("input_type") or "text",
         )
 
-        # Validate that async-invoke is used for video/audio
         if input_type in ["video", "audio"] and not async_invoke_route:
             raise ValueError(
                 f"Input type '{input_type}' requires async_invoke route. "
                 f"Use model format: 'bedrock/async_invoke/model_id'"
             )
+
+        if self.is_marengo_3:
+            marengo_3_request: Final = build_marengo_3_request(input=input, inference_params=inference_params)
+            if async_invoke_route and model_id:
+                return self._wrap_async_invoke_request(
+                    model_input=marengo_3_request, model_id=model_id, output_s3_uri=output_s3_uri
+                )
+            return marengo_3_request
 
         transformed_request: Final[TwelveLabsMarengoEmbeddingRequest] = {"inputType": input_type}
 
@@ -154,7 +189,7 @@ class TwelveLabsMarengoEmbeddingConfig:
 
     def _wrap_async_invoke_request(
         self,
-        model_input: TwelveLabsMarengoEmbeddingRequest,
+        model_input: TwelveLabsMarengoEmbeddingRequest | TwelveLabsMarengo3EmbeddingRequest,
         model_id: str,
         output_s3_uri: str | None = None,
     ) -> TwelveLabsAsyncInvokeRequest:
