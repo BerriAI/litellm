@@ -119,7 +119,7 @@ describe("UsersTable", () => {
       "Created At",
       "Updated At",
     ].forEach((header) => {
-      expect(headerRow.textContent).toContain(header);
+      expect(headerRow).toHaveTextContent(header);
     });
   });
 
@@ -251,7 +251,7 @@ describe("UsersTable", () => {
 
       await user.click(screen.getByTestId("datatable-select-row-user-1"));
 
-      expect(screen.getByTestId("datatable-select-all")).toHaveAttribute("aria-checked", "mixed");
+      expect(screen.getByTestId("datatable-select-all")).toBePartiallyChecked();
     });
   });
 

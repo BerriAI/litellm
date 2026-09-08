@@ -8,7 +8,7 @@ interface MessageListProps {
   messages: Message[];
   isLoading: boolean;
   hasVariables: boolean;
-  messagesEndRef: React.RefObject<HTMLDivElement>;
+  messagesEndRef: React.RefObject<HTMLDivElement | null>;
 }
 
 const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, hasVariables, messagesEndRef }) => {

@@ -18,17 +18,20 @@ import os
 import re
 import secrets
 import traceback
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Literal, Optional, Protocol, TypeVar, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeVar, cast
 
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
     LENGTH_OF_LITELLM_GENERATED_KEY,
     LITELLM_PROXY_ADMIN_NAME,
@@ -47,19 +50,26 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_s
     rotate_sso_identity_assertions_master_key,
 )
 from litellm.proxy._types import *
-from litellm.proxy._types import LiteLLM_VerificationToken, hash_token
+from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken, hash_token
 from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     can_team_access_model,
+    get_jwt_key_mapping_cache_keys_for_token,
     get_org_object,
     get_project_object,
     get_team_object,
 )
 from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
+    enforce_batch_enqueued_token_limit_is_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    evict_and_broadcast,
+    publish_auth_cache_invalidation,
+)
+from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
 from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     encrypt_callback_vars,
@@ -72,9 +82,7 @@ from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_k
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
-from litellm.proxy.hooks.model_max_budget_limiter import (
-    VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX,
-)
+from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
@@ -87,6 +95,11 @@ from litellm.proxy.management_endpoints.common_utils import (
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
+)
+from litellm.proxy.management_helpers.access_group_key_sync import (
+    sync_key_access_group_membership,
+    sync_key_regeneration_access_group_membership,
+    sync_key_update_access_group_membership,
 )
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.management_helpers.object_permission_utils import (
@@ -101,6 +114,7 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     get_ui_settings_cached,
@@ -117,6 +131,7 @@ from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigParam, ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
@@ -134,6 +149,7 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyResponse,
     BulkUpdateTeamKeysRequest,
     FailedKeyUpdate,
+    KeySearchWhere,
     SuccessfulKeyUpdate,
 )
 from litellm.types.router import Deployment
@@ -143,57 +159,25 @@ from litellm.types.utils import (
     TeamUIKeyGenerationConfig,
 )
 
-_PrismaRowT = TypeVar("_PrismaRowT")
+if TYPE_CHECKING:
+    import prisma
+    from prisma import Prisma
+    from prisma import models as prisma_models
+
 _RepositoryModelT = TypeVar("_RepositoryModelT", bound=BaseModel)
 
 
-class _PrismaTableActions(Protocol[_PrismaRowT]):
-    """Typed view of the Prisma table actions a repository exposes through its untyped ``table``."""
-
-    async def find_unique(
-        self,
-        *,
-        where: Mapping[str, object],
-        include: Mapping[str, object] | None = None,
-    ) -> _PrismaRowT | None: ...
-
-    async def find_first(
-        self,
-        *,
-        where: Mapping[str, object],
-        include: Mapping[str, object] | None = None,
-    ) -> _PrismaRowT | None: ...
-
-    async def find_many(
-        self,
-        *,
-        where: Mapping[str, object] | None = None,
-        include: Mapping[str, object] | None = None,
-        order: Mapping[str, object] | None = None,
-        skip: int | None = None,
-        take: int | None = None,
-    ) -> list[_PrismaRowT]: ...
-
-    async def count(self, *, where: Mapping[str, object] | None = None) -> int: ...
-
-    async def create(self, *, data: Mapping[str, object]) -> _PrismaRowT: ...
-
-    async def create_many(self, *, data: Sequence[Mapping[str, object]]) -> int: ...
-
-    async def delete_many(self, *, where: Mapping[str, object] | None = None) -> int: ...
-
-    async def update(
-        self,
-        *,
-        where: Mapping[str, object],
-        data: Mapping[str, object],
-    ) -> _PrismaRowT | None: ...
-
-
 class _UserRowLike(Protocol):
-    user_id: str | None
-    user_email: str | None
-    user_alias: str | None
+    """Read-only view of the user columns ``/key/list`` expands keys with."""
+
+    @property
+    def user_id(self) -> str | None: ...
+
+    @property
+    def user_email(self) -> str | None: ...
+
+    @property
+    def user_alias(self) -> str | None: ...
 
     def model_dump(self) -> Mapping[str, object]: ...
 
@@ -201,27 +185,138 @@ class _UserRowLike(Protocol):
 
 
 class _TxTables(Protocol):
-    litellm_proxymodeltable: _PrismaTableActions[object]
+    litellm_proxymodeltable: TableActions[object]
+
+
+class _ModelParamsUpdate(TypedDict):
+    litellm_params: ReadOnly["prisma.Json"]
+
+
+class _ModelRowWhere(TypedDict):
+    model_id: ReadOnly[str]
+
+
+class _KeyUpdateResult(TypedDict):
+    token: ReadOnly[str]
+    data: ReadOnly[Mapping[str, object]]
+
+
+class _KeyRowWhere(TypedDict):
+    token: ReadOnly[str]
+
+
+class _BudgetRowWhere(TypedDict):
+    budget_id: ReadOnly[str]
+
+
+class _BudgetRowSoftBudgetUpdate(TypedDict):
+    soft_budget: ReadOnly[float | None]
+    updated_by: ReadOnly[str]
+
+
+class _BudgetRowSoftBudgetCreate(TypedDict):
+    soft_budget: ReadOnly[float]
+    created_by: ReadOnly[str]
+    updated_by: ReadOnly[str]
+
+
+class _KeyUpdateTx(Protocol):
+    @property
+    def litellm_verificationtoken(self) -> "TableActions[prisma_models.LiteLLM_VerificationToken]": ...
+
+    @property
+    def litellm_budgettable(self) -> "TableActions[prisma_models.LiteLLM_BudgetTable]": ...
+
+
+class _ConfigTableActions(Protocol):
+    """Config table surface this module needs; the shared repository seam exposes no ``update``."""
+
+    async def find_many(self) -> Sequence[ConfigParam]: ...
+
+    async def update(
+        self,
+        *,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> ConfigParam | None: ...
 
 
 def _prisma_table(
     repository: BaseRepository[_RepositoryModelT],
-) -> _PrismaTableActions[_RepositoryModelT]:
-    return repository.table
+) -> TableActions[_RepositoryModelT]:
+    return cast(  # cast-ok: callers read only the field names the prisma row and repository model share
+        "TableActions[_RepositoryModelT]", repository.table
+    )
 
 
 def _deleted_verification_token_table(
     prisma_client: PrismaClient,
-) -> _PrismaTableActions[LiteLLM_DeletedVerificationToken]:
+) -> "TableActions[prisma_models.LiteLLM_DeletedVerificationToken]":
     return DeletedVerificationTokenRepository(prisma_client).table
 
 
-def _credentials_table(prisma_client: PrismaClient) -> _PrismaTableActions[CredentialItem]:
-    return CredentialsRepository(prisma_client).table
+def _deprecated_verification_token_table(
+    prisma_client: PrismaClient,
+) -> "TableActions[prisma_models.LiteLLM_DeprecatedVerificationToken]":
+    return DeprecatedVerificationTokenRepository(prisma_client).table
 
 
-def _config_table(prisma_client: PrismaClient) -> _PrismaTableActions[ConfigParam]:
-    return ConfigRepository(prisma_client).table
+def _user_table(prisma_client: PrismaClient) -> TableActions[_UserRowLike]:
+    return UserRepository(prisma_client).table
+
+
+def _credentials_table(prisma_client: PrismaClient) -> TableActions[CredentialItem]:
+    return cast(  # cast-ok: the rotation loop reads and rewrites these rows through CredentialItem names only
+        "TableActions[CredentialItem]", CredentialsRepository(prisma_client).table
+    )
+
+
+def _config_table(prisma_client: PrismaClient) -> _ConfigTableActions:
+    return cast(  # cast-ok: ConfigRepository.table hides the write actions this module needs on that same object
+        "_ConfigTableActions", ConfigRepository(prisma_client).table
+    )
+
+
+class _CustomKeyHooksModule(Protocol):
+    user_custom_key_generate: Callable[..., Awaitable[Mapping[str, object]]] | None
+    user_custom_key_update: Callable[..., Awaitable[Mapping[str, object]]] | None
+
+
+def _custom_key_generate_hook(
+    hooks: _CustomKeyHooksModule,
+) -> Callable[..., Awaitable[Mapping[str, object]]] | None:
+    return hooks.user_custom_key_generate
+
+
+def _custom_key_update_hook(
+    hooks: _CustomKeyHooksModule,
+) -> Callable[..., Awaitable[Mapping[str, object]]] | None:
+    return hooks.user_custom_key_update
+
+
+class _LegacyDumpable(Protocol):
+    def dict(self) -> Mapping[str, object]: ...
+
+
+def _legacy_model_dict(row: _LegacyDumpable) -> Mapping[str, object]:
+    return row.dict()
+
+
+def _as_object_dict(values: Mapping[str, object]) -> Mapping[str, object]:
+    return values
+
+
+def _model_items(model: BaseModel) -> Iterator[tuple[str, object]]:
+    return iter(model)
+
+
+class _EnvVarsParam(Protocol):
+    @property
+    def param_value(self) -> Mapping[str, str] | None: ...
+
+
+def _env_vars_param_value(param: _EnvVarsParam) -> Mapping[str, str] | None:
+    return param.param_value
 
 
 async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
@@ -519,6 +614,17 @@ def key_generation_check(
         return _personal_key_generation_check(user_api_key_dict=user_api_key_dict, data=data)
 
 
+def raise_on_invalid_key_logging_config(metadata: Mapping[str, object] | None) -> None:
+    """Key-level logging writes go through key metadata, not /team/callback.
+
+    Without this the same New Relic config the team endpoint rejects would be
+    accepted here and then silently ignored or misrouted at request time.
+    """
+    error: Final = logging_metadata_config_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})  # mutable-ok: FastAPI detail contract
+
+
 def common_key_access_checks(
     user_api_key_dict: UserAPIKeyAuth,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -664,6 +770,45 @@ def _check_allowed_routes_caller_permission(
                 "Use `key_type` to pick a preset route bucket instead."
             )
         },
+    )
+
+
+_READ_ONLY_ALLOWED_ROUTES_PRESET: Final = frozenset(("info_routes",))
+
+
+def _is_safe_preset_route_transition(
+    incoming_allowed_routes: Sequence[str] | None,
+    existing_allowed_routes: Sequence[str] | None,
+) -> bool:
+    """
+    True when every route on BOTH sides is a safe `key_type` preset bucket
+    (empty = full access, which non-admins already get from a default
+    `/key/generate`), with one carve-out: a read-only (`info_routes`) key
+    stays read-only, so widening it needs an admin. Requiring the existing
+    side to be a safe preset keeps an owner from clearing an admin-set
+    custom route restriction (LIT-4139).
+    """
+    incoming: Final = frozenset(incoming_allowed_routes or ())
+    existing: Final = frozenset(existing_allowed_routes or ())
+    if not (incoming | existing) <= _NON_ADMIN_SAFE_ALLOWED_ROUTES_PRESETS:
+        return False
+    return existing != _READ_ONLY_ALLOWED_ROUTES_PRESET or incoming == existing
+
+
+def _enforce_allowed_routes_update_permission(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if _is_safe_preset_route_transition(
+        incoming_allowed_routes=data.allowed_routes,
+        existing_allowed_routes=existing_key_row.allowed_routes,
+    ):
+        return
+    _check_allowed_routes_caller_permission(
+        allowed_routes=data.allowed_routes,
+        user_api_key_dict=user_api_key_dict,
+        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
 
 
@@ -857,6 +1002,7 @@ async def _common_key_generation_helper(
     )
 
     validate_budget_duration(data.budget_duration)
+    raise_on_invalid_key_logging_config(data.metadata)
 
     if data.throttle_on_budget_exceeded is True and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(
@@ -865,6 +1011,12 @@ async def _common_key_generation_helper(
         )
 
     enforce_output_token_estimates_are_admin_only(
+        data=data,
+        existing_metadata=None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+    enforce_batch_enqueued_token_limit_is_admin_only(
         data=data,
         existing_metadata=None,
         user_api_key_dict=user_api_key_dict,
@@ -886,19 +1038,26 @@ async def _common_key_generation_helper(
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
-        for elem in data:
+        for elem in _model_items(data):
             key, value = elem
-            if value is None and key in [
-                "max_budget",
-                "user_id",
-                "team_id",
-                "max_parallel_requests",
-                "tpm_limit",
-                "rpm_limit",
-                "budget_duration",
-                "duration",
-            ]:
-                setattr(data, key, litellm.default_key_generate_params.get(key, None))
+            if (
+                value is None
+                and (key != "budget_duration" or key not in data.model_fields_set)
+                and key
+                in [
+                    "max_budget",
+                    "user_id",
+                    "team_id",
+                    "max_parallel_requests",
+                    "tpm_limit",
+                    "rpm_limit",
+                    "budget_duration",
+                    "duration",
+                ]
+            ):
+                default_value = litellm.default_key_generate_params.get(key)
+                if default_value is not None:
+                    setattr(data, key, default_value)
             elif key == "models" and value == []:
                 setattr(data, key, litellm.default_key_generate_params.get(key, []))
             elif key == "metadata" and value == {}:
@@ -986,7 +1145,7 @@ async def _common_key_generation_helper(
         )
         new_budget: Final = prisma_client.jsonify_object(budget_row.json(exclude_none=True))
 
-        _budget: Final = await BudgetRepository(prisma_client).table.create(
+        _budget: Final[prisma_models.LiteLLM_BudgetTable] = await BudgetRepository(prisma_client).table.create(
             data={
                 **new_budget,
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
@@ -1192,7 +1351,7 @@ async def _common_key_generation_helper(
 
 
 def _check_key_model_specific_limits(
-    keys: list[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     data: GenerateKeyRequest | UpdateKeyRequest,
     entity_rpm_limit: int | None,
     entity_tpm_limit: int | None,
@@ -1263,7 +1422,7 @@ def _check_key_model_specific_limits(
 
 
 def _check_key_rpm_tpm_limits(
-    keys: list[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     data: GenerateKeyRequest | UpdateKeyRequest,
     entity_rpm_limit: int | None,
     entity_tpm_limit: int | None,
@@ -1301,7 +1460,7 @@ def _check_key_rpm_tpm_limits(
 
 
 def check_team_key_model_specific_limits(
-    keys: list[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     team_table: LiteLLM_TeamTableCachedObj,
     data: GenerateKeyRequest | UpdateKeyRequest,
 ) -> None:
@@ -1326,7 +1485,7 @@ def check_team_key_model_specific_limits(
 
 
 def check_team_key_rpm_tpm_limits(
-    keys: list[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     team_table: LiteLLM_TeamTableCachedObj,
     data: GenerateKeyRequest | UpdateKeyRequest,
 ) -> None:
@@ -1378,6 +1537,11 @@ async def _check_team_key_limits(
     )
 
 
+_INHERITED_MODEL_SENTINELS: Final = frozenset(
+    {SpecialModelNames.all_team_models.value, SpecialModelNames.all_proxy_models.value}
+)
+
+
 async def _check_project_key_limits(
     project_id: str,
     data: GenerateKeyRequest | UpdateKeyRequest,
@@ -1387,7 +1551,8 @@ async def _check_project_key_limits(
     """
     Validate that key's models and budget respect its project's limits.
 
-    - Key models must be a subset of project models
+    - Key models must be a subset of project models, except the all-team-models / all-proxy-models
+      sentinels, which inherit a parent scope and are narrowed by the project at request time
     - Key max_budget must be <= project max_budget
     """
     project_obj: Final = await get_project_object(
@@ -1405,7 +1570,7 @@ async def _check_project_key_limits(
     # Validate key models are a subset of project models
     if data.models and len(project_obj.models) > 0:
         for m in data.models:
-            if m not in project_obj.models:
+            if m not in project_obj.models and m not in _INHERITED_MODEL_SENTINELS:
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -1428,7 +1593,7 @@ async def _check_project_key_limits(
 
 
 def check_org_key_model_specific_limits(
-    keys: list[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     org_table: LiteLLM_OrganizationTable,
     data: GenerateKeyRequest | UpdateKeyRequest,
 ) -> None:
@@ -1461,7 +1626,7 @@ def check_org_key_model_specific_limits(
 
 
 def check_org_key_rpm_tpm_limits(
-    keys: list[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     org_table: LiteLLM_OrganizationTable,
     data: GenerateKeyRequest | UpdateKeyRequest,
 ) -> None:
@@ -1655,11 +1820,11 @@ async def generate_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
     """
     try:
+        from litellm.proxy import proxy_server
         from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import (
             prisma_client,
             user_api_key_cache,
-            user_custom_key_generate,
         )
 
         if prisma_client is None:
@@ -1679,14 +1844,10 @@ async def generate_key_fn(
                 status_code=400,
                 detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
             )
-        if data.soft_budget is not None and (not math.isfinite(data.soft_budget) or data.soft_budget < 0):
-            raise HTTPException(
-                status_code=400,
-                detail={"error": f"soft_budget must be a non-negative finite number. Received: {data.soft_budget}"},
-            )
+        _validate_soft_budget_value(data.soft_budget)
 
         custom_key_generate_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = (
-            user_custom_key_generate
+            _custom_key_generate_hook(proxy_server)
         )
         if custom_key_generate_hook is not None:
             if inspect.iscoroutinefunction(custom_key_generate_hook):
@@ -1855,11 +2016,11 @@ async def generate_service_account_key_fn(
     - user_id: (str) Unique user id - used for tracking spend across multiple keys for same user id.
 
     """
+    from litellm.proxy import proxy_server
     from litellm.proxy._types import CommonProxyErrors
     from litellm.proxy.proxy_server import (
         prisma_client,
         user_api_key_cache,
-        user_custom_key_generate,
     )
 
     if prisma_client is None:
@@ -1887,7 +2048,9 @@ async def generate_service_account_key_fn(
 
     verbose_proxy_logger.debug("entered /key/generate")
 
-    custom_key_generate_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = user_custom_key_generate
+    custom_key_generate_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = _custom_key_generate_hook(
+        proxy_server
+    )
     if custom_key_generate_hook is not None:
         if inspect.iscoroutinefunction(custom_key_generate_hook):
             result: Final = await custom_key_generate_hook(data)
@@ -1939,6 +2102,8 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
     """
+    raise_on_invalid_key_logging_config(non_default_values.get("metadata"))
+
     if "metadata" not in non_default_values:  # allow user to set metadata to none
         non_default_values["metadata"] = existing_metadata.copy()
 
@@ -1959,7 +2124,7 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
             )
         casted_metadata[reserved_field] = existing_value
 
-    data_json: Final[Mapping[str, object]] = data.model_dump(exclude_unset=True, exclude_none=True)
+    data_json: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
 
     try:
         for k, v in data_json.items():
@@ -1982,6 +2147,88 @@ def prepare_metadata_fields(data: BaseModel, non_default_values: dict, existing_
 
     non_default_values["metadata"] = encrypt_callback_vars(casted_metadata)
     return non_default_values
+
+
+def _validate_soft_budget_value(soft_budget: float | None) -> None:
+    if soft_budget is not None and (not math.isfinite(soft_budget) or soft_budget < 0):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"soft_budget must be a non-negative finite number. Received: {soft_budget}"},
+        )
+
+
+async def _update_key_soft_budget(
+    db: _KeyUpdateTx,
+    existing_key_row: LiteLLM_VerificationToken,
+    soft_budget: float | None,
+    changed_by: str,
+) -> str | None:
+    existing_budget_id: Final = existing_key_row.budget_id
+    if existing_budget_id is not None:
+        budget_update: Final[_BudgetRowSoftBudgetUpdate] = {"soft_budget": soft_budget, "updated_by": changed_by}
+        budget_where: Final[_BudgetRowWhere] = {"budget_id": existing_budget_id}
+        await db.litellm_budgettable.update(where=budget_where, data=budget_update)
+        return existing_budget_id
+    if soft_budget is None:
+        return None
+    budget_create: Final[_BudgetRowSoftBudgetCreate] = {
+        "soft_budget": soft_budget,
+        "created_by": changed_by,
+        "updated_by": changed_by,
+    }
+    created_budget: Final = await db.litellm_budgettable.create(data=budget_create)
+    return created_budget.budget_id
+
+
+async def _apply_soft_budget_update(
+    data: UpdateKeyRequest,
+    non_default_values: Mapping[str, object],
+    db: _KeyUpdateTx,
+    existing_key_row: LiteLLM_VerificationToken,
+    changed_by: str,
+) -> Mapping[str, object]:
+    remaining: Final = MappingProxyType({k: v for k, v in non_default_values.items() if k != "soft_budget"})
+    updated_budget_id: Final = await _update_key_soft_budget(
+        db=db,
+        existing_key_row=existing_key_row,
+        soft_budget=data.soft_budget,
+        changed_by=changed_by,
+    )
+    if updated_budget_id is not None and existing_key_row.budget_id is None:
+        return MappingProxyType({**remaining, "budget_id": updated_budget_id})
+    return remaining
+
+
+async def _update_key_row_with_soft_budget(
+    prisma_client: PrismaClient,
+    key: str,
+    data: UpdateKeyRequest,
+    non_default_values: Mapping[str, object],
+    existing_key_row: LiteLLM_VerificationToken,
+    changed_by: str,
+) -> _KeyUpdateResult:
+    hashed_token: Final = _hash_token_if_needed(key)
+    key_where: Final[_KeyRowWhere] = {"token": hashed_token}
+    tx: _KeyUpdateTx
+    async with prisma_client.tx() as tx:
+        update_values: Final = await _apply_soft_budget_update(
+            data=data,
+            non_default_values=non_default_values,
+            db=tx,
+            existing_key_row=existing_key_row,
+            changed_by=changed_by,
+        )
+        updated_row: Final = await tx.litellm_verificationtoken.update(
+            where=key_where,
+            data=with_settings_updated_at(
+                prisma_client.jsonify_object(MappingProxyType({**update_values, "token": hashed_token}))
+            ),
+        )
+    updated_data: Final[Mapping[str, object]] = (
+        updated_row.model_dump() if updated_row is not None else MappingProxyType({})
+    )
+    result: Final[_KeyUpdateResult] = {"token": hashed_token, "data": updated_data}
+    return result
 
 
 async def prepare_key_update_data(
@@ -2154,7 +2401,7 @@ async def _get_and_validate_existing_key(
 
         existing_key_row: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
             VerificationTokenRepository(prisma_client)
-        ).find_unique(where={"token": hashed_token})
+        ).find_unique(where={"token": hashed_token}, include={"object_permission": True})
 
         if existing_key_row is None:
             raise ProxyException(
@@ -2174,9 +2421,9 @@ async def _get_and_validate_existing_key(
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-    rows: list[LiteLLM_VerificationToken] = await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
-        where={"key_alias": key_alias}, take=2
-    )
+    rows: Sequence[LiteLLM_VerificationToken] = await _prisma_table(
+        VerificationTokenRepository(prisma_client)
+    ).find_many(where={"key_alias": key_alias}, take=2)
 
     if len(rows) == 0:
         raise ProxyException(
@@ -2258,6 +2505,13 @@ async def _process_single_key_update(
             prisma_client=prisma_client,
         )
 
+    enforce_batch_enqueued_token_limit_is_admin_only(
+        data=update_key_request,
+        existing_metadata=existing_key_row.metadata,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+
     # Check team member permissions
     if prisma_client is not None:
         await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
@@ -2331,13 +2585,27 @@ async def _process_single_key_update(
         )
 
     _data: Final = {**non_default_values, "token": update_key_request.key}
-    response: Final = await prisma_client.update_data(token=update_key_request.key, data=_data)
+    response: Final[Mapping[str, object] | None] = cast(  # cast-ok: every update_data branch returns a str-keyed dict
+        "Mapping[str, object] | None",
+        await prisma_client.update_data(token=update_key_request.key, data=_data),
+    )
 
     # Delete cache
     await _delete_cache_key_object(
         hashed_token=_hash_token_if_needed(update_key_request.key),
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+    )
+
+    # After the key's own cache entry is dropped, so a failure here cannot leave the key
+    # authenticating against the access groups it just lost.
+    await sync_key_update_access_group_membership(
+        prisma_client=prisma_client,
+        key_token=_hash_token_if_needed(
+            _resolve_token_to_update(data=update_key_request, existing_key_row=existing_key_row)
+        ),
+        data=update_key_request,
+        existing_key_row=existing_key_row,
     )
 
     # Trigger async hook
@@ -2385,11 +2653,13 @@ async def _validate_mcp_servers_for_key_update(
             check_db_only=True,
         )
     object_permission_dict: Final = _object_permission_to_dict(data.object_permission)
+    team_unchanged: Final = data.team_id is None or data.team_id == existing_key_row.team_id
     normalized_object_permission: Final = await validate_key_mcp_servers_against_team(
         object_permission=object_permission_dict,
         team_obj=effective_team_obj,
         prisma_client=prisma_client,
         is_proxy_admin=is_proxy_admin,
+        existing_key_object_permission=existing_key_row.object_permission if team_unchanged else None,
     )
     await validate_key_search_tools_against_team(
         object_permission=object_permission_dict,
@@ -2404,26 +2674,34 @@ async def _validate_mcp_servers_for_key_update(
     return normalized_object_permission
 
 
+def _require_prisma_client(prisma_client: PrismaClient | None) -> PrismaClient:
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": "Database not connected"})
+    return prisma_client
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Router | None,
     premium_user: bool,
-    prisma_client: Any,
+    prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """Validate permissions and constraints for key update."""
+    checked_prisma_client: Final = _require_prisma_client(prisma_client)
+
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
     validate_finite_spend(data.spend)
     validate_budget_duration(data.budget_duration)
 
     _is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
 
-    _check_allowed_routes_caller_permission(
-        allowed_routes=data.allowed_routes,
+    _enforce_allowed_routes_update_permission(
+        data=data,
+        existing_key_row=existing_key_row,
         user_api_key_dict=user_api_key_dict,
-        allowed_routes_was_provided="allowed_routes" in data.model_fields_set,
     )
     _check_passthrough_routes_caller_permission(
         data=data,
@@ -2451,7 +2729,7 @@ async def _validate_update_key_data(
     await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
         user_api_key_dict=user_api_key_dict,
         route=KeyManagementRoutes.KEY_UPDATE,
-        prisma_client=prisma_client,
+        prisma_client=checked_prisma_client,
         existing_key_row=existing_key_row,
         user_api_key_cache=user_api_key_cache,
     )
@@ -2491,6 +2769,7 @@ async def _validate_update_key_data(
         (data.max_budget is not None and data.max_budget != existing_key_row.max_budget)
         or data.spend is not None
         or "budget_limits" in data.model_fields_set
+        or "soft_budget" in data.model_fields_set
     )
 
     _existing_metadata: Final = getattr(existing_key_row, "metadata", None)
@@ -2504,6 +2783,12 @@ async def _validate_update_key_data(
         )
 
     enforce_output_token_estimates_are_admin_only(
+        data=data,
+        existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
+        user_api_key_dict=user_api_key_dict,
+        entity="key",
+    )
+    enforce_batch_enqueued_token_limit_is_admin_only(
         data=data,
         existing_metadata=_existing_metadata if isinstance(_existing_metadata, dict) else None,
         user_api_key_dict=user_api_key_dict,
@@ -2526,12 +2811,12 @@ async def _validate_update_key_data(
     # _check_key_admin_access that would otherwise require team/org admin status.
     _key_is_team_key: Final = getattr(existing_key_row, "team_id", None) is not None
     can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not _is_budget_change
-    if (not _is_proxy_admin) and prisma_client is not None and not can_skip_admin_check:
+    if (not _is_proxy_admin) and not can_skip_admin_check:
         hashed_key: Final = existing_key_row.token
         await _check_key_admin_access(
             user_api_key_dict=user_api_key_dict,
             hashed_token=hashed_key,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
             user_api_key_cache=user_api_key_cache,
             route=("/key/update (max_budget/spend)" if _is_budget_change else "/key/update"),
         )
@@ -2542,7 +2827,7 @@ async def _validate_update_key_data(
     if _team_id_to_check is not None:
         team_obj = await get_team_object(
             team_id=_team_id_to_check,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
             user_api_key_cache=user_api_key_cache,
             check_db_only=True,
         )
@@ -2558,7 +2843,7 @@ async def _validate_update_key_data(
             await _check_team_key_limits(
                 team_table=team_obj,
                 data=data,
-                prisma_client=prisma_client,
+                prisma_client=checked_prisma_client,
             )
 
     TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
@@ -2573,7 +2858,7 @@ async def _validate_update_key_data(
         await _check_project_key_limits(
             project_id=_project_id_to_check,
             data=data,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
             user_api_key_cache=user_api_key_cache,
         )
 
@@ -2588,7 +2873,7 @@ async def _validate_update_key_data(
         await _validate_caller_can_assign_key_org(
             user_api_key_dict=user_api_key_dict,
             organization_id=data.organization_id,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
         )
 
     # Check org key limits only when throughput-related fields or organization_id change
@@ -2604,7 +2889,7 @@ async def _validate_update_key_data(
         org_table: Final = await get_org_object(
             org_id=_org_id_to_check,
             user_api_key_cache=user_api_key_cache,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
         )
         if org_table is None:
             raise HTTPException(
@@ -2614,7 +2899,7 @@ async def _validate_update_key_data(
         await _check_org_key_limits(
             org_table=org_table,
             data=data,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
         )
 
     # if team change - check if this is possible
@@ -2644,7 +2929,7 @@ async def _validate_update_key_data(
             data=data,
             team_obj=team_obj,
             existing_key_row=existing_key_row,
-            prisma_client=prisma_client,
+            prisma_client=checked_prisma_client,
             user_api_key_cache=user_api_key_cache,
             is_proxy_admin=_is_proxy_admin,
         )
@@ -2666,6 +2951,11 @@ async def update_key_fn(
     """
     Update an existing API key's parameters.
 
+    The body is a merge patch: a field left out keeps its stored value, and on the key's own columns
+    an explicit null clears it. The metadata-backed fields below are the exception, merging into the
+    stored metadata instead: passing one as null leaves it unchanged, while `metadata` itself
+    replaces the stored metadata wholesale.
+
     Parameters:
     - key: Optional[str] - The key to update. Either key or key_alias must be provided.
     - key_alias: Optional[str] - User-friendly key alias. If key is omitted, also identifies the key to update (must match exactly one key, same as /key/delete's key_aliases)
@@ -2683,7 +2973,7 @@ async def update_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
     - budget_duration: Optional[str] - Budget reset period ("30d", "1h", etc.)
-    - soft_budget: Optional[float] - [TODO] Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached.
+    - soft_budget: Optional[float] - Soft budget limit (warning vs. hard stop). Will trigger a slack alert when this soft budget is reached. Set to null to remove the soft budget.
     - max_parallel_requests: Optional[int] - Rate limit for parallel requests
     - metadata: Optional[dict] - Metadata for key. Example {"team": "core-infra", "app": "app2"}
     - tpm_limit: Optional[int] - Tokens per minute limit
@@ -2737,13 +3027,14 @@ async def update_key_fn(
     }'
     ```
     """
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
         llm_router,
         premium_user,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
-        user_custom_key_update,
     )
 
     try:
@@ -2753,6 +3044,8 @@ async def update_key_fn(
                 status_code=400,
                 detail={"error": f"max_budget must be a non-negative finite number. Received: {data.max_budget}"},
             )
+
+        _validate_soft_budget_value(data.soft_budget)
 
         # get the row from db
         existing_key_row: Final = await _get_and_validate_existing_key(
@@ -2774,7 +3067,9 @@ async def update_key_fn(
         )
 
         # Custom key update hook
-        custom_key_update_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = user_custom_key_update
+        custom_key_update_hook: Final[Callable[..., Awaitable[Mapping[str, object]]] | None] = _custom_key_update_hook(
+            proxy_server
+        )
         if custom_key_update_hook is not None:
             if inspect.iscoroutinefunction(custom_key_update_hook):
                 result: Final = await custom_key_update_hook(data)
@@ -2808,10 +3103,22 @@ async def update_key_fn(
             existing_key_alias=existing_key_row.key_alias,
         )
 
-        _data: Final = {**non_default_values, "token": key}
         if prisma_client is None:
             raise Exception("Not connected to DB!")
-        response: Final = await prisma_client.update_data(token=key, data=_data)
+
+        changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
+        response: Final = (
+            await _update_key_row_with_soft_budget(
+                prisma_client=prisma_client,
+                key=key,
+                data=data,
+                non_default_values=non_default_values,
+                existing_key_row=existing_key_row,
+                changed_by=changed_by,
+            )
+            if "soft_budget" in data.model_fields_set
+            else await prisma_client.update_data(token=key, data=MappingProxyType({**non_default_values, "token": key}))
+        )
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
@@ -2819,6 +3126,15 @@ async def update_key_fn(
             hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+        )
+
+        # After the key's own cache entry is dropped, so a failure here cannot leave the key
+        # authenticating against the access groups it just lost.
+        await sync_key_update_access_group_membership(
+            prisma_client=prisma_client,
+            key_token=_hash_token_if_needed(key),
+            data=data,
+            existing_key_row=existing_key_row,
         )
 
         if data.spend is not None:
@@ -2927,13 +3243,15 @@ async def bulk_update_keys(
     }'
     ```
     """
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
         llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
-        user_custom_key_update,
     )
+
+    custom_key_update_hook: Final = _custom_key_update_hook(proxy_server)
 
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(
@@ -2980,7 +3298,7 @@ async def bulk_update_keys(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 llm_router=llm_router,
-                user_custom_key_update=user_custom_key_update,
+                user_custom_key_update=custom_key_update_hook,
             )
 
             successful_updates.append(
@@ -3058,7 +3376,7 @@ def _build_failed_team_key_update(
         if hasattr(existing_key_row, "model_dump"):
             key_info = existing_key_row.model_dump()
         elif hasattr(existing_key_row, "dict"):
-            key_info = existing_key_row.dict()
+            key_info = dict[str, object](_legacy_model_dict(existing_key_row))
         if key_info:
             key_info.pop("token", None)
 
@@ -3089,13 +3407,15 @@ async def bulk_update_team_keys(
 
     Callable by proxy admins, or by team admins with `KEY_UPDATE` permission.
     """
+    from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
         llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
-        user_custom_key_update,
     )
+
+    custom_key_update_hook: Final = _custom_key_update_hook(proxy_server)
 
     if prisma_client is None:
         raise HTTPException(
@@ -3123,7 +3443,7 @@ async def bulk_update_team_keys(
         # `blocked` is Boolean? with no default; `/key/generate` writes NULL. Prisma's `NOT`
         # excludes NULLs, so explicitly OR `false` with `null` to include them.
         now: Final = datetime.now(timezone.utc)
-        existing_keys = await VerificationTokenRepository(prisma_client).table.find_many(
+        existing_keys = await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
             where={
                 "team_id": data.team_id,
                 "AND": [
@@ -3141,7 +3461,9 @@ async def bulk_update_team_keys(
                     "error": f"Team {data.team_id} has more than {MAX_BATCH_SIZE} keys. Use `key_ids` to update in batches of {MAX_BATCH_SIZE}."
                 },
             )
-        requested_tokens = [row.token for row in existing_keys]
+        requested_tokens = cast(  # cast-ok: token is the table's primary key, so a row read back always carries one
+            "list[str]", [row.token for row in existing_keys]
+        )
     else:
         if data.key_ids is None or len(data.key_ids) == 0:
             raise HTTPException(
@@ -3159,7 +3481,7 @@ async def bulk_update_team_keys(
             seen_hashes.add(h)
             requested_tokens.append(k)
             hashed_key_ids.append(h)
-        existing_keys = await VerificationTokenRepository(prisma_client).table.find_many(
+        existing_keys = await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
             where={"team_id": data.team_id, "token": {"in": hashed_key_ids}}
         )
 
@@ -3223,7 +3545,7 @@ async def bulk_update_team_keys(
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
                 llm_router=llm_router,
-                user_custom_key_update=user_custom_key_update,
+                user_custom_key_update=custom_key_update_hook,
                 existing_key_row=existing_by_token[db_token],
             )
 
@@ -3426,62 +3748,74 @@ async def delete_key_fn(
         raise handle_exception_on_proxy(e)
 
 
-async def _get_model_max_budget_current_spend(
-    api_key_hash: str,
-    model: str,
-    budget_config: BudgetConfig,
-    user_api_key_cache: UserApiKeyCache,
-) -> float:
-    virtual_key_model_spend_cache_key = (
-        f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:{api_key_hash}:{model}:{budget_config.budget_duration}"
-    )
-    current_spend: float | None = await user_api_key_cache.async_get_cache(
-        key=virtual_key_model_spend_cache_key,
-    )
-    if current_spend is None:
-        model_without_prefix: Final = model.split("/")[-1] if "/" in model else model
-        virtual_key_model_spend_cache_key = (
-            f"{VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX}:"
-            f"{api_key_hash}:{model_without_prefix}:{budget_config.budget_duration}"
-        )
-        current_spend = await user_api_key_cache.async_get_cache(
-            key=virtual_key_model_spend_cache_key,
-        )
-    try:
-        return float(current_spend or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
 async def _build_model_max_budget_usage(
     api_key_hash: str,
     model_max_budget: Mapping[str, Mapping[str, object]],
-    user_api_key_cache: UserApiKeyCache | None,
+    user_api_key_cache: DualCache | None,
 ) -> dict[str, dict[str, object]]:
-    if user_api_key_cache is None or not model_max_budget:
-        return {}
+    return await build_model_max_budget_usage(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id=api_key_hash,
+        model_max_budget=model_max_budget,
+        cache=user_api_key_cache,
+    )
 
-    result: Final[dict[str, dict[str, object]]] = {}
-    for model, budget_info in model_max_budget.items():
-        try:
-            budget_config = BudgetConfig.model_validate(budget_info)
-            if budget_config.budget_duration is None:
-                continue
-            duration_in_seconds(budget_config.budget_duration)
-        except Exception:  # noqa: BLE001
-            continue
-        spend = await _get_model_max_budget_current_spend(
-            api_key_hash=api_key_hash,
-            model=model,
-            budget_config=budget_config,
-            user_api_key_cache=user_api_key_cache,
-        )
-        result[model] = {
-            "current_spend": round(spend, 4),
-            "budget_limit": budget_config.max_budget,
-            "time_period": budget_config.budget_duration,
-        }
-    return result
+
+def _window_max_budget(window: Mapping[str, object]) -> float | None:
+    """A window's max_budget as a float; None when absent or unparseable."""
+    value: Final = window.get("max_budget")
+    if not isinstance(value, (int, float, str)):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+async def _budget_window_usage(
+    window: Mapping[str, object], api_key_hash: str
+) -> tuple[str, Mapping[str, object]] | None:
+    """
+    (budget_duration, usage entry) for one budget window; None when the window
+    has no budget_duration to key it by.
+
+    Reads the same cross-pod counter (spend:key:{hashed_token}:window:{budget_duration})
+    that _virtual_key_multi_budget_check enforces against, passing the same
+    window_duration + window_start so a stale-low counter is re-checked against
+    the LiteLLM_BudgetWindowSpend row instead of a spend-log aggregate.
+    """
+    from litellm.proxy.proxy_server import get_current_spend
+
+    duration: Final = window.get("budget_duration")
+    if not isinstance(duration, str) or not duration:
+        return None
+    spend: Final = await get_current_spend(
+        counter_key=f"spend:key:{api_key_hash}:window:{duration}",
+        fallback_spend=0.0,
+        max_budget=_window_max_budget(window),
+        window_entity_type="Key",
+        window_entity_id=api_key_hash,
+        window_duration=duration,
+        window_start=get_budget_window_start(window),
+    )
+    return duration, MappingProxyType({"current_spend": round(spend, 4)})
+
+
+async def _build_budget_limits_usage(
+    budget_limits: Sequence[object] | str | None, api_key_hash: str
+) -> Mapping[str, Mapping[str, object]] | None:
+    """
+    Current-window spend per budget window, keyed by budget_duration, reported
+    next to the stored budget_limits (which is returned untouched). None when
+    the key has no windows, so the field only appears on keys that have them.
+    """
+    windows: Final = _budget_limit_windows(budget_limits)
+    if not windows:
+        return None
+    usages: Final = await asyncio.gather(
+        *(_budget_window_usage(window=window, api_key_hash=api_key_hash) for window in windows)
+    )
+    return MappingProxyType({duration: usage for duration, usage in (u for u in usages if u is not None)})
 
 
 @router.post(
@@ -3511,7 +3845,10 @@ async def info_key_fn_v2(
     -d {"keys": ["sk-1", "sk-2", "sk-3"]}
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import (
+        model_max_budget_limiter,
+        prisma_client,
+    )
 
     try:
         if prisma_client is None:
@@ -3523,7 +3860,6 @@ async def info_key_fn_v2(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={"message": "Malformed request. No keys passed in."},
             )
-
         # Resolve key_aliases to tokens so we never pass token=None (unbounded query)
         tokens_to_query: Final = list(data.keys) if data.keys else []
         if data.key_aliases:
@@ -3563,8 +3899,15 @@ async def info_key_fn_v2(
                 k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
                     api_key_hash=k_token_hash,
                     model_max_budget=model_max_budget,
-                    user_api_key_cache=user_api_key_cache,
+                    user_api_key_cache=model_max_budget_limiter.dual_cache,
                 )
+            if k_token_hash:
+                budget_limits_usage = await _build_budget_limits_usage(
+                    budget_limits=k_dict.get("budget_limits"),
+                    api_key_hash=k_token_hash,
+                )
+                if budget_limits_usage is not None:
+                    k_dict["budget_limits_usage"] = budget_limits_usage
 
             filtered_key_info.append(k_dict)
         return {"key": data.keys, "info": filtered_key_info}
@@ -3576,15 +3919,22 @@ async def info_key_fn_v2(
 @router.get("/key/info", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def info_key_fn(
-    key: str | None = fastapi.Query(default=None, description="Key in the request parameters"),
+    key: str | None = fastapi.Query(
+        default=None,
+        description=(
+            "Key to look up. Pass the key's sha256 hash so the raw key stays out of URLs and access "
+            "logs. Example key='d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa'"
+        ),
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Retrieve information about a key.
 
     Parameters:
-    - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash.
-      Defaults to the key in the Authorization header.
+    - key: str | None (query parameter) - The key to look up. Accepts the plaintext key or its hash;
+      prefer the hash, since a query parameter is recorded verbatim by any HTTP access log in front
+      of the proxy. Defaults to the key in the Authorization header.
 
     Returns:
     - key: str - The key that was looked up, echoed back as it was passed in
@@ -3601,6 +3951,10 @@ async def info_key_fn(
         - model_max_budget: dict - Per-model budgets, e.g. {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}
         - model_max_budget_usage: dict | None - Current-window spend per model, present only when
           the key has per-model budgets
+        - budget_limits: list | None - Concurrent budget windows, exactly as stored
+        - budget_limits_usage: dict | None - Current-window spend per budget window, e.g.
+          {"1h": {"current_spend": 0.0009}}, present only when the key has budget windows
+          (read from the same cross-pod spend counter the budget enforcement uses)
         - models: list - Model_name's the key is allowed to call
         - tpm_limit / rpm_limit: int | None - Tokens and requests per minute limits
         - metadata: dict - Metadata for the key, e.g. {"team": "core-infra"}
@@ -3612,7 +3966,7 @@ async def info_key_fn(
 
     Example Curl:
     ```
-    curl -X GET "http://0.0.0.0:4000/key/info?key=sk-test-example-key-123" \
+    curl -X GET "http://0.0.0.0:4000/key/info?key=d5345c0ecc68ae6295c69f91926b2bd379e25481a40c34b5884d157a9f65d8fa" \
 -H "Authorization: Bearer sk-1234"
     ```
 
@@ -3622,7 +3976,10 @@ async def info_key_fn(
 -H "Authorization: Bearer sk-test-example-key-123"
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import (
+        model_max_budget_limiter,
+        prisma_client,
+    )
 
     try:
         if prisma_client is None:
@@ -3635,7 +3992,7 @@ async def info_key_fn(
         hashed_key: str | None = key
         if key is not None:
             hashed_key = _hash_token_if_needed(token=key)
-        key_info = await VerificationTokenRepository(prisma_client).table.find_unique(
+        key_info = await _prisma_table(VerificationTokenRepository(prisma_client)).find_unique(
             where={"token": hashed_key},
             include={"litellm_budget_table": True},
         )
@@ -3664,8 +4021,8 @@ async def info_key_fn(
             key_info = key_info.model_dump()
         except Exception:
             # if using pydantic v1
-            key_info = key_info.dict()
-        key_token_hash: Final = key_info.pop("token")
+            key_info = key_info.dict()  # pyright: ignore[reportDeprecated]  # deliberate pydantic v1 fallback
+        key_token_hash: Final[str | None] = key_info.pop("token")
 
         model_max_budget = key_info.get("model_max_budget") or {}
         budget_table: Final = key_info.get("litellm_budget_table") or {}
@@ -3675,8 +4032,14 @@ async def info_key_fn(
             key_info["model_max_budget_usage"] = await _build_model_max_budget_usage(
                 api_key_hash=key_token_hash,
                 model_max_budget=model_max_budget,
-                user_api_key_cache=user_api_key_cache,
+                user_api_key_cache=model_max_budget_limiter.dual_cache,
             )
+        budget_limits_usage: Final = await _build_budget_limits_usage(
+            budget_limits=key_info.get("budget_limits"),
+            api_key_hash=key_token_hash,
+        )
+        if budget_limits_usage is not None:
+            key_info["budget_limits_usage"] = budget_limits_usage
 
         # Attach object_permission if object_permission_id is set
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
@@ -3764,7 +4127,7 @@ async def generate_key_helper_fn(
     auto_rotate: bool | None = None,
     rotation_interval: str | None = None,
     router_settings: dict | None = None,
-    access_group_ids: list | None = None,
+    access_group_ids: list[str] | None = None,
     budget_limits: list | None = None,  # multiple concurrent budget windows
 ):
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -3868,6 +4231,10 @@ async def generate_key_helper_fn(
         }
         if teams is not None:
             user_data["teams"] = teams
+        if model_max_budget:
+            # Only when supplied: the SSO and default-key callers reach this with the
+            # empty default, and writing that would clear an existing user's budgets.
+            user_data["model_max_budget"] = model_max_budget_json
         key_data: Final = {
             "token": token,
             "key_alias": key_alias,
@@ -3945,7 +4312,10 @@ async def generate_key_helper_fn(
             if table_name is None or table_name == "user":  # do not auto-create users for `/key/generate`
                 ## CREATE USER (If necessary)
                 if query_type == "insert_data":
-                    user_row = await prisma_client.insert_data(data=user_data, table_name="user")
+                    user_row = cast(  # cast-ok: table_name="user" is the insert_data branch returning the user row
+                        "prisma_models.LiteLLM_UserTable | None",
+                        await prisma_client.insert_data(data=user_data, table_name="user"),
+                    )
 
                     if user_row is None:
                         raise Exception("Failed to create user")
@@ -3972,6 +4342,14 @@ async def generate_key_helper_fn(
             create_key_response: Final = await prisma_client.insert_data(data=key_data, table_name="key")
 
             key_data["token_id"] = getattr(create_key_response, "token", None)
+            created_token_hash: Final = getattr(create_key_response, "token", None)
+            if isinstance(created_token_hash, str):
+                await sync_key_access_group_membership(
+                    prisma_client=prisma_client,
+                    key_token=created_token_hash,
+                    previous_access_group_ids=None,
+                    updated_access_group_ids=access_group_ids,
+                )
             key_data["litellm_budget_table"] = getattr(create_key_response, "litellm_budget_table", None)
             key_data["created_at"] = getattr(create_key_response, "created_at", None)
             key_data["updated_at"] = getattr(create_key_response, "updated_at", None)
@@ -4144,9 +4522,12 @@ async def delete_verification_tokens(
         if prisma_client:
             hashed_tokens: Final[list[str]] = [_hash_token_if_needed(token=key) for key in tokens]
             tokens = hashed_tokens
-            _keys_being_deleted: Final[list[LiteLLM_VerificationToken]] = await _prisma_table(
-                VerificationTokenRepository(prisma_client)
-            ).find_many(where={"token": {"in": hashed_tokens}})
+            _keys_being_deleted: Final[list[LiteLLM_VerificationToken]] = cast(  # cast-ok: find_many returns a list
+                "list[LiteLLM_VerificationToken]",
+                await _prisma_table(VerificationTokenRepository(prisma_client)).find_many(
+                    where={"token": {"in": hashed_tokens}}
+                ),
+            )
 
             if len(_keys_being_deleted) == 0:
                 raise HTTPException(
@@ -4189,6 +4570,7 @@ async def delete_verification_tokens(
                 deleted_tokens = [key.token for key in authorized_keys]
                 if len(deleted_tokens) != len(tokens):
                     failed_tokens = [token for token in tokens if token not in deleted_tokens]
+
         else:
             raise Exception("DB not connected. prisma_client is None")
     except Exception as e:
@@ -4204,6 +4586,16 @@ async def delete_verification_tokens(
         hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
 
+    # After credential invalidation, so a failure here can never keep a deleted key alive.
+    for deleted_key in authorized_keys:
+        if deleted_key.token is not None:
+            await sync_key_access_group_membership(
+                prisma_client=prisma_client,
+                key_token=deleted_key.token,
+                previous_access_group_ids=deleted_key.access_group_ids,
+                updated_access_group_ids=None,
+            )
+
     return {
         "deleted_keys": deleted_tokens,
         "failed_tokens": failed_tokens,
@@ -4211,7 +4603,7 @@ async def delete_verification_tokens(
 
 
 def _transform_verification_tokens_to_deleted_records(
-    keys: list[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
 ) -> list[dict[str, object]]:
@@ -4232,7 +4624,7 @@ def _transform_verification_tokens_to_deleted_records(
                 "litellm_changed_by": litellm_changed_by,
             }
         )
-        record = deleted_record.model_dump()
+        record = dict[str, object](_as_object_dict(deleted_record.model_dump()))
 
         # Map org_id to organization_id (model uses org_id, but schema expects organization_id)
         org_id_value: object = record.pop("org_id", None)
@@ -4269,18 +4661,28 @@ def _transform_verification_tokens_to_deleted_records(
 async def _save_deleted_verification_token_records(
     records: Sequence[Mapping[str, object]],
     prisma_client: PrismaClient,
+    tx: "Prisma | None" = None,
 ) -> None:
-    """Save deleted verification token records to the database."""
+    """Save deleted verification token records to the database.
+
+    ``tx`` runs the write on that transaction's connection instead of a fresh
+    one, so a caller batching this with other writes gets one all-or-nothing
+    commit.
+    """
     if not records:
+        return
+    if tx is not None:
+        await tx.litellm_deletedverificationtoken.create_many(data=records)
         return
     await _deleted_verification_token_table(prisma_client).create_many(data=records)
 
 
 async def _persist_deleted_verification_tokens(
-    keys: list[LiteLLM_VerificationToken],
+    keys: Sequence[LiteLLM_VerificationToken],
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
+    tx: "Prisma | None" = None,
 ) -> None:
     """Persist deleted verification token records by transforming and saving them."""
     records: Final = _transform_verification_tokens_to_deleted_records(
@@ -4291,6 +4693,7 @@ async def _persist_deleted_verification_tokens(
     await _save_deleted_verification_token_records(
         records=records,
         prisma_client=prisma_client,
+        tx=tx,
     )
 
 
@@ -4338,35 +4741,38 @@ async def _rotate_master_key(
     from litellm.proxy.proxy_server import proxy_config
 
     try:
-        models: list | None = await _prisma_table(ModelRepository(prisma_client)).find_many()
+        models: list | None = cast(  # cast-ok: find_many returns a real list, which TableActions widens to Sequence
+            "list[object]", await _prisma_table(ModelRepository(prisma_client)).find_many()
+        )
     except Exception:
         models = None
     # 2. process model table
     if models:
         decrypted_models: Final = proxy_config.decrypt_model_list_from_db(new_models=models)
         verbose_proxy_logger.debug("ABLE TO DECRYPT MODELS - len(decrypted_models): %s", len(decrypted_models))
-        new_models: Final[list[dict[str, object]]] = []
-        for model in decrypted_models:
-            new_model = await _add_model_to_db(
-                model_params=Deployment(**model),
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-                new_encryption_key=new_master_key,
-                should_create_model_in_db=False,
-            )
-            if new_model:
-                _dumped = new_model.model_dump(exclude_none=True)
-                _dumped["litellm_params"] = prisma.Json(_dumped["litellm_params"])
-                _dumped["model_info"] = prisma.Json(_dumped["model_info"])
-                new_models.append(_dumped)
-        verbose_proxy_logger.debug("Resetting proxy model table")
-        async with prisma_client.db.tx() as tx_ctx:
+        reencrypted_models: Final = tuple(
+            [
+                reencrypted
+                for model in decrypted_models
+                if (
+                    reencrypted := await _add_model_to_db(
+                        model_params=Deployment(**model),
+                        user_api_key_dict=user_api_key_dict,
+                        prisma_client=prisma_client,
+                        new_encryption_key=new_master_key,
+                        should_create_model_in_db=False,
+                    )
+                )
+            ]
+        )
+        verbose_proxy_logger.debug("Re-encrypting litellm_params on %s model rows", len(reencrypted_models))
+        async with prisma_client.db.tx(timeout=timedelta(minutes=2)) as tx_ctx:
             tx: Final[_TxTables] = tx_ctx
-            await tx.litellm_proxymodeltable.delete_many()
-            verbose_proxy_logger.debug("Creating %s models", len(new_models))
-            await tx.litellm_proxymodeltable.create_many(
-                data=new_models,
-            )
+            for reencrypted_model in reencrypted_models:
+                await tx.litellm_proxymodeltable.update_many(
+                    data=_ModelParamsUpdate(litellm_params=prisma.Json(reencrypted_model.litellm_params)),
+                    where=_ModelRowWhere(model_id=reencrypted_model.model_id),
+                )
         await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
     # 3. process config table
     try:
@@ -4376,14 +4782,14 @@ async def _rotate_master_key(
 
     if config:
         """If environment_variables is found, decrypt it and encrypt it with the new master key"""
-        environment_variables_dict = {}
+        environment_variables_dict: Mapping[str, str] | None = {}
         for c in config:
             if c.param_name == "environment_variables":
-                environment_variables_dict = c.param_value
+                environment_variables_dict = _env_vars_param_value(c)
 
         if environment_variables_dict:
             decrypted_env_vars: Final = proxy_config._decrypt_and_set_db_env_variables(
-                environment_variables=environment_variables_dict
+                environment_variables=dict[str, str](environment_variables_dict)
             )
             encrypted_env_vars: Final = proxy_config._encrypt_env_variables(
                 environment_variables=decrypted_env_vars,
@@ -4449,7 +4855,7 @@ async def _rotate_master_key(
                     updated_patch=decrypted_cred,
                     new_encryption_key=new_master_key,
                 )
-                _cred_data = encrypted_cred.model_dump(exclude_none=True)
+                _cred_data = dict[str, object](_as_object_dict(encrypted_cred.model_dump(exclude_none=True)))
                 if "credential_values" in _cred_data:
                     _cred_data["credential_values"] = prisma.Json(_cred_data["credential_values"])
                 if "credential_info" in _cred_data:
@@ -4605,7 +5011,7 @@ async def _insert_deprecated_key(
 
     try:
         revoke_at: Final = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
-        await DeprecatedVerificationTokenRepository(prisma_client).table.upsert(
+        await _deprecated_verification_token_table(prisma_client).upsert(
             where={"token": old_token_hash},
             data={
                 "create": {
@@ -4677,6 +5083,12 @@ async def _execute_virtual_key_regeneration(
             user_api_key_dict=user_api_key_dict,
             entity="key",
         )
+        enforce_batch_enqueued_token_limit_is_admin_only(
+            data=data,
+            existing_metadata=_existing_key_metadata if isinstance(_existing_key_metadata, dict) else None,
+            user_api_key_dict=user_api_key_dict,
+            entity="key",
+        )
 
     new_token: Final = await get_new_token(data=data)
     new_token_hash: Final = hash_token(new_token)
@@ -4696,6 +5108,13 @@ async def _execute_virtual_key_regeneration(
     update_data.update(non_default_values)
     jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(data=update_data)
 
+    # Snapshot before the token update: the FK cascade rewrites mapping rows to the new hash,
+    # but their cached jwt_key_mapping entries still point at the old token (LIT-5379).
+    jwt_mapping_cache_keys: Final = await get_jwt_key_mapping_cache_keys_for_token(
+        hashed_token=hashed_api_key,
+        prisma_client=prisma_client,
+    )
+
     # If grace period set, insert deprecated key so old key remains valid
     await _insert_deprecated_key(
         prisma_client=prisma_client,
@@ -4704,7 +5123,9 @@ async def _execute_virtual_key_regeneration(
         grace_period=data.grace_period if data else None,
     )
 
-    updated_token: Final[Mapping[str, object] | None] = await VerificationTokenRepository(prisma_client).table.update(
+    updated_token: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
+        VerificationTokenRepository(prisma_client)
+    ).update(
         where={"token": hashed_api_key},
         data=with_settings_updated_at(jsonified_update_data),
     )
@@ -4718,6 +5139,17 @@ async def _execute_virtual_key_regeneration(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+    await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
+
+    # After credential invalidation, so a failure here can never keep the old key alive.
+    await sync_key_regeneration_access_group_membership(
+        prisma_client=prisma_client,
+        previous_key_token=hashed_api_key,
+        new_key_token=new_token_hash,
+        data=data,
+        existing_key_row=key_in_db,
+    )
 
     response: Final = GenerateKeyResponse.model_validate(updated_token_dict)
     asyncio.create_task(
@@ -5061,7 +5493,7 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
 
     max_budget = key_in_db.max_budget
     if key_in_db.litellm_budget_table is not None:
-        budget_max_budget: Final = getattr(key_in_db.litellm_budget_table, "max_budget", None)
+        budget_max_budget: Final[float | None] = getattr(key_in_db.litellm_budget_table, "max_budget", None)
         if budget_max_budget is not None:
             if max_budget is None or budget_max_budget < max_budget:
                 max_budget = budget_max_budget
@@ -5073,6 +5505,125 @@ def _validate_reset_spend_value(reset_to: object, key_in_db: LiteLLM_Verificatio
         )
 
     return reset_to
+
+
+async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: float) -> None:
+    """
+    Set a Redis-backed spend counter to `value`, mirror it into the short-lived
+    spend_db_floor marker `_authoritative_floor_spend` reads, and broadcast both
+    to every worker (LIT-3803 pattern: setting, not deleting, means a worker's
+    own self-delivered broadcast still carries the reset value forward).
+
+    Without the floor marker, `_authoritative_floor_spend` can re-derive a
+    stale, pre-reset value from a marker another worker cached moments earlier
+    and raise the just-reset counter right back up via `_repair_stale_spend_counter`.
+    Without the broadcast, a worker that already cached the pre-reset key object
+    or floor marker keeps enforcing against it until its own TTL expires.
+    """
+    from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
+
+    spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value, ttl=60)
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value, ttl=60)
+        except Exception as redis_err:
+            verbose_proxy_logger.warning(
+                "Failed to update spend counter %s in Redis: %s. "
+                "Budget checks may use stale value until counter expires.",
+                counter_key,
+                redis_err,
+            )
+
+    floor_key: Final = f"spend_db_floor:{counter_key}"
+    spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+
+    await publish_auth_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
+    await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+
+
+def _budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple[Mapping[str, object], ...]:
+    """Coerce a key's stored `budget_limits` into a tuple of plain window dicts.
+
+    It is a DB Json column, so a caller reading it straight off `find_unique`
+    gets an already-parsed list; one reading it off `json.dumps`'d text (or a
+    raw SQL row) gets the string form. Either way each entry is a plain dict,
+    except wherever a caller already validated the field through a pydantic
+    model (e.g. `UserAPIKeyAuth.budget_limits`), which yields `BudgetLimitEntry`
+    objects instead -- coerced here via `model_dump()`, matching
+    `_set_budget_reset_at`'s identical coercion in team_endpoints.py.
+    """
+    if not budget_limits:
+        return ()
+    raw_windows: Final = json.loads(budget_limits) if isinstance(budget_limits, str) else budget_limits
+    return tuple(raw_window if isinstance(raw_window, dict) else raw_window.model_dump() for raw_window in raw_windows)
+
+
+def _advance_one_key_budget_window(window: Mapping[str, object]) -> Mapping[str, object]:
+    """Restart one budget window from now, by advancing its `reset_at`.
+
+    `window_start` is derived elsewhere as `reset_at - budget_duration`
+    (`get_budget_window_start`), so `reset_at` must be set to `now +
+    budget_duration` -- a window floating from THIS moment -- to make
+    `window_start` land at `now` and exclude the historical spend that
+    triggered the block. Reusing `get_budget_reset_time`/
+    `ResetBudgetJob._reset_expired_window`'s calendar-standardized boundary
+    (e.g. "next midnight") would not do that: for a "1d" window `next
+    midnight - 1d` is simply the START of the calendar day already in
+    progress, which still covers that spend. That reuse is only safe for the
+    scheduled job, which runs right as `reset_at` naturally elapses, so the
+    elapsed boundary it computes is already close to "now". A manual reset
+    can happen at any point mid-window, so it needs the floating form
+    instead. A window with no `budget_duration` is returned unchanged.
+    """
+    duration = window.get("budget_duration")
+    if not isinstance(duration, str) or not duration:
+        return window
+    new_reset_at: Final = datetime.now(timezone.utc) + timedelta(seconds=duration_in_seconds(duration))
+    return {  # mutable-ok: this is the JSON payload persisted to budget_limits' Json column, which requires a plain dict
+        **window,
+        "reset_at": new_reset_at.isoformat(),
+    }
+
+
+async def _reset_key_budget_windows(
+    prisma_client: PrismaClient,
+    hashed_api_key: str,
+    budget_limits: Sequence[object] | str | None,
+) -> None:
+    """Force-expire every one of a key's own `budget_limits` windows (extra
+    time-windowed caps layered on top of the lifetime max_budget, e.g. a daily
+    limit) so a manual spend reset also clears them, not just the lifetime
+    counter.
+
+    Persists the advanced `reset_at` boundaries BEFORE zeroing any window's
+    Redis counter, not after: a window counter reading zero is only durable
+    once every reader recomputing its floor from the DB sees the new
+    boundary too (`get_current_spend` re-derives a window counter from real
+    `LiteLLM_SpendLogs` rows inside `[window_start, now)` on every read below
+    max_budget, see its `is_window` branch). Zeroing first would let a
+    request racing the DB write compute `window_start` from the stale
+    pre-reset boundary, re-sum the unchanged historical spend, and put the
+    counter right back where it was before the write ever landed.
+    """
+    windows: Final = _budget_limit_windows(budget_limits)
+    if not windows:
+        return
+
+    reset_windows: Final = tuple(_advance_one_key_budget_window(w) for w in windows)
+
+    # prisma-client-py's typed update() takes plain dict literals for `where`/`data`; there is no
+    # frozen-mapping equivalent to pass instead.
+    reset_payload: Final = {"budget_limits": json.dumps(reset_windows, default=str)}  # mutable-ok: prisma data kwarg
+    await VerificationTokenRepository(prisma_client).table.update(
+        where={"token": hashed_api_key},  # mutable-ok: prisma where kwarg
+        data=reset_payload,
+    )
+
+    for window in reset_windows:
+        duration = window.get("budget_duration")
+        if isinstance(duration, str) and duration:
+            counter_key = f"spend:key:{hashed_api_key}:window:{duration}"
+            await _set_spend_counter_with_floor_and_broadcast(counter_key=counter_key, value=0.0)
 
 
 @router.post(
@@ -5140,29 +5691,29 @@ async def reset_key_spend_fn(
                 detail={"error": "Failed to update key spend"},
             )
 
+        # Reset the lifetime spend counter to the new value (not 0.0, so partial
+        # resets are reflected correctly), and force-expire any of the key's own
+        # budget_limits windows, so get_current_spend() returns the correct
+        # amount for every enforcement check immediately instead of the stale
+        # pre-reset value.
+        _counter_key: Final = f"spend:key:{hashed_api_key}"
+        await _set_spend_counter_with_floor_and_broadcast(counter_key=_counter_key, value=reset_to)
+        await _reset_key_budget_windows(
+            prisma_client=prisma_client,
+            hashed_api_key=hashed_api_key,
+            budget_limits=_key_in_db.budget_limits,
+        )
+
+        # Evicting the cached key object LAST (after every DB write above has
+        # committed) matters: a request landing between an earlier eviction and
+        # a later write would re-fetch and re-cache the pre-write row, pinning
+        # that pod to the stale budget_limits/spend for the rest of its own
+        # cache TTL even though the DB is already correct.
         await _delete_cache_key_object(
             hashed_token=hashed_api_key,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
-
-        # Set Redis spend counter to the new value so get_current_spend()
-        # returns the correct amount immediately instead of the stale pre-reset value.
-        # We use reset_to (not 0.0) so partial resets are reflected correctly.
-        from litellm.proxy.proxy_server import spend_counter_cache
-
-        _counter_key: Final = f"spend:key:{hashed_api_key}"
-        spend_counter_cache.in_memory_cache.set_cache(key=_counter_key, value=reset_to, ttl=60)
-        if spend_counter_cache.redis_cache is not None:
-            try:
-                await spend_counter_cache.redis_cache.async_set_cache(key=_counter_key, value=reset_to, ttl=60)
-            except Exception as redis_err:
-                verbose_proxy_logger.warning(
-                    "Failed to update spend counter %s in Redis: %s. "
-                    "Budget checks may use stale value until counter expires.",
-                    _counter_key,
-                    redis_err,
-                )
 
         max_budget: Final = updated_key.max_budget
         budget_reset_at: Final = updated_key.budget_reset_at
@@ -5247,10 +5798,19 @@ async def validate_key_list_check(
 
     if key_hash:
         try:
-            key_info: Final = await VerificationTokenRepository(prisma_client).table.find_unique(
+            key_info: Final[LiteLLM_VerificationToken | None] = await _prisma_table(
+                VerificationTokenRepository(prisma_client)
+            ).find_unique(
                 where={"token": key_hash},
             )
         except Exception:
+            raise ProxyException(
+                message="Key Hash not found.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key_hash",
+                code=status.HTTP_403_FORBIDDEN,
+            )
+        if key_info is None:
             raise ProxyException(
                 message="Key Hash not found.",
                 type=ProxyErrorTypes.bad_request_error,
@@ -5278,8 +5838,9 @@ async def _fetch_user_team_objects(
     if complete_user_info is None or not complete_user_info.teams:
         return []
 
-    teams: Final[list[BaseModel] | None] = await TeamRepository(prisma_client).table.find_many(
-        where={"team_id": {"in": complete_user_info.teams}}
+    teams: Final[Sequence[BaseModel] | None] = cast(  # cast-ok: the None guard below predates the non-optional seam
+        "Sequence[BaseModel] | None",
+        await TeamRepository(prisma_client).table.find_many(where={"team_id": {"in": complete_user_info.teams}}),
     )
     if teams is None:
         return []
@@ -5381,6 +5942,10 @@ async def list_keys(
     key_alias: str | None = Query(
         None,
         description="Filter keys by key alias. Exact match by default; set substring_matching=true (admin only) for case-insensitive substring matching.",
+    ),
+    search: str | None = Query(
+        None,
+        description="Combined search: matches keys whose token (key hash) equals the value OR whose key_alias contains it (case-insensitive).",
     ),
     return_full_object: bool = Query(False, description="Return full key object"),
     include_team_keys: bool = Query(False, description="Include all keys for teams that user is an admin of."),
@@ -5525,6 +6090,7 @@ async def list_keys(
             agent_id=agent_id,
             use_substring_matching=use_substring_matching,
             expires_filter=expires if isinstance(expires, str) else None,
+            search=search,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -5744,6 +6310,16 @@ def _build_expires_where_clause(expires_filter: str, now: datetime) -> dict[str,
     return {"OR": [{"expires": None}, {"expires": {"gte": now}}]}
 
 
+def _build_key_search_where(search: str) -> KeySearchWhere:
+    search_where: Final[KeySearchWhere] = {
+        "OR": (
+            {"token": search},
+            {"key_alias": {"contains": search, "mode": "insensitive"}},
+        )
+    }
+    return search_where
+
+
 def _build_key_filter_conditions(
     user_id: str | None,
     team_id: str | None,
@@ -5759,6 +6335,7 @@ def _build_key_filter_conditions(
     agent_id: str | None = None,
     use_substring_matching: bool = False,
     expires_filter: str | None = None,
+    search: str | None = None,
 ) -> Mapping[str, object]:
     """Build filter conditions for key listing.
 
@@ -5848,7 +6425,7 @@ def _build_key_filter_conditions(
 
     # Apply team_id, project_id and access_group_id as global AND filters so they
     # narrow results across all visibility conditions (own keys, team keys, etc.)
-    global_filters: Final[tuple[dict[str, object], ...]] = (
+    global_filters: Final[tuple[Mapping[str, object], ...]] = (
         *(
             (
                 {"key_alias": {"contains": key_alias, "mode": "insensitive"}}
@@ -5859,6 +6436,7 @@ def _build_key_filter_conditions(
             else ()
         ),
         *(({"token": key_hash},) if key_hash and isinstance(key_hash, str) else ()),
+        *((_build_key_search_where(search),) if isinstance(search, str) and search else ()),
         *(({"team_id": team_id},) if team_id and isinstance(team_id, str) else ()),
         *(({"project_id": project_id},) if project_id else ()),
         *(({"access_group_ids": {"hasSome": [access_group_id]}},) if access_group_id else ()),
@@ -5898,6 +6476,7 @@ async def _list_key_helper(
     agent_id: str | None = None,
     use_substring_matching: bool = False,
     expires_filter: str | None = None,
+    search: str | None = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -5936,6 +6515,7 @@ async def _list_key_helper(
         agent_id=agent_id,
         use_substring_matching=use_substring_matching,
         expires_filter=expires_filter,
+        search=search,
     )
 
     # Calculate skip for pagination
@@ -5978,7 +6558,7 @@ async def _list_key_helper(
                     {"token": "desc"},  # fallback sort
                 ]
             ),
-            include={"object_permission": True},
+            include={"object_permission": True, "litellm_budget_table": True},
         )
 
     verbose_proxy_logger.debug("Fetched %s keys", len(keys))
@@ -5995,13 +6575,13 @@ async def _list_key_helper(
     total_pages: Final = -(-total_count // size)  # Ceiling division
 
     # Fetch user information if expand includes "user"
-    user_map = {}
+    user_map = dict[str | None, _UserRowLike]()
     if expand and "user" in expand:
         user_ids: Final = [key.user_id for key in keys if key.user_id]
         created_by_ids: Final = [key.created_by for key in keys if key.created_by]
         all_ids: Final = list(set(user_ids + created_by_ids))  # Remove duplicates
         if all_ids:
-            users: Final[Sequence[_UserRowLike]] = await UserRepository(prisma_client).table.find_many(
+            users: Final[Sequence[_UserRowLike]] = await _user_table(prisma_client).find_many(
                 where={"user_id": {"in": all_ids}}
             )
             user_map = {user.user_id: user for user in users}
@@ -6014,7 +6594,7 @@ async def _list_key_helper(
             key_dict = key.model_dump()
         except Exception:
             # Fallback for Pydantic v1 compatibility
-            key_dict = key.dict()
+            key_dict = key.dict()  # pyright: ignore[reportDeprecated]  # deliberate pydantic v1 fallback
         # Attach object_permission if object_permission_id is set (only for non-deleted keys)
         if not use_deleted_table:
             key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
@@ -6039,7 +6619,9 @@ async def _list_key_helper(
                 # Use deleted key type to preserve deleted_at, deleted_by, etc.
                 key_list.append(LiteLLM_DeletedVerificationToken.model_validate(key_dict))
             else:
-                key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
+                key_list.append(
+                    UserAPIKeyAuth(**key_dict)  # pyright: ignore[reportAny]  # model_dump() is dict[str, Any]
+                )
         else:
             _token = key_dict.get("token")
             key_list.append(cast(str, _token))  # Return only the token
@@ -6149,6 +6731,7 @@ async def block_key(
     """
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -6195,7 +6778,7 @@ async def block_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if litellm.store_audit_logs is True:
+    if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(
@@ -6262,6 +6845,7 @@ async def unblock_key(
     """
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
+        is_audit_logging_enabled,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -6308,7 +6892,7 @@ async def unblock_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if litellm.store_audit_logs is True:
+    if is_audit_logging_enabled():
         asyncio.create_task(
             create_audit_log_for_update(
                 request_data=LiteLLM_AuditLogs(

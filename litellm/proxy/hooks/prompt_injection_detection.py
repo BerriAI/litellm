@@ -26,6 +26,8 @@ from litellm.utils import get_formatted_prompt
 
 
 class _OPTIONAL_PromptInjectionDetection(CustomLogger):
+    enforces_request_content: bool = True
+
     # Class variables or attributes
     def __init__(
         self,

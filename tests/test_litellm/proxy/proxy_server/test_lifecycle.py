@@ -61,6 +61,7 @@ def test_cleanup_router_config_variables_resets_globals(monkeypatch):
     monkeypatch.setattr(ps, "user_custom_auth", lambda x: x, raising=False)
     monkeypatch.setattr(ps, "health_check_interval", 42, raising=False)
     monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(ps, "heuristic_v1_tuning_baselines", {"router": "baseline"}, raising=False)
 
     cleanup_router_config_variables()
 
@@ -70,6 +71,7 @@ def test_cleanup_router_config_variables_resets_globals(monkeypatch):
         "user_custom_auth": ps.user_custom_auth,
         "health_check_interval": ps.health_check_interval,
         "prisma_client": ps.prisma_client,
+        "heuristic_v1_tuning_baselines": ps.heuristic_v1_tuning_baselines,
     }
     assert normalize(observed) == {
         "master_key": None,
@@ -77,6 +79,7 @@ def test_cleanup_router_config_variables_resets_globals(monkeypatch):
         "user_custom_auth": None,
         "health_check_interval": None,
         "prisma_client": None,
+        "heuristic_v1_tuning_baselines": None,
     }
 
 
@@ -203,6 +206,50 @@ async def test_proxy_shutdown_event_prisma_disconnect_raises_error(monkeypatch):
 
     with pytest.raises(RuntimeError, match="db gone"):
         await proxy_shutdown_event()
+
+
+# ---------------------------------------------------------------------------
+# _flush_spend_logs_queue_on_shutdown
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_logs_queue_on_shutdown_drains_before_disconnect(monkeypatch):
+    fake_prisma = MagicMock()
+    monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    drain = AsyncMock()
+    import litellm.proxy.utils as utils_mod
+
+    monkeypatch.setattr(utils_mod, "drain_spend_logs_queue", drain)
+
+    await ps._flush_spend_logs_queue_on_shutdown()
+
+    observed = {
+        "drain_calls": drain.await_count,
+        "drain_prisma": drain.await_args.kwargs["prisma_client"] is fake_prisma,
+    }
+    assert observed == {
+        "drain_calls": 1,
+        "drain_prisma": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_flush_spend_logs_queue_on_shutdown_swallows_drain_errors(monkeypatch):
+    monkeypatch.setattr(ps, "prisma_client", MagicMock(), raising=False)
+    monkeypatch.setattr(ps, "db_writer_client", None, raising=False)
+
+    import litellm.proxy.utils as utils_mod
+
+    monkeypatch.setattr(
+        utils_mod,
+        "drain_spend_logs_queue",
+        AsyncMock(side_effect=RuntimeError("db gone")),
+    )
+
+    await ps._flush_spend_logs_queue_on_shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -480,8 +527,9 @@ def test_load_from_azure_key_vault_missing_uri_failure_is_swallowed(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
+def test_cost_tracking_adds_db_and_shadow_eval_callbacks_when_prisma_set(monkeypatch):
     import litellm
+    from litellm.integrations.shadow_eval_logger import ShadowEvalLogger
 
     fake_prisma = MagicMock()
     monkeypatch.setattr(ps, "prisma_client", fake_prisma, raising=False)
@@ -492,15 +540,18 @@ def test_cost_tracking_adds_two_callbacks_when_prisma_set(monkeypatch):
     before_async = len(litellm._async_success_callback)
 
     cost_tracking()
+    cost_tracking()
 
     observed = {
         "added_to_callbacks": len(litellm.callbacks) - before_callbacks,
         "added_to_async_success": len(litellm._async_success_callback) - before_async,
+        "shadow_eval_loggers": sum(isinstance(cb, ShadowEvalLogger) for cb in litellm.callbacks),
         "prisma_was_set": True,
     }
     assert normalize(observed) == {
-        "added_to_callbacks": 1,
+        "added_to_callbacks": 2,
         "added_to_async_success": 1,
+        "shadow_eval_loggers": 1,
         "prisma_was_set": True,
     }
 
@@ -768,6 +819,42 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
     assert budget_check_pos < warn_pos < next_startup_section_pos, (
         "DB-less budget warning must run after Prisma setup and the DB-backed budget block"
     )
+
+
+@pytest.mark.asyncio
+async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
+    from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_config.create = AsyncMock()
+    deployment = {
+        "model_name": "a",
+        "litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": {}},
+    }
+
+    result = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, [deployment])
+
+    assert result == {'yaml:["a",[]]': DEFAULT_TUNING_FINGERPRINT}
+    assert prisma_client.db.litellm_config.create.await_args.kwargs["data"] == {
+        "param_name": "auto_router_tuning_baseline_v2",
+        "param_value": json.dumps(dict(result)),
+    }
+
+
+@pytest.mark.asyncio
+async def test_tuning_baseline_waits_for_a_complete_db_model_census(monkeypatch):
+    prisma_client = MagicMock()
+    monkeypatch.setattr(ps.proxy_config, "_get_models_from_db", AsyncMock(return_value=None))
+
+    result = await ProxyStartupEvent.enforce_heuristic_v1_tuning_baseline(
+        prisma_client=prisma_client,
+        llm_router=None,
+        limit=1,
+    )
+
+    assert result is None
+    prisma_client.db.litellm_config.find_unique.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

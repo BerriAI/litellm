@@ -1,5 +1,5 @@
 import { PaginationState } from "@tanstack/react-table";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React, { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -95,6 +95,7 @@ describe("MemoryTable", () => {
   it("shows the filtered-empty copy when a search is active", () => {
     render(<MemoryTable {...baseProps} data={[]} rowCount={0} hasActiveSearch={true} />);
     expect(screen.getByText("No matching memories")).toBeInTheDocument();
+    expect(screen.getByText("No memories match your search.")).toBeInTheDocument();
     expect(screen.queryByText("No memories stored yet")).not.toBeInTheDocument();
   });
 
@@ -128,7 +129,8 @@ describe("MemoryTable", () => {
     const onRefresh = vi.fn();
     render(<MemoryTable {...baseProps} onSearchChange={onSearchChange} onRefresh={onRefresh} />);
 
-    await user.type(screen.getByTestId("datatable-search"), "u");
+    expect(screen.getByPlaceholderText("Search by key prefix or memory ID…")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "u" } });
     expect(onSearchChange).toHaveBeenCalledWith("u");
 
     await user.click(screen.getByTestId("datatable-refresh"));

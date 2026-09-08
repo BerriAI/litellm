@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -80,6 +81,50 @@ def test_update_customer_success(mock_prisma_client, mock_user_api_key_auth):
     assert response.status_code == 200
     assert response.json()["user_id"] == "test-user-1"
     assert response.json()["alias"] == "Updated Test User"
+
+
+def test_update_customer_unblock(mock_prisma_client, mock_user_api_key_auth):
+    mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=True)
+    updated_mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=False)
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_end_user)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=updated_mock_end_user)
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "test-user-1", "blocked": False},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["blocked"] is False
+    update_mock = mock_prisma_client.db.litellm_endusertable.update
+    update_mock.assert_called_once()
+    assert update_mock.call_args.kwargs["data"]["blocked"] is False
+
+
+def test_update_customer_keeps_blocked_when_omitted(mock_prisma_client, mock_user_api_key_auth):
+    """
+    Regression test: updating a blocked customer without supplying `blocked`
+    must NOT reset it to unblocked. `blocked=False` is the model default and
+    should only be applied when explicitly provided by the caller.
+    """
+    mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=True)
+    updated_mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=True)
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_end_user)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=updated_mock_end_user)
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "test-user-1", "alias": "Updated Test User"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    update_mock = mock_prisma_client.db.litellm_endusertable.update
+    update_mock.assert_called_once()
+    assert "blocked" not in update_mock.call_args.kwargs["data"]
 
 
 def test_update_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
@@ -815,3 +860,129 @@ def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):
         "deleted_customers": 2,
         "message": "Successfully deleted customers with ids: ['c1', 'c2']",
     }
+
+
+class _RecordingAuthCache:
+    """Captures the keys an endpoint evicts, so tests assert on cache keys not mock plumbing."""
+
+    def __init__(self):
+        self.deleted: list[str] = []
+
+    async def async_delete_cache(self, key: str) -> None:
+        self.deleted.append(key)
+
+
+@contextmanager
+def _end_user_cache_doubles():
+    """Swaps in the auth cache and the cross-worker publisher a customer mutation is expected to hit."""
+    recording_cache = _RecordingAuthCache()
+    mock_publish = AsyncMock()
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache", recording_cache),
+        patch(
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            mock_publish,
+        ),
+    ):
+        yield recording_cache, mock_publish
+
+
+def _published_keys(mock_publish) -> list[str]:
+    return [call.kwargs["cache_key"] for call in mock_publish.call_args_list]
+
+
+def test_customer_new_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
+    """
+    A customer created on one worker must be visible to every worker's auth path immediately.
+
+    Auth serves end users cache-first, and the cached restricted-id registry is what decides whether
+    the row is read at all, so a create that leaves both entries stale means the new customer's
+    budget or block goes unenforced until the TTL expires.
+    """
+    mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    with _end_user_cache_doubles() as (recording_cache, mock_publish):
+        response = client.post(
+            "/customer/new",
+            json={"user_id": "c1", "blocked": True},
+            headers={"Authorization": "Bearer k"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert recording_cache.deleted == ["end_user_id:c1", "end_user_restricted_registry"]
+    assert _published_keys(mock_publish) == ["end_user_id:c1", "end_user_restricted_registry"]
+
+
+def test_customer_update_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
+    """An update can add or drop a budget, block, region or permission, moving the id in the registry."""
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=_row({"user_id": "c1", "blocked": False})
+    )
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=_row(_FULL_DB_ROW))
+
+    with _end_user_cache_doubles() as (recording_cache, mock_publish):
+        response = client.post(
+            "/customer/update",
+            json={"user_id": "c1", "budget_id": "b1"},
+            headers={"Authorization": "Bearer k"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert recording_cache.deleted == ["end_user_id:c1", "end_user_restricted_registry"]
+    assert _published_keys(mock_publish) == ["end_user_id:c1", "end_user_restricted_registry"]
+
+
+def test_customer_block_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
+    """Blocking is the one mutation that must take effect instantly; a stale registry keeps serving it."""
+    mock_prisma_client.db.litellm_endusertable.upsert = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="c1", blocked=True)
+    )
+
+    with _end_user_cache_doubles() as (recording_cache, mock_publish):
+        response = client.post(
+            "/customer/block",
+            json={"user_ids": ["c1", "c2"]},
+            headers={"Authorization": "Bearer k"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert recording_cache.deleted == [
+        "end_user_id:c1",
+        "end_user_id:c2",
+        "end_user_restricted_registry",
+    ]
+    assert _published_keys(mock_publish) == [
+        "end_user_id:c1",
+        "end_user_id:c2",
+        "end_user_restricted_registry",
+    ]
+
+
+def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_client, mock_user_api_key_auth):
+    """Without this a deleted customer keeps its cached budget and block enforced until the TTL expires."""
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(
+        return_value=[
+            LiteLLM_EndUserTable(user_id="c1", blocked=False),
+            LiteLLM_EndUserTable(user_id="c2", blocked=False),
+        ]
+    )
+    mock_prisma_client.db.litellm_endusertable.delete_many = AsyncMock(return_value=2)
+
+    with _end_user_cache_doubles() as (recording_cache, mock_publish):
+        response = client.post(
+            "/customer/delete",
+            json={"user_ids": ["c1", "c2"]},
+            headers={"Authorization": "Bearer k"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert recording_cache.deleted == [
+        "end_user_id:c1",
+        "end_user_id:c2",
+        "end_user_restricted_registry",
+    ]
+    assert _published_keys(mock_publish) == [
+        "end_user_id:c1",
+        "end_user_id:c2",
+        "end_user_restricted_registry",
+    ]

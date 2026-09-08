@@ -7,12 +7,12 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
 import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { UserBanner } from "@/components/UserBanner";
-import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -69,7 +69,7 @@ export function AgentControlPlaneView() {
 
   if (!agentPlatformUrl) {
     return (
-      <div className="flex flex-1 items-center justify-center text-gray-500">
+      <div className="flex flex-1 items-center justify-center text-muted-foreground">
         <div className="text-center">
           <p className="text-lg font-medium mb-2">Plugin</p>
           <p className="text-sm">Configure the plugin URL in settings</p>
@@ -97,20 +97,11 @@ export function AgentControlPlaneView() {
 }
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
   const { accessToken } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { mode } = usePluginMode();
 
-  const page = legacyKeyForPathname(pathname) || searchParams.get("page") || "api-keys";
   const isGateway = mode === "ai-gateway";
-
-  const navigateToPage = (newPage: string) => {
-    const migratedRoute = MIGRATED_PAGES[newPage];
-    router.push(migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(newPage));
-  };
 
   // Non-gateway (agent control plane) mode keeps the original full-width Navbar,
   // which carries the account menu; the redesigned sidebar + header shell is
@@ -136,14 +127,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   // so the page can't be dragged past the end of the nav.
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      <SidebarProvider
-        setPage={navigateToPage}
-        defaultSelectedKey={page}
-        sidebarCollapsed={sidebarCollapsed}
-        onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
-      />
+      <SidebarProvider sidebarCollapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed((v) => !v)} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <DashboardHeader page={page} />
+        <DashboardHeader />
         <DebugWarningBanner accessToken={accessToken} />
         <NoRedisWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
@@ -161,10 +147,10 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
-  // /onboarding route. Redirect once ui-config has loaded so migratedHref resolves the SERVER_ROOT_PATH base.
+  // /onboarding route. Redirect once ui-config has loaded so uiHref resolves the SERVER_ROOT_PATH base.
   useEffect(() => {
     if (!authLoading && isInvitationFlow) {
-      router.replace(`${migratedHref("onboarding")}?${searchParams.toString()}`);
+      router.replace(`${uiHref("onboarding")}?${searchParams.toString()}`);
     }
   }, [authLoading, isInvitationFlow, router, searchParams]);
 

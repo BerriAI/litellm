@@ -85,7 +85,7 @@ _RATE_LIMIT_CATEGORY_VALUES: Final = frozenset(c.value for c in RateLimitErrorCa
 _RATE_LIMIT_TYPE_VALUES: Final = frozenset(t.value for t in RateLimitType)
 
 
-def validate_rate_limit_category(value: Any) -> str | None:
+def validate_rate_limit_category(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitErrorCategory`.
 
     Used at duck-typed read sites (StandardLoggingPayload extraction, Prometheus
@@ -100,7 +100,7 @@ def validate_rate_limit_category(value: Any) -> str | None:
     return None
 
 
-def validate_rate_limit_type(value: Any) -> str | None:
+def validate_rate_limit_type(value: object) -> str | None:
     """Return ``value`` only if it matches a known :class:`RateLimitType`.
 
     See :func:`validate_rate_limit_category` for the rationale.
@@ -1039,16 +1039,29 @@ class LiteLLMUnknownProvider(BadRequestError):
 
 
 class GuardrailRaisedException(Exception):
+    """
+    Raised both when a guardrail judged content and when it could not judge it at all, since a
+    guardrail that fails closed refuses the request the same way a policy violation does.
+
+    ``blocked_content`` separates the two. Set it only where the guardrail actually reached a
+    verdict on the payload; leave it alone for an unreachable backend, a timeout, or a response
+    the integration could not parse. Callers that treat a block as something other than a plain
+    failure, such as the batch path dropping one record and submitting the rest, must gate on it,
+    because dropping a record no guardrail ever inspected is a silent loss of enforcement.
+    """
+
     def __init__(
         self,
         guardrail_name: str | None = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
         status_code: int = 400,
+        blocked_content: bool = False,
     ):
         default_message: Final = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
         self.status_code = status_code
+        self.blocked_content = blocked_content
         self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 

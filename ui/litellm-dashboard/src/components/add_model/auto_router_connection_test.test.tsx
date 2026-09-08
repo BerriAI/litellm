@@ -17,6 +17,7 @@ const targets: AutoRouterTestTarget[] = [
   { labels: ["SIMPLE"], modelGroup: "gpt-4o-mini", mode: "chat" },
   { labels: ["MEDIUM", "COMPLEX"], modelGroup: "claude-sonnet-4", mode: "chat" },
   { labels: ["Embedding"], modelGroup: "voyage-3-5", mode: "embedding" },
+  { labels: ["Classifier"], modelGroup: "gpt-5-mini", mode: "chat", requestParams: { reasoning_effort: "low" } },
 ];
 
 describe("AutoRouterConnectionTest", () => {
@@ -30,11 +31,12 @@ describe("AutoRouterConnectionTest", () => {
 
     renderWithProviders(<AutoRouterConnectionTest accessToken="sk-test" targets={targets} />);
 
-    await waitFor(() => expect(mock).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(mock).toHaveBeenCalledTimes(4));
 
     expect(mock).toHaveBeenCalledWith("sk-test", "gpt-4o-mini", "chat");
     expect(mock).toHaveBeenCalledWith("sk-test", "claude-sonnet-4", "chat");
     expect(mock).toHaveBeenCalledWith("sk-test", "voyage-3-5", "embedding");
+    expect(mock).toHaveBeenCalledWith("sk-test", "gpt-5-mini", "chat", { reasoning_effort: "low" });
   });
 
   it("shows a success indicator per target when the routing probe passes", async () => {
@@ -43,8 +45,8 @@ describe("AutoRouterConnectionTest", () => {
 
     renderWithProviders(<AutoRouterConnectionTest accessToken="sk-test" targets={targets} />);
 
-    await waitFor(() => expect(screen.getAllByTestId("test-status-success")).toHaveLength(3));
-    expect(screen.queryByTestId("test-status-error")).toBeNull();
+    await waitFor(() => expect(screen.getAllByTestId("test-status-success")).toHaveLength(4));
+    expect(screen.queryByTestId("test-status-error")).not.toBeInTheDocument();
     expect(screen.getByText("MEDIUM, COMPLEX")).toBeInTheDocument();
   });
 
@@ -60,10 +62,10 @@ describe("AutoRouterConnectionTest", () => {
 
     renderWithProviders(<AutoRouterConnectionTest accessToken="sk-test" targets={targets} />);
 
-    await waitFor(() => expect(screen.getByTestId("test-error-message")).toBeInTheDocument());
+    expect(await screen.findByTestId("test-error-message")).toBeInTheDocument();
     expect(screen.getByTestId("test-error-message")).toHaveTextContent("invalid api key");
     expect(screen.getByTestId("test-error-message")).not.toHaveTextContent("litellm.AuthenticationError");
-    expect(screen.getAllByTestId("test-status-success")).toHaveLength(2);
+    expect(screen.getAllByTestId("test-status-success")).toHaveLength(3);
   });
 
   it("renders a non-litellm error string verbatim", async () => {

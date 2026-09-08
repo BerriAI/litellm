@@ -5,15 +5,10 @@
 #    latency list and break the Redis cache sync). Issue #33169.
 
 import json
-import os
-import sys
 from datetime import datetime, timedelta
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.caching.caching import DualCache
@@ -168,3 +163,31 @@ def test_sync_chat_zero_completion_tokens_falls_back_to_seconds():
     assert latencies and latencies[-1] == pytest.approx(2.0)
     assert not isinstance(latencies[-1], timedelta)
     json.dumps({"latency": latencies})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cached_entry",
+    [{"latency": []}, {"2026-09-05-15-39": {"tpm": 28, "rpm": 1}}],
+    ids=["empty_latency_list", "minute_bucket_only_as_cost_based_routing_writes"],
+)
+async def test_async_get_available_deployments_treats_missing_samples_as_zero_latency(cached_entry):
+    cache = DualCache()
+    handler = LowestLatencyLoggingHandler(router_cache=cache)
+    cache.set_cache(
+        key="gemini-embedding-001_map",
+        value={DEPLOYMENT_ID: cached_entry, "slower": {"latency": [0.5]}},
+    )
+    healthy_deployments = [
+        {"model_info": {"id": DEPLOYMENT_ID}, "litellm_params": {}},
+        {"model_info": {"id": "slower"}, "litellm_params": {}},
+    ]
+
+    picked = await handler.async_get_available_deployments(
+        model_group="gemini-embedding-001",
+        healthy_deployments=healthy_deployments,
+        request_kwargs={"stream": False, "metadata": {}},
+    )
+
+    assert picked is not None
+    assert picked["model_info"]["id"] == DEPLOYMENT_ID

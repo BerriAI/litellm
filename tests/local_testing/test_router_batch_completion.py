@@ -2,18 +2,12 @@
 # This tests litellm router with batch completion
 
 import asyncio
-import os
-import sys
 import time
 import traceback
 
 import openai
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -44,7 +38,7 @@ async def test_batch_completion_multiple_models(mode):
             {
                 "model_name": "groq-llama",
                 "litellm_params": {
-                    "model": "groq/llama-3.1-8b-instant",
+                    "model": "groq/openai/gpt-oss-120b",
                 },
             },
         ]
@@ -143,7 +137,7 @@ async def test_batch_completion_fastest_response_streaming():
             {
                 "model_name": "groq-llama",
                 "litellm_params": {
-                    "model": "groq/llama-3.1-8b-instant",
+                    "model": "groq/openai/gpt-oss-120b",
                 },
             },
         ]
@@ -179,7 +173,7 @@ async def test_batch_completion_multiple_models_multiple_messages():
             {
                 "model_name": "groq-llama",
                 "litellm_params": {
-                    "model": "groq/llama-3.1-8b-instant",
+                    "model": "groq/openai/gpt-oss-120b",
                 },
             },
         ]

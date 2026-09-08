@@ -14,7 +14,7 @@ Key differences from OpenAI:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm import get_secret_str
 from litellm._logging import verbose_logger
@@ -26,12 +26,12 @@ if TYPE_CHECKING:
     from litellm.types.rag import RAGIngestOptions
 
 
-def _get_str_or_none(value: Any) -> str | None:
+def _get_str_or_none(value: object) -> str | None:
     """Cast config value to Optional[str]."""
     return str(value) if value is not None else None
 
 
-def _get_int(value: Any, default: int) -> int:
+def _get_int(value: str | float | None, default: int) -> int:
     """Cast config value to int with default."""
     if value is None:
         return default
@@ -205,7 +205,7 @@ class VertexAIRAGIngestion(BaseRAGIngestion):
             )
             verbose_logger.info("Import started asynchronously")
 
-    def _build_transformation_config(self) -> Any:
+    def _build_transformation_config(self) -> object:
         """
         Build Vertex AI TransformationConfig from unified chunking_strategy.
 

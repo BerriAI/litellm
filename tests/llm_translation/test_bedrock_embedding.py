@@ -1,15 +1,11 @@
 import json
 import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch
 import pytest
 import base64
 import httpx
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
@@ -447,9 +443,7 @@ def test_bedrock_embedding_region_bug_reproduction():
                 print(
                     "❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter"
                 )
-                assert (
-                    False
-                ), f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}"
+                pytest.fail(f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}")
             else:
                 print(
                     "✓ Bug NOT reproduced: Using correct region from explicit parameter"

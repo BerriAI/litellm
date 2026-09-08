@@ -4,11 +4,12 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	info lint lint-dev lint-checks format \
+	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
+	lint-test-quality lint-test-quality-budget-update \
 	install-dev install-proxy-dev install-test-deps install-hooks \
-	install-helm-unittest check-circular-imports check-import-safety check pre-commit \
+	install-helm-unittest check-circular-imports check-import-safety check check-inner pre-commit \
 	lint-install lint-fetch-base bootstrap
 
 # Default target
@@ -33,9 +34,10 @@ help:
 	@echo "  make lint-basedpyright-budget-update - Ratchet basedpyright limits down by what this branch fixed"
 	@echo "  make lint-format        - Check ruff format formatting (matches CI)"
 	@echo "  make lint-ruff-budget - Gate the codebase total of each strict ruff rule against its limit"
-	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches staging, simulates the merge)"
+	@echo "  make lint-gate        - Strict ruff gate in CI-parity mode (fetches the default branch, simulates the merge)"
 	@echo "  make lint-ruff-budget-update - Ratchet ruff-strict-budget.json limits down by what this branch fixed"
-	@echo "  make lint-budget-update - Ratchet all budgets down (ruff + type-discipline + basedpyright)"
+	@echo "  make lint-test-quality  - Gate the test suite against test-quality-budget.json"
+	@echo "  make lint-budget-update - Ratchet all budgets down (ruff + type-discipline + test quality + basedpyright)"
 	@echo "  make check-circular-imports - Check for circular imports"
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
@@ -52,13 +54,23 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
+	@echo ""
+	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
+	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
 
 UV := uv
 UV_RUN := $(UV) run --no-sync
+BASE_REF ?=
+export BASE_REF
+RESOLVE_BASE = python3 scripts/default_branch.py --base "$(BASE_REF)"
+
+# Machine-wide slot queue for the heavy targets below; python3 + stdlib only, so
+# it runs before any venv exists. See scripts/gate_slot_lock.py.
+GATE_SLOT_LOCK := python3 scripts/gate_slot_lock.py
 
 LINT_DEP_INSTALL ?= install-dev
 LINT_E2E_DEP_INSTALL ?= lint-install
-LINT_DEP_BASE ?= lint-fetch-base
+LINT_DEP_BASE ?=
 LINT_JOBS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 LINT_OUTPUT_SYNC := $(if $(filter output-sync,$(.FEATURES)),--output-sync=target,)
 
@@ -73,6 +85,8 @@ info:
 install-dev:
 	$(UV) sync --inexact --frozen
 
+# Deliberately unqueued: provisioning is I/O bound, so it doesn't need one of the
+# machine-wide slots the CPU-bound gates below share.
 bootstrap:
 	$(UV) sync --inexact --frozen --extra proxy --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
@@ -119,10 +133,8 @@ format: install-dev
 format-check: install-dev
 	cd litellm && $(UV_RUN) ruff format --check --exclude '/enterprise/' . && cd ..
 
-# Single fetch of the PR base so the delta-based gates below share one network round
-# trip instead of each re-fetching when chained from `lint`.
 lint-fetch-base:
-	git fetch origin litellm_internal_staging
+	@$(RESOLVE_BASE)
 
 # Mirror test-linting.yml's lint job environment: the proxy-dev group plus a generated
 # Prisma client, so `basedpyright tests/e2e` resolves the same modules CI does. The
@@ -133,11 +145,15 @@ lint-install:
 	$(UV) sync --inexact --frozen --group proxy-dev --group e2e-dev
 	$(UV_RUN) python scripts/prisma_generate_if_needed.py
 
-# Diff-scoped format check, identical to test-linting.yml's "Check ruff format" step:
+# Diff-scoped format check, mirroring test-linting.yml's "Check ruff format" step:
 # only the litellm Python files changed vs the base are checked, so a pre-existing
-# format issue elsewhere doesn't block an unrelated commit.
+# format issue elsewhere doesn't block an unrelated commit. Git pathspecs match
+# recursively, so 'litellm/*.py' covers nested modules and the top-level files that
+# CI's 'litellm/**/*.py' skips, which makes this target a superset of the CI step.
 lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	@files=$$(git diff --name-only origin/litellm_internal_staging...HEAD -- 'litellm/**/*.py' | grep -v '^litellm/enterprise/' || true); \
+	@base_ref=$$($(RESOLVE_BASE)) && \
+	changed=$$(git diff --name-only --diff-filter=ACMR "$$base_ref...HEAD" -- 'litellm/*.py') && \
+	files=$$(printf '%s\n' "$$changed" | grep -v '^litellm/enterprise/' || true) || exit $$?; \
 	if [ -z "$$files" ]; then \
 		echo "No changed litellm Python files to format-check."; \
 	else \
@@ -147,13 +163,16 @@ lint-format-check-changed: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
 # Linting targets
 lint-ruff: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) ruff check . && cd ..
+	$(UV_RUN) ruff check --config ruff-tests.toml tests
 
 # faster linter for developing ...
 # inspiration from:
 # https://github.com/astral-sh/ruff/discussions/10977
 # https://github.com/astral-sh/ruff/discussions/4049
 lint-format-changed: install-dev
-	@git diff origin/main --unified=0 --no-color -- '*.py' | \
+	@base_ref=$$($(RESOLVE_BASE)) && \
+	diff=$$(git diff "$$base_ref" --unified=0 --no-color -- '*.py') && \
+	printf '%s\n' "$$diff" | \
 	perl -ne '\
 		if (/^diff --git a\/(.*) b\//) { $$file = $$1; } \
 		if (/^@@ .* \+(\d+)(?:,(\d+))? @@/) { \
@@ -168,20 +187,22 @@ lint-format-changed: install-dev
 		done
 
 lint-ruff-dev: install-dev
-	@tmpfile=$$(mktemp /tmp/ruff-dev.XXXXXX) && \
+	@base_ref=$$($(RESOLVE_BASE)) || exit $$?; \
+	tmpfile=$$(mktemp /tmp/ruff-dev.XXXXXX) && \
 	cd litellm && \
 	($(UV_RUN) ruff check . --output-format=pylint || true) > "$$tmpfile" && \
-	$(UV_RUN) diff-quality --violations=pylint "$$tmpfile" --compare-branch=origin/main && \
+	$(UV_RUN) diff-quality --violations=pylint "$$tmpfile" --compare-branch="$$base_ref" && \
 	cd .. ; \
 	rm -f "$$tmpfile"
 
 lint-ruff-FULL-dev: install-dev
-	@files=$$(git diff --name-only origin/main -- '*.py'); \
+	@base_ref=$$($(RESOLVE_BASE)) && \
+	files=$$(git diff --name-only "$$base_ref" -- '*.py') || exit $$?; \
 	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
 lint-basedpyright: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/type_check_gate.py --base origin/litellm_internal_staging
+	$(UV_RUN) python scripts/type_check_gate.py --base "$(BASE_REF)"
 
 lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
 	$(UV_RUN) basedpyright tests/e2e
@@ -189,31 +210,40 @@ lint-e2e-basedpyright: $(LINT_E2E_DEP_INSTALL)
 # Type-discipline budget (mutable collections / casts / type guards / kwargs /
 # unexplained suppressions), the test-linting.yml step `make lint` used to omit.
 lint-type-discipline: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/type_discipline_gate.py --base origin/litellm_internal_staging
+	$(UV_RUN) python scripts/type_discipline_gate.py --base "$(BASE_REF)"
+
+# Test-quality budget (zero-assert / mock-echo tests, sys.path.insert, raw env writes,
+# litellm module-global mutation, credential-gated skips, conftest snapshot
+# inventory), counted across tests/ the same delta-vs-base way.
+lint-test-quality: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
+	$(UV_RUN) python scripts/test_quality_gate.py --base "$(BASE_REF)"
 
 # --update lowers each limit by what this branch fixed since its branch point, so
 # it needs the base ref fetched to resolve the merge-base.
-lint-basedpyright-budget-update: install-dev lint-fetch-base
-	$(UV_RUN) python scripts/type_check_gate.py --update
+lint-basedpyright-budget-update: install-dev
+	$(UV_RUN) python scripts/type_check_gate.py --update --base "$(BASE_REF)"
 
 lint-format: format-check
 
 lint-ruff-budget: install-dev
-	$(UV_RUN) python scripts/ruff_strict_gate.py
+	$(UV_RUN) python scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
 # Strict gate, invoked the same way CI does in test-linting.yml so a local pass
 # means the CI check will pass too.
 lint-gate: $(LINT_DEP_INSTALL) $(LINT_DEP_BASE)
-	$(UV_RUN) python scripts/ruff_strict_gate.py --base origin/litellm_internal_staging
+	$(UV_RUN) python scripts/ruff_strict_gate.py --base "$(BASE_REF)"
 
-lint-ruff-budget-update: install-dev lint-fetch-base
-	$(UV_RUN) python scripts/ruff_strict_gate.py --update
+lint-ruff-budget-update: install-dev
+	$(UV_RUN) python scripts/ruff_strict_gate.py --update --base "$(BASE_REF)"
 
-lint-type-discipline-budget-update: install-dev lint-fetch-base
-	$(UV_RUN) python scripts/type_discipline_gate.py --update
+lint-type-discipline-budget-update: install-dev
+	$(UV_RUN) python scripts/type_discipline_gate.py --update --base "$(BASE_REF)"
 
-# Ratchet all budgets in one shot (ruff strict + type-discipline + basedpyright)
-lint-budget-update: lint-ruff-budget-update lint-type-discipline-budget-update lint-basedpyright-budget-update
+lint-test-quality-budget-update: install-dev
+	$(UV_RUN) python scripts/test_quality_gate.py --update --base "$(BASE_REF)"
+
+# Ratchet all budgets in one shot (ruff strict + type-discipline + test quality + basedpyright)
+lint-budget-update: lint-ruff-budget-update lint-type-discipline-budget-update lint-test-quality-budget-update lint-basedpyright-budget-update
 
 check-circular-imports: $(LINT_DEP_INSTALL)
 	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
@@ -226,13 +256,17 @@ check-import-safety: $(LINT_DEP_INSTALL)
 # runs the diff-scoped ruff format check, whole-tree ruff check, the strict-rule /
 # type-discipline / basedpyright budgets as a delta vs the base, then the circular-import
 # and import-safety checks. Steps that compare against the base resolve it the same way CI
-# does (merge-base with origin/litellm_internal_staging). Setup (env sync, Prisma client,
+# does (merge-base with origin's current default branch). Setup (env sync, Prisma client,
 # base fetch) runs once up front; the checks themselves are independent, so a sub-make
 # fans them out with -j and the fast ones finish under basedpyright's shadow.
-lint: lint-install lint-fetch-base
-	$(MAKE) -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
+lint:
+	@$(GATE_SLOT_LOCK) $(MAKE) lint-inner
 
-lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
+lint-inner: lint-install
+	@base_ref=$$($(RESOLVE_BASE)) && \
+	$(MAKE) BASE_REF="$$base_ref" -j $(LINT_JOBS) $(LINT_OUTPUT_SYNC) LINT_DEP_INSTALL= LINT_E2E_DEP_INSTALL= LINT_DEP_BASE= lint-checks
+
+lint-checks: lint-format-check-changed lint-ruff lint-gate lint-type-discipline lint-test-quality lint-basedpyright lint-e2e-basedpyright check-circular-imports check-import-safety
 
 # Faster linting for local development (only checks changed code)
 lint-dev: lint-format-changed check-circular-imports check-import-safety
@@ -244,7 +278,10 @@ lint-dev: lint-format-changed check-circular-imports check-import-safety
 # test-linting.yml (Python), test-litellm-ui-build.yml's frontend-lint (dashboard), and
 # check-ui-api-types.yml (API-type drift), skipping any whose files aren't in scope.
 # Not auto-installed as a git hook so it never slows an unrelated human commit.
-check: bootstrap
+check:
+	@$(GATE_SLOT_LOCK) $(MAKE) check-inner
+
+check-inner: bootstrap
 	./scripts/pre_commit_lint.sh
 
 pre-commit:
@@ -299,7 +336,7 @@ test-unit-helm: install-helm-unittest
 # LLM Translation testing targets
 test-llm-translation: install-test-deps
 	@echo "Running LLM translation tests..."
-	@python .github/workflows/run_llm_translation_tests.py
+	@python .github/scripts/run_llm_translation_tests.py
 
 test-llm-translation-single: install-test-deps
 	@echo "Running single LLM translation test file..."

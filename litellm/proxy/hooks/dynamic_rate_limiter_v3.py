@@ -454,7 +454,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             parent_otel_span=user_api_key_dict.parent_otel_span,
         )
 
-        verbose_proxy_logger.debug("Atomic check+increment response: %s", json.dumps(atomic_response, indent=2))
+        verbose_proxy_logger.debug(
+            "Atomic check+increment response: %s", json.dumps(atomic_response, indent=2, default=list)
+        )
 
         if atomic_response["overall_code"] == "OVER_LIMIT":
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(model)

@@ -79,6 +79,11 @@
           "minimum": 0,
           "description": "USD per token written to the provider's prompt cache."
         },
+        "cache_creation_input_token_cost_above_128k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_creation_input_token_cost_above_1hr": {
           "type": "number",
           "minimum": 0,
@@ -94,6 +99,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "cache_creation_input_token_cost_above_256k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_creation_input_token_cost_above_272k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -103,6 +113,11 @@
           "type": "number",
           "minimum": 0,
           "description": "Flex service-tier rate for the same-named base field."
+        },
+        "cache_creation_input_token_cost_above_272k_tokens_priority": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Priority service-tier rate for the same-named base field."
         },
         "cache_creation_input_token_cost_flex": {
           "type": "number",
@@ -123,6 +138,11 @@
           "minimum": 0,
           "description": "USD per prompt token served from the provider's prompt cache."
         },
+        "cache_read_input_token_cost_above_128k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_read_input_token_cost_above_200k_tokens": {
           "type": "number",
           "minimum": 0,
@@ -132,6 +152,11 @@
           "type": "number",
           "minimum": 0,
           "description": "Priority service-tier rate for the same-named base field."
+        },
+        "cache_read_input_token_cost_above_256k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "cache_read_input_token_cost_above_272k_tokens": {
           "type": "number",
@@ -174,6 +199,18 @@
         "comment": {
           "type": "string"
         },
+        "default_reasoning_effort": {
+          "type": "string",
+          "description": "Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.",
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
         "deprecation_date": {
           "type": "string",
           "description": "Date the provider deprecates the model, YYYY-MM-DD.",
@@ -185,6 +222,19 @@
         },
         "gemini_native_audio": {
           "type": "boolean"
+        },
+        "google_maps_grounding_cost_per_query": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
+        },
+        "guardrail_cost_per_unit": {
+          "type": "object",
+          "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0
+          }
         },
         "input_cost_per_audio_per_second": {
           "type": "number",
@@ -361,6 +411,7 @@
             "chat",
             "completion",
             "embedding",
+            "guardrail",
             "image_edit",
             "image_generation",
             "moderation",
@@ -416,6 +467,14 @@
           "minimum": 0
         },
         "output_cost_per_second_1080p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_480p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_4k": {
           "type": "number",
           "minimum": 0
         },
@@ -505,6 +564,27 @@
           "type": "object",
           "description": "Provider-internal routing hints (e.g. bedrock_invocation_schema)."
         },
+        "reasoning_effort_levels": {
+          "type": "array",
+          "description": "Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        },
+        "regional_endpoint_uplift_multiplier": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%)."
+        },
         "regional_processing_uplift_multiplier_eu": {
           "type": "number",
           "minimum": 1,
@@ -542,6 +622,17 @@
         "source": {
           "type": "string",
           "description": "URL of the provider pricing/model page this entry was taken from."
+        },
+        "supported_audio_formats": {
+          "type": "array",
+          "description": "Audio container formats the model can return.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "mp3",
+              "wav"
+            ]
+          }
         },
         "supported_endpoints": {
           "type": "array",
@@ -602,6 +693,9 @@
         "supports_embedding_image_input": {
           "type": "boolean"
         },
+        "supports_forced_tool_use": {
+          "type": "boolean"
+        },
         "supports_function_calling": {
           "type": "boolean"
         },
@@ -609,6 +703,9 @@
           "type": "boolean"
         },
         "supports_image_size": {
+          "type": "boolean"
+        },
+        "supports_legacy_thinking": {
           "type": "boolean"
         },
         "supports_low_reasoning_effort": {
@@ -650,6 +747,9 @@
         "supports_pdf_input": {
           "type": "boolean"
         },
+        "supports_prompt_cache_breakpoint": {
+          "type": "boolean"
+        },
         "supports_prompt_caching": {
           "type": "boolean"
         },
@@ -687,6 +787,9 @@
           "type": "boolean"
         },
         "supports_xhigh_reasoning_effort": {
+          "type": "boolean"
+        },
+        "thinking_always_on": {
           "type": "boolean"
         },
         "tiered_pricing": {
@@ -731,6 +834,10 @@
                 "type": "number",
                 "minimum": 0
               },
+              "cache_creation_input_token_cost": {
+                "type": "number",
+                "minimum": 0
+              },
               "input_cost_per_query": {
                 "type": "number",
                 "minimum": 0
@@ -749,6 +856,13 @@
         },
         "uses_embed_content": {
           "type": "boolean"
+        },
+        "vertex_ai_audio_api": {
+          "type": "string",
+          "enum": [
+            "lyria_predict",
+            "lyria_interactions"
+          ]
         },
         "web_search_billing_unit": {
           "type": "string",
