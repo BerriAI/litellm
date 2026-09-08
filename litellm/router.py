@@ -13166,8 +13166,34 @@ class Router:
                 allowed_models.add(def_model_obj)
 
         originating_deployment = self.get_deployment(model_id=extracted_model_id)
+        if not originating_deployment:
+            return None
+
         dep_model_name = getattr(originating_deployment, "model_name", None)  # guard-ok: type discipline
-        if originating_deployment and dep_model_name in allowed_models:
+        is_authorized = False
+
+        if dep_model_name in allowed_models:
+            is_authorized = True
+        else:
+            for allowed_model in allowed_models:
+                candidates = self.get_deployments(model_name=allowed_model) or []
+                if any(
+                    (
+                        getattr(c, "litellm_params", {}).get("model_id") == extracted_model_id
+                        if isinstance(getattr(c, "litellm_params", None), dict)  # guard-ok: type discipline
+                        else getattr(getattr(c, "litellm_params", None), "model_id", None) == extracted_model_id  # guard-ok: type discipline
+                    )
+                    or (
+                        getattr(c, "model_info", {}).get("id") == extracted_model_id
+                        if isinstance(getattr(c, "model_info", None), dict)  # guard-ok: type discipline
+                        else getattr(getattr(c, "model_info", None), "id", None) == extracted_model_id  # guard-ok: type discipline
+                    )
+                    for c in candidates
+                ):
+                    is_authorized = True
+                    break
+
+        if is_authorized and dep_model_name:
             from litellm.types.router import PreRoutingHookResponse
 
             return PreRoutingHookResponse(
