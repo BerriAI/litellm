@@ -1,6 +1,7 @@
 """Per-request multi-tenant credential routing (V1 parity)."""
 
 import base64
+from typing import Final
 
 import pytest
 from opentelemetry.trace import NoOpTracer
@@ -769,3 +770,16 @@ def test_langfuse_host_stamped_onto_owned_exporter_only():
         "Authorization=Basic team-b",
     )
     assert by_owner[None] == ("http://self-hosted-collector:4318", "x=base-collector")
+
+
+def test_langfuse_provider_cached_per_key_pair_and_host():
+    cache: Final = _cache("langfuse_otel")
+    default: Final = NoOpTracer()
+    team_a: Final = {**LANGFUSE_CREDS, "langfuse_host": "http://team-a-langfuse:3100"}
+    cache.route_for(default, team_a)
+    cache.route_for(default, team_a)
+    assert len(cache._providers) == 1
+    cache.route_for(default, {**LANGFUSE_CREDS, "langfuse_host": "http://team-b-langfuse:3100"})
+    assert len(cache._providers) == 2
+    cache.route_for(default, LANGFUSE_CREDS)
+    assert len(cache._providers) == 3
