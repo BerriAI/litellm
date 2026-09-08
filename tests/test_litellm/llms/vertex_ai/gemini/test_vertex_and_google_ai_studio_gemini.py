@@ -5769,3 +5769,117 @@ def test_calculate_web_search_requests_counts_unique_queries():
 
     assert VertexGeminiConfig._calculate_web_search_requests([]) is None
     assert VertexGeminiConfig._calculate_web_search_requests([{"webSearchQueries": ["", ""]}]) is None
+
+
+def _transform_gemini_response(candidates: list) -> ModelResponse:
+    """Run the non-streaming transformation over a raw Gemini body."""
+    raw_response = MagicMock()
+    raw_response.headers = {}
+    raw_response.json.return_value = {
+        "candidates": candidates,
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 15,
+        },
+    }
+
+    return VertexGeminiConfig().transform_response(
+        model="gemini-3.6-flash",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def test_vertex_ai_content_less_candidate_after_tool_result_returns_a_valid_choice():
+    """An empty turn (finishReason STOP, no content) must still produce choices[0]."""
+    result = _transform_gemini_response([{"finishReason": "STOP", "index": 0}])
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.message.role == "assistant"
+    assert choice.message.content == ""
+    assert choice.finish_reason == "stop"
+    assert choice.message.provider_specific_fields["finish_reason"] == "STOP"
+
+
+def test_vertex_ai_malformed_function_call_candidate_keeps_the_provider_reason():
+    """MALFORMED_FUNCTION_CALL has no OpenAI equivalent, so keep it alongside the mapped reason."""
+    result = _transform_gemini_response(
+        [{"finishReason": "MALFORMED_FUNCTION_CALL", "index": 0}]
+    )
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.message.content == ""
+    assert choice.finish_reason == "stop"
+    assert (
+        choice.message.provider_specific_fields["finish_reason"]
+        == "MALFORMED_FUNCTION_CALL"
+    )
+
+
+def test_vertex_ai_content_less_candidate_at_max_tokens_maps_to_length():
+    """A thinking model that spends its whole budget reports truncation, not an empty response."""
+    result = _transform_gemini_response([{"finishReason": "MAX_TOKENS", "index": 0}])
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "length"
+    assert result.choices[0].message.content == ""
+
+
+def test_vertex_ai_content_less_candidate_without_finish_reason_defaults_to_stop():
+    result = _transform_gemini_response([{"index": 0}])
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.message.content == ""
+    assert not (choice.message.provider_specific_fields or {}).get("finish_reason")
+
+
+def test_vertex_ai_content_less_candidate_does_not_shadow_a_candidate_with_content():
+    """A content-less candidate is rescued without dropping the sibling that does have content.
+
+    SAFETY and the other flagged reasons are deliberately not used here: those short-circuit into
+    _handle_content_policy_violation before the candidates are processed.
+    """
+    result = _transform_gemini_response(
+        [
+            {"finishReason": "MAX_TOKENS", "index": 0},
+            {
+                "content": {"parts": [{"text": "Hello"}], "role": "model"},
+                "finishReason": "STOP",
+                "index": 1,
+            },
+        ]
+    )
+
+    assert len(result.choices) == 2
+    by_index = {choice.index: choice for choice in result.choices}
+    assert by_index[0].finish_reason == "length"
+    assert by_index[0].message.content == ""
+    assert by_index[1].finish_reason == "stop"
+    assert by_index[1].message.content == "Hello"
+
+
+def test_vertex_ai_streaming_content_less_candidate_left_to_the_stream_recovery():
+    """Streaming already recovers empty chunks in _apply_stream_candidates; don't double-append."""
+    from litellm.types.utils import ModelResponseStream
+
+    model_response = ModelResponseStream()
+    model_response.choices = []
+
+    VertexGeminiConfig._process_candidates(
+        _candidates=[{"finishReason": "STOP", "index": 0}],
+        model_response=model_response,
+        standard_optional_params={},
+    )
+
+    assert model_response.choices == []

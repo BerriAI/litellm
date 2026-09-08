@@ -2222,6 +2222,29 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
+                # Gemini legitimately returns a candidate with no content: an empty turn after a tool
+                # result (finishReason STOP), a thinking model that spent its whole budget (MAX_TOKENS),
+                # or a malformed/blocked turn. Skipping it leaves choices empty on the non-streaming
+                # path, which is not a valid OpenAI response - a caller reading choices[0] gets an
+                # IndexError on an HTTP 200 and never learns why the turn was empty. Emit an
+                # empty-content choice carrying the mapped finish_reason instead, and keep the raw
+                # provider reason, since the OpenAI enum has no equivalent for MALFORMED_FUNCTION_CALL.
+                # Streaming has its own recovery in _apply_stream_candidates, so only the
+                # non-streaming ModelResponse is handled here.
+                if isinstance(model_response, ModelResponse):
+                    provider_finish_reason = candidate.get("finishReason")
+                    empty_message: ChatCompletionResponseMessage = {"role": "assistant", "content": ""}
+                    if provider_finish_reason is not None:
+                        empty_message["provider_specific_fields"] = {"finish_reason": provider_finish_reason}
+                    model_response.choices.append(
+                        litellm.Choices(
+                            finish_reason=VertexGeminiConfig._check_finish_reason(None, provider_finish_reason),
+                            index=candidate.get("index", idx),
+                            message=empty_message,
+                            logprobs=None,
+                            enhancements=None,
+                        )
+                    )
                 continue
 
             # Extract metadata using helper function
