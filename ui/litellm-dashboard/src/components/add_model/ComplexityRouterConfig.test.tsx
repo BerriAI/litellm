@@ -1521,14 +1521,16 @@ describe("ComplexityRouterConfig tier editing", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} value={customValue} onEditingTiersChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.queryByText("How Classification Works")).not.toBeInTheDocument();
-    expect(screen.queryByText("scores each request across 7 dimensions", { exact: false })).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("scores each request across 7 built-in dimensions", { exact: false }),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the scorer card on a built-in router, whose tiers the score still decides", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onEditingTiersChange={vi.fn()} />);
     fireEvent.click(screen.getByText("Advanced: Classification Method"));
     expect(screen.getByText("How Classification Works")).toBeInTheDocument();
-    expect(screen.getByText("scores each request across 7 dimensions", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("scores each request across 7 built-in dimensions", { exact: false })).toBeInTheDocument();
   });
 
   it("says why a custom row is blocked instead of only reddening its border", () => {

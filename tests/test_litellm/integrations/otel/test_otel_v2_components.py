@@ -4,8 +4,9 @@ builders, and the registry validator's failure paths. Needs the OTel SDK."""
 
 import json
 import threading
+from collections.abc import Iterator
 from dataclasses import replace
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 import pytest
 
@@ -625,6 +626,92 @@ def test_http_protobuf_exporter_still_posts_protobuf():
     span = decoded.resource_spans[0].scope_spans[0].spans[0]
     assert span.name == "parent"
     assert span.trace_id == trace_id.to_bytes(16, "big")
+
+
+@pytest.fixture
+def otlp_collector() -> Iterator[tuple[str, list[str]]]:
+    received_paths: list[str] = []
+
+    class RecordingHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            received_paths.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RecordingHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", received_paths
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _export_one_span(cfg: OpenTelemetryV2Config) -> None:
+    provider = providers.build_tracer_provider(cfg)
+    provider.get_tracer("probe").start_span("probe").end()
+    assert provider.force_flush()
+    provider.shutdown()
+
+
+def test_traces_endpoint_env_posts_to_the_configured_url_verbatim(monkeypatch, otlp_collector):
+    base_url, received_paths = otlp_collector
+    for var in ("OTEL_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("OTEL_ENDPOINT", f"{base_url}/services/collector")
+    monkeypatch.setenv("OTEL_TRACES_ENDPOINT", f"{base_url}/services/collector/traces")
+
+    cfg = OpenTelemetryV2Config.from_env()
+    assert cfg.exporter == "otlp_http"
+    _export_one_span(cfg)
+    assert received_paths == ["/services/collector/traces"]
+
+
+def test_traces_endpoint_alias_alone_implies_otlp_http(monkeypatch, otlp_collector):
+    base_url, received_paths = otlp_collector
+    for var in ("OTEL_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", f"{base_url}/custom/traces")
+
+    cfg = OpenTelemetryV2Config.from_env()
+    assert cfg.exporter == "otlp_http"
+    _export_one_span(cfg)
+    assert received_paths == ["/custom/traces"]
+
+
+def test_traces_endpoint_per_exporter_coexists_with_default_normalization(otlp_collector):
+    base_url, received_paths = otlp_collector
+    cfg = OpenTelemetryV2Config(
+        exporters=[
+            {"kind": "otlp_http", "endpoint": base_url},
+            {
+                "kind": "otlp_http",
+                "endpoint": f"{base_url}/services/collector",
+                "traces_endpoint": f"{base_url}/services/collector/traces",
+            },
+        ]
+    )
+    _export_one_span(cfg)
+    assert sorted(received_paths) == ["/services/collector/traces", "/v1/traces"]
+
+
+def test_http_json_exporter_honors_traces_endpoint(otlp_collector):
+    base_url, received_paths = otlp_collector
+    cfg = OpenTelemetryV2Config(
+        exporters=[
+            {
+                "kind": "http/json",
+                "endpoint": base_url,
+                "traces_endpoint": f"{base_url}/services/collector/traces",
+            }
+        ]
+    )
+    _export_one_span(cfg)
+    assert received_paths == ["/services/collector/traces"]
 
 
 def test_otlp_metric_exporter_uses_cumulative_histogram_temporality():

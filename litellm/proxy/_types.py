@@ -3586,6 +3586,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "OTEL_EXPORTER",
             "OTEL_EXPORTER_OTLP_PROTOCOL",
             "OTEL_ENDPOINT",
+            "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
         ],
     )
