@@ -53,7 +53,7 @@ async def test_non_exempt_llm_route_still_reserves_budget():
 
 
 ANTHROPIC_MESSAGES: Final = [{"role": "user", "content": "hello!!!"}]
-COUNT_TOKENS_REQUESTS: Final = (
+COUNT_TOKENS_REQUESTS: Final[tuple[tuple[str, dict[str, object]], ...]] = (
     ("/v1/messages/count_tokens", {"model": "claude-sonnet-5", "messages": ANTHROPIC_MESSAGES}),
     ("/v1beta/models/gemini-3.8-flash:countTokens", {"contents": [{"role": "user", "parts": [{"text": "hello!!!"}]}]}),
 )
@@ -68,7 +68,7 @@ def spend_counter_cache(monkeypatch: pytest.MonkeyPatch) -> DualCache:
     return cache
 
 
-async def _reserve_for_tiny_budget_key(route: str, request_body: dict) -> dict | None:
+async def _reserve_for_tiny_budget_key(route: str, request_body: dict[str, object]) -> dict[str, object] | None:
     return await reserve_budget_for_request(
         request_body=request_body,
         route=route,
@@ -85,7 +85,7 @@ async def _reserve_for_tiny_budget_key(route: str, request_body: dict) -> dict |
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("route", "request_body"), COUNT_TOKENS_REQUESTS)
 async def test_repeated_token_counting_never_touches_a_tiny_budget(
-    spend_counter_cache: DualCache, route: str, request_body: dict
+    spend_counter_cache: DualCache, route: str, request_body: dict[str, object]
 ):
     counter_key: Final = f"spend:key:{TINY_BUDGET_KEY_TOKEN}"
 
@@ -97,8 +97,10 @@ async def test_repeated_token_counting_never_touches_a_tiny_budget(
         "/v1/messages", {"model": "claude-sonnet-5", "max_tokens": 16, "messages": ANTHROPIC_MESSAGES}
     )
     assert completion is not None
-    assert completion["reserved_cost"] > 0
-    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(completion["reserved_cost"])
+    reserved_cost: Final = completion["reserved_cost"]
+    assert isinstance(reserved_cost, float)
+    assert reserved_cost > 0
+    assert spend_counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(reserved_cost)
 
 
 BEDROCK_SONNET: Final = "us.anthropic.claude-sonnet-4-6"
