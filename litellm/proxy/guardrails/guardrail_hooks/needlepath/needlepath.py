@@ -65,7 +65,7 @@ SELECT_PATH: Final = "/v1/context/select"
 # Immutable engine label. Pinned rather than inherited from the service default
 # so an upgrade on the service side cannot change what this proxy sends without
 # an operator changing this config.
-DEFAULT_OPERATING_POINT: Final = "np-2026-07-r2"
+DEFAULT_OPERATING_POINT: Final = "np-2026-08-r4"
 DEFAULT_MAX_CONTEXT_TOKENS: Final = 4000
 DEFAULT_MIN_CHARS_TO_SELECT: Final = 500
 # The shared client's read timeout is measured in minutes, which is far too long
