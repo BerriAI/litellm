@@ -153,27 +153,35 @@ async def test_huggingface_count_in_a_worker_thread_leaves_the_event_loop_free()
     assert max(lags) < took / 4, f"the event loop stalled {max(lags):.3f}s during a {took:.3f}s count"
 
 
-@pytest.mark.parametrize(
-    ("max_exact_chars", "expected"),
-    [(1_000, 10_000), (5_000, 6_000), (10_000, 6_000)],
-)
-def test_count_above_the_cap_scales_the_exact_count_of_the_prefix(max_exact_chars, expected):
-    def count_exactly(chunk: str) -> int:
-        return chunk.count("a") + len(chunk)
+@pytest.mark.parametrize("max_exact_chars", [64, 1_000, 2_500])
+def test_count_above_the_cap_samples_the_whole_string_and_scales(max_exact_chars):
+    count_exactly: Final = MagicMock(side_effect=lambda chunk: chunk.count("a") + len(chunk))
+    front_heavy: Final = "a" * 1_000 + "b" * 4_000
+    exact: Final = 1_000 + len(front_heavy)
 
-    count_tokens: Final = _get_extrapolating_count_function(count_exactly, max_exact_chars=max_exact_chars)
+    estimate: Final = _get_extrapolating_count_function(count_exactly, max_exact_chars=max_exact_chars)(front_heavy)
 
-    assert count_tokens("a" * 1_000 + "b" * 4_000) == expected
+    assert abs(estimate - exact) <= exact // 100
+    assert sum(len(call.args[0]) for call in count_exactly.call_args_list) <= max_exact_chars
+
+
+def test_count_at_or_below_the_cap_is_exact():
+    count_exactly: Final = MagicMock(side_effect=len)
+
+    assert _get_extrapolating_count_function(count_exactly, max_exact_chars=5_000)("a" * 5_000) == 5_000
+    assert count_exactly.call_args_list == [(("a" * 5_000,),)]
 
 
 def test_token_counter_applies_the_default_cap():
     max_exact_chars: Final = litellm.constants.TOKEN_COUNTER_MAX_EXACT_CHARS
-    prefix: Final = ("The quick brown fox jumps over the lazy dog. " * (max_exact_chars // 45 + 1))[:max_exact_chars]
-    over_the_cap: Final = prefix + "a" * 200_000
-    scaled: Final = round(token_counter_new(model="gpt-5.6", text=prefix) * len(over_the_cap) / max_exact_chars)
+    prose: Final = ("The quick brown fox jumps over the lazy dog. " * (max_exact_chars // 45 + 1))[:max_exact_chars]
+    over_the_cap: Final = prose + "a" * 200_000
+    exact: Final = _get_exact_count_function("gpt-5.6")(over_the_cap)
 
-    assert token_counter_new(model="gpt-5.6", text=over_the_cap) == scaled
-    assert _get_exact_count_function("gpt-5.6")(over_the_cap) != scaled
+    estimate: Final = token_counter_new(model="gpt-5.6", text=over_the_cap)
+
+    assert estimate != exact
+    assert abs(estimate - exact) <= exact // 100
 
 
 @pytest.mark.parametrize(
