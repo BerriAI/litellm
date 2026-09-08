@@ -11,7 +11,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from tests.test_litellm_rust.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.contracts import (
     OCR_DOCUMENT,
-    OCR_MODEL,
     OCR_RESPONSE,
     call_native_aocr,
     call_native_ocr,
@@ -247,3 +246,69 @@ async def test_pre_call_runs_in_callers_execution_context(ocr_server: RecordingS
     assert len(events) == 1
     assert events[0].loop is caller_loop
     assert events[0].thread is caller_thread
+
+
+@pytest.mark.asyncio
+async def test_ocr_failure_callbacks_receive_pre_call_state(ocr_server: RecordingServer) -> None:
+    ocr_server.enqueue(ResponseSpec(body={"message": "provider unavailable"}, status=500))
+    token: Final = object()
+    observed: Final = []
+
+    class TrackInFlightRequest(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            kwargs["request-token"] = token
+
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(("sync", kwargs["request-token"]))
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(("async", kwargs["request-token"]))
+
+    with pytest.raises(litellm.InternalServerError):
+        await call_aocr(ocr_server, [TrackInFlightRequest()])
+
+    assert [event for event, _ in observed] == ["sync", "async"]
+    assert all(observed_token is token for _, observed_token in observed)
+
+
+@pytest.mark.asyncio
+async def test_ocr_failure_callback_error_does_not_mask_provider_error_or_later_callbacks(
+    ocr_server: RecordingServer,
+) -> None:
+    ocr_server.enqueue(ResponseSpec(body={"message": "provider unavailable"}, status=500))
+    recorder: Final = RecordingLogger()
+
+    class UnavailableExporter(CustomLogger):
+        def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            raise RuntimeError("exporter unavailable")
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            raise RuntimeError("exporter unavailable")
+
+    with pytest.raises(litellm.InternalServerError) as caught:
+        await call_aocr(ocr_server, [UnavailableExporter(), recorder])
+
+    sync_events: Final = tuple(event for event in recorder.events if event.name == "log_failure_event")
+    async_events: Final = tuple(event for event in recorder.events if event.name == "async_log_failure_event")
+    assert len(sync_events) == 1
+    assert len(async_events) == 1
+    assert sync_events[0].kwargs["exception"] is caught.value
+    assert async_events[0].kwargs["exception"] is caught.value
+    assert "async_log_success_event" not in recorder.names
+
+
+def test_ocr_duplicate_callback_registration_dispatches_once(ocr_server: RecordingServer) -> None:
+    recorder: Final = RecordingLogger()
+
+    call_ocr(
+        ocr_server,
+        [recorder, recorder],
+        success_callback=[recorder],
+        failure_callback=[recorder],
+    )
+    recorder.wait_for("log_success_event")
+
+    assert recorder.names.count("log_pre_api_call") == 1
+    assert recorder.names.count("logging_hook") == 1
+    assert recorder.names.count("log_success_event") == 1
+    assert "log_failure_event" not in recorder.names

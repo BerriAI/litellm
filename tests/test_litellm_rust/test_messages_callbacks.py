@@ -8,6 +8,8 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.contracts import (
     MESSAGES,
@@ -219,3 +221,132 @@ async def test_messages_stream_logs_success_after_exhaustion(messages_server: Re
     assert len(events) == 1
     assert "async_log_stream_event" not in recorder.names
     assert events[0].kwargs["complete_streaming_response"] is not None
+
+
+@pytest.mark.asyncio
+async def test_messages_compression_hook_replaces_messages_sent_to_provider(messages_server: RecordingServer) -> None:
+    compressed_messages: Final = [{"role": "user", "content": "Compressed context"}]
+    call_types: Final = []
+
+    class CompressMessages(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            call_types.append(call_type)
+            kwargs["messages"] = compressed_messages
+            return kwargs
+
+    litellm.callbacks.append(CompressMessages())
+
+    await call_messages(messages_server, [])
+
+    assert call_types == [CallTypes.anthropic_messages]
+    assert messages_server.requests[0].body["messages"] == compressed_messages
+
+
+@pytest.mark.asyncio
+async def test_messages_post_call_guardrail_replacement_reaches_caller_and_logging(
+    messages_server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+    call_types: Final = []
+
+    class ReviewResponse(CustomLogger):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            call_types.append(call_type)
+            response["content"][0]["text"] = "Reviewed response"
+            return response
+
+    litellm.callbacks.append(ReviewResponse())
+
+    response: Final = await call_messages(messages_server, [recorder])
+    events: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert call_types == [CallTypes.anthropic_messages]
+    assert response["content"][0]["text"] == "Reviewed response"
+    assert events[0].response.choices[0].message.content == "Reviewed response"
+
+
+@pytest.mark.asyncio
+async def test_messages_logging_hook_replacement_reaches_later_loggers_only(messages_server: RecordingServer) -> None:
+    observations: Final = []
+
+    class RecordGuardrailVerdict(CustomLogger):
+        async def async_logging_hook(self, kwargs, result, call_type):
+            observations.append("guardrail")
+            return {**kwargs, "guardrail-verdict": "allowed"}, result
+
+    class ExportLog(CustomLogger):
+        async def async_logging_hook(self, kwargs, result, call_type):
+            return kwargs, result
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            observations.append(("export", kwargs["guardrail-verdict"]))
+
+    response: Final = await call_messages(messages_server, [RecordGuardrailVerdict(), ExportLog()])
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert observations == ["guardrail", ("export", "allowed")]
+    assert response["content"][0]["text"] == "Hello from native Messages"
+
+
+@pytest.mark.asyncio
+async def test_messages_success_callback_failure_does_not_skip_later_loggers(
+    messages_server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+
+    class UnavailableExporter(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            raise RuntimeError("exporter unavailable")
+
+    response: Final = await call_messages(messages_server, [UnavailableExporter(), recorder])
+    events: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert response["content"][0]["text"] == "Hello from native Messages"
+    assert len(events) == 1
+    assert "async_log_failure_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+async def test_messages_concurrent_calls_keep_callback_state_isolated(messages_server: RecordingServer) -> None:
+    messages_server.expected_requests = 4
+    tokens: Final = {f"messages-{index}": object() for index in range(4)}
+    terminal_state: Final = []
+
+    class CorrelateCallState(RecordingLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            kwargs["correlation-token"] = tokens[kwargs["litellm_call_id"]]
+            super().log_pre_api_call(model, messages, kwargs)
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            terminal_state.append((kwargs["litellm_call_id"], kwargs["correlation-token"]))
+            await super().async_log_success_event(kwargs, response_obj, start_time, end_time)
+
+    correlate: Final = CorrelateCallState()
+
+    await asyncio.gather(*(call_messages(messages_server, [correlate], litellm_call_id=call_id) for call_id in tokens))
+    await correlate.wait_for_async("async_log_success_event", count=4)
+
+    assert len(terminal_state) == 4
+    assert all(token is tokens[call_id] for call_id, token in terminal_state)
+
+
+@pytest.mark.asyncio
+async def test_messages_cancelled_call_runs_no_terminal_callbacks(messages_server: RecordingServer) -> None:
+    messages_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE, delay=0.5)
+    recorder: Final = RecordingLogger()
+    task: Final = asyncio.create_task(call_messages(messages_server, [recorder]))
+
+    async with asyncio.timeout(10):
+        while not messages_server.requests:
+            await asyncio.sleep(0.01)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+    assert recorder.names.count("log_pre_api_call") == 1
+    assert "log_success_event" not in recorder.names
+    assert "async_log_success_event" not in recorder.names
+    assert "log_failure_event" not in recorder.names
+    assert "async_log_failure_event" not in recorder.names

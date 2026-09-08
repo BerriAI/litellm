@@ -340,6 +340,7 @@ class Host:
         self.current = arguments
         self.asynchronous = asynchronous
         self.logger = arguments.get('litellm_logging_obj')
+        self.deployment_hooks_owned = self.logger is None
         self.state = None
         self.response = None
         self.error = None
@@ -353,7 +354,9 @@ class Host:
         self.streaming = self.logger.stream is True
 
     async def deployment_pre(self):
-        modified = await utils.async_pre_call_deployment_hook(self.current, 'amessages')
+        if not self.deployment_hooks_owned:
+            return
+        modified = await utils.async_pre_call_deployment_hook(self.current, 'anthropic_messages')
         if modified is not None:
             self.current = modified
         self.current['litellm_logging_obj'] = self.logger
@@ -370,7 +373,8 @@ class Host:
         self.end = datetime.now()
 
     async def deployment_success(self):
-        self.response = await utils.async_post_call_success_deployment_hook(self.current, self.response, CallTypes.aanthropic_messages)
+        if self.deployment_hooks_owned:
+            self.response = await utils.async_post_call_success_deployment_hook(self.current, self.response, CallTypes.aanthropic_messages)
         if self.streaming:
             self.response = retain_stream_response(
                 self.response,
@@ -380,7 +384,8 @@ class Host:
             )
 
     async def deployment_failure(self):
-        await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'amessages')
+        if self.deployment_hooks_owned:
+            await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'anthropic_messages')
 
     def terminal(self, action, value):
         if self.streaming:
