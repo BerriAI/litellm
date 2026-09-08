@@ -33,6 +33,7 @@ def test_runs_checks_inside_suite_context(monkeypatch: MonkeyPatch, tmp_path: Pa
         return module
 
     monkeypatch.setattr(e2e_runner.importlib, "import_module", import_module)
+    monkeypatch.setattr(e2e_runner, "ensure_native_bridge", lambda _root, _bindings: None)
     case: Final = HarnessCase(
         strategy_id="e2e_parity",
         strategy_label="End-to-end parity",
@@ -46,3 +47,24 @@ def test_runs_checks_inside_suite_context(monkeypatch: MonkeyPatch, tmp_path: Pa
     assert code == 0, run.failures
     assert run.results[case.key].status is RunStatus.PASSED
     assert lifecycle.call_args_list == [call("entered"), call("checked"), call("exited")]
+
+
+def test_bridge_setup_failure_stops_before_loading_cases(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(e2e_runner, "ensure_native_bridge", lambda _root, _bindings: "stale bridge")
+    import_module: Final = Mock()
+    monkeypatch.setattr(e2e_runner.importlib, "import_module", import_module)
+    case: Final = HarnessCase(
+        strategy_id="e2e_parity",
+        strategy_label="End-to-end parity",
+        sdk_function="ocr",
+        spec=ModuleCaseSpec(coverage=Coverage.PARTIAL, module="example"),
+        surface="sdk",
+    )
+
+    code, run = run_e2e_cases((case,), tmp_path, lambda _: None)
+
+    nodeid: Final = "e2e:sdk:ocr:bridge"
+    assert code == 1
+    assert run.results[case.key].outcomes[nodeid] is RunStatus.ERROR
+    assert run.failures == [(nodeid, "stale bridge")]
+    import_module.assert_not_called()

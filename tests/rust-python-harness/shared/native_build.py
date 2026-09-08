@@ -73,24 +73,42 @@ def _rebuild(repo_root: Path) -> tuple[bool, str]:
     return completed.returncode == 0, "\n".join(lines[-_FAILURE_OUTPUT_LINES:])
 
 
-def trace_bridge_error() -> str | None:
+def native_bridge_error(required_bindings: tuple[str, ...] = ()) -> str | None:
     bridge: Final = get_native_bridge()
     if bridge is None:
         return "native Rust bridge is not importable"
-    if getattr(bridge, "_trace", None) is None:
+    missing: Final = tuple(binding for binding in required_bindings if not callable(getattr(bridge, binding, None)))
+    if missing:
+        return f"native Rust bridge does not expose callable bindings: {', '.join(missing)}"
+    return None
+
+
+def trace_bridge_error() -> str | None:
+    bridge_error: Final = native_bridge_error()
+    if bridge_error is not None:
+        return bridge_error
+    bridge: Final = get_native_bridge()
+    if bridge is None or getattr(bridge, "_trace", None) is None:
         return f"native Rust bridge does not expose _trace; it must be built with the {BRIDGE_FEATURE} feature"
     return None
 
 
-def ensure_trace_bridge(repo_root: Path) -> str | None:
+def ensure_native_bridge(repo_root: Path, required_bindings: tuple[str, ...] = ()) -> str | None:
     native_path: Final = _native_module_path()
     native_mtime: Final = native_path.stat().st_mtime if native_path is not None and native_path.exists() else None
     if needs_rebuild(native_mtime, _newest_source_mtime(repo_root)):
-        print(f"Rebuilding native Rust bridge ({BRIDGE_FEATURE} feature)...", flush=True)
-        succeeded: Final
-        output: Final
+        print(  # noqa: T201  # CLI must report the long-running rebuild before test execution
+            f"Rebuilding native Rust bridge ({BRIDGE_FEATURE} feature)...", flush=True
+        )
         succeeded, output = _rebuild(repo_root)
         if not succeeded:
             return f"native Rust bridge rebuild failed:\n{output}"
         _drop_imported_bridge()
+    return native_bridge_error(required_bindings)
+
+
+def ensure_trace_bridge(repo_root: Path) -> str | None:
+    bridge_error: Final = ensure_native_bridge(repo_root)
+    if bridge_error is not None:
+        return bridge_error
     return trace_bridge_error()

@@ -8,6 +8,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Final, cast
 
+from ...shared.native_build import ensure_native_bridge
 from ...shared.reporting.models import CaseResult, HarnessCase, HarnessRun, RunStatus
 from ...shared.reporting.strategy import ModuleCaseSpec, UpdateCallback
 
@@ -107,14 +108,30 @@ def _run_case(run: HarnessRun, harness_case: HarnessCase, on_update: UpdateCallb
         on_update(run)
 
 
+def _record_bridge_failure(run: HarnessRun, harness_case: HarnessCase, message: str) -> None:
+    result: Final = run.results[harness_case.key]
+    nodeid: Final = f"e2e:{harness_case.surface}:{harness_case.sdk_function}:bridge"
+    result.collected.add(nodeid)
+    result.record(nodeid, RunStatus.ERROR)
+    run.failures.append((nodeid, message))
+
+
 def run_e2e_cases(
     cases: Sequence[HarnessCase],
     repo_root: Path,
     on_update: UpdateCallback,
     runner_args: Sequence[str] = (),
 ) -> tuple[int, HarnessRun]:
-    del repo_root, runner_args
+    del runner_args
     run: Final = HarnessRun.from_cases(cases)
+    runnable_cases: Final = tuple(case for case in cases if isinstance(case.spec, ModuleCaseSpec))
+    bridge_error: Final = ensure_native_bridge(repo_root, ("ocr", "aocr")) if runnable_cases else None
+    if bridge_error is not None:
+        for harness_case in runnable_cases:
+            _record_bridge_failure(run, harness_case, bridge_error)
+        run.finished_at = monotonic()
+        on_update(run)
+        return 1, run
     for harness_case in cases:
         _run_case(run, harness_case, on_update)
     run.finished_at = monotonic()

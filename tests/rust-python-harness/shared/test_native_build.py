@@ -114,3 +114,22 @@ def test_ensure_trace_bridge_flags_missing_trace_feature_without_rebuild(
     assert message is not None
     assert "_trace" in message
     assert state.rebuilt is False
+
+
+def test_ensure_native_bridge_flags_missing_required_binding_without_rebuild(
+    tmp_path: Final, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native: Final = tmp_path / "_native.abi3.so"
+    native.write_bytes(b"")
+    os.utime(native, (9_999, 9_999))
+    source: Final = tmp_path / "litellm-rust" / "crates" / "bridge" / "src" / "lib.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text("fn main() {}\n")
+    os.utime(source, (1_000, 1_000))
+
+    monkeypatch.setattr(native_build, "_native_module_path", lambda: native)
+    monkeypatch.setattr(native_build, "get_native_bridge", lambda: SimpleNamespace(ocr=lambda: None))
+
+    message: Final = native_build.ensure_native_bridge(tmp_path, ("ocr", "aocr"))
+
+    assert message == "native Rust bridge does not expose callable bindings: aocr"
