@@ -570,7 +570,7 @@ async def new_user(
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
         data_json = await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
-        data_json.pop("password", None)  # always None: NewUserRequest.password_not_supported rejects any other value
+        data_json.pop("password", None)
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
