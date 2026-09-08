@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
 use litellm_ai_gateway::routes;
-use litellm_ai_gateway::state::AppState;
+use litellm_ai_gateway::state::{AppState, GatewayMessagesServices};
 #[cfg(feature = "python-config")]
 use litellm_config::load_model_list;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
@@ -79,6 +79,9 @@ async fn main() {
         master_key,
         loggers: Arc::new(loggers),
         realtime_pool,
+        messages_client: litellm_core::runtime::LiteLlm::from_services(
+            GatewayMessagesServices::new(|key| std::env::var(key).ok()),
+        ),
     };
 
     let host = std::env::var("HOST").unwrap_or_else(|_| DEFAULT_HOST.to_string());

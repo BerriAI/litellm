@@ -2,9 +2,10 @@ use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::Error;
 use crate::http_utils::{HttpClientProfile, http_client, http_request};
 use crate::lifecycle::{StreamingMetadata, StreamingSource};
+use futures_util::TryStreamExt;
 
 use super::common_utils::truncate_error_body;
-use super::request::build_provider_request;
+use super::request::{build_provider_request, build_provider_request_with_environment};
 use super::types::{AnthropicMessagesResponse, MessagesRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -61,10 +62,13 @@ pub async fn execute_provider_messages_request(
     config.transform_response(&model, response)
 }
 
-pub(super) async fn execute_messages_provider_stream(
+pub(crate) async fn execute_messages_provider_stream_with_transport(
+    environment: &dyn crate::providers::auth::Environment,
+    transport: &dyn crate::runtime::HttpTransport,
     request: MessagesRequest,
 ) -> Result<StreamingSource, Error> {
-    let request = build_provider_request(request)?;
+    let request =
+        build_provider_request_with_environment(request, &|key| environment.environment(key))?;
     if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::InvalidRequest(
             "streaming messages is not supported for this provider".to_string(),
@@ -75,50 +79,38 @@ pub(super) async fn execute_messages_provider_stream(
         url, http, timeout, ..
     } = request;
     let (body, headers) = http.into_parts();
-    let client = http_client(HttpClientProfile::Standard)
-        .map_err(|error| Error::Network(error.to_string()))?;
-    let request_builder = headers
-        .into_iter()
-        .fold(client.post(&url).body(body), |builder, (key, value)| {
-            builder.header(key, value)
-        });
-    let request_builder = match timeout {
-        Some(timeout) => request_builder.timeout(timeout),
-        None => request_builder,
-    };
-
-    let response = http_request(request_builder)
+    let response = transport
+        .execute_stream(crate::runtime::HttpRequest {
+            method: reqwest::Method::POST,
+            url,
+            headers,
+            body,
+            timeout,
+        })
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
-    let status = response.status();
-    if !status.is_success() {
-        let text = response
-            .text()
-            .await
-            .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|error| match error {
+            Error::Connect(message) => Error::Network(message),
+            error => error,
+        })?;
+    if !(200..300).contains(&response.status) {
+        let body = response
+            .stream
+            .try_fold(Vec::new(), |mut body, chunk| async move {
+                body.extend_from_slice(&chunk);
+                Ok(body)
+            })
+            .await?;
         return Err(Error::Http {
-            status: status.as_u16(),
-            body: truncate_error_body(&text),
+            status: response.status,
+            body: truncate_error_body(&String::from_utf8_lossy(&body)),
         });
     }
-    let metadata = StreamingMetadata {
-        status: status.as_u16(),
-        content_type: response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string),
-        cache_control: response
-            .headers()
-            .get(reqwest::header::CACHE_CONTROL)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string),
-    };
-    let stream = response.bytes_stream();
     Ok(StreamingSource {
-        metadata,
-        stream: Box::pin(futures_util::StreamExt::map(stream, |result| {
-            result.map_err(|error| Error::Network(error.to_string()))
-        })),
+        metadata: StreamingMetadata {
+            status: response.status,
+            content_type: response.content_type,
+            cache_control: response.cache_control,
+        },
+        stream: response.stream,
     })
 }

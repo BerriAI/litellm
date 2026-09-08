@@ -2,64 +2,14 @@ use std::sync::Arc;
 
 use litellm_core::Error;
 use litellm_core::constants::ANTHROPIC_MESSAGES_PROVIDER;
-use litellm_core::integrations::custom_logger::{CustomLogger, CustomLoggerRunner, LogFuture};
-use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, RequestPolicy, StreamingCall, TerminalDispatcher,
-    TerminalRecord,
-};
+use litellm_core::integrations::custom_logger::CustomLogger;
+use litellm_core::lifecycle::{CallLifecycleContext, StreamingCall};
 use litellm_core::messages::lifecycle::{self, Options};
 use litellm_core::messages::types::{AnthropicMessagesRequest, MessagesRequest};
 use litellm_core::router::Router;
 use serde_json::{Map, Value};
-use std::future::{Ready, ready};
 
-pub(crate) struct GatewayTerminalDispatcher {
-    runner: CustomLoggerRunner,
-}
-
-impl GatewayTerminalDispatcher {
-    pub(crate) fn new(loggers: Arc<Vec<Arc<dyn CustomLogger>>>) -> Self {
-        Self {
-            runner: CustomLoggerRunner::new(loggers.as_ref().clone()),
-        }
-    }
-}
-
-impl Clock for GatewayTerminalDispatcher {
-    fn now(&self) -> f64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_secs_f64())
-            .unwrap_or(0.0)
-    }
-}
-
-impl RequestPolicy<MessagesRequest, MessagesRequest> for GatewayTerminalDispatcher {
-    type PreCallFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
-    type DuringCallFuture<'a> = Ready<ActionResult<MessagesRequest, Error>>;
-
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        _: &'a CallLifecycleContext,
-        request: MessagesRequest,
-    ) -> Self::PreCallFuture<'a> {
-        ready(ActionResult::Continue(request))
-    }
-
-    fn async_during_call_hook<'a>(
-        &'a self,
-        _: &'a CallLifecycleContext,
-        request: MessagesRequest,
-    ) -> Self::DuringCallFuture<'a> {
-        ready(ActionResult::Continue(request))
-    }
-}
-
-impl TerminalDispatcher for GatewayTerminalDispatcher {
-    fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
-        self.runner.dispatch(terminal)
-    }
-}
+use crate::state::{GatewayMessagesServices, GatewayMessagesSession};
 
 pub(crate) enum MessagesResponse {
     Json(Value),
@@ -74,6 +24,7 @@ pub(crate) enum MessagesResponse {
 )]
 pub async fn run(
     router: &Arc<Router>,
+    client: &litellm_core::runtime::LiteLlm<GatewayMessagesServices>,
     loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
     body: AnthropicMessagesRequest,
     extra_headers: Option<Map<String, Value>>,
@@ -116,7 +67,7 @@ pub async fn run(
         extra_headers,
         timeout: None,
     };
-    let services = Arc::new(GatewayTerminalDispatcher::new(loggers));
+    let services = Arc::new(GatewayMessagesSession::new(loggers.clone()));
     let context = CallLifecycleContext::new(
         "messages",
         provider_model,
@@ -130,7 +81,8 @@ pub async fn run(
         ),
     );
     if stream {
-        return lifecycle::messages_stream(services, request, Options::default(), context)
+        return client
+            .messages_stream_with(request, Options::default(), context, loggers)
             .await
             .map(Box::new)
             .map(MessagesResponse::Stream);

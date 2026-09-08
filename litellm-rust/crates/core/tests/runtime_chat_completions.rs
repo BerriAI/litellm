@@ -7,8 +7,8 @@ use litellm_core::chat_completions::types::ChatCompletionsRequest;
 use litellm_core::lifecycle::CallLifecycleContext;
 use litellm_core::providers::auth::{AwsMechanisms, Environment, SigningClock};
 use litellm_core::runtime::{
-    CallServices, ChatCompletionsServices, HttpFuture, HttpRequest, HttpResponse, HttpTransport,
-    LiteLlm, SessionFuture,
+    CallServices, ChatCompletionsServices, HttpFuture, HttpRequest, HttpResponse, HttpStreamFuture,
+    HttpTransport, LiteLlm, SessionFuture,
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -30,6 +30,12 @@ impl HttpTransport for RecordingTransport {
             body: self.response.as_bytes().to_vec(),
         })))
     }
+
+    fn execute_stream(&self, _: HttpRequest) -> HttpStreamFuture<'_> {
+        Box::pin(std::future::ready(Err(Error::Unsupported(
+            "recording transport streaming",
+        ))))
+    }
 }
 
 #[derive(Clone)]
@@ -42,12 +48,13 @@ struct RecordingSession;
 impl CallServices for RecordingCalls {
     type Bindings = u64;
     type Session = RecordingSession;
+    type OpenFuture<'a> = SessionFuture<'a, RecordingSession>;
 
     fn open<'a>(
         &'a self,
         context: CallLifecycleContext,
         bindings: Self::Bindings,
-    ) -> SessionFuture<'a, Self::Session> {
+    ) -> Self::OpenFuture<'a> {
         self.opened
             .lock()
             .unwrap()

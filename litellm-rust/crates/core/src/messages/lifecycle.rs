@@ -1,4 +1,4 @@
-use std::future::{Ready, ready};
+use std::future::{Future, Ready, ready};
 use std::sync::Arc;
 
 use crate::Error;
@@ -11,7 +11,7 @@ use crate::lifecycle::{
     TerminalDispatcher, TerminalRecord,
 };
 
-use super::handler::{execute_messages_provider_call, execute_messages_provider_stream};
+use super::handler::execute_messages_provider_call;
 use super::types::{AnthropicMessagesResponse, MessagesRequest};
 
 pub use crate::lifecycle::program::{Observations, Operation, Transition};
@@ -216,19 +216,25 @@ fn anthropic_response_usage(response: &AnthropicMessagesResponse) -> Option<Usag
     })
 }
 
-pub async fn messages_stream<S: MessagesServices + 'static>(
+pub(crate) async fn messages_stream_with<S, ProviderCall, ProviderFuture>(
     services: Arc<S>,
     request: MessagesRequest,
     _options: Options,
     context: CallLifecycleContext,
-) -> Result<StreamingCall, Error> {
+    provider_call: ProviderCall,
+) -> Result<StreamingCall, Error>
+where
+    S: MessagesServices + 'static,
+    ProviderCall: FnOnce(MessagesRequest) -> ProviderFuture,
+    ProviderFuture: Future<Output = Result<crate::lifecycle::StreamingSource, Error>>,
+{
     CallLifecycle
         .run_streaming(
             context,
             request,
             services,
             Box::<AnthropicUsageObserver>::default(),
-            |request| async move { execute_messages_provider_stream(request).await },
+            provider_call,
         )
         .await
 }

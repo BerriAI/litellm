@@ -39,9 +39,15 @@ async fn handle(
 ) -> Result<Response, MessagesRouteError> {
     let Json(body) = body.map_err(MessagesRouteError::from)?;
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run(&state.router, state.loggers, body, extra_headers)
-        .await
-        .map_err(MessagesRouteError::from)?
+    match service::run(
+        &state.router,
+        &state.messages_client,
+        state.loggers,
+        body,
+        extra_headers,
+    )
+    .await
+    .map_err(MessagesRouteError::from)?
     {
         service::MessagesResponse::Json(body) => Ok(Json(body).into_response()),
         service::MessagesResponse::Stream(upstream) => stream_response(*upstream),
@@ -237,6 +243,9 @@ mod tests {
             master_key: master_key.map(Arc::from),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
+            messages_client: litellm_core::runtime::LiteLlm::from_services(
+                crate::state::GatewayMessagesServices::new(|_| None),
+            ),
         }
     }
 

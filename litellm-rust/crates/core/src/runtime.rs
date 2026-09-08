@@ -5,7 +5,13 @@ use std::time::Duration;
 
 use crate::Error;
 use crate::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
-use crate::lifecycle::CallLifecycleContext;
+use crate::integrations::custom_logger::{LogError, LogFuture};
+use crate::lifecycle::{
+    ActionResult, BytesStream, CallLifecycleContext, Clock, RequestPolicy, StreamingCall,
+    TerminalDispatcher, TerminalRecord,
+};
+use crate::messages::lifecycle::{MessagesServices, Options as MessagesOptions};
+use crate::messages::types::MessagesRequest;
 
 pub struct HttpRequest {
     pub method: reqwest::Method,
@@ -20,10 +26,20 @@ pub struct HttpResponse {
     pub body: Vec<u8>,
 }
 
+pub struct HttpStreamResponse {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub cache_control: Option<String>,
+    pub stream: BytesStream,
+}
+
 pub type HttpFuture<'a> = Pin<Box<dyn Future<Output = Result<HttpResponse, Error>> + Send + 'a>>;
+pub type HttpStreamFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<HttpStreamResponse, Error>> + Send + 'a>>;
 
 pub trait HttpTransport: Send + Sync {
     fn execute(&self, request: HttpRequest) -> HttpFuture<'_>;
+    fn execute_stream(&self, request: HttpRequest) -> HttpStreamFuture<'_>;
 }
 
 #[derive(Clone)]
@@ -81,6 +97,49 @@ impl HttpTransport for NativeHttpTransport {
             Ok(HttpResponse { status, body })
         })
     }
+
+    fn execute_stream(&self, request: HttpRequest) -> HttpStreamFuture<'_> {
+        let client = self.standard.clone();
+        Box::pin(async move {
+            let builder = request.headers.into_iter().fold(
+                client
+                    .request(request.method, request.url)
+                    .body(request.body),
+                |builder, (name, value)| builder.header(name, value),
+            );
+            let builder = match request.timeout {
+                Some(timeout) => builder.timeout(timeout),
+                None => builder,
+            };
+            let response = builder.send().await.map_err(|error| {
+                if error.is_connect() || error.is_builder() {
+                    Error::Connect(error.to_string())
+                } else {
+                    Error::Network(error.to_string())
+                }
+            })?;
+            let status = response.status().as_u16();
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            let cache_control = response
+                .headers()
+                .get(reqwest::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
+            let stream = futures_util::StreamExt::map(response.bytes_stream(), |result| {
+                result.map_err(|error| Error::Network(error.to_string()))
+            });
+            Ok(HttpStreamResponse {
+                status,
+                content_type,
+                cache_control,
+                stream: Box::pin(stream),
+            })
+        })
+    }
 }
 
 pub type SessionFuture<'a, Session> = Pin<Box<dyn Future<Output = Result<Session, Error>> + 'a>>;
@@ -88,12 +147,15 @@ pub type SessionFuture<'a, Session> = Pin<Box<dyn Future<Output = Result<Session
 pub trait CallServices: Send + Sync {
     type Bindings;
     type Session;
+    type OpenFuture<'a>: Future<Output = Result<Self::Session, Error>> + 'a
+    where
+        Self: 'a;
 
     fn open<'a>(
         &'a self,
         context: CallLifecycleContext,
         bindings: Self::Bindings,
-    ) -> SessionFuture<'a, Self::Session>;
+    ) -> Self::OpenFuture<'a>;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -102,25 +164,70 @@ pub struct NativeBindings;
 #[derive(Debug)]
 pub struct NativeSession;
 
+impl Clock for NativeSession {
+    fn now(&self) -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or(0.0)
+    }
+}
+
+impl RequestPolicy<MessagesRequest, MessagesRequest> for NativeSession {
+    type PreCallFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
+    type DuringCallFuture<'a> = std::future::Ready<ActionResult<MessagesRequest, Error>>;
+
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: MessagesRequest,
+    ) -> Self::PreCallFuture<'a> {
+        std::future::ready(ActionResult::Continue(request))
+    }
+
+    fn async_during_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: MessagesRequest,
+    ) -> Self::DuringCallFuture<'a> {
+        std::future::ready(ActionResult::Continue(request))
+    }
+}
+
+impl TerminalDispatcher for NativeSession {
+    fn dispatch<'a>(&'a self, _: &'a TerminalRecord) -> LogFuture<'a> {
+        Box::pin(async { Ok::<(), LogError>(()) })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NativeCallServices;
 
 impl CallServices for NativeCallServices {
     type Bindings = NativeBindings;
     type Session = NativeSession;
+    type OpenFuture<'a> = std::future::Ready<Result<NativeSession, Error>>;
 
     fn open<'a>(
         &'a self,
         _context: CallLifecycleContext,
         _bindings: Self::Bindings,
-    ) -> SessionFuture<'a, Self::Session> {
-        Box::pin(std::future::ready(Ok(NativeSession)))
+    ) -> Self::OpenFuture<'a> {
+        std::future::ready(Ok(NativeSession))
     }
 }
 
 pub trait ChatCompletionsServices:
     crate::providers::auth::ChatAuthorizationServices + Send + Sync
 {
+    type Transport: HttpTransport;
+    type Calls: CallServices;
+
+    fn transport(&self) -> &Self::Transport;
+    fn calls(&self) -> &Self::Calls;
+}
+
+pub trait MessagesRuntimeServices: crate::providers::auth::Environment + Send + Sync {
     type Transport: HttpTransport;
     type Calls: CallServices;
 
@@ -184,6 +291,19 @@ impl ChatCompletionsServices for NativeServices {
     }
 }
 
+impl MessagesRuntimeServices for NativeServices {
+    type Transport = NativeHttpTransport;
+    type Calls = NativeCallServices;
+
+    fn transport(&self) -> &Self::Transport {
+        &self.transport
+    }
+
+    fn calls(&self) -> &Self::Calls {
+        &self.calls
+    }
+}
+
 pub struct LiteLlm<S = NativeServices> {
     services: Arc<S>,
 }
@@ -226,6 +346,22 @@ impl LiteLlm<NativeServices> {
         self.chat_completions_with(request, context, NativeBindings)
             .await
     }
+
+    pub async fn messages_stream(&self, request: MessagesRequest) -> Result<StreamingCall, Error> {
+        let provider = request
+            .custom_llm_provider
+            .as_deref()
+            .or_else(|| request.model.split_once('/').map(|(provider, _)| provider))
+            .unwrap_or(crate::constants::ANTHROPIC_MESSAGES_PROVIDER);
+        let context = CallLifecycleContext::new(
+            "messages",
+            &request.model,
+            provider,
+            format!("{:032x}", rand::random::<u128>()),
+        );
+        self.messages_stream_with(request, MessagesOptions::default(), context, NativeBindings)
+            .await
+    }
 }
 
 impl Default for LiteLlm<NativeServices> {
@@ -250,6 +386,105 @@ where
             &*self.services,
             self.services.transport(),
             request,
+        )
+        .await
+    }
+}
+
+struct StreamingRuntimeSession<S, Session> {
+    _application: Arc<S>,
+    invocation: Session,
+}
+
+impl<S, Session> Clock for StreamingRuntimeSession<S, Session>
+where
+    S: Send + Sync,
+    Session: Clock,
+{
+    fn now(&self) -> f64 {
+        self.invocation.now()
+    }
+}
+
+impl<S, Session> RequestPolicy<MessagesRequest, MessagesRequest>
+    for StreamingRuntimeSession<S, Session>
+where
+    S: Send + Sync,
+    Session: RequestPolicy<MessagesRequest, MessagesRequest>,
+{
+    type PreCallFuture<'a>
+        = Session::PreCallFuture<'a>
+    where
+        Self: 'a;
+    type DuringCallFuture<'a>
+        = Session::DuringCallFuture<'a>
+    where
+        Self: 'a;
+
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        request: MessagesRequest,
+    ) -> Self::PreCallFuture<'a> {
+        self.invocation.async_pre_call_hook(context, request)
+    }
+
+    fn async_during_call_hook<'a>(
+        &'a self,
+        context: &'a CallLifecycleContext,
+        request: MessagesRequest,
+    ) -> Self::DuringCallFuture<'a> {
+        self.invocation.async_during_call_hook(context, request)
+    }
+}
+
+impl<S, Session> TerminalDispatcher for StreamingRuntimeSession<S, Session>
+where
+    S: Send + Sync,
+    Session: TerminalDispatcher,
+{
+    fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
+        self.invocation.dispatch(terminal)
+    }
+}
+
+impl<S> LiteLlm<S>
+where
+    S: MessagesRuntimeServices + 'static,
+    <<S as MessagesRuntimeServices>::Calls as CallServices>::Session:
+        MessagesServices + Send + Sync + 'static,
+    for<'a> <<S as MessagesRuntimeServices>::Calls as CallServices>::OpenFuture<'a>: Send,
+{
+    pub async fn messages_stream_with(
+        &self,
+        request: MessagesRequest,
+        options: MessagesOptions,
+        context: CallLifecycleContext,
+        bindings: <<S as MessagesRuntimeServices>::Calls as CallServices>::Bindings,
+    ) -> Result<StreamingCall, Error> {
+        let invocation = self
+            .services
+            .calls()
+            .open(context.clone(), bindings)
+            .await?;
+        let application = self.services.clone();
+        let session = Arc::new(StreamingRuntimeSession {
+            _application: application.clone(),
+            invocation,
+        });
+        crate::messages::lifecycle::messages_stream_with(
+            session,
+            request,
+            options,
+            context,
+            move |request| async move {
+                crate::messages::execute_messages_provider_stream_with_transport(
+                    &*application,
+                    application.transport(),
+                    request,
+                )
+                .await
+            },
         )
         .await
     }

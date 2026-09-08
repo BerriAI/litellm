@@ -7,14 +7,24 @@ use super::types::{MessagesEndpoint, MessagesOptions, MessagesRequest, ProviderM
 use serde_json::{Map, Value};
 
 pub fn build_provider_request(request: MessagesRequest) -> Result<ProviderMessagesRequest, Error> {
-    let endpoint = build_endpoint(MessagesOptions {
-        model: request.model,
-        api_key: request.api_key,
-        api_base: request.api_base,
-        custom_llm_provider: request.custom_llm_provider,
-        extra_headers: request.extra_headers,
-        timeout: request.timeout,
-    })?;
+    build_provider_request_with_environment(request, &|key: &str| std::env::var(key).ok())
+}
+
+pub(crate) fn build_provider_request_with_environment(
+    request: MessagesRequest,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<ProviderMessagesRequest, Error> {
+    let endpoint = build_endpoint_with_environment(
+        MessagesOptions {
+            model: request.model,
+            api_key: request.api_key,
+            api_base: request.api_base,
+            custom_llm_provider: request.custom_llm_provider,
+            extra_headers: request.extra_headers,
+            timeout: request.timeout,
+        },
+        environment,
+    )?;
     let typed_request = serde_json::from_value(request.body).map_err(|err| {
         Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
     })?;
@@ -30,6 +40,13 @@ pub fn build_provider_request(request: MessagesRequest) -> Result<ProviderMessag
 }
 
 pub fn build_endpoint(request: MessagesOptions) -> Result<MessagesEndpoint, Error> {
+    build_endpoint_with_environment(request, &|key: &str| std::env::var(key).ok())
+}
+
+fn build_endpoint_with_environment(
+    request: MessagesOptions,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<MessagesEndpoint, Error> {
     let provider_info =
         get_custom_llm_provider(&request.model, request.custom_llm_provider.as_deref())
             .or_else(|| {
@@ -51,16 +68,14 @@ pub fn build_endpoint(request: MessagesOptions) -> Result<MessagesEndpoint, Erro
 
     let config = messages_provider_config(provider)
         .ok_or_else(|| Error::InvalidProvider(provider.to_string()))?;
-    let env_lookup = |key: &str| std::env::var(key).ok();
-
     let headers = validate_environment(
         config,
         request.extra_headers,
         request.api_key.as_deref(),
-        &env_lookup,
+        environment,
     )?;
 
-    let url = config.complete_url(request.api_base.as_deref(), &model, &env_lookup)?;
+    let url = config.complete_url(request.api_base.as_deref(), &model, environment)?;
 
     Ok(MessagesEndpoint {
         provider: provider.to_string(),

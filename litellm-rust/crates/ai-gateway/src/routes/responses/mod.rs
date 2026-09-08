@@ -325,6 +325,9 @@ mod tests {
             master_key: Some(Arc::from("master-key")),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
+            messages_client: litellm_core::runtime::LiteLlm::from_services(
+                crate::state::GatewayMessagesServices::new(|_| None),
+            ),
         }
     }
 
