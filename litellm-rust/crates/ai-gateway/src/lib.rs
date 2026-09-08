@@ -13,9 +13,7 @@
 //!   binary turns on.
 
 pub mod audio_transcription;
-mod client;
 pub mod io;
-pub mod ocr;
 
 #[cfg(feature = "server")]
 pub mod auth;
@@ -27,6 +25,5 @@ pub mod state;
 pub mod trace_parity;
 
 mod constants;
-pub mod integrations;
 #[cfg(feature = "server")]
 mod realtime;

@@ -10,6 +10,7 @@
 //! wires startup.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use litellm_ai_gateway::io::realtime_pool::{PoolConfig, RealtimePool, upstream_key};
 use litellm_ai_gateway::routes;
@@ -18,13 +19,19 @@ use litellm_ai_gateway::state::AppState;
 use litellm_config::load_model_list;
 use litellm_core::router::{Deployment, LiteLLMParams, Router};
 
-use litellm_ai_gateway::integrations::custom_logger::CustomLogger;
-use litellm_ai_gateway::integrations::litellm_python_proxy_api::LiteLLMPythonProxyAPILogger;
+use litellm_core::integrations::custom_logger::CustomLogger;
+use litellm_core::integrations::litellm_python_proxy_api::{
+    LiteLLMPythonProxyAPILogger, LogEgressConfig,
+};
 
 /// Bind to localhost by default so the gateway is not a public, unauthenticated
 /// provider proxy out of the box. Override with `HOST` (e.g. `0.0.0.0`).
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 4001;
+const DEFAULT_PROXY_BASE_URL: &str = "http://localhost:4000";
+const DEFAULT_CHANNEL_CAPACITY: usize = 4096;
+const DEFAULT_MAX_BATCH_SIZE: usize = 256;
+const DEFAULT_FLUSH_INTERVAL_MS: u64 = 500;
 
 #[tokio::main]
 async fn main() {
@@ -44,7 +51,7 @@ async fn main() {
     // Spawn the realtime-logging worker (drains a channel → POSTs batches to the
     // Python proxy's /v1/callbacks/logs). Built here so the spawn lands on the
     // tokio runtime. `from_env` reads LITELLM_PROXY_BASE_URL + LITELLM_MASTER_KEY.
-    let proxy_logger = LiteLLMPythonProxyAPILogger::from_env();
+    let proxy_logger = configured_proxy_logger();
     let loggers: Vec<Arc<dyn CustomLogger>> = vec![proxy_logger];
 
     let router = Arc::new(build_router());
@@ -84,6 +91,41 @@ async fn main() {
     axum::serve(listener, routes::app(state))
         .await
         .expect("server error");
+}
+
+fn configured_proxy_logger() -> Arc<LiteLLMPythonProxyAPILogger> {
+    let base = std::env::var("LITELLM_PROXY_BASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_PROXY_BASE_URL.to_string());
+    let key = std::env::var("LITELLM_MASTER_KEY").unwrap_or_default();
+    LiteLLMPythonProxyAPILogger::start(
+        base,
+        key,
+        LogEgressConfig {
+            channel_capacity: positive_env(
+                "LITELLM_LOG_CHANNEL_CAPACITY",
+                DEFAULT_CHANNEL_CAPACITY,
+            ),
+            max_batch_size: positive_env("LITELLM_LOG_BATCH_SIZE", DEFAULT_MAX_BATCH_SIZE),
+            flush_interval: Duration::from_millis(positive_env(
+                "LITELLM_LOG_FLUSH_INTERVAL_MS",
+                DEFAULT_FLUSH_INTERVAL_MS,
+            )),
+        },
+    )
+}
+
+fn positive_env<T>(name: &str, default: T) -> T
+where
+    T: std::str::FromStr + PartialOrd + From<u8>,
+{
+    let zero = T::from(0u8);
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.trim().parse::<T>().ok())
+        .filter(|value| *value > zero)
+        .unwrap_or(default)
 }
 
 /// Register every deployment's upstream key with the pool so the replenisher

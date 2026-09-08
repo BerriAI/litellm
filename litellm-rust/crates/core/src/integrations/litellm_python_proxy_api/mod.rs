@@ -16,12 +16,12 @@ use reqwest::Client;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::interval;
 
-use crate::constants::{DEFAULT_PROXY_BASE_URL, RUST_CONTROL_PLANE_LOGS_PATH};
+use crate::constants::RUST_CONTROL_PLANE_LOGS_PATH;
 use crate::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogError, LogFuture, LoggingError,
     ModelCallDetails,
 };
-use types::{CallbackLogsRequest, EgressTunables, LogRecord};
+use types::{CallbackLogsRequest, LogRecord};
 
 pub mod types;
 
@@ -33,9 +33,8 @@ pub struct LiteLLMPythonProxyAPILogger {
 impl LiteLLMPythonProxyAPILogger {
     /// Spawn the background worker and return a logger handle. `base` is the
     /// proxy base URL (no trailing path); `master_key` is sent as a bearer token.
-    pub fn start(base: String, master_key: String) -> Arc<Self> {
-        let tunables = EgressTunables::from_env();
-        let (sink, receiver) = mpsc::channel::<LogRecord>(tunables.channel_capacity);
+    pub fn start(base: String, master_key: String, config: LogEgressConfig) -> Arc<Self> {
+        let (sink, receiver) = mpsc::channel::<LogRecord>(config.channel_capacity);
         let url = format!(
             "{}{}",
             base.trim_end_matches('/'),
@@ -47,27 +46,10 @@ impl LiteLLMPythonProxyAPILogger {
             client,
             url,
             master_key,
-            tunables.max_batch_size,
-            tunables.flush_interval,
+            config.max_batch_size,
+            config.flush_interval,
         ));
         Arc::new(Self { sink })
-    }
-
-    /// Build a logger from the environment: `LITELLM_PROXY_BASE_URL` (default
-    /// `http://localhost:4000`) and `LITELLM_MASTER_KEY`.
-    ///
-    /// `LITELLM_PROXY_BASE_URL` is treated as the full base and the route is
-    /// appended verbatim, so if the proxy runs under a `SERVER_ROOT_PATH`
-    /// (e.g. served at `https://host/litellm`), include it in the base
-    /// (`LITELLM_PROXY_BASE_URL=https://host/litellm`) and the POST lands at
-    /// `https://host/litellm/v1/rust_control_plane/logs`.
-    pub fn from_env() -> Arc<Self> {
-        let base = std::env::var("LITELLM_PROXY_BASE_URL")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| DEFAULT_PROXY_BASE_URL.to_string());
-        let key = std::env::var("LITELLM_MASTER_KEY").unwrap_or_default();
-        Self::start(base, key)
     }
 
     fn enqueue(&self, record: LogRecord) -> Result<(), LogError> {
@@ -76,6 +58,13 @@ impl LiteLLMPythonProxyAPILogger {
             mpsc::error::TrySendError::Closed(_) => LogError::channel_closed(),
         })
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct LogEgressConfig {
+    pub channel_capacity: usize,
+    pub max_batch_size: usize,
+    pub flush_interval: Duration,
 }
 
 impl CustomLogger for LiteLLMPythonProxyAPILogger {

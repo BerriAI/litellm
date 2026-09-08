@@ -1,12 +1,12 @@
-use litellm_core::error::Error;
-use litellm_core::http_utils::http_request;
-use litellm_core::ocr::transformation::OcrResponseHandling;
+use crate::error::Error;
+use crate::http_utils::http_request;
+use crate::ocr::transformation::OcrResponseHandling;
 use serde_json::Value;
 
+use super::client::http_client;
 use super::common_utils::{poll_document_intelligence, truncate_error_body};
 use super::hooks::OcrLifecycleHooks;
-use super::types::PreparedOcrRequest;
-use crate::client::http_client;
+use super::runtime_types::PreparedOcrRequest;
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(crate) async fn execute_ocr_provider_call(

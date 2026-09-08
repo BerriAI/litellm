@@ -1,43 +1,23 @@
 # routes/ — the route template
 
-Every route follows the **same shape** so the layout is predictable. The rule:
-
-> **Each route module exposes `pub fn router() -> Router<AppState>`.**
-> `routes/mod.rs::app` merges them all and applies state once. Adding a route is:
-> create the module, then add one `.merge(<name>::router())` line.
+Every route follows one shape: each module exposes `pub fn router() -> Router<AppState>`; `routes/mod.rs::app` merges them all and applies state once. Adding a route means creating the module and adding one `.merge(<name>::router())` line.
 
 ## Default: one file
-A route is a single file containing `router()` + its handler(s) (handlers stay
-private). This is the norm — don't split until it hurts.
-```
-pub fn router() -> Router<AppState> { Router::new().route(PATH, get(handle)) }
-async fn handle(...) -> impl IntoResponse { ... }
-```
-`health.rs` is the example.
+
+- A route is one file with `router()` + its handler(s) (handlers stay private); `health.rs` is the example
+- Don't split until it hurts
 
 ## Split out `service` when there's real logic
-When a route has business logic worth testing without axum, put it in a sibling
-`service` (a file, or a folder if the route grows). The route file stays the
-**axum surface** (router + handler + any socket/SSE adapter); `service` is plain
-Rust with **no axum types**, and its job is to pick the deployment and call the
-`core` route entrypoint (see `messages/service.rs` calling
-`litellm_core::messages::messages`). Never build a provider request, resolve a
-key, or perform the provider call here. `realtime/` is the older example:
-```
-realtime/
-  mod.rs       # axum surface: router() + handler + the WS<->events adapter
-  service.rs   # pure logic: select deployment + call provider (no axum) — testable
-```
-Split `service` further (or add `transport`, `repo`, …) only once a single file
-genuinely gets hard to read.
+
+- Put testable business logic in a sibling `service` (file, or folder if it grows)
+- The route file stays the axum surface (router + handler + any socket/SSE adapter); `service` is plain Rust with no axum types
+- `service` picks the deployment and calls the `core` entrypoint (see `messages/service.rs`), never builds a provider request, resolves a key, or performs the provider call
+- Split further (`transport`, `repo`, ...) only when one file genuinely gets hard to read
 
 ## Invariants
-- **Auth is an extractor, not a manual call.** A handler requires auth by adding
-  `crate::auth::RequireMasterKey` to its arguments; it runs during extraction.
-  Never re-implement the check per route.
-- **Handlers contain no business logic; `service` contains no axum types.**
-- **No provider handlers in this crate.** Transforms, auth headers, and the
-  provider HTTP call live in `core/src/<route>/`.
-- A route owns its paths in its own `router()`; `mod.rs` only merges.
-- Cross-cutting concerns (logging, CORS, timeouts) → Tower layers in `mod.rs`,
-  not duplicated in handlers.
+
+- Auth is an extractor, not a manual call
+- Handlers contain no business logic; `service` contains no axum types
+- No provider handlers here: transforms, auth headers, and the provider HTTP call live in `core/src/<route>/`
+- A route owns its paths in its own `router()`; `mod.rs` only merges
+- Cross-cutting concerns go in Tower layers in `mod.rs`, not duplicated in handlers

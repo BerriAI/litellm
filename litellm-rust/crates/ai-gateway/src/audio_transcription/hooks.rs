@@ -9,13 +9,13 @@ use std::future::Future;
 use std::pin::Pin;
 
 use super::types::PreparedAudioTranscriptionRequest;
-use crate::integrations::custom_guardrail::{
+use litellm_core::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{
+use litellm_core::integrations::custom_logger::{
     CallType, CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
 };
-use crate::integrations::types::{
+use litellm_core::integrations::types::{
     RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
 };
 

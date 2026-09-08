@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
-use litellm_core::ocr::transformation::OcrProviderConfig;
+use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
+use crate::ocr::transformation::OcrProviderConfig;
 use serde_json::{Map, Value};
 
 use crate::integrations::custom_guardrail::CustomGuardrail;
@@ -25,7 +25,7 @@ pub struct OcrRequest<'a> {
 }
 
 pub(crate) struct PreparedOcrRequest {
-    pub(crate) config: Result<&'static dyn OcrProviderConfig, litellm_core::Error>,
+    pub(crate) config: Result<&'static dyn OcrProviderConfig, crate::Error>,
     pub(crate) model: String,
     pub(crate) custom_llm_provider: String,
     pub(crate) litellm_call_id: String,

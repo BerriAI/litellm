@@ -1,22 +1,22 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use litellm_ai_gateway::integrations::custom_guardrail::{
+use litellm_core::error::Error;
+use litellm_core::integrations::custom_guardrail::{
     CustomGuardrail, GuardrailContext, GuardrailDecision, GuardrailError, GuardrailEventHook,
     GuardrailFuture, GuardrailRequest,
 };
-use litellm_ai_gateway::integrations::custom_logger::{
+use litellm_core::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
-use litellm_ai_gateway::integrations::types::RequestMetadata;
-use litellm_ai_gateway::ocr::{OcrRequest, ocr};
-use litellm_core::error::Error;
-#[cfg(feature = "trace-parity")]
+use litellm_core::integrations::types::RequestMetadata;
+#[cfg(feature = "observability")]
 use litellm_core::observability::FunctionTrace;
+use litellm_core::ocr::{OcrRequest, ocr};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-#[cfg(feature = "trace-parity")]
+#[cfg(feature = "observability")]
 use tracing::instrument::WithSubscriber;
 
 async fn read_http_headers(socket: &mut TcpStream) -> String {
@@ -324,7 +324,7 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
         GuardrailEventHook::PreCall,
         GuardrailEventHook::DuringCall,
     ]));
-    #[cfg(feature = "trace-parity")]
+    #[cfg(feature = "observability")]
     let trace = FunctionTrace::default();
     let api_base = format!("http://{addr}");
     let call = ocr(OcrRequest {
@@ -347,7 +347,7 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
         },
         litellm_call_id: Some("ocr-call-1"),
     });
-    #[cfg(feature = "trace-parity")]
+    #[cfg(feature = "observability")]
     let call = call.with_subscriber(trace.dispatcher());
     let response = call.await.expect("ocr request succeeds");
 
@@ -367,7 +367,7 @@ async fn ocr_lifecycle_runs_pre_during_and_success_hooks() {
             error_kind: None,
         }]
     );
-    #[cfg(feature = "trace-parity")]
+    #[cfg(feature = "observability")]
     assert_eq!(
         trace
             .events()
@@ -406,7 +406,7 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
     });
 
     let logger = Arc::new(RecordingOcrLogger::default());
-    #[cfg(feature = "trace-parity")]
+    #[cfg(feature = "observability")]
     let trace = FunctionTrace::default();
     let api_base = format!("http://{addr}");
     let call = ocr(OcrRequest {
@@ -426,7 +426,7 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
         request_metadata: RequestMetadata::default(),
         litellm_call_id: Some("ocr-call-2"),
     });
-    #[cfg(feature = "trace-parity")]
+    #[cfg(feature = "observability")]
     let call = call.with_subscriber(trace.dispatcher());
     let err = call.await.expect_err("provider error propagates");
 
@@ -443,7 +443,7 @@ async fn ocr_lifecycle_runs_failure_hook_on_provider_error() {
             error_kind: Some("HttpError".to_string()),
         }]
     );
-    #[cfg(feature = "trace-parity")]
+    #[cfg(feature = "observability")]
     assert_eq!(
         trace
             .events()

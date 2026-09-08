@@ -23,10 +23,10 @@ use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
 use crate::realtime::streaming::{RealTimeStreaming, SessionStatus};
 use crate::state::AppState;
+use litellm_core::integrations::custom_logger::CustomLogger;
+use litellm_core::integrations::types::RequestMetadata;
 
 /// Process-local monotonic counter, mixed into the per-session call id so two
 /// sessions opened in the same nanosecond still get distinct ids.

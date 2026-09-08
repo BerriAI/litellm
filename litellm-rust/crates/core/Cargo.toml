@@ -13,6 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing-subscriber = { workspace = true, optional = true }
 sha2.workspace = true
 aws-config = { version = "1.9.0", default-features = false, features = ["rustls", "rt-tokio"], optional = true }
@@ -36,5 +37,5 @@ observability = ["dep:tracing-subscriber"]
 
 [dev-dependencies]
 rstest.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }
 tracing-subscriber.workspace = true

@@ -4,9 +4,9 @@ use std::time::Duration;
 use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use serde_json::{Map, Value};
 
-use crate::integrations::custom_guardrail::CustomGuardrail;
-use crate::integrations::custom_logger::CustomLogger;
-use crate::integrations::types::RequestMetadata;
+use litellm_core::integrations::custom_guardrail::CustomGuardrail;
+use litellm_core::integrations::custom_logger::CustomLogger;
+use litellm_core::integrations::types::RequestMetadata;
 
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,

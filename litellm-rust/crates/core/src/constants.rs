@@ -45,3 +45,5 @@ pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
 
 pub const FUNCTION_TRACE_TARGET: &str = "litellm::function_trace";
+
+pub(crate) const RUST_CONTROL_PLANE_LOGS_PATH: &str = "/v1/rust_control_plane/logs";

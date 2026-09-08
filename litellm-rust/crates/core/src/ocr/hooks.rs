@@ -1,15 +1,15 @@
-use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
-use litellm_core::error::Error;
-use litellm_core::providers::reducto::ocr::transformation::{
+use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
+use crate::error::Error;
+use crate::providers::reducto::ocr::transformation::{
     build_upload_request, extract_document_source, extract_upload_file_id,
 };
 use serde_json::{Map, Value, json};
 use std::future::Future;
 use std::pin::Pin;
 
+use super::client::http_client;
 use super::common_utils::{convert_document_url_to_data_uri, string_headers, truncate_error_body};
-use super::types::{PreparedOcrRequest, ProviderOcrRequest};
-use crate::client::http_client;
+use super::runtime_types::{PreparedOcrRequest, ProviderOcrRequest};
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
