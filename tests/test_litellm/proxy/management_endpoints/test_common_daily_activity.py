@@ -2109,11 +2109,6 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
 
 @pytest.mark.asyncio
 async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
-    """
-    A CLI session token has no verification-token row, so the active/deleted lookups
-    and reverse-hash all miss. Given a spend-log window, its alias and owner are
-    recovered from the spend-log metadata and its email is filled from the user table.
-    """
     from litellm.proxy.utils import hash_token
 
     session_digest = hash_token("cli-session-user-42")

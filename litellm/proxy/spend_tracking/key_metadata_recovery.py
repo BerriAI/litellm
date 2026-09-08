@@ -29,16 +29,21 @@ ORDER BY token, deleted_at DESC
 """
 
 _SPEND_LOG_ALIAS_SQL: Final = """
-SELECT DISTINCT ON (api_key)
-    api_key AS digest,
-    metadata->>'user_api_key_alias' AS key_alias,
-    COALESCE(NULLIF(team_id, ''), metadata->>'user_api_key_team_id') AS team_id,
-    COALESCE(NULLIF("user", ''), metadata->>'user_api_key_user_id') AS user_id
-FROM "LiteLLM_SpendLogs"
-WHERE api_key = ANY($1::text[])
-  AND "startTime" >= $2::timestamp
-  AND "startTime" < $3::timestamp
-ORDER BY api_key, (metadata->>'user_api_key_alias') IS NULL, "startTime" DESC
+SELECT newest.digest, newest.key_alias, newest.team_id, newest.user_id
+FROM unnest($1::text[]) AS missing(digest)
+CROSS JOIN LATERAL (
+    SELECT
+        api_key AS digest,
+        metadata->>'user_api_key_alias' AS key_alias,
+        COALESCE(NULLIF(team_id, ''), metadata->>'user_api_key_team_id') AS team_id,
+        COALESCE(NULLIF("user", ''), metadata->>'user_api_key_user_id') AS user_id
+    FROM "LiteLLM_SpendLogs"
+    WHERE api_key = missing.digest
+      AND "startTime" >= $2::timestamp
+      AND "startTime" < $3::timestamp
+    ORDER BY "startTime" DESC
+    LIMIT 1
+) AS newest
 """
 
 
@@ -152,14 +157,6 @@ async def recover_double_hashed_key_metadata(
     prisma_client: PrismaClient,
     missing_keys: AbstractSet[str],
 ) -> Mapping[str, KeyMetadataDict]:
-    """
-    Recover key_alias/team_id/user_id for DailyUserSpend.api_key values that
-    were double-hashed by the v1.99 spend-log provenance gate.
-
-    Those rows store hash(VerificationToken.token) instead of the token, so the
-    exact join misses. Postgres hashes the token column itself, one pass over
-    active keys and one over deleted keys, so no key row crosses the wire.
-    """
     sha_missing: Final = frozenset(key for key in missing_keys if is_valid_sha256_hash(key))
     if not sha_missing:
         return _EMPTY_KEY_METADATA
@@ -187,15 +184,6 @@ async def recover_key_metadata_from_spend_logs(
     missing_keys: AbstractSet[str],
     window: tuple[datetime, datetime],
 ) -> Mapping[str, KeyMetadataDict]:
-    """
-    Recover key_alias/team_id/user_id for hashed api_key values absent from both
-    verification-token tables, e.g. in-memory CLI session tokens that never get a
-    token row. Their owner is written to LiteLLM_SpendLogs metadata at request
-    time under the same hashed api_key, so it is the only surviving source. Only
-    sha256 digests are looked up, matching the reverse-hash recovery gate, since
-    every current api_key value in spend logs is a token hash. The [start, end)
-    bound keeps the lookup on the startTime index instead of scanning the table.
-    """
     sha_missing: Final = frozenset(key for key in missing_keys if is_valid_sha256_hash(key))
     if not sha_missing:
         return _EMPTY_KEY_METADATA

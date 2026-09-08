@@ -462,9 +462,7 @@ async def get_api_key_metadata(
 
     This ensures that key_alias and team_id are preserved in historical activity logs
     even after a key is deleted or regenerated. Also recovers aliases for api_key
-    values that were double-hashed by the v1.99 spend-log provenance gate, and, when
-    spend_logs_window is given, for keys never written to either token table (CLI
-    session tokens) from the spend-log rows those requests wrote in that window.
+    values that were double-hashed by the v1.99 spend-log provenance gate.
     """
     key_records: Sequence[PrismaVerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"token": {"in": list(api_keys)}}

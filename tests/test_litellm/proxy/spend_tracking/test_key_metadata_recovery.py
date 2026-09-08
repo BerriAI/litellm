@@ -233,11 +233,6 @@ async def test_fill_missing_api_key_aliases_skips_named_keys_that_have_no_email(
 
 @pytest.mark.asyncio
 async def test_recover_key_metadata_from_spend_logs_resolves_session_token_from_metadata():
-    """
-    CLI session tokens never get a verification-token row, so both the exact join and
-    the reverse-hash lookup miss them. Their owner survives only in the spend-log
-    metadata written at request time, keyed by the same hashed api_key.
-    """
     session_digest = hash_token("cli-session-repro-user-6852")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
