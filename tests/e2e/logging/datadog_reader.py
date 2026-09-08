@@ -13,7 +13,7 @@ empty result. External reads go through ``e2e_http``.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
@@ -36,8 +36,8 @@ _RATE_LIMIT_RETRIES = 5
 
 
 class _DdAuthHeaders(Headers):
-    api_key: str = Field(serialization_alias="DD-API-KEY")
-    app_key: str = Field(serialization_alias="DD-APPLICATION-KEY")
+    api_key: str = Field(serialization_alias="DD-API-KEY", repr=False)
+    app_key: str = Field(serialization_alias="DD-APPLICATION-KEY", repr=False)
 
 
 class _SearchFilter(BaseModel):
@@ -88,8 +88,8 @@ class _SearchResponse(BaseModel):
 @dataclass(frozen=True, slots=True)
 class DdLogsReader:
     site: str
-    api_key: str
-    app_key: str
+    api_key: str = field(repr=False)
+    app_key: str = field(repr=False)
 
     def events_for_marker(self, marker: str) -> list[DdLogEvent]:
         """Every ingested event whose attributes carry the marker. DataDog
