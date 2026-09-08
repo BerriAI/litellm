@@ -1795,14 +1795,18 @@ PARTS_MESSAGES = [
         ],
     },
     {
+        # No cache_control here on purpose: this row exercises the general
+        # multi-part flatten/merge mechanics (shared with compresr). A row
+        # carrying its own cache_control is a different, dedicated case --
+        # see test_mid_history_cache_control_row_is_never_sent_for_compression
+        # (#39519): get_protected_indices withholds it from /v1/compress
+        # entirely rather than letting it be rewritten and re-merged, because
+        # rewriting the bytes under a live breakpoint busts the cache the
+        # marker is supposed to preserve.
         "role": "user",
         "content": [
-            {"type": "text", "text": "Earlier turn.", "cache_control": {"type": "ephemeral"}},
-            {
-                "type": "text",
-                "text": "Second block. " + "B" * 5000,
-                "cache_control": {"type": "ephemeral", "ttl": "1h"},
-            },
+            {"type": "text", "text": "Earlier turn."},
+            {"type": "text", "text": "Second block. " + "B" * 5000},
         ],
     },
     {
@@ -1891,14 +1895,17 @@ async def test_apply_guardrail_restores_rewritten_all_text_row(
 
     messages = result["structured_messages"]
     history_content = messages[1]["content"]
-    # Rewritten all-text row collapses to one part carrying the LAST declared
-    # breakpoint: an Anthropic breakpoint caches the prefix ending at its
-    # part, so after the merge the last one (and its TTL) still describes the
-    # row.
+    # Rewritten all-text row collapses to one part carrying the rewritten text.
+    # This fixture row carries no cache_control (see PARTS_MESSAGES): the
+    # last-declared-breakpoint-survives-the-merge behavior is a property of
+    # merge_rewritten_text_parts and is covered directly by compresr's
+    # test_all_text_row_merges_and_keeps_last_cache_control, since a
+    # cache_control-marked row never reaches this merge path through Headroom
+    # at all -- get_protected_indices withholds it before compression runs
+    # (see test_mid_history_cache_control_row_is_never_sent_for_compression).
     assert isinstance(history_content, list)
     assert len(history_content) == 1
     assert history_content[0]["text"] == "compressed history. Retrieve more: hash=b573993006976af767214fac"
-    assert history_content[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     # Mixed row passes through byte-identical.
     assert messages[2]["content"] == PARTS_MESSAGES[2]["content"]
     # The service-declared hash still drives retrieve-tool injection on a restored row.
@@ -2521,6 +2528,45 @@ async def test_history_is_still_compressed(guardrail: HeadroomGuardrail):
     assert messages[1] == compressed_history[0]
     assert messages[2] == AGENTIC_MESSAGES[2]
     assert messages[3] == compressed_history[1]
+
+
+# ---------------------------------------------------------------------------
+# #39519: a mid-history row carrying its own Anthropic cache_control marker
+# (e.g. a large tool result the client already cached several turns back) was
+# still sent to /v1/compress and rewritten. It came back byte-different but
+# kept its marker, so the next request's cache read silently became a cache
+# write. get_protected_indices() now protects any cache_control-marked row,
+# not just system/last-user/last-assistant, so it must never reach the wire.
+# ---------------------------------------------------------------------------
+
+CACHE_MARKED_HISTORY_MESSAGES = [
+    {"role": "system", "content": "You are Claude Code. " + "S" * 5000},
+    {"role": "user", "content": "old question " + "Q" * 5000},
+    {
+        "role": "assistant",
+        "content": "Reading the file now.",
+        "tool_calls": [{"id": "old_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+    },
+    {
+        "role": "tool",
+        "tool_call_id": "old_1",
+        "content": [{"type": "text", "text": "large cached file body " + "F" * 5000}],
+        "cache_control": {"type": "ephemeral"},
+    },
+    {"role": "assistant", "content": "Summarized the file for you."},
+    {"role": "user", "content": "live instruction"},
+]
+
+
+@pytest.mark.asyncio
+async def test_mid_history_cache_control_row_is_never_sent_for_compression(guardrail: HeadroomGuardrail):
+    wire, result = await _wire_and_result(guardrail, CACHE_MARKED_HISTORY_MESSAGES)
+
+    cached_row = CACHE_MARKED_HISTORY_MESSAGES[3]
+    assert cached_row not in wire
+    assert not any(row.get("tool_call_id") == "old_1" for row in wire)
+    # Byte-identical, marker intact -- the next request's cache read survives.
+    assert result["structured_messages"][3] == cached_row
 
 
 # ---------------------------------------------------------------------------
