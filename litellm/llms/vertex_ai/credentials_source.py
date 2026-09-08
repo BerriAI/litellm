@@ -143,4 +143,4 @@ def raise_vertex_credentials_failure(failure: VertexCredentialsFailure) -> NoRet
                 "Check for unescaped newlines in private_key."
             )
         case _:  # pragma: no cover - exhaustiveness guard, unreachable while the union holds
-            assert_never(failure)
+            assert_never(failure)  # pragma: no cover
