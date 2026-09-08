@@ -1920,8 +1920,6 @@ async def _user_api_key_auth_builder(
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
             )
-
-        if valid_token is not None:
             valid_token = _update_key_budget_with_temp_budget_increase(valid_token)
 
         user_obj: LiteLLM_UserTable | None = None
