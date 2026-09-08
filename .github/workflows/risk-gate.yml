@@ -21,8 +21,9 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: write
-      checks: write
+    outputs:
+      tier: ${{ steps.floor.outputs.tier }}
+      summary: ${{ steps.floor.outputs.summary }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
@@ -45,6 +46,8 @@ jobs:
           version: "0.10.9"
 
       - name: Compute the floor tier
+        id: floor
+        shell: bash
         env:
           MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -57,15 +60,34 @@ jobs:
             --author "$PR_AUTHOR" \
             --json-out "${RUNNER_TEMP}/risk.json" \
             | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "tier=$(jq -r '.tier' "${RUNNER_TEMP}/risk.json")"
+            echo "summary<<RISK_SUMMARY"
+            jq -r '.summary' "${RUNNER_TEMP}/risk.json"
+            echo "RISK_SUMMARY"
+          } >> "$GITHUB_OUTPUT"
 
+  report:
+    name: risk-gate report (shadow)
+    needs: floor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      checks: write
+    steps:
       - name: Publish the risk-gate check run and the risk label
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
-          RISK_JSON: ${{ runner.temp }}/risk.json
+          TIER: ${{ needs.floor.outputs.tier }}
+          SUMMARY: ${{ needs.floor.outputs.summary }}
         with:
           script: |
-            const fs = require('fs');
-            const risk = JSON.parse(fs.readFileSync(process.env.RISK_JSON, 'utf8'));
+            const tier = process.env.TIER;
+            if (!['low', 'medium', 'high'].includes(tier)) {
+              core.setFailed(`unexpected tier ${JSON.stringify(tier)} from the floor job`);
+              return;
+            }
             const pr = context.payload.pull_request;
             const repo = { owner: context.repo.owner, repo: context.repo.repo };
             await github.rest.checks.create({
@@ -74,9 +96,9 @@ jobs:
               head_sha: pr.head.sha,
               status: 'completed',
               conclusion: 'neutral',
-              output: { title: `risk: ${risk.tier} (shadow)`, summary: risk.summary },
+              output: { title: `risk: ${tier} (shadow)`, summary: process.env.SUMMARY },
             });
-            const wanted = `risk:${risk.tier}`;
+            const wanted = `risk:${tier}`;
             const { data: labels } = await github.rest.issues.listLabelsOnIssue({
               ...repo,
               issue_number: pr.number,
