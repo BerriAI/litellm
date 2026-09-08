@@ -8259,3 +8259,38 @@ class TestPassthroughHeadersAcceptImmutableMappings:
         assert merged["content-type"] == "text/event-stream"
         # the excluded hop-by-hop header is still dropped
         assert "transfer-encoding" not in merged
+
+
+@pytest.mark.asyncio
+async def test_handle_llm_api_exception_forwards_provider_headers_on_http_status_error():
+    """The httpx.HTTPStatusError branch dropped the headers its sibling branches forward.
+
+    A Bedrock passthrough failure reaches this branch, so the request id was gone
+    before the client saw the response.
+    """
+    import httpx
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    request = httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/model/m/converse")
+    response = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-passthrough-500"},
+        content=b'{"message": "Amazon Bedrock is unable to process your request."}',
+        request=request,
+    )
+
+    processor = ProxyBaseLLMRequestProcessing(data={})
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await processor._handle_llm_api_exception(
+            e=httpx.HTTPStatusError("boom", request=request, response=response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert exc_info.value.headers is not None
+    assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-passthrough-500"

@@ -5206,3 +5206,37 @@ class TestAzureRouterModelStreamingKeepalive:
 
         assert result.headers["x-upstream"] == "kept"
         assert chunks == [b"data: hello\n\n"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_count_tokens_error_forwards_provider_headers():
+    """The count tokens route converts BedrockError into an HTTPException, and dropping the
+    headers there loses x-amzn-RequestId after the handler went to the trouble of keeping it."""
+    from fastapi import HTTPException
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    failure = BedrockError(
+        status_code=500,
+        message="Amazon Bedrock is unable to process your request.",
+        headers={"x-amzn-RequestId": "req-count-tokens-500"},
+    )
+
+    with patch(  # test-quality-ok: the route's BedrockError branch is only reachable when the handler raises
+        "litellm.llms.bedrock.count_tokens.handler.BedrockCountTokensHandler.handle_count_tokens_request",
+        new=AsyncMock(side_effect=failure),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_bedrock_count_tokens(
+                endpoint="v1/messages/count_tokens",
+                request=MagicMock(),
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+                request_body={"model": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+            )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-count-tokens-500"
