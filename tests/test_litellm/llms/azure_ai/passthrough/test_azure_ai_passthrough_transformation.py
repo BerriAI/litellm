@@ -25,7 +25,9 @@ def clear_azure_ai_env(monkeypatch):
 
 
 def test_provider_config_manager_resolves_azure_ai_passthrough_config():
-    config = ProviderConfigManager.get_provider_passthrough_config(model="Cohere-parse-v5", provider=LlmProviders.AZURE_AI)
+    config = ProviderConfigManager.get_provider_passthrough_config(
+        model="Cohere-parse-v5", provider=LlmProviders.AZURE_AI
+    )
 
     assert isinstance(config, AzureAIPassthroughConfig)
 
@@ -189,7 +191,10 @@ def test_no_credentials_at_all_raises():
     [({"stream": True}, True), ({"stream": 1}, True), ({"stream": False}, False), ({}, False)],
 )
 def test_is_streaming_request_reads_the_stream_flag(request_data, expected):
-    assert AzureAIPassthroughConfig().is_streaming_request(endpoint="models/chat/completions", request_data=request_data) is expected
+    assert (
+        AzureAIPassthroughConfig().is_streaming_request(endpoint="models/chat/completions", request_data=request_data)
+        is expected
+    )
 
 
 def _chat_completion_response() -> httpx.Response:
@@ -266,7 +271,12 @@ def _relay_logging_obj(model: str, api_base: str) -> Logging:
 
 
 def _relay_logging_result(
-    config: AzureAIPassthroughConfig, model: str, native_path: str, body, api_base: str = FOUNDRY_BASE, status_code: int = 200
+    config: AzureAIPassthroughConfig,
+    model: str,
+    native_path: str,
+    body,
+    api_base: str = FOUNDRY_BASE,
+    status_code: int = 200,
 ):
     relayed_url = f"{FOUNDRY_BASE}/{native_path}?api-version=2024-05-01-preview"
     logging_obj = _relay_logging_obj(model, api_base)
@@ -355,7 +365,11 @@ def test_deployment_without_an_ocr_config_is_never_costed_as_ocr():
 
 def test_accepted_ocr_job_without_a_result_body_is_not_costed():
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(), "mistral-document-ai-2512", "providers/mistral/azure/ocr", {"status": "running"}, status_code=202
+        AzureAIPassthroughConfig(),
+        "mistral-document-ai-2512",
+        "providers/mistral/azure/ocr",
+        {"status": "running"},
+        status_code=202,
     )
 
     assert result == {"response": {"status": "running"}}
@@ -364,7 +378,10 @@ def test_accepted_ocr_job_without_a_result_body_is_not_costed():
 
 def test_unparseable_ocr_body_falls_back_to_the_passthrough_object():
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(), "mistral-document-ai-2512", "providers/mistral/azure/ocr", ["not", "an", "ocr", "body"]
+        AzureAIPassthroughConfig(),
+        "mistral-document-ai-2512",
+        "providers/mistral/azure/ocr",
+        ["not", "an", "ocr", "body"],
     )
 
     assert result == {"response": '["not", "an", "ocr", "body"]'}
@@ -423,6 +440,17 @@ def test_image_generation_relay_is_costed_per_image():
     assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
 
 
+def test_flux_2_relay_through_the_provider_route_is_costed_per_image():
+    result, logging_obj = _relay_logging_result(
+        AzureAIPassthroughConfig(), "FLUX.2-pro", "providers/blackforestlabs/v1/flux-2-pro", IMAGE_BODY
+    )
+    per_image = litellm.get_model_info("azure_ai/FLUX.2-pro")["output_cost_per_image"]
+
+    assert isinstance(result, ImageResponse)
+    assert logging_obj.call_type == "aimage_generation"
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+
+
 def test_rejected_rerank_relay_keeps_the_passthrough_object_and_call_type():
     result, logging_obj = _relay_logging_result(
         AzureAIPassthroughConfig(),
@@ -439,8 +467,15 @@ def test_rejected_rerank_relay_keeps_the_passthrough_object_and_call_type():
 def test_streaming_chat_completion_chunks_are_costed_like_azure():
     head = {"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 1, "model": "gpt-5.4-mini"}
     chunks = [
-        "data: " + json.dumps({**head, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}]}),
-        "data: " + json.dumps({**head, "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}),
+        "data: "
+        + json.dumps(
+            {
+                **head,
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            }
+        ),
+        "data: "
+        + json.dumps({**head, "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}),
         "data: [DONE]",
     ]
 
