@@ -637,14 +637,14 @@ def test_callback_capabilities_excludes_opted_out_guardrail_from_iterator_overri
     assert [cb for cb, _ in caps.iterator_overrides if cb is opted_out] == []
 
 
-def test_deployment_pre_call_target_stays_native_when_opted_out():
+def test_deployment_hook_target_stays_native_when_opted_out():
     """Model-level guardrails resolve their target here rather than through ProxyLogging."""
-    assert _KeepsNativeHooks()._deployment_pre_call_target() is not None
+    assert _KeepsNativeHooks()._deployment_hook_target() is not None
     opted_out = _KeepsNativeHooks()
-    assert opted_out._deployment_pre_call_target() is opted_out
-    assert _AppliesGuardrail()._deployment_pre_call_target() is not None
+    assert opted_out._deployment_hook_target() is opted_out
+    assert _AppliesGuardrail()._deployment_hook_target() is not None
     routed = _AppliesGuardrail()
-    assert routed._deployment_pre_call_target() is not routed
+    assert routed._deployment_hook_target() is not routed
 
 
 @pytest.mark.asyncio

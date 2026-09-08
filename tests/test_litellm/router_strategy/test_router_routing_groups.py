@@ -12,6 +12,7 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.router import RoutingGroup, RoutingStrategy
 
 
@@ -433,6 +434,81 @@ def test_update_settings_unregisters_group_selectors_when_groups_removed(monkeyp
     assert all(c is not group_selector for c in litellm.callbacks)
     assert all(c is not group_selector for c in litellm.input_callback)
     assert router._group_selectors == {}
+
+
+def test_two_least_busy_groups_count_a_request_once(monkeypatch):
+    """
+    Least-busy counts a request up from the pre-call hooks on `litellm.input_callback` and
+    back down from the success hooks on `litellm.callbacks`. The success list drops a second
+    selector of the same class, so a pre-call list that kept both counted every request twice
+    and released it once, and the deployment's in-flight count climbed until it looked pinned.
+    """
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+
+    router = _build_router(
+        routing_strategy="least-busy",
+        routing_groups=[
+            {
+                "group_name": "fast",
+                "models": ["filtered-model"],
+                "routing_strategy": "least-busy",
+            }
+        ],
+    )
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"model_group": "filtered-model"},
+            "model_info": {"id": "deploy-1"},
+        }
+    }
+
+    for callback in litellm.input_callback:
+        if isinstance(callback, CustomLogger):
+            callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            callback.log_success_event(kwargs, None, None, None)
+
+    assert router.cache.get_cache("filtered-model_request_count:deploy-1") == 0
+
+
+def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
+    """
+    Least-busy hangs its counting off litellm's global callback lists, and those lists keep one
+    logger per class unless the instances differ in a plain attribute. Two routers in one process
+    (a second Router, or a per-request `user_config` one) therefore have to register separately:
+    a second router whose selector is dropped counts nothing, reads zero for every deployment,
+    and sends every request to whichever one is listed first.
+    """
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+
+    first = _build_router(routing_strategy="least-busy")
+    second = _build_router(routing_strategy="least-busy")
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"model_group": "filtered-model"},
+            "model_info": {"id": "deploy-1"},
+        }
+    }
+
+    for callback in litellm.input_callback:
+        if isinstance(callback, CustomLogger):
+            callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
+
+    assert second.cache.get_cache("filtered-model_request_count:deploy-1") == 1
+    assert (
+        second.get_available_deployment(model="filtered-model", messages=[])["model_info"]["id"]
+        == "deploy-2"
+    )
+
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            callback.log_success_event(kwargs, None, None, None)
+
+    assert first.cache.get_cache("filtered-model_request_count:deploy-1") == 0
+    assert second.cache.get_cache("filtered-model_request_count:deploy-1") == 0
 
 
 # ---------------------------------------------------------------------------
