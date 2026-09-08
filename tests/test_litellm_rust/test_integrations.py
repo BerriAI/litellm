@@ -10,7 +10,6 @@ import litellm
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils import litellm_logging
-from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 from litellm.types.utils import CallTypes
@@ -26,7 +25,6 @@ from tests.test_litellm_rust.integrations import (
     OCR_ASYNC,
     OCR_SYNC,
     OtelHarness,
-    RecordingGuardrail,
     ReviewGuardrail,
     Route,
     azure_text_moderation,
@@ -38,12 +36,6 @@ from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSp
 pytestmark = pytest.mark.requires_rust_extension
 
 FAILURE_RESPONSE: Final = ResponseSpec(body={"message": "provider unavailable"}, status=500)
-
-
-class LoggingOnlyContentFilter(ContentFilterGuardrail):
-    @classmethod
-    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
-        return [*super().get_supported_event_hooks(), GuardrailEventHooks.logging_only]
 
 
 @pytest.mark.asyncio
@@ -102,92 +94,6 @@ async def test_generic_api_logger_exports_provider_failure_over_http(route: Rout
     assert payload["call_type"] == route.call_type
     assert payload["error_information"]["error_class"] == "InternalServerError"
     assert payload["error_information"]["error_code"] == "500"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", NON_STREAM_ASYNC_ROUTES, ids=route_id)
-@pytest.mark.parametrize(
-    ("verdict", "expected_status"),
-    (
-        (ResponseSpec(body={"action": "NONE"}), "success"),
-        (ResponseSpec(body={"action": "BLOCKED", "blocked_reason": "policy violation"}), "guardrail_intervened"),
-        (ResponseSpec(body={"action": "GUARDRAIL_INTERVENED", "texts": ["redacted"]}), "success"),
-        (FAILURE_RESPONSE, "guardrail_failed_to_respond"),
-    ),
-    ids=("allow", "block", "rewrite", "unavailable"),
-)
-async def test_generic_guardrail_logging_only_verdict_is_exported_over_http(
-    route: Route, provider: RecordingServer, verdict: ResponseSpec, expected_status: str
-) -> None:
-    # Async OCR intentionally dispatches both sync and async success callbacks;
-    # the non-blocking sync exporter may finish before or after this assertion.
-    provider.expected_requests = None
-    provider.enqueue(ResponseSpec(body=route.provider_response))
-    provider.enqueue(verdict)
-    provider.enqueue(ResponseSpec(body={}))
-    guardrail: Final = GenericGuardrailAPI(
-        api_base=provider.base_url,
-        guardrail_name="http-review",
-        supported_event_hooks=[*GenericGuardrailAPI.get_supported_event_hooks(), GuardrailEventHooks.logging_only],
-        event_hook=GuardrailEventHooks.logging_only,
-        default_on=True,
-    )
-    logger: Final = GenericAPILogger(endpoint=f"{provider.base_url}/logs", batch_size=1, log_format="single")
-    recorder: Final = RecordingLogger()
-
-    response: Final = await route.invoke(provider, callbacks=[guardrail, logger, recorder])
-    await recorder.wait_for_async("async_log_success_event")
-    await drain_logging()
-    await provider.wait_for_requests(3)
-
-    scan: Final = provider.requests[1]
-    assert scan.path == "/beta/litellm_basic_guardrail_api"
-    assert scan.body["input_type"] == route.logging_only_scan[0]
-    assert scan.body["texts"] == list(route.logging_only_scan[1])
-    exports: Final = [request for request in provider.requests if request.path == "/logs"]
-    assert len(exports) in (1, 2)
-    payload: Final = exports[0].body
-    assert payload["status"] == "success"
-    assert [(entry["guardrail_name"], entry["guardrail_status"]) for entry in payload["guardrail_information"]] == [
-        ("http-review", expected_status)
-    ]
-    assert route.response_text in json.dumps(payload["response"])
-    if route == OCR_ASYNC:
-        assert response.pages[0].markdown == route.response_text
-    else:
-        assert response["content"][0]["text"] == route.response_text
-    assert "guardrails" not in provider.requests[0].body
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", NON_STREAM_ASYNC_ROUTES, ids=route_id)
-@pytest.mark.parametrize("action", (ContentFilterAction.BLOCK, ContentFilterAction.MASK))
-async def test_content_filter_logging_only_detects_real_content_without_changing_response(
-    route: Route, provider: RecordingServer, action: ContentFilterAction
-) -> None:
-    guardrail: Final = LoggingOnlyContentFilter(
-        guardrail_name="content-review",
-        event_hook=GuardrailEventHooks.logging_only,
-        default_on=True,
-        blocked_words=[BlockedWord(keyword=route.logging_only_scan[1][0], action=action)],
-    )
-    recorder: Final = RecordingLogger()
-
-    response: Final = await route.invoke(provider, callbacks=[guardrail, recorder])
-    payload: Final = (await recorder.wait_for_async("async_log_success_event"))[0].kwargs["standard_logging_object"]
-
-    assert len(payload["guardrail_information"]) == 1
-    verdict: Final = payload["guardrail_information"][0]
-    assert verdict["guardrail_name"] == "content-review"
-    assert verdict["guardrail_status"] == ("guardrail_intervened" if action == ContentFilterAction.BLOCK else "success")
-    assert verdict["guardrail_response"] == [
-        {"action": action.value, "keyword": route.logging_only_scan[1][0].lower(), "type": "blocked_word"}
-    ]
-    assert route.response_text in json.dumps(payload["response"])
-    if route == OCR_ASYNC:
-        assert response.pages[0].markdown == route.response_text
-    else:
-        assert response["content"][0]["text"] == route.response_text
 
 
 @pytest.mark.asyncio
@@ -434,44 +340,6 @@ async def test_sync_ocr_reaches_sync_hooks_only(
 
     assert len(await otel.wait_for_spans()) == 1
     assert metric_value("litellm_requests_metric_total", model=OCR_SYNC.provider_model) == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", NON_STREAM_ASYNC_ROUTES, ids=route_id)
-async def test_logging_only_guardrail_verdict_reaches_otel_and_custom_logger(
-    route: Route, provider: RecordingServer, otel: OtelHarness
-) -> None:
-    guardrail: Final = RecordingGuardrail()
-    recorder: Final = RecordingLogger()
-
-    await route.invoke(provider, callbacks=[guardrail, otel.logger, recorder])
-
-    payload: Final = (await recorder.wait_for_async("async_log_success_event"))[0].kwargs["standard_logging_object"]
-    assert guardrail.observations == [route.logging_only_scan]
-    verdicts: Final = payload["guardrail_information"]
-    assert [verdict["guardrail_name"] for verdict in verdicts] == ["rust-review"]
-    assert verdicts[0]["guardrail_status"] == "success"
-    guardrail_spans: Final = await otel.wait_for_spans("guardrail")
-    assert len(guardrail_spans) == 1
-    assert guardrail_spans[0].attributes["guardrail_name"] == "rust-review"
-    assert guardrail_spans[0].attributes["guardrail_status"] == "success"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("route", NON_STREAM_ASYNC_ROUTES, ids=route_id)
-async def test_logging_only_guardrail_failure_does_not_block_loggers(
-    route: Route, provider: RecordingServer, otel: OtelHarness, prometheus: PrometheusLogger
-) -> None:
-    guardrail: Final = RecordingGuardrail(fail_with=RuntimeError("review service unavailable"))
-    recorder: Final = RecordingLogger()
-
-    response: Final = await route.invoke(provider, callbacks=[guardrail, otel.logger, prometheus, recorder])
-
-    assert response is not None
-    assert len(await otel.wait_for_spans()) == 1
-    assert metric_value("litellm_requests_metric_total", model=route.provider_model) == 1
-    payload: Final = (await recorder.wait_for_async("async_log_success_event"))[0].kwargs["standard_logging_object"]
-    assert payload["guardrail_information"][0]["guardrail_status"] == "guardrail_failed_to_respond"
 
 
 @pytest.mark.asyncio

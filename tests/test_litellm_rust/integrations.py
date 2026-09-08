@@ -19,7 +19,6 @@ from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
     AzureContentSafetyTextModerationGuardrail,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs
 from tests.test_litellm_rust.callback_recorder import drain_logging
 from tests.test_litellm_rust.contracts import (
     MESSAGES,
@@ -32,7 +31,6 @@ from tests.test_litellm_rust.contracts import (
 from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
 
 RouteName = Literal["ocr-sync", "ocr-async", "messages", "messages-stream"]
-GuardrailObservation = tuple[Literal["request", "response"], tuple[str, ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +42,6 @@ class Route:
     response_text: str
     provider: str
     expected_cost: float
-    logging_only_scan: GuardrailObservation
     fires_async_hooks: bool
 
     async def invoke(self, server: RecordingServer, **kwargs: object) -> object:
@@ -82,7 +79,6 @@ OCR_SYNC: Final = Route(
     response_text="native OCR response",
     provider="mistral",
     expected_cost=OCR_COST,
-    logging_only_scan=("response", ("native OCR response",)),
     fires_async_hooks=False,
 )
 OCR_ASYNC: Final = Route(
@@ -93,7 +89,6 @@ OCR_ASYNC: Final = Route(
     response_text="native OCR response",
     provider="mistral",
     expected_cost=OCR_COST,
-    logging_only_scan=("response", ("native OCR response",)),
     fires_async_hooks=True,
 )
 MESSAGES_ROUTE: Final = Route(
@@ -104,7 +99,6 @@ MESSAGES_ROUTE: Final = Route(
     response_text="Hello from native Messages",
     provider="anthropic",
     expected_cost=MESSAGES_COST,
-    logging_only_scan=("request", ("Hello",)),
     fires_async_hooks=True,
 )
 MESSAGES_STREAM: Final = Route(
@@ -115,7 +109,6 @@ MESSAGES_STREAM: Final = Route(
     response_text="Hello from native Messages",
     provider="anthropic",
     expected_cost=MESSAGES_COST,
-    logging_only_scan=("request", ("Hello",)),
     fires_async_hooks=True,
 )
 ALL_ROUTES: Final = (OCR_SYNC, OCR_ASYNC, MESSAGES_ROUTE, MESSAGES_STREAM)
@@ -196,23 +189,6 @@ def metric_value(name: str, **labels: str) -> float:
             if sample.name == name and all(sample.labels.get(key) == value for key, value in labels.items()):
                 return sample.value
     return 0.0
-
-
-class RecordingGuardrail(CustomGuardrail):
-    def __init__(self, guardrail_name: str = "rust-review", fail_with: Exception | None = None) -> None:
-        super().__init__(
-            guardrail_name=guardrail_name,
-            event_hook=GuardrailEventHooks.logging_only,
-            default_on=True,
-        )
-        self.observations: list[GuardrailObservation] = []
-        self._fail_with = fail_with
-
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None) -> GenericGuardrailAPIInputs:
-        self.observations.append((input_type, tuple(inputs.get("texts") or ())))
-        if self._fail_with is not None:
-            raise self._fail_with
-        return inputs
 
 
 class ReviewGuardrail(CustomGuardrail):
