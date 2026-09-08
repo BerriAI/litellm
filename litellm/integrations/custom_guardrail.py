@@ -846,8 +846,7 @@ class CustomGuardrail(CustomLogger):
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         target: Final = self._deployment_hook_target()
-        if target is not self:
-            request_data["guardrail_to_apply"] = self
+        hook_request_data: Final = {**request_data, "guardrail_to_apply": self} if target is not self else request_data
         result: Final = await target.async_post_call_success_hook(
             user_api_key_dict=UserAPIKeyAuth(
                 user_id=request_data.get("user_api_key_user_id"),
@@ -856,7 +855,7 @@ class CustomGuardrail(CustomLogger):
                 api_key=request_data.get("user_api_key_hash"),
                 request_route=request_data.get("user_api_key_request_route"),
             ),
-            data=request_data,
+            data=hook_request_data,
             response=response,
         )
 
