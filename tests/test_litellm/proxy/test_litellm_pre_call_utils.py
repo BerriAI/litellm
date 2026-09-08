@@ -4149,6 +4149,48 @@ async def test_add_guardrails_from_policy_engine():
 
 
 @pytest.mark.asyncio
+async def test_add_guardrails_from_policy_engine_keeps_a_policy_added_guardrail_its_pipeline_also_steps():
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import (
+        GuardrailPipeline,
+        PipelineStep,
+        Policy,
+        PolicyAttachment,
+        PolicyGuardrails,
+    )
+
+    data = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hello"}], "metadata": {}}
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "response-governance": Policy(
+            guardrails=PolicyGuardrails(add=["pii_blocker"]),
+            pipeline=GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="pii_blocker")]),
+        ),
+    }
+    policy_registry._initialized = True
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [PolicyAttachment(policy="response-governance", scope="*")]
+    attachment_registry._initialized = True
+
+    try:
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        )
+    finally:
+        policy_registry._policies = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+
+    assert data["metadata"]["guardrails"] == ["pii_blocker"]
+    assert data["metadata"]["_pipeline_managed_guardrails"] == {"pii_blocker"}
+    assert [pipeline.mode for _policy_name, pipeline in data["metadata"]["_guardrail_pipelines"]] == ["post_call"]
+
+
+@pytest.mark.asyncio
 async def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
     """
     Test that add_guardrails_from_policy_engine accepts dynamic 'policies' from the request body
