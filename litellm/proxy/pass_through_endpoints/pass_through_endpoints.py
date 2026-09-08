@@ -322,7 +322,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
     def get_response_headers(
         headers: httpx.Headers,
         litellm_call_id: str | None = None,
-        custom_headers: dict | None = None,
+        custom_headers: Mapping[str, str] | None = None,
     ) -> dict:
         # Exclude headers that uvicorn writes itself (server, date) and
         # encoding/length headers that don't survive re-serialization.

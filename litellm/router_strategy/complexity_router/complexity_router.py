@@ -67,6 +67,7 @@ from litellm.types.utils import (
 from .classification_rubrics import BUSINESS_TIER_CRITERIA, calibration_examples_section
 from .config import (
     CALIBRATION_EXAMPLES_HEADING,
+    CUSTOM_PATTERN_SCAN_CHARS,
     DEFAULT_CLASSIFICATION_RUBRIC,
     DEFAULT_CODE_KEYWORDS,
     DEFAULT_ESCALATION_KEYWORDS,
@@ -1119,6 +1120,10 @@ class ComplexityRouter(CustomLogger):
             self.config.custom_technical_keywords,
         )
         self.simple_keywords = self.config.simple_keywords or DEFAULT_SIMPLE_KEYWORDS
+        self._custom_dimensions = tuple(
+            (dimension, tuple(re.compile(pattern, re.IGNORECASE) for pattern in dimension.patterns))
+            for dimension in self.config.custom_dimensions
+        )
         if self.config.has_custom_tiers:
             self.escalation_keywords: tuple[str, ...] = ()
         elif self.config.escalation_keywords is not None:
@@ -1320,6 +1325,17 @@ class ComplexityRouter(CustomLogger):
         score: Final = score_high if match_count >= high_threshold else score_low
         return DimensionScore(name, score, f"{signal_label} ({detail})"), match_count
 
+    def _score_custom_dimensions(self, prompt: str, user_text: str) -> tuple[tuple[DimensionScore, float], ...]:
+        if not self._custom_dimensions:
+            return ()
+        scanned: Final = prompt[:CUSTOM_PATTERN_SCAN_CHARS]
+        return tuple(
+            (DimensionScore(dimension.name, 1.0, f"custom ({dimension.name})"), dimension.weight)
+            for dimension, patterns in self._custom_dimensions
+            if any(self._keyword_matches(user_text, keyword) for keyword in dimension.keywords)
+            or any(pattern.search(scanned) is not None for pattern in patterns)
+        )
+
     def _score_multi_step(self, text: str) -> DimensionScore:
         """Score based on multi-step patterns."""
         hits: Final = sum(1 for p in self._multi_step_patterns if p.search(text))
@@ -1415,12 +1431,13 @@ class ComplexityRouter(CustomLogger):
             self._score_question_complexity(prompt),
         ]
 
-        # Collect signals
-        signals: Final = [d.signal for d in dimensions if d.signal is not None]
+        custom_dimensions: Final = self._score_custom_dimensions(prompt, user_text)
+        signals: Final = [d.signal for d in (*dimensions, *(d for d, _ in custom_dimensions)) if d.signal is not None]
 
-        # Compute weighted score
         weights: Final = self.config.dimension_weights
-        weighted_score: Final = sum(d.score * weights.get(d.name, 0) for d in dimensions)
+        weighted_score: Final = sum(d.score * weights.get(d.name, 0) for d in dimensions) + sum(
+            dimension.score * weight for dimension, weight in custom_dimensions
+        )
 
         boundaries: Final = self._effective_tier_boundaries()
         clears_override_floor: Final = weighted_score >= self._effective_reasoning_override_min_score()
@@ -2835,8 +2852,9 @@ class ComplexityRouter(CustomLogger):
         where the prompt never arrives as messages.
 
         Probed on a COPY of request_kwargs because the owner pops routing bookkeeping off the
-        dict it is handed (`_target_order`, `_excluded_deployment_ids`), and this is a
-        speculative question about a model that may never be picked.
+        dict it is handed (`_target_order`, `_excluded_deployment_ids`,
+        `_retry_skipped_deployment_ids`), and this is a speculative question about a model
+        that may never be picked.
 
         Every way the owner says "nothing here can serve this" is a negative verdict: no healthy
         deployment for the group at all (BadRequestError, which ContextWindowExceededError

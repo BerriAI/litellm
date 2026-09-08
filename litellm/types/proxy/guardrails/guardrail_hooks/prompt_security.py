@@ -16,6 +16,10 @@ class PromptSecurityGuardrailConfigModel(GuardrailConfigModel):
         default=True,
         description="Whether file sanitization timeouts allow the original file through instead of blocking the request.",
     )
+    block_on_file_modify: bool = Field(
+        default=True,
+        description="Whether a file sanitization `modify` verdict blocks the request instead of replacing the file content.",
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

@@ -822,6 +822,27 @@ def test_proxy_startup_event_warns_for_global_budget_without_database():
 
 
 @pytest.mark.asyncio
+async def test_tuning_baseline_v2_is_created_alongside_the_legacy_row():
+    from litellm.router_utils.auto_router_tuning_baseline import DEFAULT_TUNING_FINGERPRINT
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_config.create = AsyncMock()
+    deployment = {
+        "model_name": "a",
+        "litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": {}},
+    }
+
+    result = await ProxyStartupEvent._load_heuristic_v1_tuning_baselines(prisma_client, [deployment])
+
+    assert result == {'yaml:["a",[]]': DEFAULT_TUNING_FINGERPRINT}
+    assert prisma_client.db.litellm_config.create.await_args.kwargs["data"] == {
+        "param_name": "auto_router_tuning_baseline_v2",
+        "param_value": json.dumps(dict(result)),
+    }
+
+
+@pytest.mark.asyncio
 async def test_tuning_baseline_waits_for_a_complete_db_model_census(monkeypatch):
     prisma_client = MagicMock()
     monkeypatch.setattr(ps.proxy_config, "_get_models_from_db", AsyncMock(return_value=None))
