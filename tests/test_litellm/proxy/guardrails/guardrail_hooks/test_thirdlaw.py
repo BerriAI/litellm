@@ -512,6 +512,24 @@ async def test_post_call_modify_response_rewrites_responses_api_output():
     assert out.model_dump()["output"][0]["content"][0]["text"] == "[REDACTED]"
 
 
+@pytest.mark.parametrize("response_factory", [_model_response, _responses_api_response])
+async def test_post_call_modify_response_carries_hidden_params(response_factory):
+    """model_validate() builds a fresh instance that starts with empty _hidden_params --
+    the original's must be carried across explicitly or response-header forwarding breaks.
+    """
+    response = response_factory()
+    response._hidden_params["additional_headers"] = {"x-request-id": "abc123"}
+    g = _make_guardrail(
+        decisions=[
+            _decision_response({"action": "modify_response", "response_body": {"model": "gpt-5.6-redacted"}})
+        ]
+    )
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out._hidden_params.get("additional_headers") == {"x-request-id": "abc123"}
+
+
 async def test_post_call_block_raises():
     g = _make_guardrail(decisions=[_decision_response({"action": "block", "message": "leaked secret"})])
     with pytest.raises(GuardrailRaisedException) as exc_info:
