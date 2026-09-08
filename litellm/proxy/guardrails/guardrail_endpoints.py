@@ -248,6 +248,7 @@ async def list_guardrails_v2(
         guardrail_configs: Final[list[GuardrailInfoResponse]] = []
         seen_guardrail_ids: Final[set] = excluded_guardrail_ids.copy()
         for guardrail in guardrails:
+            db_guardrail_id: Final[str | None] = guardrail.get("guardrail_id")
             litellm_params: LitellmParams | dict | None = guardrail.get("litellm_params")
             litellm_params_dict = (
                 litellm_params.model_dump(exclude_none=True)
@@ -264,17 +265,17 @@ async def list_guardrails_v2(
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
-                    guardrail_id=guardrail.get("guardrail_id"),
+                    guardrail_id=db_guardrail_id,
                     guardrail_name=guardrail.get("guardrail_name"),
                     litellm_params=masked_litellm_params,
                     guardrail_info=guardrail.get("guardrail_info"),
                     created_at=guardrail.get("created_at"),
                     updated_at=guardrail.get("updated_at"),
                     guardrail_definition_location="db",
-                    enabled=IN_MEMORY_GUARDRAIL_HANDLER.is_enabled(guardrail.get("guardrail_id") or ""),
+                    enabled=db_guardrail_id is None or IN_MEMORY_GUARDRAIL_HANDLER.is_enabled(db_guardrail_id),
                 )
             )
-            seen_guardrail_ids.add(guardrail.get("guardrail_id"))
+            seen_guardrail_ids.add(db_guardrail_id)
 
         # get guardrails initialized on litellm config.yaml
         in_memory_guardrails: Final = IN_MEMORY_GUARDRAIL_HANDLER.list_in_memory_guardrails()
@@ -311,7 +312,7 @@ async def list_guardrails_v2(
                     litellm_params=masked_in_memory_litellm_params_typed,
                     guardrail_info=dict(guardrail.get("guardrail_info") or {}),
                     guardrail_definition_location="config",
-                    enabled=IN_MEMORY_GUARDRAIL_HANDLER.is_enabled(gid),
+                    enabled=gid is None or IN_MEMORY_GUARDRAIL_HANDLER.is_enabled(gid),
                 )
             )
             seen_guardrail_ids.add(gid)
@@ -1350,13 +1351,13 @@ async def set_guardrail_enabled(
     IN_MEMORY_GUARDRAIL_HANDLER.set_disabled_guardrails(disabled_guardrail_ids)
     verbose_proxy_logger.info(
         "Guardrail '%s' (ID: %s) %s",
-        guardrail.get("guardrail_name"),
+        guardrail["guardrail_name"],
         guardrail_id,
         "enabled" if request.enabled else "disabled",
     )
     return SetGuardrailEnabledResponse(
         guardrail_id=guardrail_id,
-        guardrail_name=guardrail.get("guardrail_name") or "",
+        guardrail_name=guardrail["guardrail_name"],
         enabled=request.enabled,
     )
 

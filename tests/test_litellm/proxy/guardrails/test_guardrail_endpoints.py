@@ -2757,7 +2757,7 @@ def _real_handler_with_config_guardrail(mocker, name: str):
             "litellm_params": {"guardrail": "toggle_endpoint_test", "mode": "pre_call"},
         }
     )
-    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)  # test-quality-ok: endpoint reads these module globals; no injection seam
     return handler, result["guardrail_id"]
 
 
@@ -2766,7 +2766,7 @@ async def test_set_guardrail_enabled_requires_admin(mocker):
     from litellm.proxy.guardrails.guardrail_endpoints import set_guardrail_enabled
     from litellm.types.guardrails import SetGuardrailEnabledRequest
 
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())  # test-quality-ok: endpoint reads these module globals; no injection seam
 
     with pytest.raises(HTTPException) as exc_info:
         await set_guardrail_enabled(
@@ -2792,7 +2792,7 @@ async def test_set_guardrail_enabled_toggles_config_guardrail_and_surfaces_in_li
 
     stored: dict = {}
     prisma_client = _prisma_with_config_store(mocker, stored, db_guardrails=[])
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: endpoint reads these module globals; no injection seam
     try:
         handler, gid = _real_handler_with_config_guardrail(mocker, "headroom-compression")
         instance = handler.guardrail_id_to_custom_guardrail[gid]
@@ -2832,9 +2832,9 @@ async def test_set_guardrail_enabled_disables_db_guardrail_without_touching_its_
     prisma_client = _prisma_with_config_store(mocker, stored, db_guardrails=[MOCK_DB_GUARDRAIL])
     prisma_client.db.litellm_guardrailstable.update = AsyncMock()
     prisma_client.db.litellm_guardrailstable.delete = AsyncMock()
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: endpoint reads these module globals; no injection seam
     handler = InMemoryGuardrailHandler()
-    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)  # test-quality-ok: endpoint reads these module globals; no injection seam
 
     result = await set_guardrail_enabled(
         guardrail_id="test-db-guardrail",
@@ -2859,11 +2859,11 @@ async def test_set_guardrail_enabled_404s_unknown_and_stale_db_backed_ids(mocker
 
     stored: dict = {}
     prisma_client = _prisma_with_config_store(mocker, stored, db_guardrails=[])
-    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: endpoint reads these module globals; no injection seam
     handler = mocker.Mock(spec=InMemoryGuardrailHandler)
     handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
     handler.get_source.return_value = "db"
-    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)  # test-quality-ok: endpoint reads these module globals; no injection seam
 
     with pytest.raises(HTTPException) as exc_info:
         await set_guardrail_enabled(

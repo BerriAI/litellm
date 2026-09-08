@@ -6210,26 +6210,8 @@ export const getAgentInfo = async (accessToken: string, agentId: string) => {
   }
 };
 
-export const setGuardrailEnabledCall = async (accessToken: string, guardrailId: string, enabled: boolean) => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/enabled` : `/guardrails/${guardrailId}/enabled`;
-
-  const response = await fetch(url, {
-    method: "PATCH",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ enabled }),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.text();
-    handleError(errorData);
-    throw new Error(errorData);
-  }
-
-  return response.json();
-};
+export const setGuardrailEnabledCall = async (accessToken: string, guardrailId: string, enabled: boolean) =>
+  apiClient.patch(`/guardrails/${guardrailId}/enabled`, { accessToken, body: { enabled } });
 
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {

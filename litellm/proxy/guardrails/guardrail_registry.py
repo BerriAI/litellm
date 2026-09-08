@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from itertools import chain, count
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router
@@ -92,6 +92,7 @@ guardrail_initializer_registry: Final = {
 CONFIG_GUARDRAIL_ID_NAMESPACE: Final = uuid.UUID("625f63f4-935a-50e5-98b5-fbe77babc74a")
 
 DISABLED_GUARDRAILS_CONFIG_PARAM: Final = "disabled_guardrails"
+_DISABLED_IDS_ADAPTER: Final = TypeAdapter(list[str])
 
 GuardrailCallbacks: TypeAlias = tuple[CustomGuardrail, ...]
 
@@ -420,9 +421,12 @@ class GuardrailRegistry:
     @staticmethod
     async def get_disabled_guardrail_ids_from_db(prisma_client: PrismaClient) -> frozenset[str]:
         param: Final = await ConfigRepository(prisma_client).get_param(DISABLED_GUARDRAILS_CONFIG_PARAM)
-        if param is None or not isinstance(param.param_value, list):
+        if param is None:
             return frozenset()
-        return frozenset(item for item in param.param_value if isinstance(item, str))
+        try:
+            return frozenset(_DISABLED_IDS_ADAPTER.validate_python(param.param_value))
+        except ValidationError:
+            return frozenset()
 
     @staticmethod
     async def set_guardrail_enabled_in_db(
