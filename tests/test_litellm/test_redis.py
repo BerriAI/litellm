@@ -10,7 +10,7 @@ from redis.credentials import CredentialProvider
 
 import litellm
 from litellm._redis import (
-    _async_auth_kwargs,
+    _credential_provider_auth_kwargs,
     _get_redis_client_logic,
     _get_redis_cluster_kwargs,
     _get_redis_env_kwarg_mapping,
@@ -243,6 +243,47 @@ def test_sync_cluster_preserves_credential_provider_identity(clean_redis_environ
     assert [(node.host, node.port) for node in cluster_kwargs["startup_nodes"]] == [("cluster-node", 6379)]
 
 
+def test_sync_cluster_authenticates_with_azure_credentials(clean_redis_environment, monkeypatch):
+    monkeypatch.setenv("REDIS_USERNAME", "identity-object-id")
+    credential = MagicMock()
+    credential.get_token.return_value = SimpleNamespace(token="azure-access-token")
+
+    with (
+        patch("azure.identity.DefaultAzureCredential", return_value=credential),
+        patch("redis.RedisCluster", autospec=True) as cluster,
+    ):
+        get_redis_client(
+            startup_nodes=[{"host": "cluster-node", "port": 6379}],
+            azure_redis_ad_token=True,
+            password="stale-password",
+        )
+
+    kwargs = cluster.call_args.kwargs
+    provider = kwargs.get("credential_provider")
+    assert isinstance(provider, AzureADCredentialProvider)
+    assert provider.get_credentials() == ("identity-object-id", "azure-access-token")
+    assert "username" not in kwargs
+    assert "password" not in kwargs
+    assert "redis_connect_func" not in kwargs
+    credential.get_token.assert_called_once_with("https://redis.azure.com/.default")
+
+
+def test_sync_cluster_authenticates_with_gcp_credentials(clean_redis_environment):
+    with patch("redis.RedisCluster", autospec=True) as cluster:
+        get_redis_client(
+            startup_nodes=[{"host": "cluster-node", "port": 6379}],
+            redis_connect_func=_gcp_marker_callback(),
+            username="stale-user",
+            password="stale-password",
+        )
+
+    kwargs = cluster.call_args.kwargs
+    assert isinstance(kwargs.get("credential_provider"), GCPIAMCredentialProvider)
+    assert "username" not in kwargs
+    assert "password" not in kwargs
+    assert "redis_connect_func" not in kwargs
+
+
 def test_async_cluster_preserves_credential_provider_identity(clean_redis_environment):
     provider = _StubCredentialProvider()
     startup_nodes = [{"host": "cluster-node", "port": 6379}]
@@ -319,10 +360,10 @@ def test_provider_free_url_is_left_untouched(clean_redis_environment):
     assert redis_kwargs["url"] == url
 
 
-def test_async_auth_kwargs_supersedes_credentials_an_explicit_provider_replaces():
+def test_credential_provider_auth_kwargs_supersedes_credentials_an_explicit_provider_replaces():
     provider = _StubCredentialProvider()
 
-    auth_kwargs = _async_auth_kwargs(
+    auth_kwargs = _credential_provider_auth_kwargs(
         {
             "host": "redis-host",
             "port": 6379,
@@ -341,10 +382,10 @@ def test_async_auth_kwargs_supersedes_credentials_an_explicit_provider_replaces(
     assert "password" not in auth_kwargs
 
 
-def test_async_auth_kwargs_leaves_provider_free_kwargs_alone():
+def test_credential_provider_auth_kwargs_leaves_provider_free_kwargs_alone():
     redis_kwargs = {"host": "redis-host", "port": 6379, "username": "url-user", "password": "url-pass"}
 
-    assert _async_auth_kwargs(redis_kwargs) == redis_kwargs
+    assert _credential_provider_auth_kwargs(redis_kwargs) == redis_kwargs
 
 
 @pytest.mark.asyncio

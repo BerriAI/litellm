@@ -624,11 +624,12 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
     verbose_logger.debug("init_redis_cluster: startup nodes are being initialized.")
     from redis.cluster import ClusterNode
 
+    auth_kwargs: Final = _credential_provider_auth_kwargs(redis_kwargs)
     args: Final = _get_redis_cluster_kwargs()
     cluster_kwargs: Final = {}
-    for arg in redis_kwargs:
+    for arg in auth_kwargs:
         if arg in args:
-            cluster_kwargs[arg] = redis_kwargs[arg]
+            cluster_kwargs[arg] = auth_kwargs[arg]
 
     new_startup_nodes: Final[list[ClusterNode]] = []
 
@@ -706,13 +707,13 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     return sentinel.master_for(service_name, **connection_kwargs)
 
 
-def _async_credential_provider(redis_connect_func: object | None) -> CredentialProvider | None:
-    """The Azure AD and GCP IAM connect funcs run their AUTH exchange with the blocking client
-    API, so on an async connection their ``send_command``/``read_response`` calls return
-    coroutines nobody awaits and every connect fails. Async paths authenticate through a
-    ``CredentialProvider`` instead, which redis-py consults per connection so the token stays
-    fresh. Any other ``redis_connect_func`` is left where it is, since redis-py awaits it
-    itself when it is a coroutine function."""
+def _credential_provider_from_connect_func(redis_connect_func: object | None) -> CredentialProvider | None:
+    """Translate IAM callbacks for paths that need credentials during the standard handshake.
+
+    Async connections cannot run blocking AUTH callbacks. Sync clusters authenticate before
+    invoking the callback, so they also need the provider during the initial handshake.
+    redis-py consults the provider for each connection, keeping token refresh intact.
+    """
     gcp_service_account: Final = getattr(redis_connect_func, "_gcp_service_account", None)
     if gcp_service_account is not None:
         return GCPIAMCredentialProvider(gcp_service_account)
@@ -724,14 +725,13 @@ def _async_credential_provider(redis_connect_func: object | None) -> CredentialP
     return None
 
 
-def _async_auth_kwargs(redis_kwargs: dict) -> dict:
-    """Swaps a connect func an async path cannot run for the equivalent credential provider,
-    which supersedes any static username or password redis-py would otherwise reject it with."""
+def _credential_provider_auth_kwargs(redis_kwargs: dict) -> dict:
+    """Use a credential provider instead of an IAM callback and conflicting static credentials."""
     explicit_provider: Final = redis_kwargs.get("credential_provider")
     credential_provider: Final = (
         explicit_provider
         if explicit_provider is not None
-        else _async_credential_provider(redis_kwargs.get("redis_connect_func"))
+        else _credential_provider_from_connect_func(redis_kwargs.get("redis_connect_func"))
     )
     if credential_provider is None:
         return redis_kwargs
@@ -769,7 +769,7 @@ def get_redis_async_client(
     connection_pool: async_redis.BlockingConnectionPool | None = None,
     **env_overrides,
 ) -> async_redis.Redis | async_redis.RedisCluster:
-    redis_kwargs: Final = _async_auth_kwargs(_get_redis_client_logic(**env_overrides))
+    redis_kwargs: Final = _credential_provider_auth_kwargs(_get_redis_client_logic(**env_overrides))
 
     if "startup_nodes" in redis_kwargs:
         from redis.cluster import ClusterNode
@@ -841,7 +841,7 @@ def get_redis_async_client(
 def get_redis_connection_pool(
     **env_overrides,
 ) -> async_redis.BlockingConnectionPool | None:
-    redis_kwargs: Final = _async_auth_kwargs(_get_redis_client_logic(**env_overrides))
+    redis_kwargs: Final = _credential_provider_auth_kwargs(_get_redis_client_logic(**env_overrides))
     verbose_logger.debug("get_redis_connection_pool: redis_kwargs", redis_kwargs)
 
     if "startup_nodes" in redis_kwargs:
