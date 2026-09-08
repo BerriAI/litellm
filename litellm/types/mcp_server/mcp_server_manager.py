@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
@@ -9,6 +9,7 @@ from litellm.types.mcp import (
     MCPAuthType,
     MCPTokenEndpointAuthMethod,
     MCPTransportType,
+    normalize_upstream_header_name,
 )
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
@@ -86,6 +87,22 @@ class MCPServer(BaseModel):
     # today's behavior; "auto" derives the canonical URI from ``url``; any other value is sent
     # verbatim. Resolved by ``oauth_utils.resolve_upstream_resource``.
     upstream_resource: str | None = None
+    # Which upstream header carries the credential LiteLLM resolves for this server (the minted
+    # OAuth token, or the static key). None keeps RFC 6750's default, ``Authorization``. An ESB or
+    # API gateway that terminates its own credential in a private header needs this so a second,
+    # operator-configured ``Authorization`` can pass through to the origin untouched.
+    upstream_token_header: str | None = None
+
+    @field_validator("upstream_token_header")
+    @classmethod
+    def _check_upstream_token_header(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        normalized: Final = normalize_upstream_header_name(value)
+        if normalized is None:
+            raise ValueError(f"upstream_token_header must be a valid HTTP header name (RFC 7230 token), got {value!r}")
+        return normalized
+
     # AWS SigV4 fields
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
@@ -141,6 +158,7 @@ class MCPServer(BaseModel):
     # be set explicitly to avoid regressing servers that did not opt in.
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
     byok_description: list[str] = []
     byok_api_key_help_url: str | None = None
@@ -184,6 +202,18 @@ class MCPServer(BaseModel):
         return self.__repr__()
 
     @property
+    def effective_authorization_url(self) -> str | None:
+        return self.authorization_url or self.configured_authorization_url
+
+    @property
+    def effective_token_url(self) -> str | None:
+        return self.token_url or self.configured_token_url
+
+    @property
+    def effective_registration_url(self) -> str | None:
+        return self.registration_url or self.configured_registration_url
+
+    @property
     def has_client_credentials(self) -> bool:
         """True if this server should use the OAuth2 client_credentials (M2M) flow.
 
@@ -211,6 +241,16 @@ class MCPServer(BaseModel):
         DCR-bridge, and token-exchange servers are their own auth types and client-forwarded,
         so they are excluded by construction."""
         return self.auth_type == MCPAuth.oauth2 and not self.delegate_auth_to_upstream
+
+    @property
+    def uses_per_server_oauth_relay(self) -> bool:
+        """Whether named discovery should advertise the configured per-server OAuth relay."""
+        return self.per_server_oauth_discovery and self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
+
+    @property
+    def advertises_gateway_authorization_server(self) -> bool:
+        """Whether named discovery should advertise the aggregate gateway authorization server."""
+        return self.is_gateway_managed_oauth2 and not self.uses_per_server_oauth_relay
 
     @property
     def is_true_passthrough(self) -> bool:

@@ -19,7 +19,7 @@ async def generate_team(
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     if team_id is None:
         team_id = "litellm-dashboard"
-    data = {"team_id": team_id, "models": models}
+    data = {"team_id": team_id, **({"models": models} if models is not None else {})}
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -810,6 +810,7 @@ async def test_key_model_list(model_access, model_access_level, model_endpoint):
             models=_models if model_access_level == "team" else None,
             team_id=team_id,
         )
+        assert new_team["team_id"] == team_id
         key_gen = await generate_key(
             session=session,
             i=0,

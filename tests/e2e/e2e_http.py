@@ -4,6 +4,11 @@ Enforced by tests/code_coverage_tests/check_e2e_no_raw_requests.py. Every reques
 body / query / header / response is a pydantic model; outcomes are a tagged union
 (``Result[R]``) so callers ``match`` on them instead of catching exceptions.
 
+``forward`` relays one provider-bound request for the provider edge and buffers
+the whole body; ``forward_stream`` relays the same request but hands back the
+response head plus a lazy iterator over the upstream's own transfer chunks, which
+is what lets a recording keep the split points a streamed response arrived on.
+
 Named e2e_http (not http) so it does not shadow the stdlib ``http`` package that
 requests itself imports.
 """
@@ -11,8 +16,9 @@ requests itself imports.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
-from typing import Generic, Iterator, Literal, NewType, Protocol, TypeVar, cast
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Final, Generator, Generic, Iterator, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
@@ -136,6 +142,7 @@ class StreamingResponse(BaseModel):
     body: str
     chunks: int = 0  # streamed events (0 for non-streaming)
     stream_events: list[str] = []
+    stream_event_arrivals: list[float] = []
     # First in-stream error event, if any. A streamed call commits its HTTP 200
     # before the upstream completes, so upstream failures (e.g. insufficient
     # quota) arrive as SSE error events inside an otherwise-successful response;
@@ -178,7 +185,20 @@ class BinaryStream(BaseModel):
         return "chunked" in (self.transfer_encoding or "")
 
 
-def _hdr(resp: requests.Response, name: str) -> str | None:
+class SseResponse(Protocol):
+    @property
+    def status_code(self) -> int: ...
+
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+
+    @property
+    def text(self) -> str: ...
+
+    def iter_lines(self) -> Iterator[bytes]: ...
+
+
+def _hdr(resp: SseResponse, name: str) -> str | None:
     value = resp.headers.get(name)
     return value if isinstance(value, str) else None
 
@@ -451,7 +471,7 @@ def probe(
     return ProbeResult(status_code=resp.status_code, body=resp.text)
 
 
-def _parse_response_cost(resp: requests.Response) -> float | None:
+def _parse_response_cost(resp: SseResponse) -> float | None:
     raw = _hdr(resp, "x-litellm-response-cost")
     if raw is None or raw == "":
         return None
@@ -461,11 +481,26 @@ def _parse_response_cost(resp: requests.Response) -> float | None:
         return None
 
 
-def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingResponse:
-    call_id = _hdr(resp, "x-litellm-call-id")
-    response_cost = _parse_response_cost(resp)
-    content_type = _hdr(resp, "content-type")
-    headers = {name.lower(): value for name, value in resp.headers.items()}
+_SSE_DATA_PREFIX: Final = b"data: "
+_SSE_DONE: Final = "[DONE]"
+
+
+def _is_stream_error_line(line: bytes) -> bool:
+    return (
+        line.startswith(b"event: error")
+        or b'"type":"error"' in line
+        or b'"type": "error"' in line
+        or line.startswith(b'data: {"error"')
+    )
+
+
+def streaming_outcome(
+    resp: SseResponse, stream: bool, *, sent_at: float, clock: Callable[[], float] = time.monotonic
+) -> StreamingResponse:
+    call_id: Final = _hdr(resp, "x-litellm-call-id")
+    response_cost: Final = _parse_response_cost(resp)
+    content_type: Final = _hdr(resp, "content-type")
+    headers: Final = {name.lower(): value for name, value in resp.headers.items()}
     if not stream or not (200 <= resp.status_code < 300):
         return StreamingResponse(
             status_code=resp.status_code,
@@ -475,29 +510,13 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
             headers=headers,
             body=resp.text,
         )
-    lines = cast("Iterator[bytes]", resp.iter_lines())
-    chunks = 0
-    stream_error: str | None = None
-    stream_events: list[str] = []
-    stream_done = False
-    for line in lines:
-        if not line:
-            continue
-        chunks += 1
-        decoded_line = line.decode(errors="replace")
-        if decoded_line.startswith("data: "):
-            payload = decoded_line.removeprefix("data: ")
-            if payload == "[DONE]":
-                stream_done = True
-            else:
-                stream_events.append(payload)
-        if stream_error is None and (
-            line.startswith(b"event: error")
-            or b'"type":"error"' in line
-            or b'"type": "error"' in line
-            or line.startswith(b'data: {"error"')
-        ):
-            stream_error = line.decode(errors="replace")[:300]
+    stamped: Final = tuple((line, clock() - sent_at) for line in resp.iter_lines() if line)
+    payloads: Final = tuple(
+        (line.removeprefix(_SSE_DATA_PREFIX).decode(errors="replace"), arrived)
+        for line, arrived in stamped
+        if line.startswith(_SSE_DATA_PREFIX)
+    )
+    events: Final = tuple((payload, arrived) for payload, arrived in payloads if payload != _SSE_DONE)
     return StreamingResponse(
         status_code=resp.status_code,
         call_id=call_id,
@@ -505,10 +524,14 @@ def _streaming_outcome(resp: requests.Response, stream: bool) -> StreamingRespon
         content_type=content_type,
         headers=headers,
         body="<streamed>",
-        chunks=chunks,
-        stream_events=stream_events,
-        stream_done=stream_done,
-        stream_error=stream_error,
+        chunks=len(stamped),
+        stream_events=[payload for payload, _ in events],
+        stream_event_arrivals=[arrived for _, arrived in events],
+        stream_done=any(payload == _SSE_DONE for payload, _ in payloads),
+        stream_error=next(
+            (line.decode(errors="replace")[:300] for line, _ in stamped if _is_stream_error_line(line)),
+            None,
+        ),
     )
 
 
@@ -525,6 +548,7 @@ def send(
     x-litellm-call-id header. For native/passthrough bodies and for calls judged by
     status rather than a typed JSON model (e.g. a budget block is a non-2xx). With
     ``stream=True`` the SSE body is consumed and its events counted instead."""
+    sent_at: Final = time.monotonic()
     try:
         resp = request_with_retry(
             lambda: requests.post(
@@ -538,7 +562,7 @@ def send(
         )
     except requests.RequestException as exc:
         return StreamingResponse(status_code=-1, body=str(exc))
-    return _streaming_outcome(resp, stream)
+    return streaming_outcome(resp, stream, sent_at=sent_at)
 
 
 def stream(
@@ -680,4 +704,89 @@ def forward(
         status_code=resp.status_code,
         headers={name.lower(): value for name, value in resp.headers.items()},
         body=resp.content,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StreamChunk:
+    """One transfer chunk of a response body, exactly as the upstream framed it."""
+
+    data: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class StreamTruncation:
+    """The body ended without its terminator, i.e. the upstream hung up mid-message.
+    Always the last step, and ``reason`` is the transport's own description of it."""
+
+    reason: str
+
+
+type StreamStep = StreamChunk | StreamTruncation
+
+
+@dataclass(frozen=True, slots=True)
+class StreamHead:
+    """An upstream response whose head has arrived and whose body has not been read.
+
+    A dataclass rather than a BaseModel because it owns a live socket: ``steps`` is
+    consumed once, in order, and closing it closes the underlying response."""
+
+    status_code: int
+    headers: dict[str, str]
+    steps: Generator[StreamStep, None, None]
+
+
+def _stream_steps(resp: requests.Response) -> Generator[StreamStep, None, None]:
+    """The body as the upstream framed it, one step per transfer chunk.
+
+    ``chunk_size=None`` is the whole point: urllib3 then returns exactly one piece
+    per wire chunk, so the provider's split points survive into the recording. Any
+    integer would re-slice the body into fixed-size pieces instead. Empty pieces are
+    dropped because a zero-length chunk is the terminator on the wire, and a failure
+    part way through becomes a final truncation step rather than an exception, since
+    the chunks already delivered are exactly what makes a mid-stream failure
+    different from a request that never streamed at all."""
+    try:
+        for piece in cast("Iterator[bytes]", resp.iter_content(chunk_size=None)):
+            if piece:
+                yield StreamChunk(data=piece)
+    except requests.RequestException as exc:
+        yield StreamTruncation(reason=str(exc))
+    finally:
+        resp.close()
+
+
+def forward_stream(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout: float = 60.0,
+) -> StreamHead | NetworkError:
+    """Relay one provider-bound request for the provider edge and return as soon as
+    the response head arrives, with the body left unread behind ``StreamHead.steps``.
+
+    Same contract as ``forward`` otherwise: no retries, no redirects, no schema. A
+    failure before the head arrives is still a ``NetworkError``; one raised while the
+    body streams arrives as the last step. With ``stream=True`` the timeout bounds
+    each socket read rather than the whole body, which is the right bound for a
+    stream and strictly more permissive for a long generation."""
+    try:
+        resp = requests.request(
+            method,
+            url,
+            headers=headers,
+            data=body,
+            timeout=timeout,
+            allow_redirects=False,
+            stream=True,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return StreamHead(
+        status_code=resp.status_code,
+        headers={name.lower(): value for name, value in resp.headers.items()},
+        steps=_stream_steps(resp),
     )

@@ -18,6 +18,7 @@ import time
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, groupby
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, cast
 
 import httpx
@@ -30,19 +31,26 @@ from litellm.caching import DualCache
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import bedrock_guardrail_cost
+from litellm.litellm_core_utils.litellm_logging import (
+    _get_masked_values,  # pyright: ignore[reportPrivateUsage]  # the shared header-masking helper has no public name
+)
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
+    bedrock_guardrail_cost_by_unit,
+    guardrail_cost_total,
+)
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
 )
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_request_processing import _serialize_http_exception_detail
+from litellm.proxy.common_request_processing import serialize_http_exception_detail
 from litellm.proxy.common_utils.sse_keepalive import keepalive_ping_has_fired
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
@@ -51,8 +59,12 @@ from litellm.proxy.guardrails.anthropic_sse import (
     is_raw_sse_stream,
     model_response_text,
 )
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.guardrails import BedrockChecksConfigModel, GuardrailEventHooks
+from litellm.types.guardrails import (
+    BedrockChecksConfigModel,
+    BedrockGuardrailStreamingParams,
+    GuardrailEventHooks,
+    LitellmParams,
+)
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockChecksMessage,
@@ -100,6 +112,7 @@ _BEDROCK_TOO_LARGE_ERROR_SUBSTRINGS: Final = (
 _BEDROCK_APPLY_GUARDRAIL_MAX_THROTTLE_RETRIES: Final = 3
 _BEDROCK_APPLY_GUARDRAIL_BASE_BACKOFF_SECONDS: Final = 0.5
 _BEDROCK_WHITESPACE: Final = re.compile(r"\s")
+_NO_TRACING_DETAIL: Final[GuardrailTracingDetail] = {}
 # Resource-less, detect-only InvokeGuardrailChecks API (no guardrail resource required).
 _BEDROCK_INVOKE_GUARDRAIL_CHECKS_PATH: Final = "/guardrail-checks/invoke"
 # InvokeGuardrailChecks accepts at most 10 content blocks per message. A message with
@@ -206,6 +219,16 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
     return redacted if isinstance(redacted, list) else assessments
 
 
+_RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+
+
+def _is_responses_api_route(request_route: str | None) -> bool:
+    if request_route is None:
+        return False
+    call_types: Final = get_call_types_for_route(request_route)
+    return call_types is not None and any(call_type in _RESPONSES_API_CALL_TYPES for call_type in call_types)
+
+
 class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     # During-call must use async_moderation_hook (not unified apply_guardrail), otherwise
     # OpenAI translation always passes input_type="request" and spend/UI show PRE-CALL.
@@ -221,9 +244,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         prompt_attack_threshold: float | None = 0.5,
         pii_confidence_threshold: float | None = 0.5,
         chunk_budget_chars: int = BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS,
+        streaming_buffer_until_moderated: bool | None = None,
+        streaming_sampling_rate: int | None = None,
+        streaming_end_of_stream_only: bool | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self._set_streaming_params(
+            BedrockGuardrailStreamingParams.from_extras(
+                MappingProxyType(
+                    {
+                        "streaming_buffer_until_moderated": streaming_buffer_until_moderated,
+                        "streaming_sampling_rate": streaming_sampling_rate,
+                        "streaming_end_of_stream_only": streaming_end_of_stream_only,
+                    }
+                )
+            )
+        )
         self.guardrailIdentifier = guardrailIdentifier
         self.guardrailVersion = guardrailVersion
         self.guardrail_provider = "bedrock"
@@ -232,7 +269,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # Resource-less, detect-only InvokeGuardrailChecks mode. Present `checks`
         # routes the guardrail to InvokeGuardrailChecks; absent => ApplyGuardrail.
-        self.checks: dict[str, Any] | None = self._normalize_checks(checks)
+        self.checks: dict[str, object] | None = self._normalize_checks(checks)
         # Per-check block thresholds; a score >= threshold blocks. None => the
         # check is detect-only (logged, never blocks).
         self.content_filter_threshold = content_filter_threshold
@@ -278,6 +315,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             list(self.checks.keys()) if self.checks else None,
         )
 
+    def _set_streaming_params(self, streaming_params: BedrockGuardrailStreamingParams) -> None:
+        self.streaming_buffer_until_moderated = streaming_params.streaming_buffer_until_moderated
+        self.streaming_sampling_rate = streaming_params.streaming_sampling_rate
+        self.streaming_end_of_stream_only = streaming_params.streaming_end_of_stream_only
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        super().update_in_memory_litellm_params(litellm_params)
+        self._set_streaming_params(BedrockGuardrailStreamingParams.from_extras(litellm_params.model_extra))
+
+    def _streams_incrementally(self) -> bool:
+        return not self.streaming_buffer_until_moderated and not self.mask_response_content
+
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [
@@ -289,7 +338,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         ]
 
     @staticmethod
-    def _normalize_checks(checks: BedrockChecksConfigModel | Mapping[str, object] | None) -> dict[str, Any] | None:
+    def _normalize_checks(checks: BedrockChecksConfigModel | Mapping[str, object] | None) -> dict[str, object] | None:
         """Normalize the configured `checks` into a plain dict for the API body.
 
         Accepts a pydantic ``BedrockChecksConfigModel`` or a raw dict; drops None /
@@ -340,7 +389,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _create_bedrock_output_content_request(
         self,
-        response: Any | ModelResponse,
+        response: object,
         messages: list[AllMessageValues] | None = None,
     ) -> BedrockRequest:
         """
@@ -364,9 +413,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_request["content"] = bedrock_request_content
         return bedrock_request
 
-    def _build_response_content_items(
-        self, response: Any | ModelResponse, has_grounding: bool
-    ) -> list[BedrockContentItem]:
+    def _build_response_content_items(self, response: object, has_grounding: bool) -> list[BedrockContentItem]:
         """Build content item(s) from the model response. When the request supplied
         grounding, the response is qualified ``guard_content`` so Bedrock can score it.
         """
@@ -390,7 +437,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
-        response: Any | ModelResponse | None = None,
+        response: object | None = None,
     ) -> BedrockRequest:
         """
         Convert the litellm messages/response to the bedrock request format.
@@ -669,9 +716,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     # logic becomes shared across providers.
 
     #### CALL HOOKS - proxy only ####
-    def _load_credentials(
-        self,
-    ):
+    def _load_credentials(self, bearer_token: str | None = None):
         try:
             from botocore.credentials import Credentials
         except ImportError:
@@ -686,22 +731,28 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         aws_profile_name: Final = self.optional_params.get("aws_profile_name", None)
         aws_web_identity_token: Final = self.optional_params.get("aws_web_identity_token", None)
         aws_sts_endpoint: Final = self.optional_params.get("aws_sts_endpoint", None)
+        aws_external_id: Final = self.optional_params.get("aws_external_id", None)
 
         ### SET REGION NAME ###
         aws_region_name = self.get_aws_region_name_for_non_llm_api_calls(
             aws_region_name=aws_region_name,
         )
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
+        credentials: Final[Credentials | None] = (
+            None
+            if bearer_token is not None
+            else self.get_credentials(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_region_name=aws_region_name,
+                aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
+                aws_role_name=aws_role_name,
+                aws_web_identity_token=aws_web_identity_token,
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_external_id=aws_external_id,
+            )
         )
         return credentials, aws_region_name
 
@@ -733,13 +784,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         proxy_endpoint_url = f"{proxy_endpoint_url}{request_path}"
         encoded_data: Final = json.dumps(data).encode("utf-8")
 
-        # first check api-key, if none, fall back to sigV4
-        if api_key is not None:
-            aws_bearer_token: str | None = api_key
-        else:
-            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+        aws_bearer_token: Final = bedrock_bearer_token(api_key)
 
-        if aws_bearer_token:
+        if aws_bearer_token is not None:
             try:
                 from botocore.awsrequest import AWSRequest
             except ImportError:
@@ -870,7 +917,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 source,
             )
             return BedrockGuardrailResponse()
-        credentials, aws_region_name = self._load_credentials()
+        credentials, aws_region_name = self._load_credentials(bearer_token=bedrock_bearer_token(api_key))
         allow_chunking: Final = not self._content_uses_contextual_grounding(content)
 
         completed_chunk_usages: Final[list[BedrockGuardrailUsage]] = []  # mutable-ok: billed-chunk usage accumulator
@@ -911,8 +958,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _apply_guardrail_content_with_chunking(
         self,
         content: Sequence[BedrockContentItem],
-        base_request_data: Mapping[str, Any],
-        credentials: "Credentials",
+        base_request_data: Mapping[str, object],
+        credentials: "Credentials | None",
         aws_region_name: str,
         api_key: str | None,
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
@@ -1049,8 +1096,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _post_apply_guardrail_content_with_retry(
         self,
         content: Sequence[BedrockContentItem],
-        base_request_data: Mapping[str, Any],
-        credentials: "Credentials",
+        base_request_data: Mapping[str, object],
+        credentials: "Credentials | None",
         aws_region_name: str,
         api_key: str | None,
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
@@ -1099,8 +1146,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _post_apply_guardrail_content(
         self,
         content: Sequence[BedrockContentItem],
-        base_request_data: Mapping[str, Any],
-        credentials: "Credentials",
+        base_request_data: Mapping[str, object],
+        credentials: "Credentials | None",
         aws_region_name: str,
         api_key: str | None,
         request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
@@ -1138,11 +1185,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             aws_region_name=aws_region_name,
             api_key=api_key,
         )
+        headers_dict: Final = dict(prepared_request.headers)  # mutable-ok: the masking helper requires a dict
         verbose_proxy_logger.debug(
             "Bedrock AI request body: %s, url %s, headers: %s",
             bedrock_request_data,
             prepared_request.url,
-            prepared_request.headers,
+            _get_masked_values(headers_dict),
         )
 
         httpx_response: Final = await self._sign_and_post(
@@ -1826,9 +1874,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Nothing to scan (e.g. tool-only turn) -> allow, like ApplyGuardrail does.
             return BedrockGuardrailResponse()
 
-        credentials, aws_region_name = self._load_credentials()
-        body: Final[dict[str, Any]] = {"messages": checks_messages, "checks": self.checks}
         api_key: Final[str | None] = request_data.get("api_key") if request_data else None
+        credentials, aws_region_name = self._load_credentials(bearer_token=bedrock_bearer_token(api_key))
+        body: Final[dict[str, object]] = {"messages": checks_messages, "checks": self.checks}
 
         prepared_request: Final = self._prepare_request(
             credentials=credentials,
@@ -2111,24 +2159,36 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         OTEL integration can expose it as a queryable span attribute
         without re-parsing the redacted guardrail_response blob.
         """
-        tracing_detail: Final[GuardrailTracingDetail] = {}
         violation_categories: Final = self._extract_violation_category_names(response)
-        if violation_categories:
-            tracing_detail["violation_categories"] = violation_categories
         bedrock_action: Final = response.get("action")
-        if isinstance(bedrock_action, str):
-            tracing_detail["guardrail_action"] = bedrock_action
-        usage: Final = response.get("usage")
-        if isinstance(usage, dict):
-            usage_units: Final = {  # mutable-ok: json.dumps'd into spend log metadata downstream
-                key: value for key, value in usage.items() if isinstance(value, int)
-            }
-            if usage_units:
-                tracing_detail["guardrail_usage"] = usage_units
-                tracing_detail["guardrail_cost"] = bedrock_guardrail_cost(
-                    usage_units=usage_units, aws_region_name=aws_region_name
-                )
+        categories_detail: Final[GuardrailTracingDetail] = {"violation_categories": violation_categories}
+        action_detail: Final[GuardrailTracingDetail] = {"guardrail_action": bedrock_action}
+        tracing_detail: Final[GuardrailTracingDetail] = {
+            **(categories_detail if violation_categories else _NO_TRACING_DETAIL),
+            **(action_detail if isinstance(bedrock_action, str) else _NO_TRACING_DETAIL),
+            **self._usage_tracing_detail(response.get("usage"), aws_region_name),
+        }
         return tracing_detail
+
+    @staticmethod
+    def _usage_tracing_detail(
+        usage: BedrockGuardrailUsage | None, aws_region_name: str | None
+    ) -> GuardrailTracingDetail:
+        if not isinstance(usage, dict):
+            return _NO_TRACING_DETAIL
+        usage_units: Final = {  # mutable-ok: json.dumps'd into spend log metadata downstream
+            key: value for key, value in usage.items() if isinstance(value, int)
+        }
+        if not usage_units:
+            return _NO_TRACING_DETAIL
+        cost_by_unit: Final = bedrock_guardrail_cost_by_unit(usage_units=usage_units, aws_region_name=aws_region_name)
+        priced_detail: Final[GuardrailTracingDetail] = {"guardrail_cost_by_unit": cost_by_unit}
+        usage_detail: Final[GuardrailTracingDetail] = {
+            "guardrail_usage": usage_units,
+            "guardrail_cost": guardrail_cost_total(cost_by_unit),
+            **(priced_detail if cost_by_unit is not None else _NO_TRACING_DETAIL),
+        }
+        return usage_detail
 
     def _extract_violation_category_names(self, response: BedrockGuardrailResponse) -> list[str]:
         """
@@ -2309,7 +2369,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 guardrail_name=self.guardrail_name,
             )
 
-        detail: Final[dict[str, Any]] = {
+        detail: Final[dict[str, object]] = {
             "error": "Violated guardrail policy",
             "bedrock_guardrail_response": bedrock_guardrail_output_text,
         }
@@ -2658,6 +2718,39 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Collect content from the stream and run the bedrock OUTPUT scan
         (post_call only validates the response).
         """
+        if self._streams_incrementally():
+            from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+                UnifiedLLMGuardrails,
+            )
+
+            async for streamed_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_data=request_data,
+                guardrail_to_apply=self,
+                buffer_until_moderated_default=False,
+            ):
+                yield streamed_chunk
+            return
+
+        # Responses-API events are neither chat-completions chunks nor raw
+        # Anthropic SSE, so the assembly below cannot scan them; the unified
+        # guardrail's translation layer can, with buffering semantics kept.
+        if _is_responses_api_route(user_api_key_dict.request_route):
+            from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+                UnifiedLLMGuardrails,
+            )
+
+            async for translated_chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_data=request_data,
+                guardrail_to_apply=self,
+                buffer_until_moderated_default=True,
+            ):
+                yield translated_chunk
+            return
+
         # Import here to avoid circular imports
         from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
         from litellm.main import stream_chunk_builder
@@ -2714,7 +2807,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
                 if not raw_sse or (not is_block and not headers_flushed):
                     raise
-                block_message, _ = _serialize_http_exception_detail(block_detail)
+                block_message, _ = serialize_http_exception_detail(block_detail)
                 for error_frame in anthropic_sse_error_frames(
                     block_message if is_block else f"{block_exc.status_code}: {block_message}"
                 ):
@@ -2853,7 +2946,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         return updated_messages
 
     def _mask_content_list(
-        self, content_list: list[Any], masked_texts: list[str], masking_index: int
+        self, content_list: Sequence[object], masked_texts: list[str], masking_index: int
     ) -> tuple[list[Any], int]:
         """
         Apply masking to a list of content items.
@@ -2866,7 +2959,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         Returns:
             Updated content list with masked items
         """
-        new_content: Final[list[dict | str]] = []
+        new_content: Final[list[dict[str, object] | str]] = []
         for item in content_list:
             if isinstance(item, dict) and "text" in item:
                 new_item = item.copy()
@@ -2885,7 +2978,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _apply_masking_to_response(
         self,
-        response: ModelResponse | Any,
+        response: object,
         bedrock_guardrail_response: BedrockGuardrailResponse,
     ) -> None:
         """

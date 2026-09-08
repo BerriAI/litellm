@@ -1,4 +1,5 @@
 
+import time
 import pytest
 import requests
 
@@ -276,3 +277,17 @@ def test_encrypt_credential_values_does_not_mutate_original(monkeypatch):
     assert encrypted.credential_values["api_key"] != "sk-123"
     assert credential.credential_values["api_key"] == "sk-123"
     assert encrypted.credential_name == credential.credential_name
+
+
+def test_list_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
+    """
+    A proxy that accepts the connection but never answers used to pin the caller's
+    process forever, since the request carried no timeout at all.
+    """
+    client = CredentialsManagementClient(base_url=hanging_server, api_key="sk-test", timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        client.list()
+
+    assert time.monotonic() - started < 10

@@ -10,7 +10,7 @@ import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelec
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import type { ObjectPermission } from "@/components/object_permission_types";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -336,6 +336,8 @@ export function UserEditView({
               <MCPToolPermissions
                 accessToken={accessToken || ""}
                 selectedServers={form.watch("mcp_servers_and_groups")?.servers || []}
+                selectedAccessGroups={form.watch("mcp_servers_and_groups")?.accessGroups || []}
+                selectedToolsets={form.watch("mcp_servers_and_groups")?.toolsets || []}
                 toolPermissions={form.watch("mcp_tool_permissions") || {}}
                 onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
               />

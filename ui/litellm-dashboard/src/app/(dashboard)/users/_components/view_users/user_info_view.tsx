@@ -18,7 +18,7 @@ import {
   Member,
 } from "@/components/networking";
 import { SimpleTooltip } from "@/components/ui/tooltip";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   Combobox,
   ComboboxContent,
@@ -416,7 +416,7 @@ export default function UserInfoView({
               variant="ghost"
               size="icon-xs"
               onClick={() => copyToClipboard(userData.user_id, "user-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
+              className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["user-id"]
                   ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -598,7 +598,7 @@ export default function UserInfoView({
                       variant="ghost"
                       size="icon-xs"
                       onClick={() => copyToClipboard(userData.user_id, "user-id")}
-                      className={`left-2 z-10 transition-all duration-200 ${
+                      className={`left-2 z-raised transition-all duration-200 ${
                         copiedStates["user-id"]
                           ? "text-success bg-success/10 border-success/20"
                           : "text-muted-foreground hover:text-foreground hover:bg-accent"

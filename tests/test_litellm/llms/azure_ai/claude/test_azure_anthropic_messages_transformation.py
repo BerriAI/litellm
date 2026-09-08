@@ -341,7 +341,7 @@ def test_messages_thinking_shape_follows_exact_azure_entry_flag(local_model_cost
         )
 
     result = transform()
-    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("thinking") == {"type": "adaptive", "display": "summarized"}
     assert result.get("output_config") == {"effort": "medium"}
 
     monkeypatch.setitem(

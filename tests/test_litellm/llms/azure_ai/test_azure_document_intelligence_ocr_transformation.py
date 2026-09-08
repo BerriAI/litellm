@@ -344,3 +344,30 @@ def test_get_complete_url_combines_pages_and_features():
 
     assert "&pages=1,2,3" in url
     assert "&features=keyValuePairs,languages" in url
+
+
+def test_validate_environment_uses_subscription_key(monkeypatch):
+    monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", raising=False)
+
+    headers = AzureDocumentIntelligenceOCRConfig().validate_environment(
+        headers={},
+        model="prebuilt-layout",
+        api_key="my-key",
+        api_base="https://example.cognitiveservices.azure.com",
+    )
+
+    assert headers["Ocp-Apim-Subscription-Key"] == "my-key"
+
+
+def test_validate_environment_falls_back_to_entra_token(monkeypatch):
+    monkeypatch.delenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY", raising=False)
+
+    headers = AzureDocumentIntelligenceOCRConfig().validate_environment(
+        headers={},
+        model="prebuilt-layout",
+        api_base="https://example.cognitiveservices.azure.com",
+        litellm_params={"azure_ad_token": "entra-token"},
+    )
+
+    assert headers["Authorization"] == "Bearer entra-token"
+    assert "Ocp-Apim-Subscription-Key" not in headers

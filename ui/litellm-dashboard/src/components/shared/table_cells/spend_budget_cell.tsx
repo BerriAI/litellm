@@ -1,7 +1,7 @@
 "use client";
 
 import { InheritedBudgetHint, type InheritedBudgetGate } from "@/components/shared/InheritedBudgetHint";
-import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { formatNumberWithCommas, getSpendString } from "@/utils/dataUtils";
 
 interface SpendBudgetCellProps {

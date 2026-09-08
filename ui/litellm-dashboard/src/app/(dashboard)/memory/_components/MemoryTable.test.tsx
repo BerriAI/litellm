@@ -95,6 +95,7 @@ describe("MemoryTable", () => {
   it("shows the filtered-empty copy when a search is active", () => {
     render(<MemoryTable {...baseProps} data={[]} rowCount={0} hasActiveSearch={true} />);
     expect(screen.getByText("No matching memories")).toBeInTheDocument();
+    expect(screen.getByText("No memories match your search.")).toBeInTheDocument();
     expect(screen.queryByText("No memories stored yet")).not.toBeInTheDocument();
   });
 
@@ -128,6 +129,7 @@ describe("MemoryTable", () => {
     const onRefresh = vi.fn();
     render(<MemoryTable {...baseProps} onSearchChange={onSearchChange} onRefresh={onRefresh} />);
 
+    expect(screen.getByPlaceholderText("Search by key prefix or memory ID…")).toBeInTheDocument();
     fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "u" } });
     expect(onSearchChange).toHaveBeenCalledWith("u");
 

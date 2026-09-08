@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
-from litellm.llms.azure.common_utils import BaseAzureLLM, get_azure_ad_token
+from litellm.llms.azure.common_utils import (
+    BaseAzureLLM,
+    _cached_entra_id_token_provider,
+    get_azure_ad_token,
+    get_azure_ad_token_from_entra_id,
+)
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
 )
@@ -413,6 +418,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "avector_store_create",
             "avector_store_search",
             "acreate_skill",
+            "acreate_interaction",
         ]
     ],
 )
@@ -1999,6 +2005,62 @@ def test_azure_traditional_api_uses_azure_openai_client():
         assert isinstance(
             async_client, AsyncAzureOpenAI
         ), f"Expected AsyncAzureOpenAI client for api_version={api_version}"
+
+
+class TestEntraIdTokenProviderCache:
+    def setup_method(self):
+        _cached_entra_id_token_provider.cache_clear()
+
+    def teardown_method(self):
+        _cached_entra_id_token_provider.cache_clear()
+
+    def test_reuses_credential_for_the_same_service_principal(self):
+        with (
+            patch("azure.identity.ClientSecretCredential") as mock_credential,
+            patch("azure.identity.get_bearer_token_provider", side_effect=lambda credential, scope: lambda: "token"),
+        ):
+            first = get_azure_ad_token_from_entra_id(
+                tenant_id="tenant",
+                client_id="client",
+                client_secret="secret",
+                scope="https://cognitiveservices.azure.com/.default",
+            )
+            second = get_azure_ad_token_from_entra_id(
+                tenant_id="tenant",
+                client_id="client",
+                client_secret="secret",
+                scope="https://cognitiveservices.azure.com/.default",
+            )
+
+        assert first is second
+        assert mock_credential.call_count == 1
+
+    @pytest.mark.parametrize(
+        "second_call_kwargs",
+        [
+            {"tenant_id": "other-tenant"},
+            {"client_id": "other-client"},
+            {"client_secret": "other-secret"},
+            {"scope": "https://ai.azure.com/.default"},
+        ],
+    )
+    def test_does_not_share_a_provider_across_credentials_or_scopes(self, second_call_kwargs):
+        base_kwargs = {
+            "tenant_id": "tenant",
+            "client_id": "client",
+            "client_secret": "secret",
+            "scope": "https://cognitiveservices.azure.com/.default",
+        }
+
+        with (
+            patch("azure.identity.ClientSecretCredential") as mock_credential,
+            patch("azure.identity.get_bearer_token_provider", side_effect=lambda credential, scope: lambda: "token"),
+        ):
+            first = get_azure_ad_token_from_entra_id(**base_kwargs)
+            second = get_azure_ad_token_from_entra_id(**{**base_kwargs, **second_call_kwargs})
+
+        assert first is not second
+        assert mock_credential.call_count == 2
 
 
 def test_evicting_an_azure_client_built_on_the_callers_session_leaves_it_open(monkeypatch):

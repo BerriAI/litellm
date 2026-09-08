@@ -4,8 +4,9 @@
 import asyncio
 import atexit
 import contextvars
+import inspect
 import logging
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Iterator
 from typing import Final
 
 from typing_extensions import TypedDict
@@ -53,6 +54,7 @@ class LoggingWorker:
         self._queue: asyncio.Queue[LoggingTask] | None = None
         self._worker_task: asyncio.Task | None = None
         self._running_tasks: set[asyncio.Task] = set()
+        self._dequeued_tasks: dict[int, LoggingTask] = {}  # mutable-ok: refs so flush can rescue never-started tasks
         self._sem: asyncio.Semaphore | None = None
         self._bound_loop: asyncio.AbstractEventLoop | None = None
         self._last_aggressive_clear_time: float = 0.0
@@ -60,6 +62,51 @@ class LoggingWorker:
 
         # Register cleanup handler to flush remaining events on exit
         atexit.register(self._flush_on_exit)
+
+    def _track_dequeued(self, task: LoggingTask) -> None:
+        self._dequeued_tasks[id(task)] = task
+
+    def _untrack_dequeued(self, task: LoggingTask) -> None:
+        self._dequeued_tasks.pop(id(task), None)
+
+    def _unstarted_dequeued_tasks(self) -> tuple[LoggingTask, ...]:
+        return tuple(
+            task
+            for task in self._dequeued_tasks.values()
+            if inspect.getcoroutinestate(task["coroutine"]) == inspect.CORO_CREATED
+        )
+
+    def _requeue_unstarted_dequeued(self, new_queue: "asyncio.Queue[LoggingTask]") -> int:
+        revived: Final = self._unstarted_dequeued_tasks()
+        self._dequeued_tasks.clear()
+        for index, revived_task in enumerate(revived):
+            try:
+                new_queue.put_nowait(revived_task)
+            except asyncio.QueueFull:
+                for leftover in revived[index:]:
+                    self._track_dequeued(leftover)
+                return index
+        return len(revived)
+
+    def _run_coroutine_silently(self, loop: asyncio.AbstractEventLoop, coroutine: Coroutine) -> bool:
+        try:
+            loop.run_until_complete(asyncio.wait_for(coroutine, timeout=self.timeout))
+        except (Exception, asyncio.CancelledError):  # noqa: BLE001  # atexit flush must never break the user's program
+            return False
+        return True
+
+    @staticmethod
+    def _drain_pending(queue: "asyncio.Queue[LoggingTask]") -> tuple[LoggingTask, ...]:
+        """Pop every task still queued, without awaiting them, so they can be moved to another queue."""
+
+        def _pop_until_empty() -> Iterator[LoggingTask]:
+            while True:
+                try:
+                    yield queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+
+        return tuple(_pop_until_empty())
 
     def _ensure_queue(self) -> None:
         """Initialize the queue if it doesn't exist or if event loop has changed."""
@@ -69,14 +116,29 @@ class LoggingWorker:
             # No running loop, can't initialize
             return
 
-        # Check if we need to reinitialize due to event loop change
+        # The queue, semaphore and worker task are all bound to the loop that created them. On a
+        # loop change we hand the still-pending tasks to a fresh queue instead of dropping them,
+        # so queued spend-logging coroutines are not silently discarded (and never left un-awaited).
         if self._queue is not None and self._bound_loop is not current_loop:
-            verbose_logger.debug("LoggingWorker: Event loop changed, reinitializing queue and worker")
-            # Clear old state - these are bound to the old loop
-            self._queue = None
+            carried_over: Final = self._drain_pending(self._queue)
+            new_queue: Final[asyncio.Queue[LoggingTask]] = asyncio.Queue(maxsize=self.max_queue_size)
+            for carried_task in carried_over:
+                new_queue.put_nowait(carried_task)
+            revived_count: Final = self._requeue_unstarted_dequeued(new_queue)
+            if carried_over or revived_count:
+                verbose_logger.warning(
+                    "LoggingWorker: event loop changed; carried %d pending and revived %d dequeued logging task(s) onto the new loop",
+                    len(carried_over),
+                    revived_count,
+                )
+            else:
+                verbose_logger.debug("LoggingWorker: Event loop changed, reinitializing queue and worker")
             self._sem = None
             self._worker_task = None
             self._running_tasks.clear()
+            self._queue = new_queue
+            self._bound_loop = current_loop
+            return
 
         if self._queue is None:
             self._queue = asyncio.Queue(maxsize=self.max_queue_size)
@@ -103,6 +165,7 @@ class LoggingWorker:
                 except Exception as e:
                     verbose_logger.exception("LoggingWorker error: %s", e)
                 finally:
+                    self._untrack_dequeued(task)
                     self._queue.task_done()
         finally:
             # Always release semaphore, even if queue is None
@@ -120,6 +183,7 @@ class LoggingWorker:
                 await self._sem.acquire()
                 try:
                     task = await self._queue.get()
+                    self._track_dequeued(task)
                     # Track each spawned coroutine so we can cancel on shutdown.
                     processing_task = asyncio.create_task(self._process_log_task(task, self._sem))
                     self._running_tasks.add(processing_task)
@@ -272,9 +336,10 @@ class LoggingWorker:
         extracted_tasks: Final = []
         for _ in range(items_to_extract):
             try:
-                extracted_tasks.append(self._queue.get_nowait())
+                extracted_tasks.append(extracted := self._queue.get_nowait())
             except asyncio.QueueEmpty:
                 break
+            self._track_dequeued(extracted)
 
         return extracted_tasks
 
@@ -292,6 +357,7 @@ class LoggingWorker:
 
             # Add new task to extracted tasks to process directly
             if new_task is not None:
+                self._track_dequeued(new_task)
                 extracted_tasks.append(new_task)
 
             # Process extracted tasks directly
@@ -317,6 +383,7 @@ class LoggingWorker:
             # Suppress errors during processing to ensure we keep going
             pass
         finally:
+            self._untrack_dequeued(task)
             self._queue.task_done()
 
     async def _process_extracted_tasks(self, tasks: list[LoggingTask]) -> None:
@@ -460,11 +527,12 @@ class LoggingWorker:
             self._safe_log("debug", "[LoggingWorker] atexit: No queue initialized")
             return
 
-        if self._queue.empty():
+        unstarted_dequeued: Final = self._unstarted_dequeued_tasks()
+        if self._queue.empty() and not unstarted_dequeued:
             self._safe_log("debug", "[LoggingWorker] atexit: Queue is empty")
             return
 
-        queue_size: Final = self._queue.qsize()
+        queue_size: Final = self._queue.qsize() + len(unstarted_dequeued)
         self._safe_log("info", f"[LoggingWorker] atexit: Flushing {queue_size} remaining events...")
 
         # Create a new event loop since the original is closed
@@ -483,6 +551,16 @@ class LoggingWorker:
             previous_raise_exceptions: Final = logging.raiseExceptions
             logging.raiseExceptions = False
             try:
+                for pending in unstarted_dequeued:
+                    if (
+                        processed >= MAX_ITERATIONS_TO_CLEAR_QUEUE
+                        or loop.time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE
+                    ):
+                        break
+                    if self._run_coroutine_silently(loop, pending["coroutine"]):
+                        processed += 1
+                    self._untrack_dequeued(pending)
+
                 while not self._queue.empty() and processed < MAX_ITERATIONS_TO_CLEAR_QUEUE:
                     if loop.time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
                         self._safe_log(
@@ -500,11 +578,8 @@ class LoggingWorker:
                     # Note: We run the coroutine directly, not via create_task,
                     # since we're in a new event loop context
                     try:
-                        loop.run_until_complete(task["coroutine"])
-                        processed += 1
-                    except Exception:
-                        # Silent failure to not break user's program
-                        pass
+                        if self._run_coroutine_silently(loop, task["coroutine"]):
+                            processed += 1
                     finally:
                         # Clear reference to prevent memory leaks
                         task = None

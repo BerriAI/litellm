@@ -19,11 +19,13 @@ failures are hard test failures (see `tests/e2e/CLAUDE.md`).
 | OpenAI    | yes | yes | yes | yes | yes (lifecycle + terminal output) | OpenAI Files |
 | Azure     | yes | yes | yes | yes | yes (byte-verbatim) | Azure Files |
 | Vertex AI | yes | yes | yes | yes | yes (provider-transformed) | GCS (`gcs_bucket_name` / `GCS_BUCKET_NAME` on model) |
-| Bedrock   | yes (unified only) | yes | no (limited upstream) | no | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
+| Bedrock   | yes (unified only) | yes | yes | yes (unfiltered managed list) | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 
-Bedrock cancel is unreliable upstream and list is unsupported, so both are gated off
-(`can_cancel=False`, `can_list=False`) when that provider is enabled in the matrix;
-flipping those gates is tracked in LIT-4774 and deliberately not part of this suite.
+Bedrock cancel maps to `StopModelInvocationJob` and comes back `cancelling`; the
+lifecycle asserts it the same way it does for OpenAI (`_CANCEL_ASSERTED_PROVIDERS`).
+Bedrock has no provider-side list, so list is the proxy's DB-backed managed view: the
+unified lifecycle lists with the plain `GET /v1/batches` and the batch must appear
+there. Both were gated off until LIT-5730, after LIT-4774 landed cancel support. A batch that completes inside the 2 s pre-cancel window skips the cancel assertion (a documented vacuous pass for the cancel cell, same as OpenAI); the list assertion runs either way.
 Bedrock file upload requires a model on the request (`encoded` / `unified` scenarios only);
 `model_param` and `provider_fallback` are omitted because `POST /bedrock/v1/files` has no
 model-less passthrough path.
@@ -81,6 +83,21 @@ File delete asserts `object=="file"` and `deleted==True`.
 | `capabilities.py` | the provider x scenario matrix + per-provider /model/new params + id-shape classifiers + per-provider raw-id assertion |
 | `conftest.py` | session-scoped batch deployment registration and teardown |
 | `test_batches_e2e.py` | parametrized lifecycle with per-endpoint output assertions, file upload/delete outputs, key-model-access denial, per-backend content download, failure paths, second-hop routing, terminal state + cost |
+| `test_managed_files_enforcement_e2e.py` | require_managed_files enforcement pins; deselected unless `E2E_MANAGED_FILES_STACK` is set (see below) |
+
+## require_managed_files enforcement (separate stack phase)
+
+`litellm_settings.require_managed_files` is a boot-time module global with no per-key
+or runtime override, and turning it on 400s every upload that lacks
+`target_model_names`, including the files_settings-routed `provider_fallback`
+scenario above. So its pins cannot share a proxy with the rest of this suite:
+`test_managed_files_enforcement_e2e.py` carries the `managed_files` marker, is
+deselected unless `E2E_MANAGED_FILES_STACK` is set (the same pattern as the `weekly`
+marker), and the PR gate runs it in a sequential phase after the main suite, against
+the same ephemeral stack redeployed with the flag on. The pins: upload without
+`target_model_names` is a 400, upload carrying a `model` param is a 400, a raw
+provider file id on retrieve is a 400, and another user's managed unified id is a
+403 while the owning user still retrieves it.
 
 ## Failure paths
 
@@ -133,6 +150,6 @@ never landed.
 Unified (managed) batch cost is owned by the hourly `CheckBatchCost` poller, and a
 terminal DB status short-circuits retrieve for those ids, so the terminal-state cell
 uses the encoded path; poller timing does not fit an e2e gate and belongs in a
-DI-stubbed proxy integration test under `tests/test_litellm/proxy/`. Bedrock
-cancel/list stay gated pending LIT-4774. Gemini (non-Vertex) file content raises
-`NotImplementedError` upstream and is not a coverage cell.
+DI-stubbed proxy integration test under `tests/test_litellm/proxy/`. Gemini
+(non-Vertex) file content raises `NotImplementedError` upstream and is not a
+coverage cell.

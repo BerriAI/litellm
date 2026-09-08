@@ -475,7 +475,7 @@ class TestOllamaTextCompletionResponseIterator:
         assert isinstance(result, ModelResponseStream)
         assert result.choices and result.choices[0].delta is not None
         assert result.choices[0].delta.content == None
-        assert getattr(result.choices[0].delta, "reasoning_content", None) is ""
+        assert getattr(result.choices[0].delta, "reasoning_content", None) == ""
 
     def test_chunk_parser_done_chunk(self):
         """Test that done chunks work correctly."""
