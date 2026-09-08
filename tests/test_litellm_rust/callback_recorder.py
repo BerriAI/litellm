@@ -38,6 +38,12 @@ class RecordingLogger(CustomLogger):
     def _record(self, name: str, kwargs: object = None, response: object = None) -> None:
         details: Final = kwargs if isinstance(kwargs, dict) else {}
         try:
+            snapshot: Final = copy.deepcopy(details)
+        except Exception:
+            snapshot = dict(details)
+        if "exception" in details:
+            snapshot["exception"] = details["exception"]
+        try:
             loop: Final = asyncio.get_running_loop()
             has_running_loop: Final = True
         except RuntimeError:
@@ -50,7 +56,7 @@ class RecordingLogger(CustomLogger):
             thread=threading.current_thread(),
             loop=loop,
             has_running_loop=has_running_loop,
-            kwargs=copy.deepcopy(details),
+            kwargs=snapshot,
             response=response,
         )
         with self._condition:
@@ -68,7 +74,11 @@ class RecordingLogger(CustomLogger):
             return tuple(event for event in self._events if event.name == name)
 
     async def wait_for_async(self, name: str, count: int = 1, timeout: float = 10) -> tuple[HookEvent, ...]:
-        return await asyncio.wait_for(asyncio.to_thread(self.wait_for, name, count, timeout), timeout=timeout + 1)
+        await asyncio.wait_for(asyncio.to_thread(self.wait_for, name, count, timeout), timeout=timeout + 1)
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=timeout)
+        return tuple(event for event in self.events if event.name == name)
 
     def log_pre_api_call(self, model, messages, kwargs):
         self._record("log_pre_api_call", kwargs)

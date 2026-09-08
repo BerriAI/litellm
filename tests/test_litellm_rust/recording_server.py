@@ -33,6 +33,7 @@ class RecordingServer:
     requests: list[RecordedRequest]
     responses: list[ResponseSpec]
     default_response: ResponseSpec
+    expected_requests: int | None = 1
 
     @property
     def base_url(self) -> str:
@@ -101,3 +102,6 @@ def recording_server() -> Iterator[RecordingServer]:
         server.shutdown()
         server.server_close()
         thread.join()
+        if recording_server.expected_requests is not None:
+            assert len(recording_server.requests) == recording_server.expected_requests
+        assert recording_server.responses == []

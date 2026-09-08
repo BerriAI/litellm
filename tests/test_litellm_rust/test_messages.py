@@ -5,22 +5,10 @@ from typing import Final, cast
 import pytest
 
 import litellm
+from tests.test_litellm_rust.contracts import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE
 from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
-
-MODEL: Final = "anthropic/claude-sonnet-4-5-20250929"
-MESSAGES: Final = [{"role": "user", "content": "Hello"}]
-MESSAGES_RESPONSE: Final = {
-    "id": "msg_native",
-    "type": "message",
-    "role": "assistant",
-    "model": "claude-sonnet-4-5-20250929",
-    "content": [{"type": "text", "text": "Hello from native Messages"}],
-    "stop_reason": "end_turn",
-    "stop_sequence": None,
-    "usage": {"input_tokens": 5, "output_tokens": 4},
-}
 
 
 @pytest.fixture
@@ -31,7 +19,7 @@ def messages_server(recording_server: RecordingServer) -> RecordingServer:
 
 async def call_messages(server: RecordingServer, **kwargs: object):
     return await litellm.anthropic.messages.acreate(
-        model=MODEL,
+        model=MESSAGES_MODEL,
         messages=MESSAGES,
         max_tokens=64,
         api_key="test-key",
@@ -45,12 +33,17 @@ def assert_native_request(server: RecordingServer) -> None:
     assert "accept-encoding" not in server.requests[0].headers
 
 
+def assert_native_response(response: object) -> None:
+    assert isinstance(response, dict)
+    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
+
+
 @pytest.mark.asyncio
 async def test_messages_sends_expected_provider_request(messages_server: RecordingServer) -> None:
     response: Final = await call_messages(messages_server)
 
     assert response["content"] == [{"type": "text", "text": "Hello from native Messages"}]
-    assert response["_hidden_params"]["additional_headers"] == {"x-litellm-rust": "true"}
+    assert_native_response(response)
     assert_native_request(messages_server)
     request: Final = messages_server.requests[0]
     assert request.path == "/v1/messages"
@@ -65,8 +58,9 @@ async def test_messages_sends_expected_provider_request(messages_server: Recordi
 
 @pytest.mark.asyncio
 async def test_messages_sends_custom_headers(messages_server: RecordingServer) -> None:
-    await call_messages(messages_server, extra_headers={"x-trace-id": "trace-1"})
+    response: Final = await call_messages(messages_server, extra_headers={"x-trace-id": "trace-1"})
 
+    assert_native_response(response)
     assert messages_server.requests[0].headers["x-trace-id"] == "trace-1"
 
 
@@ -76,13 +70,14 @@ async def test_messages_resolves_provider_credentials(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "environment-key")
 
-    await litellm.anthropic.messages.acreate(
-        model=MODEL,
+    response: Final = await litellm.anthropic.messages.acreate(
+        model=MESSAGES_MODEL,
         messages=MESSAGES,
         max_tokens=64,
         api_base=messages_server.base_url,
     )
 
+    assert_native_response(response)
     assert messages_server.requests[0].headers["x-api-key"] == "environment-key"
 
 
@@ -92,14 +87,15 @@ async def test_messages_explicit_credentials_override_defaults(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "environment-key")
 
-    await call_messages(messages_server)
+    response: Final = await call_messages(messages_server)
 
+    assert_native_response(response)
     assert messages_server.requests[0].headers["x-api-key"] == "test-key"
 
 
 @pytest.mark.asyncio
 async def test_azure_messages_uses_foundry_endpoint_and_credentials(messages_server: RecordingServer) -> None:
-    await litellm.anthropic.messages.acreate(
+    response: Final = await litellm.anthropic.messages.acreate(
         model="azure_ai/claude-opus-4.5",
         messages=MESSAGES,
         max_tokens=64,
@@ -107,6 +103,7 @@ async def test_azure_messages_uses_foundry_endpoint_and_credentials(messages_ser
         api_base=f"{messages_server.base_url}/anthropic",
     )
 
+    assert_native_response(response)
     assert_native_request(messages_server)
     assert messages_server.requests[0].path == "/anthropic/v1/messages"
     assert messages_server.requests[0].headers["x-api-key"] == "azure-key"

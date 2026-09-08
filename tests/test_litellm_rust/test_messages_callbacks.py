@@ -9,22 +9,16 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from tests.test_litellm_rust.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.contracts import (
+    MESSAGES,
+    MESSAGES_MODEL,
+    MESSAGES_RESPONSE,
+    request_body,
+    request_headers,
+)
 from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
-
-MODEL: Final = "anthropic/claude-sonnet-4-5-20250929"
-MESSAGES: Final = [{"role": "user", "content": "Hello"}]
-MESSAGES_RESPONSE: Final = {
-    "id": "msg_native",
-    "type": "message",
-    "role": "assistant",
-    "model": "claude-sonnet-4-5-20250929",
-    "content": [{"type": "text", "text": "Hello from native Messages"}],
-    "stop_reason": "end_turn",
-    "stop_sequence": None,
-    "usage": {"input_tokens": 5, "output_tokens": 4},
-}
 
 
 @pytest.fixture
@@ -35,7 +29,7 @@ def messages_server(recording_server: RecordingServer) -> RecordingServer:
 
 async def call_messages(server: RecordingServer, callbacks: list[CustomLogger], **kwargs: object):
     return await litellm.anthropic.messages.acreate(
-        model=MODEL,
+        model=MESSAGES_MODEL,
         messages=MESSAGES,
         max_tokens=64,
         api_key="test-key",
@@ -45,16 +39,7 @@ async def call_messages(server: RecordingServer, callbacks: list[CustomLogger], 
     )
 
 
-def request_body(kwargs: dict) -> dict:
-    return kwargs["additional_args"]["complete_input_dict"]
-
-
-def request_headers(kwargs: dict) -> dict:
-    return kwargs["additional_args"]["headers"]
-
-
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="UC-MSG-PRECALL-VIEW: native pre-call arguments differ from legacy")
 async def test_messages_pre_call_receives_expected_provider_request(messages_server: RecordingServer) -> None:
     observations: Final = []
 
@@ -90,10 +75,6 @@ async def test_messages_pre_call_receives_expected_provider_request(messages_ser
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raise_after_edit", [False, True])
-@pytest.mark.xfail(
-    strict=True,
-    reason="UC-MSG-PRECALL-MUTATION: native transport snapshots body and headers before pre-call",
-)
 async def test_messages_pre_call_edits_reach_later_callbacks_and_provider(
     messages_server: RecordingServer, raise_after_edit: bool
 ) -> None:
@@ -168,6 +149,26 @@ async def test_messages_callbacks_run_once(messages_server: RecordingServer) -> 
     assert recorder.names.count("log_pre_api_call") == 1
     assert recorder.names.count("async_logging_hook") == 1
     assert recorder.names.count("async_log_success_event") == 1
+    assert "log_failure_event" not in recorder.names
+    assert "async_log_failure_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason="accepted native Messages errors are replayed through the Python transport")
+async def test_messages_failure_callbacks_receive_original_provider_error(messages_server: RecordingServer) -> None:
+    messages_server.default_response = ResponseSpec(body={"error": {"message": "provider unavailable"}}, status=500)
+    messages_server.expected_requests = None
+    recorder: Final = RecordingLogger()
+
+    with pytest.raises(litellm.InternalServerError) as caught:
+        await call_messages(messages_server, [recorder])
+    events: Final = await recorder.wait_for_async("async_log_failure_event")
+
+    assert len(events) == 1
+    assert events[0].call_type == "anthropic_messages"
+    assert events[0].kwargs["exception"] is caught.value
+    assert len(messages_server.requests) == 1
+    assert "async_log_success_event" not in recorder.names
 
 
 @pytest.mark.asyncio
@@ -206,10 +207,6 @@ async def test_messages_pre_call_runs_in_callers_execution_context(messages_serv
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="UC-MSG-STREAM-COMPLETION: native fake stream logs before assembled stream finalization",
-)
 async def test_messages_stream_logs_success_after_exhaustion(messages_server: RecordingServer) -> None:
     recorder: Final = RecordingLogger()
     stream: Final = await call_messages(messages_server, [recorder], stream=True)

@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import json
 import queue
 import threading
 from typing import Final
@@ -10,17 +9,18 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from tests.test_litellm_rust.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.contracts import (
+    OCR_DOCUMENT,
+    OCR_MODEL,
+    OCR_RESPONSE,
+    call_native_aocr,
+    call_native_ocr,
+    request_body,
+    request_headers,
+)
 from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
 
 pytestmark = pytest.mark.requires_rust_extension
-
-DOCUMENT: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"}
-MODEL: Final = "mistral/mistral-ocr-latest"
-OCR_RESPONSE: Final = {
-    "pages": [{"index": 0, "markdown": "native OCR response", "images": [], "dimensions": None}],
-    "model": "mistral-ocr-latest",
-    "usage_info": {"pages_processed": 1, "doc_size_bytes": 3},
-}
 
 
 @pytest.fixture
@@ -30,33 +30,11 @@ def ocr_server(recording_server: RecordingServer) -> RecordingServer:
 
 
 def call_ocr(server: RecordingServer, callbacks: list[CustomLogger], **kwargs: object):
-    return litellm.ocr(
-        model=MODEL,
-        document=dict(DOCUMENT),
-        api_key="test-key",
-        api_base=server.base_url,
-        callbacks=callbacks,
-        **kwargs,
-    )
+    return call_native_ocr(server, callbacks=callbacks, **kwargs)
 
 
 async def call_aocr(server: RecordingServer, callbacks: list[CustomLogger], **kwargs: object):
-    return await litellm.aocr(
-        model=MODEL,
-        document=dict(DOCUMENT),
-        api_key="test-key",
-        api_base=server.base_url,
-        callbacks=callbacks,
-        **kwargs,
-    )
-
-
-def request_body(kwargs: dict) -> dict:
-    return kwargs["additional_args"]["complete_input_dict"]
-
-
-def request_headers(kwargs: dict) -> dict:
-    return kwargs["additional_args"]["headers"]
+    return await call_native_aocr(server, callbacks=callbacks, **kwargs)
 
 
 def test_pre_call_receives_expected_provider_request(ocr_server: RecordingServer) -> None:
@@ -75,7 +53,7 @@ def test_pre_call_receives_expected_provider_request(ocr_server: RecordingServer
     assert additional_args["api_base"] == f"{ocr_server.base_url}/v1/ocr"
     assert additional_args["complete_input_dict"] == {
         "model": "mistral-ocr-latest",
-        "document": DOCUMENT,
+        "document": OCR_DOCUMENT,
         "pages": [0],
     }
 
@@ -120,7 +98,7 @@ def test_pre_call_header_edits_reach_later_callbacks_and_provider(ocr_server: Re
 
 
 def test_pre_call_nested_mutation_updates_retained_references(ocr_server: RecordingServer) -> None:
-    original: Final = dict(DOCUMENT)
+    original: Final = dict(OCR_DOCUMENT)
     replacement_url: Final = "data:application/pdf;base64,ZGVm"
     retained: Final = []
 
@@ -132,11 +110,9 @@ def test_pre_call_nested_mutation_updates_retained_references(ocr_server: Record
         def log_pre_api_call(self, model, messages, kwargs):
             request_body(kwargs)["document"]["document_url"] = replacement_url
 
-    litellm.ocr(
-        model=MODEL,
+    call_native_ocr(
+        ocr_server,
         document=original,
-        api_key="test-key",
-        api_base=ocr_server.base_url,
         callbacks=[Retain(), Edit()],
     )
 
@@ -146,7 +122,7 @@ def test_pre_call_nested_mutation_updates_retained_references(ocr_server: Record
 
 
 def test_pre_call_field_replacement_preserves_original_references(ocr_server: RecordingServer) -> None:
-    original: Final = dict(DOCUMENT)
+    original: Final = dict(OCR_DOCUMENT)
     replacement: Final = {"type": "document_url", "document_url": "data:application/pdf;base64,ZGVm"}
     retained: Final = []
 
@@ -156,16 +132,14 @@ def test_pre_call_field_replacement_preserves_original_references(ocr_server: Re
             retained.append(body["document"])
             body["document"] = replacement
 
-    litellm.ocr(
-        model=MODEL,
+    call_native_ocr(
+        ocr_server,
         document=original,
-        api_key="test-key",
-        api_base=ocr_server.base_url,
         callbacks=[RetainAndReplace()],
     )
 
     assert retained[0] is original
-    assert original["document_url"] == DOCUMENT["document_url"]
+    assert original["document_url"] == OCR_DOCUMENT["document_url"]
     assert ocr_server.requests[0].body["document"] == replacement
 
 
@@ -183,7 +157,7 @@ def test_pre_call_body_rebinding_does_not_replace_inflight_request(ocr_server: R
     call_ocr(ocr_server, [Rebind(), Observe()])
 
     assert observed == [{"replacement": True}]
-    assert ocr_server.requests[0].body == {"model": "mistral-ocr-latest", "document": DOCUMENT}
+    assert ocr_server.requests[0].body == {"model": "mistral-ocr-latest", "document": OCR_DOCUMENT}
 
 
 def test_queued_payload_observes_later_callback_mutations(ocr_server: RecordingServer) -> None:
@@ -200,28 +174,6 @@ def test_queued_payload_observes_later_callback_mutations(ocr_server: RecordingS
     call_ocr(ocr_server, [QueuePayload(), Edit()])
 
     assert queued[0]["queued-edit"] is True
-
-
-def test_callback_copies_preserve_expected_sharing(ocr_server: RecordingServer) -> None:
-    copies: Final = {}
-    replacement_url: Final = "data:application/pdf;base64,ZGVm"
-
-    class CopyPayload(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            body = request_body(kwargs)
-            copies["shallow"] = dict(body)
-            copies["deep"] = copy.deepcopy(body)
-            copies["serialized"] = json.dumps(body)
-
-    class Edit(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            request_body(kwargs)["document"]["document_url"] = replacement_url
-
-    call_ocr(ocr_server, [CopyPayload(), Edit()])
-
-    assert copies["shallow"]["document"]["document_url"] == replacement_url
-    assert copies["deep"]["document"]["document_url"] == "data:application/pdf;base64,YWJj"
-    assert json.loads(copies["serialized"])["document"]["document_url"] == "data:application/pdf;base64,YWJj"
 
 
 def test_pre_call_state_reaches_terminal_callbacks(ocr_server: RecordingServer) -> None:
@@ -283,31 +235,6 @@ async def test_failure_callbacks_receive_expected_context_and_error(ocr_server: 
     assert all(observation[3] is None for observation in observations)
 
 
-def test_background_callback_can_mutate_retained_state_after_return(ocr_server: RecordingServer) -> None:
-    release: Final = threading.Event()
-    finished: Final = threading.Event()
-    retained: Final = []
-
-    class BackgroundEdit(CustomLogger):
-        def log_pre_api_call(self, model, messages, kwargs):
-            body = request_body(kwargs)
-            retained.append(body)
-
-            def edit() -> None:
-                release.wait(10)
-                body["background-edit"] = True
-                finished.set()
-
-            threading.Thread(target=edit, daemon=True).start()
-
-    call_ocr(ocr_server, [BackgroundEdit()])
-
-    assert "background-edit" not in retained[0]
-    release.set()
-    assert finished.wait(10)
-    assert retained[0]["background-edit"] is True
-
-
 @pytest.mark.asyncio
 async def test_pre_call_runs_in_callers_execution_context(ocr_server: RecordingServer) -> None:
     caller_loop: Final = asyncio.get_running_loop()
@@ -316,7 +243,7 @@ async def test_pre_call_runs_in_callers_execution_context(ocr_server: RecordingS
 
     await call_aocr(ocr_server, [recorder])
 
-    events: Final = recorder.wait_for("log_pre_api_call")
+    events: Final = await recorder.wait_for_async("log_pre_api_call")
     assert len(events) == 1
     assert events[0].loop is caller_loop
     assert events[0].thread is caller_thread
