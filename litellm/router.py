@@ -13182,7 +13182,6 @@ class Router:
                 raw_input
             )
             if extracted_model_id:
-                # Security constraint: only allow deployment if it belongs to this complexity router tiers
                 strategy_params = getattr(selected_strategy, "litellm_params", {}) or {}
                 if isinstance(strategy_params, dict):
                     cfg = strategy_params.get("complexity_router_config") or {}
