@@ -144,31 +144,32 @@ def _validate_push_notification_url(url: str) -> None:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
-def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> dict[str, str]:
-    headers: Final[dict[str, str]] = {}
-    if user_api_key_dict.user_id:
-        headers["X-LiteLLM-User-Id"] = user_api_key_dict.user_id
-    if user_api_key_dict.team_id:
-        headers["X-LiteLLM-Team-Id"] = user_api_key_dict.team_id
-    return headers
+def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in (
+                ("X-LiteLLM-User-Id", user_api_key_dict.user_id),
+                ("X-LiteLLM-Team-Id", user_api_key_dict.team_id),
+            )
+            if value
+        }
+    )
 
 
 def _forwarding_headers(
-    user_api_key_dict: UserAPIKeyAuth,
+    caller_identity: Mapping[str, str],
     request_data: Mapping[str, object],
     agent_extra_headers: Mapping[str, str] | None,
 ) -> dict[str, str] | None:
-    sanitized: Final = (
-        {k: v for k, v in agent_extra_headers.items() if not k.lower().startswith("x-litellm-")}
-        if agent_extra_headers
-        else None
+    passthrough: Final = tuple(
+        (name, value)
+        for name, value in (agent_extra_headers.items() if agent_extra_headers else ())
+        if not name.lower().startswith("x-litellm-")
     )
-    merged: Final = merge_agent_headers(dynamic_headers=sanitized, static_headers=None) or {}
-    identity: Final = _caller_identity_headers(user_api_key_dict)
     trace_id: Final = request_data.get("litellm_trace_id")
-    if trace_id:
-        identity["X-LiteLLM-Trace-Id"] = str(trace_id)
-    merged.update(identity)
+    trace: Final = (("X-LiteLLM-Trace-Id", str(trace_id)),) if trace_id else ()
+    merged: Final = dict((*passthrough, *caller_identity.items(), *trace))
     return merged or None
 
 
@@ -755,6 +756,7 @@ async def invoke_agent_a2a(
             ProxyBaseLLMRequestProcessing,
         )
 
+        caller_identity: Final = _caller_identity_headers(user_api_key_dict)
         processor: Final = ProxyBaseLLMRequestProcessing(data=body)
         data, logging_obj = await processor.common_processing_pre_call_logic(
             request=request,
@@ -793,20 +795,13 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
-        agent_extra_headers = merge_agent_headers(
-            dynamic_headers=dynamic_headers or None,
-            static_headers=static_headers or None,
-        )
-
-        # Stamp the caller's identity (X-LiteLLM-User-Id/-Team-Id) onto every method,
-        # not just the tasks/* ones _forwarding_headers was originally written for.
-        # message/send and message/stream previously sent agent_extra_headers as-is,
-        # so a downstream agent never saw who was calling it on the primary
-        # conversational path -- only on secondary task-management calls.
         agent_extra_headers = _forwarding_headers(
-            user_api_key_dict=user_api_key_dict,
+            caller_identity=caller_identity,
             request_data=data,
-            agent_extra_headers=agent_extra_headers,
+            agent_extra_headers=merge_agent_headers(
+                dynamic_headers=dynamic_headers or None,
+                static_headers=static_headers or None,
+            ),
         )
 
         # Databricks App endpoints require a short-lived OAuth M2M token rather
