@@ -236,6 +236,7 @@ def test_unconditional_skip_marker_is_high(risk_tier, rules, marker):
         '        pytest.skip("needs a real key")',
         '@unittest.skipIf(sys.platform == "win32", "posix only")',
         '@unittest.skipUnless(HAS_REDIS, "needs redis")',
+        'redis = pytest.importorskip("redis")',
     ],
 )
 def test_conditional_skip_is_not_a_silenced_test(risk_tier, rules, guard):
@@ -245,6 +246,29 @@ def test_conditional_skip_is_not_a_silenced_test(risk_tier, rules, guard):
     factor = _factor(_verdict(risk_tier, rules, diff), "tests")
     assert factor.tier == "low"
     assert factor.reason == "1 test(s) added"
+
+
+@pytest.mark.parametrize(
+    ("path", "line"),
+    [
+        ("tests/test_litellm/test_a.py", '    pytest.skip("flaky since the refactor, see LIT-0000")'),
+        ("tests/test_litellm/test_a.py", 'redis = pytest.importorskip("redis")'),
+        ("ui/litellm-dashboard/src/app/login/LoginPage.test.tsx", "  test.fixme(true, 'broken after the redesign');"),
+    ],
+)
+def test_skip_call_added_to_an_existing_test_is_high_even_without_production_code(risk_tier, rules, path, line):
+    verdict = _verdict(risk_tier, rules, _file_diff(path, added=(line,)))
+    assert verdict.tier == "high"
+    assert _factor(verdict, "tests").reason == "1 skip call(s) added to existing tests"
+
+
+def test_removing_a_skip_call_is_not_silencing(risk_tier, rules):
+    diff = _file_diff("tests/test_litellm/test_a.py", deleted=('    pytest.skip("flaky")',)) + _file_diff(
+        "litellm/llms/anthropic/chat/x.py", added=("x = 1",)
+    )
+    factor = _factor(_verdict(risk_tier, rules, diff), "tests")
+    assert factor.tier == "medium"
+    assert factor.reason == "tests edited, none added"
 
 
 def test_weakened_assertions_are_high(risk_tier, rules):
@@ -311,7 +335,7 @@ def test_typescript_tests_count_like_python_ones(risk_tier, rules, added, expect
     ("author", "from_fork", "expected"),
     [
         (DEVIN, False, "low"),
-        ("mateo-berri", False, "low"),
+        ("mateo-berri", False, "medium"),
         (DEVIN, True, "high"),
         ("jairandresdiazp", True, "high"),
     ],
@@ -355,7 +379,17 @@ def test_author_factor(risk_tier, rules, author, from_fork, expected):
         ("ui/litellm-dashboard/src/app/login/LoginPage.test.tsx", "low"),
         ("tests/e2e/x.py", "low"),
         ("litellm-proxy-extras/tests/test_x.py", "low"),
-        ("helm/litellm-helm/tests/x.yaml", "low"),
+        ("helm/litellm-helm/tests/x.yaml", "medium"),
+        ("helm/litellm-helm/templates/tests/test-connection.yaml", "medium"),
+        ("docker/tests/nonroot.yaml", "medium"),
+        ("docker/entrypoint.sh", "medium"),
+        ("CLAUDE.md", "medium"),
+        ("AGENTS.md", "medium"),
+        ("GEMINI.md", "medium"),
+        ("litellm/proxy/_experimental/mcp_server/CLAUDE.md", "medium"),
+        ("tests/conftest.py", "medium"),
+        ("tests/test_litellm/conftest.py", "medium"),
+        ("tests/e2e/junit_properties.py", "low"),
         ("ui/litellm-dashboard/tests/x.spec.ts", "low"),
         ("litellm-rust/crates/core/tests/x.rs", "low"),
         ("enterprise/litellm_enterprise/proxy/common_utils/x.py", "medium"),
@@ -369,6 +403,73 @@ def test_author_factor(risk_tier, rules, author, from_fork, expected):
 )
 def test_path_tier_from_the_checked_in_config(rules, path, expected):
     assert rules.path_tier(path) == expected
+
+
+def test_human_opened_docs_change_is_medium_on_the_author_factor_only(risk_tier, rules):
+    verdict = _verdict(risk_tier, rules, _file_diff("README.md", added=("hello",)), author="mateo-berri")
+    assert verdict.tier == "medium"
+    assert {factor.name: factor.tier for factor in verdict.factors} == {
+        "paths": "low",
+        "modules": "low",
+        "size": "low",
+        "tests": "low",
+        "author": "medium",
+    }
+
+
+MODEL_MAP = "model_prices_and_context_window.json"
+BUDGET = "ruff-strict-budget.json"
+
+
+def _guarded_verdict(risk_tier, rules, path: str, base: str | None, head: str | None):
+    contents = {("base", path): base, ("head", path): head}
+    diff = _file_diff(path, added=("changed",))
+    changes = risk_tier.with_guards(risk_tier.parse_diff(diff), rules, "base", "head", lambda rev, p: contents[(rev, p)])
+    return risk_tier.classify(changes, DEVIN, False, rules)
+
+
+def test_additive_model_map_rows_stay_low(risk_tier, rules):
+    base = json.dumps({"gpt-x": {"input_cost_per_token": 1e-6}})
+    head = json.dumps({"gpt-x": {"input_cost_per_token": 1e-6}, "gpt-y": {"input_cost_per_token": 2e-6}})
+    verdict = _guarded_verdict(risk_tier, rules, MODEL_MAP, base, head)
+    assert verdict.tier == "low"
+    assert _factor(verdict, "paths").reason == "docs, tests, cookbook, or model map only"
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        {"gpt-x": {"input_cost_per_token": 3e-6}},
+        {"gpt-x-renamed": {"input_cost_per_token": 1e-6}},
+        {},
+    ],
+)
+def test_changed_or_removed_model_map_rows_are_medium(risk_tier, rules, head):
+    base = json.dumps({"gpt-x": {"input_cost_per_token": 1e-6}})
+    verdict = _guarded_verdict(risk_tier, rules, MODEL_MAP, base, json.dumps(head))
+    assert verdict.tier == "medium"
+    assert _factor(verdict, "paths").tier == "medium"
+    assert _factor(verdict, "paths").reason == f"1 existing row(s) changed or removed in `{MODEL_MAP}`"
+
+
+def test_new_model_map_file_or_broken_json_is_never_low(risk_tier, rules):
+    assert _guarded_verdict(risk_tier, rules, MODEL_MAP, None, "{}").tier == "low"
+    assert _factor(_guarded_verdict(risk_tier, rules, MODEL_MAP, "{}", "not json"), "paths").tier == "medium"
+    assert _factor(_guarded_verdict(risk_tier, rules, MODEL_MAP, "{}", None), "paths").tier == "medium"
+
+
+def test_lowered_budget_limits_stay_low_and_raised_ones_are_medium(risk_tier, rules):
+    base = json.dumps({"ANN001": {"limit": 10}, "B006": {"limit": 5}})
+    lowered = json.dumps({"ANN001": {"limit": 9}, "B006": {"limit": 5}})
+    raised = json.dumps({"ANN001": {"limit": 10}, "B006": {"limit": 6}})
+    new_rule = json.dumps({"ANN001": {"limit": 10}, "B006": {"limit": 5}, "B999": {"limit": 1}})
+    dropped_rule = json.dumps({"ANN001": {"limit": 10}})
+    assert _guarded_verdict(risk_tier, rules, BUDGET, base, lowered).tier == "low"
+    assert _guarded_verdict(risk_tier, rules, BUDGET, base, dropped_rule).tier == "low"
+    for head in (raised, new_rule):
+        verdict = _guarded_verdict(risk_tier, rules, BUDGET, base, head)
+        assert verdict.tier == "medium"
+        assert _factor(verdict, "paths").reason == f"1 limit(s) raised in `{BUDGET}`"
 
 
 def test_single_star_does_not_cross_directories(risk_tier):
@@ -511,6 +612,31 @@ def test_main_end_to_end_against_a_git_repo(risk_tier, tmp_path, capsys):
     printed = capsys.readouterr().out
     assert printed.startswith("risk: high (shadow mode, nothing is blocked)")
     assert payload["summary"] == printed
+
+
+def test_main_reads_both_sides_of_the_model_map_from_git(risk_tier, tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(tmp_path, "init", "-q", "-b", "main", "repo")
+    model_map = repo / "model_prices_and_context_window.json"
+    model_map.write_text(json.dumps({"gpt-x": {"input_cost_per_token": 1e-6}}, indent=1))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    model_map.write_text(json.dumps({"gpt-x": {"input_cost_per_token": 2e-6}}, indent=1))
+    _git(repo, "commit", "-q", "-am", "reprice")
+    head = _git(repo, "rev-parse", "HEAD")
+    json_out = tmp_path / "risk.json"
+
+    exit_code = risk_tier.main(
+        ["--config", str(CONFIG_PATH), "--base", base, "--head", head, "--author", DEVIN, "--repo", str(repo), "--json-out", str(json_out)]
+    )
+
+    assert exit_code == 0
+    payload = json.loads(json_out.read_text())
+    assert payload["tier"] == "medium"
+    paths = next(factor for factor in payload["factors"] if factor["name"] == "paths")
+    assert paths["reason"] == "1 existing row(s) changed or removed in `model_prices_and_context_window.json`"
 
 
 def test_git_quoted_filename_still_reaches_the_paths_factor(risk_tier, rules, tmp_path):

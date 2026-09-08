@@ -35,6 +35,13 @@ paths:
     - "**/package*.json"
     - "**/Dockerfile*"
     - "scripts/*gate*"
+  medium:
+    - "**/CLAUDE.md"
+    - "**/AGENTS.md"
+    - "**/GEMINI.md"
+    - "**/conftest.py"
+    - "helm/**"
+    - "docker/**"
   low:
     - "cookbook/**"
     - "model_prices_and_context_window.json"
@@ -65,3 +72,14 @@ tests:
     - "**/*.test.*"
     - "**/*.spec.*"
     - "**/__tests__/**"
+
+authors:
+  low:
+    - "devin-ai-integration[bot]"
+
+guards:
+  additive_rows:
+    - "model_prices_and_context_window.json"
+    - "litellm/model_prices_and_context_window_backup.json"
+  lowered_limits:
+    - "*-budget.json"

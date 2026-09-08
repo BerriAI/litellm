@@ -5,23 +5,26 @@ import json
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 Tier: TypeAlias = Literal["low", "medium", "high"]
+ReadFile: TypeAlias = Callable[[str, str], str | None]
+RewriteCheck: TypeAlias = Callable[[str | None, str | None], str | None]
 
 TEST_DEF_RE: Final = re.compile(r"^\s*(?:async\s+)?def\s+test_|^\s*(?:it|test)\(")
 SKIP_RE: Final = re.compile(
     r"pytest\.mark\.(?:skip(?!if)|xfail)|unittest\.skip\b"
     r"|\b(?:it|test|describe)\.(?:skip\(\s*[\"'`]|only\()|\bx(?:it|test|describe)\("
 )
+SKIP_CALL_RE: Final = re.compile(r"\bpytest\.(?:skip|importorskip)\(|\b(?:it|test|describe)\.fixme\(")
 ASSERT_RE: Final = re.compile(r"^\s*assert\b|\bexpect\(")
 GLOB_TOKEN_RE: Final = re.compile(r"(\*\*/|\*\*|\*|\?)")
 DIFF_BLOCK_SEPARATOR: Final = "\ndiff --git "
@@ -32,6 +35,7 @@ QUOTED_PATH_ESCAPES: Final = MappingProxyType(
     {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", '"': '"', "\\": "\\"}
 )
 MAX_LISTED_PATHS: Final = 5
+JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 class SizeLimit(BaseModel):
@@ -56,6 +60,7 @@ class ModuleRules(BaseModel):
 class PathRules(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     high: tuple[str, ...]
+    medium: tuple[str, ...] = ()
     low: tuple[str, ...]
 
 
@@ -64,12 +69,25 @@ class TestRules(BaseModel):
     files: tuple[str, ...]
 
 
+class AuthorRules(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    low: tuple[str, ...]
+
+
+class GuardRules(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    additive_rows: tuple[str, ...] = ()
+    lowered_limits: tuple[str, ...] = ()
+
+
 class RiskConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     paths: PathRules
     modules: ModuleRules
     size: SizeRules
     tests: TestRules
+    authors: AuthorRules
+    guards: GuardRules = GuardRules()
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +108,7 @@ class FileChange:
     added_lines: tuple[str, ...]
     deleted_lines: tuple[str, ...]
     previous_path: str | None = None
+    guarded_rewrite: str | None = None
 
     @property
     def paths(self) -> tuple[str, ...]:
@@ -104,29 +123,45 @@ class FileChange:
 class Rules:
     config: RiskConfig
     high_paths: PathMatcher
+    medium_paths: PathMatcher
     low_paths: PathMatcher
     test_files: PathMatcher
     size_ignored: PathMatcher
+    additive_rows: PathMatcher
+    lowered_limits: PathMatcher
 
     @staticmethod
     def from_config(config: RiskConfig) -> Rules:
         return Rules(
             config=config,
             high_paths=PathMatcher.from_globs(config.paths.high),
+            medium_paths=PathMatcher.from_globs(config.paths.medium),
             low_paths=PathMatcher.from_globs(config.paths.low),
             test_files=PathMatcher.from_globs(config.tests.files),
             size_ignored=PathMatcher.from_globs(config.size.ignore),
+            additive_rows=PathMatcher.from_globs(config.guards.additive_rows),
+            lowered_limits=PathMatcher.from_globs(config.guards.lowered_limits),
         )
 
     def path_tier(self, path: str) -> Tier:
         if self.high_paths.matches(path):
             return "high"
+        if self.medium_paths.matches(path):
+            return "medium"
         if self.test_files.matches(path) or self.low_paths.matches(path):
             return "low"
         return "medium"
 
     def change_tier(self, change: FileChange) -> Tier:
-        return highest(tuple(self.path_tier(path) for path in change.paths))
+        rewrite_tier: Final[Tier] = "low" if change.guarded_rewrite is None else "medium"
+        return highest((rewrite_tier, *(self.path_tier(path) for path in change.paths)))
+
+    def rewrite_check(self, path: str) -> RewriteCheck | None:
+        if self.additive_rows.matches(path):
+            return rewritten_rows
+        if self.lowered_limits.matches(path):
+            return raised_limits
+        return None
 
     def is_production(self, change: FileChange) -> bool:
         return self.change_tier(change) != "low"
@@ -263,7 +298,14 @@ def paths_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
             )
             return Factor("paths", "high", f"always-human: {_listed(always_human)}")
         case "medium":
-            return Factor("paths", "medium", f"{len(matching)} file(s) outside the docs, tests, and model map tiers")
+            rewritten: Final = tuple(
+                f"{change.guarded_rewrite} in `{change.path}`" for change in matching if change.guarded_rewrite
+            )
+            outside: Final = len(matching) - len(rewritten)
+            outside_note: Final = (
+                (f"{outside} file(s) outside the docs, tests, and model map tiers",) if outside else ()
+            )
+            return Factor("paths", "medium", "; ".join((*rewritten, *outside_note)))
         case "low":
             return Factor("paths", "low", "docs, tests, cookbook, or model map only")
 
@@ -312,12 +354,17 @@ def tests_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
     test_changes: Final = tuple(change for change in changes if rules.test_files.matches(change.path))
     net_tests: Final = _net(test_changes, TEST_DEF_RE)
     net_skips: Final = _net(test_changes, SKIP_RE)
+    silenced: Final = sum(
+        max(_net((change,), SKIP_CALL_RE), 0) for change in test_changes if _net((change,), TEST_DEF_RE) <= 0
+    )
     net_asserts: Final = _net(test_changes, ASSERT_RE)
     production_changed: Final = any(rules.is_production(change) for change in changes)
     if net_tests < 0:
         return Factor("tests", "high", f"{-net_tests} test(s) removed")
     if net_skips > 0:
         return Factor("tests", "high", f"{net_skips} skip marker(s) added")
+    if silenced > 0:
+        return Factor("tests", "high", f"{silenced} skip call(s) added to existing tests")
     if net_asserts < 0:
         return Factor("tests", "high", f"{-net_asserts} assertion(s) removed")
     if not production_changed:
@@ -329,10 +376,12 @@ def tests_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
     return Factor("tests", "medium", "production code changed with no test touched")
 
 
-def author_factor(author: str, from_fork: bool) -> Factor:
+def author_factor(author: str, from_fork: bool, rules: Rules) -> Factor:
     if from_fork:
         return Factor("author", "high", f"`{author}` from a fork")
-    return Factor("author", "low", f"`{author}` on an internal branch")
+    if author in rules.config.authors.low:
+        return Factor("author", "low", f"`{author}` opened it on an internal branch")
+    return Factor("author", "medium", f"`{author}` opened it by hand on an internal branch")
 
 
 def classify(changes: Sequence[FileChange], author: str, from_fork: bool, rules: Rules) -> Verdict:
@@ -341,9 +390,86 @@ def classify(changes: Sequence[FileChange], author: str, from_fork: bool, rules:
         modules_factor(changes, rules),
         size_factor(changes, rules),
         tests_factor(changes, rules),
-        author_factor(author, from_fork),
+        author_factor(author, from_fork, rules),
     )
     return Verdict(highest(tuple(factor.tier for factor in factors)), factors)
+
+
+def _json_object(text: str | None) -> Mapping[str, object] | None:
+    if text is None:
+        return None
+    try:
+        return MappingProxyType(JSON_OBJECT.validate_json(text))
+    except ValidationError:
+        return None
+
+
+def _as_object(value: object) -> Mapping[str, object] | None:
+    try:
+        return MappingProxyType(JSON_OBJECT.validate_python(value))
+    except ValidationError:
+        return None
+
+
+def rewritten_rows(base_text: str | None, head_text: str | None) -> str | None:
+    if base_text is None:
+        return None
+    base: Final = _json_object(base_text)
+    head: Final = _json_object(head_text)
+    if base is None or head is None:
+        return "not a JSON object on both sides"
+    rewritten: Final = sum(1 for key, value in base.items() if key not in head or head[key] != value)
+    return f"{rewritten} existing row(s) changed or removed" if rewritten else None
+
+
+def _limits(value: object, prefix: str = "") -> tuple[tuple[str, float], ...]:
+    node: Final = _as_object(value)
+    if node is None:
+        return ()
+    limit: Final = node.get("limit")
+    own: Final = ((prefix, float(limit)),) if isinstance(limit, int | float) and not isinstance(limit, bool) else ()
+    nested: Final = tuple(
+        pair for key, child in node.items() if key != "limit" for pair in _limits(child, f"{prefix}/{key}")
+    )
+    return (*own, *nested)
+
+
+def raised_limits(base_text: str | None, head_text: str | None) -> str | None:
+    if base_text is None:
+        return None
+    base: Final = _json_object(base_text)
+    head: Final = _json_object(head_text)
+    if base is None or head is None:
+        return "not a JSON object on both sides"
+    base_limits: Final = MappingProxyType(dict(_limits(base)))
+    raised: Final = sum(1 for key, limit in _limits(head) if key not in base_limits or limit > base_limits[key])
+    return f"{raised} limit(s) raised" if raised else None
+
+
+def with_guards(
+    changes: Sequence[FileChange], rules: Rules, base: str, head: str, read_file: ReadFile
+) -> tuple[FileChange, ...]:
+    return tuple(_guarded(change, rules, base, head, read_file) for change in changes)
+
+
+def _guarded(change: FileChange, rules: Rules, base: str, head: str, read_file: ReadFile) -> FileChange:
+    check: Final = rules.rewrite_check(change.path)
+    if check is None:
+        return change
+    reason: Final = check(read_file(base, change.previous_path or change.path), read_file(head, change.path))
+    return change if reason is None else replace(change, guarded_rewrite=reason)
+
+
+def git_show(repo: Path, rev: str, path: str) -> str | None:
+    completed: Final = subprocess.run(
+        ("git", "show", f"{rev}:{path}"),
+        cwd=repo,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    return completed.stdout if completed.returncode == 0 else None
 
 
 def git_diff(repo: Path, base: str, head: str) -> str:
@@ -384,7 +510,13 @@ class CliArgs(BaseModel):
 def main(argv: Sequence[str] | None = None) -> int:
     args: Final = CliArgs.model_validate(vars(build_parser().parse_args(argv)))
     rules: Final = Rules.from_config(load_config(args.config))
-    changes: Final = parse_diff(git_diff(args.repo, args.base, args.head))
+    changes: Final = with_guards(
+        parse_diff(git_diff(args.repo, args.base, args.head)),
+        rules,
+        args.base,
+        args.head,
+        lambda rev, path: git_show(args.repo, rev, path),
+    )
     verdict: Final = classify(changes, args.author, args.from_fork, rules)
     if args.json_out is not None:
         args.json_out.write_text(verdict.to_json(), encoding="utf-8")

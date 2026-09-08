@@ -1,7 +1,7 @@
 name: risk-gate
 
-on: # zizmor: ignore[dangerous-triggers] runs the base branch's copy of the gate only; the PR's diff is read as data and never executed
-  pull_request_target:
+on:
+  pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - litellm_internal_staging
@@ -16,6 +16,7 @@ concurrency:
 jobs:
   floor:
     name: risk-gate floor (shadow)
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -43,23 +44,17 @@ jobs:
         with:
           version: "0.10.9"
 
-      - name: Compute the floor tier with the base branch's copy of the gate
+      - name: Compute the floor tier
         env:
           MERGE_BASE: ${{ steps.revisions.outputs.merge_base }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
-          FROM_FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
-          fork_flag=()
-          if [ "$FROM_FORK" = "true" ]; then
-            fork_flag=(--from-fork)
-          fi
           uv run --frozen python .github/scripts/risk_tier.py \
             --config .github/risk-tiers.yml \
             --base "$MERGE_BASE" \
             --head "$HEAD_SHA" \
             --author "$PR_AUTHOR" \
-            "${fork_flag[@]}" \
             --json-out "${RUNNER_TEMP}/risk.json" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
