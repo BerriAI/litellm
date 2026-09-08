@@ -26,6 +26,7 @@ from ...common_utils import (
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
 )
+from ..utils import normalize_reasoning_effort_value
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
 
@@ -376,8 +377,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         optional_params.setdefault("thinking", fitted_thinking)
         if AnthropicModelInfo._is_adaptive_thinking_model(model, custom_llm_provider):
-            mapped_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
-            if mapped_effort is None:
+            requested_effort: Final = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
+            if requested_effort is None:
                 raise AnthropicError(
                     message=(
                         f"Invalid reasoning_effort: {reasoning_effort!r}. "
@@ -386,13 +387,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
-            gate_error: Final = AnthropicConfig._validate_effort_for_model(model, mapped_effort, custom_llm_provider)
-            if gate_error is not None:
+            gate_error: Final = AnthropicConfig._validate_effort_for_model(model, requested_effort, custom_llm_provider)
+            resolved_effort: Final = (
+                requested_effort
+                if gate_error is None
+                else normalize_reasoning_effort_value(requested_effort, model, custom_llm_provider)
+            )
+            if gate_error is not None and resolved_effort == requested_effort:
                 raise AnthropicError(message=gate_error, status_code=400)
             existing_output_config = optional_params.get("output_config")
             if not isinstance(existing_output_config, dict):
                 existing_output_config = {}
-            existing_output_config.setdefault("effort", mapped_effort)
+            existing_output_config.setdefault("effort", resolved_effort)
             optional_params["output_config"] = existing_output_config
 
     @staticmethod
