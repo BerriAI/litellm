@@ -65,6 +65,12 @@ def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> 
     return terminal_event
 
 
+def without_api_version(api_base: str) -> str:
+    url: Final = httpx.URL(api_base)
+    kept_params: Final = tuple((key, value) for key, value in url.params.multi_items() if key != "api-version")
+    return str(url.copy_with(params=httpx.QueryParams(kept_params)))
+
+
 class AzurePassthroughConfig(BasePassthroughConfig):
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return bool(request_data.get("stream"))
@@ -89,8 +95,9 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         native_endpoint: Final = strip_leading_model_segment(routed_endpoint, (model,))
 
         caller_api_version: Final = request_query_params.get("api-version") if request_query_params else None
+        relay_base: Final = without_api_version(base_target_url) if caller_api_version else base_target_url
         complete_url: Final = BaseAzureLLM._get_base_azure_url(
-            api_base=base_target_url,
+            api_base=relay_base,
             litellm_params={**litellm_params, "api_version": caller_api_version or litellm_params.get("api_version")},
             route=native_endpoint,
         )
