@@ -826,6 +826,8 @@ class TestCustomDimensions:
             pytest.param({"keywords": ["x"] * 32, "patterns": ["y"]}, {}, id="combined-matcher-count"),
             pytest.param({"keywords": ["x" * 256] * 17}, {}, id="matcher-character-budget"),
             pytest.param({"unknown": True}, {}, id="extra-field"),
+            pytest.param({"scoring_mode": "graded"}, {}, id="unknown-scoring-mode"),
+            pytest.param({"scoring_mode": None}, {}, id="null-scoring-mode"),
         ],
     )
     def test_custom_dimension_invalid_configuration_rejected(
@@ -878,43 +880,125 @@ class TestCustomDimensions:
             )
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("current_ask", ("Hello!", "orbitmesh"))
+    @pytest.mark.parametrize("scoring_mode", ("binary", "match_count"))
+    @pytest.mark.parametrize("current_ask", ("Hello!", "orbitmesh", "orbitmesh fluxgate"))
     async def test_custom_dimensions_public_hook_scores_only_current_ask(
-        self, mock_router_instance: MagicMock, current_ask: str
+        self, mock_router_instance: MagicMock, current_ask: str, scoring_mode: str
     ) -> None:
         router: Final = ComplexityRouter(
             "test-router",
             mock_router_instance,
             {
                 "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
-                "custom_dimensions": [{"name": "internalFrameworks", "weight": 0.7, "keywords": ["orbitmesh"]}],
+                "dimension_weights": {},
+                "custom_dimensions": [
+                    {
+                        "name": "internalFrameworks",
+                        "weight": 0.8,
+                        "keywords": ["orbitmesh", "fluxgate"],
+                        "scoring_mode": scoring_mode,
+                    }
+                ],
             },
         )
         result: Final = await router.async_pre_routing_hook(
             model="test-router",
             request_kwargs={},
             messages=[
-                {"role": "system", "content": "orbitmesh"},
-                {"role": "user", "content": "orbitmesh"},
-                {"role": "assistant", "content": "orbitmesh is ready"},
+                {"role": "system", "content": "orbitmesh fluxgate"},
+                {"role": "user", "content": "orbitmesh fluxgate"},
+                {"role": "assistant", "content": "orbitmesh fluxgate is ready"},
                 {"role": "user", "content": current_ask},
-                {"role": "tool", "tool_call_id": "previous", "content": "orbitmesh"},
+                {"role": "tool", "tool_call_id": "previous", "content": "orbitmesh fluxgate"},
             ],
         )
         assert result is not None
         assert result.routing_decision is not None
-        assert ("custom (internalFrameworks)" in result.routing_decision["signals"]) is (current_ask == "orbitmesh")
-        assert result.model == ("top" if current_ask == "orbitmesh" else "cheap")
+        expected_score: Final = (
+            0.0
+            if current_ask == "Hello!"
+            else 0.4
+            if scoring_mode == "match_count" and current_ask == "orbitmesh"
+            else 0.8
+        )
+        assert result.routing_decision["score"] == expected_score
+        assert ("custom (internalFrameworks)" in result.routing_decision["signals"]) is (expected_score > 0)
+        assert result.model == ("cheap" if expected_score == 0 else "strong" if expected_score == 0.4 else "top")
         assert "orbitmesh" not in " ".join(result.routing_decision["signals"])
 
-    def test_custom_patterns_scan_only_the_first_2048_characters(self, mock_router_instance: MagicMock) -> None:
+    @pytest.mark.parametrize("scoring_mode", ("binary", "match_count"))
+    def test_custom_patterns_scan_only_the_first_2048_characters(
+        self, mock_router_instance: MagicMock, scoring_mode: str
+    ) -> None:
         router: Final = ComplexityRouter(
             "test-router",
             mock_router_instance,
-            {"custom_dimensions": [{"name": "late", "weight": 0.7, "patterns": [r"zzz{1,3}"]}]},
+            {
+                "custom_dimensions": [
+                    {
+                        "name": "late",
+                        "weight": 0.7,
+                        "patterns": [r"zzz{1,3}", r"yyy{1,3}"],
+                        "scoring_mode": scoring_mode,
+                    }
+                ]
+            },
         )
+        baseline: Final = ComplexityRouter("test-router", mock_router_instance)
         assert "custom (late)" in router.classify("a" * 2040 + " zzz")[2]
         assert "custom (late)" not in router.classify("a" * 2048 + " zzz")[2]
+        second_hit_past_the_bound: Final = "yyy " + "a" * 2044 + " zzz"
+        contribution: Final = (
+            router.classify(second_hit_past_the_bound)[1] - baseline.classify(second_hit_past_the_bound)[1]
+        )
+        assert contribution == pytest.approx(0.7 if scoring_mode == "binary" else 0.35)
+
+    @pytest.mark.parametrize(
+        "prompt,expected_score",
+        [
+            pytest.param("Hello!", 0.0, id="no-hit"),
+            pytest.param("orbitmesh orbitmesh ORBITMESH again", 0.5, id="one-keyword-repeated"),
+            pytest.param("create table a; CREATE TABLE b; create  table c", 0.5, id="one-pattern-repeated"),
+            pytest.param("orbitmesh and fluxgate", 1.0, id="two-keywords"),
+            pytest.param("orbitmesh then create table t", 1.0, id="keyword-plus-pattern"),
+            pytest.param("create table a; alter table b", 1.0, id="two-patterns"),
+            pytest.param("orbitmesh fluxgate create table a alter table b", 1.0, id="all-matchers"),
+        ],
+    )
+    def test_match_count_grades_distinct_matchers(
+        self, mock_router_instance: MagicMock, prompt: str, expected_score: float
+    ) -> None:
+        dimension: Final = {
+            "name": "graded",
+            "weight": 0.6,
+            "keywords": ["orbitmesh", "ORBITMESH", "fluxgate"],
+            "patterns": [r"\bcreate\s{1,4}table\b", r"\bcreate\s{1,4}table\b", r"\balter\s{1,4}table\b"],
+        }
+        baseline: Final = ComplexityRouter("test-router", mock_router_instance)
+        binary: Final = ComplexityRouter("test-router", mock_router_instance, {"custom_dimensions": [dimension]})
+        graded: Final = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {"custom_dimensions": [{**dimension, "scoring_mode": "match_count"}]},
+        )
+        _, baseline_score, baseline_signals = baseline.classify(prompt)
+        _, binary_score, binary_signals = binary.classify(prompt)
+        _, graded_score, graded_signals = graded.classify(prompt)
+        assert graded_score == pytest.approx(baseline_score + 0.6 * expected_score)
+        assert binary_score == pytest.approx(baseline_score + (0.6 if expected_score else 0.0))
+        expected_signals: Final = [*baseline_signals, *(["custom (graded)"] if expected_score else [])]
+        assert graded_signals == expected_signals
+        assert binary_signals == expected_signals
+
+    def test_scoring_mode_round_trips_and_defaults_to_binary(self) -> None:
+        dimension: Final = {"name": "graded", "weight": 0.6, "keywords": ["orbitmesh"]}
+        legacy: Final = ComplexityRouterConfig.model_validate({"custom_dimensions": [dimension]})
+        graded: Final = ComplexityRouterConfig.model_validate(
+            {"custom_dimensions": [{**dimension, "scoring_mode": "match_count"}]}
+        )
+        assert legacy.custom_dimensions[0].scoring_mode == "binary"
+        assert graded.model_dump(mode="json")["custom_dimensions"][0]["scoring_mode"] == "match_count"
+        assert ComplexityRouterConfig.model_validate(graded.model_dump(mode="json")) == graded
 
     def test_custom_dimensions_router_wide_regex_work_is_capped(self) -> None:
         heavy: Final = {"weight": 0.5, "patterns": ["a?" * 8 + "z"]}
@@ -1511,6 +1595,7 @@ class TestRouterComplexityDeploymentMethods:
     def test_the_shipped_rubric_and_default_prompt_stay_free(self) -> None:
         """Only an operator-written prompt is gated: picking a shipped rubric preset, or writing no
         prompt at all, leaves a router unmetered, so several of them register under a ceiling of one."""
+
         def rubric(model_name: str, model_id: str, preset: str | None) -> dict[str, object]:
             llm_config: dict[str, object] = {"model": "gpt-4o-mini"}
             if preset is not None:
@@ -1647,6 +1732,7 @@ class TestRouterComplexityDeploymentMethods:
     def test_renaming_built_in_tiers_is_not_a_custom_tier_set(self) -> None:
         """tier_labels renames the built-in ladder without defining one, so it stays ungated: two such
         routers register under a ceiling of one."""
+
         def labeled(model_name: str, model_id: str) -> dict[str, object]:
             row = self._router_row(model_name, model_id, "heuristic")
             row["litellm_params"]["complexity_router_config"]["tier_labels"] = {"SIMPLE": "Cheap", "MEDIUM": "Standard"}
@@ -2520,9 +2606,7 @@ class TestLLMClassifier:
         assert outcome.classifier_cost == pytest.approx(1.35e-05)
 
     @pytest.mark.asyncio
-    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(
-        self, llm_classifier_config
-    ):
+    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(self, llm_classifier_config):
         real_router = Router(
             model_list=[
                 {
@@ -2565,9 +2649,7 @@ class TestLLMClassifier:
         assert real_router.total_calls["openai/mock-backup-classifier"] == 0
 
     @pytest.mark.asyncio
-    async def test_aclassify_enforces_total_classifier_deadline(
-        self, mock_router_instance, llm_classifier_config
-    ):
+    async def test_aclassify_enforces_total_classifier_deadline(self, mock_router_instance, llm_classifier_config):
         cancelled = asyncio.Event()
 
         async def slow_classifier(**_kwargs: object) -> None:
@@ -12414,9 +12496,7 @@ class TestTierHealthFailover:
                     llm_provider="",
                 )
             filtered = (*cooling, *blocked, *excluded)
-            healthy = [
-                {"model_name": model, "model_info": {"id": i}} for i in ids_by_model[model] if i not in filtered
-            ]
+            healthy = [{"model_name": model, "model_info": {"id": i}} for i in ids_by_model[model] if i not in filtered]
             if not healthy:
                 raise RouterRateLimitError(
                     model=model, cooldown_time=60.0, enable_pre_call_checks=False, cooldown_list=[]
@@ -12845,9 +12925,7 @@ class TestTierHealthFailover:
         assert all(probed is not request_kwargs for probed in router.litellm_router_instance.probed_kwargs)
 
     @pytest.mark.asyncio
-    async def test_a_peer_whose_every_deployment_is_over_its_rpm_is_not_a_failover_target(
-        self, mock_router_instance
-    ):
+    async def test_a_peer_whose_every_deployment_is_over_its_rpm_is_not_a_failover_target(self, mock_router_instance):
         """RPM exhaustion is its own verdict from the owner (RouterRateLimitErrorBasic). A peer
         in that state would be rejected downstream, so it cannot be the substitute."""
         from litellm.types.router import RouterRateLimitErrorBasic
@@ -12880,9 +12958,7 @@ class TestTierHealthFailover:
         assert {r.model for r in results} == {"live-c"}
 
     @pytest.mark.asyncio
-    async def test_the_probe_forwards_input_so_window_checks_run_on_input_only_surfaces(
-        self, mock_router_instance
-    ):
+    async def test_the_probe_forwards_input_so_window_checks_run_on_input_only_surfaces(self, mock_router_instance):
         """The Responses API carries its prompt as `input`, never as messages. The owner only
         runs its context-window pre-call check when one of them is present, so dropping `input`
         would silently skip window filtering on that whole surface."""
@@ -12908,9 +12984,7 @@ class TestTierHealthFailover:
         ), "the eligibility probe must forward `input` to the owner"
 
     @pytest.mark.asyncio
-    async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(
-        self, mock_router_instance
-    ):
+    async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(self, mock_router_instance):
         """The owner answers an unconfigured group with BadRequestError. Reading that as live
         would both skip failover off it and let it be chosen as a substitute."""
         router = self._router(
@@ -13099,9 +13173,7 @@ class TestClassifierVision:
         routed as default_fallback on text the request never contained.
         """
         router = self._router(mock_router_instance, vision={"enabled": True})
-        response = await router.async_pre_routing_hook(
-            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
-        )
+        response = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self._turn(IMG_PART))
         assert response.routing_decision["cause"] == "llm_classifier"
         assert response.model == "t-complex"
         assert [block["type"] for block in self._classifier_user_content(mock_router_instance)] == [
@@ -13112,9 +13184,7 @@ class TestClassifierVision:
     @pytest.mark.asyncio
     async def test_image_only_turn_still_falls_back_when_vision_is_off(self, mock_router_instance):
         router = self._router(mock_router_instance, vision={"enabled": False})
-        response = await router.async_pre_routing_hook(
-            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
-        )
+        response = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self._turn(IMG_PART))
         assert response.routing_decision["cause"] == "default_fallback"
         mock_router_instance.acompletion.assert_not_awaited()
 
@@ -13184,9 +13254,7 @@ class TestClassifierVision:
         makes the image the only variable; a margin loose enough to leave the score undecided
         would pass whether or not the guard exists.
         """
-        router = self._router(
-            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
-        )
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
         response = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
         )
@@ -13200,9 +13268,7 @@ class TestClassifierVision:
         self, mock_router_instance, classifier_type, extra, short_circuit_cause
     ):
         """The negative class: same router, same text, no image, and the scorer still decides."""
-        router = self._router(
-            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
-        )
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
         response = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=[{"role": "user", "content": "what is this"}]
         )

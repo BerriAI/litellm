@@ -20,7 +20,7 @@ import random
 import re
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from itertools import accumulate, islice, takewhile
+from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
@@ -82,6 +82,7 @@ from .config import (
     ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
+    CustomDimension,
     TierDefinition,
 )
 from .stall_detector import detect_stalled_task
@@ -879,6 +880,15 @@ class DimensionScore:
         self.signal = signal
 
 
+class _CustomDimensionMatchers(NamedTuple):
+    """One custom dimension's distinct matchers and the number of hits that saturates its score."""
+
+    dimension: CustomDimension
+    keywords: tuple[str, ...]
+    patterns: tuple[re.Pattern[str], ...]
+    saturation: int
+
+
 class KeywordOverride(NamedTuple):
     """A keyword_tier_rules match: the winning tier and, on the lexical path, the keyword that fired."""
 
@@ -1121,7 +1131,12 @@ class ComplexityRouter(CustomLogger):
         )
         self.simple_keywords = self.config.simple_keywords or DEFAULT_SIMPLE_KEYWORDS
         self._custom_dimensions = tuple(
-            (dimension, tuple(re.compile(pattern, re.IGNORECASE) for pattern in dimension.patterns))
+            _CustomDimensionMatchers(
+                dimension,
+                tuple(dict.fromkeys(keyword.lower() for keyword in dimension.keywords)),
+                tuple(re.compile(pattern, re.IGNORECASE) for pattern in dict.fromkeys(dimension.patterns)),
+                2 if dimension.scoring_mode == "match_count" else 1,
+            )
             for dimension in self.config.custom_dimensions
         )
         if self.config.has_custom_tiers:
@@ -1325,15 +1340,26 @@ class ComplexityRouter(CustomLogger):
         score: Final = score_high if match_count >= high_threshold else score_low
         return DimensionScore(name, score, f"{signal_label} ({detail})"), match_count
 
+    def _count_custom_hits(self, matchers: _CustomDimensionMatchers, user_text: str, scanned: str) -> int:
+        hits: Final = chain(
+            (self._keyword_matches(user_text, keyword) for keyword in matchers.keywords),
+            (pattern.search(scanned) is not None for pattern in matchers.patterns),
+        )
+        return sum(islice((1 for hit in hits if hit), matchers.saturation))
+
     def _score_custom_dimensions(self, prompt: str, user_text: str) -> tuple[tuple[DimensionScore, float], ...]:
         if not self._custom_dimensions:
             return ()
         scanned: Final = prompt[:CUSTOM_PATTERN_SCAN_CHARS]
         return tuple(
-            (DimensionScore(dimension.name, 1.0, f"custom ({dimension.name})"), dimension.weight)
-            for dimension, patterns in self._custom_dimensions
-            if any(self._keyword_matches(user_text, keyword) for keyword in dimension.keywords)
-            or any(pattern.search(scanned) is not None for pattern in patterns)
+            (
+                DimensionScore(
+                    matchers.dimension.name, hits / matchers.saturation, f"custom ({matchers.dimension.name})"
+                ),
+                matchers.dimension.weight,
+            )
+            for matchers in self._custom_dimensions
+            if (hits := self._count_custom_hits(matchers, user_text, scanned))
         )
 
     def _score_multi_step(self, text: str) -> DimensionScore:
