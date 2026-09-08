@@ -117,7 +117,8 @@ jobs:
 
       - run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
 
-      - run: make test-rust-extension
+      - name: Run pytest tests/test_litellm_rust with the compiled extension
+        run: make test-rust-extension
 
       - run: >-
           uv build --wheel --out-dir panic-dist
