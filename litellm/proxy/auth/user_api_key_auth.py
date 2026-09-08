@@ -2373,7 +2373,10 @@ async def _refresh_session_token_team_grants(
     except HTTPException:
         return valid_token
     return valid_token.model_copy(
-        update={"team_models": list(team_obj.models), "team_alias": team_obj.team_alias}  # mutable-ok: auth model requires a fresh list
+        update={  # mutable-ok: model_copy requires a mutable update mapping
+            "team_models": list(team_obj.models),  # mutable-ok: auth model requires a fresh list
+            "team_alias": team_obj.team_alias,
+        }
     )
 
 
