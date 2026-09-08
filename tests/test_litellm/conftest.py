@@ -501,30 +501,6 @@ def pytest_collection_modifyitems(config, items):
     - Separate tests marked with 'no_parallel' from parallelizable tests
     - Sort custom_logger tests first (they tend to interfere with other tests)
     """
-    rust_extension_tests = [
-        item
-        for item in items
-        if any(mark.name == "requires_rust_extension" for mark in item.iter_markers())
-    ]
-    if rust_extension_tests:
-        rust_enabled = os.environ.get("LITELLM_RUST", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        if not rust_enabled:
-            skip = pytest.mark.skip(reason="requires LITELLM_RUST=1 and a compiled Rust extension")
-            for item in rust_extension_tests:
-                item.add_marker(skip)
-        else:
-            try:
-                from litellm.rust_bridge import _native  # noqa: F401  # validates the installed extension
-            except ImportError as error:
-                raise pytest.UsageError(
-                    "LITELLM_RUST=1 requires a compiled litellm.rust_bridge._native extension"
-                ) from error
-
     # Separate no_parallel tests
     no_parallel_tests = [
         item

@@ -299,10 +299,8 @@ test-rust-extension:
 	[ "$$#" -eq 1 ] && \
 	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
-	tests=$$(git grep --untracked -l requires_rust_extension -- ':(glob)tests/test_litellm/**/test_*.py') && \
-	[ -n "$$tests" ] && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
-	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension $$tests
+	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/
