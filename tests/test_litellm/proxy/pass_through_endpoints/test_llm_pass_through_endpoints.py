@@ -5368,36 +5368,11 @@ class TestAzureRelayDeploymentSegment:
     """A key allowed one model group must not reach another deployment by naming it in the
     ``openai/deployments/<x>`` segment while the group segment picks the credential."""
 
-    @pytest.mark.parametrize(
-        "endpoint, expected",
-        [
-            ("gpt/openai/deployments/gpt/chat/completions", None),
-            ("openai/deployments/gpt/chat/completions", None),
-            ("gpt/openai/deployments/gpt-5.4-mini/chat/completions", None),
-            ("gpt/models/chat/completions", None),
-            ("gpt/openai/deployments/gpt-5.4/chat/completions", "gpt-5.4"),
-            ("gpt/openai/deployments/other-group/chat/completions", "other-group"),
-            ("openai/deployments/victim/gpt/chat/completions", "victim"),
-        ],
-    )
-    def test_foreign_azure_deployment_names_a_segment_outside_the_group(self, endpoint, expected):
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import foreign_azure_deployment
+    def test_models_served_by_group_resolves_each_deployment_to_its_model_name(self):
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _models_served_by_group
 
-        assert foreign_azure_deployment(endpoint, "gpt", _AzureGroupRouter([])) == expected
-
-    @pytest.mark.parametrize(
-        "endpoint, expected",
-        [
-            ("other-group/openai/deployments/other-group/chat/completions", "other-group"),
-            ("openai/deployments/gpt/chat/completions", "gpt"),
-            ("openai/deployments/my-azure-deployment/chat/completions", None),
-            ("gpt", None),
-        ],
-    )
-    def test_azure_router_model_in_endpoint_matches_the_relay_decision(self, endpoint, expected):
-        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import azure_router_model_in_endpoint
-
-        assert azure_router_model_in_endpoint(endpoint, _AzureGroupRouter([])) == expected
+        assert _models_served_by_group(_AzureGroupRouter([]), "gpt") == frozenset({"gpt-5.4-mini"})
+        assert _models_served_by_group(_AzureGroupRouter([]), "missing-group") == frozenset()
 
     def _install(self, monkeypatch, body: dict) -> list[dict]:
         import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep

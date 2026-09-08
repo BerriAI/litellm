@@ -8,7 +8,11 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
-from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
+from litellm.llms.azure.passthrough.transformation import (
+    AzurePassthroughConfig,
+    azure_router_model_in_endpoint,
+    foreign_azure_deployment,
+)
 from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 
@@ -444,3 +448,32 @@ def test_azure_passthrough_is_streaming_request_reads_the_stream_flag(request_da
         )
         is expected
     )
+
+
+@pytest.mark.parametrize(
+    "endpoint, expected",
+    [
+        ("gpt/openai/deployments/gpt/chat/completions", None),
+        ("openai/deployments/gpt/chat/completions", None),
+        ("gpt/openai/deployments/gpt-5.4-mini/chat/completions", None),
+        ("gpt/models/chat/completions", None),
+        ("gpt/openai/deployments/gpt-5.4/chat/completions", "gpt-5.4"),
+        ("gpt/openai/deployments/other-group/chat/completions", "other-group"),
+        ("openai/deployments/victim/gpt/chat/completions", "victim"),
+    ],
+)
+def test_foreign_azure_deployment_names_a_segment_outside_the_group(endpoint, expected):
+    assert foreign_azure_deployment(endpoint, "gpt", lambda: frozenset({"gpt-5.4-mini"})) == expected
+
+
+@pytest.mark.parametrize(
+    "endpoint, expected",
+    [
+        ("other-group/openai/deployments/other-group/chat/completions", "other-group"),
+        ("openai/deployments/gpt/chat/completions", "gpt"),
+        ("openai/deployments/my-azure-deployment/chat/completions", None),
+        ("gpt", None),
+    ],
+)
+def test_azure_router_model_in_endpoint_picks_the_first_router_model_segment(endpoint, expected):
+    assert azure_router_model_in_endpoint(endpoint, frozenset({"gpt", "other-group"})) == expected

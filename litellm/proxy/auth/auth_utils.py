@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.url_utils import (
     provider_url_destination_candidates,
     validate_url,
 )
+from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -2011,9 +2012,10 @@ def get_model_from_request(
 
 
 def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str | None:
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import azure_router_model_in_endpoint
-
-    return azure_router_model_in_endpoint(re.sub(r"^/azure(?:_ai)?/", "", route, flags=re.IGNORECASE), llm_router)
+    if llm_router is None:
+        return None
+    endpoint: Final = re.sub(r"^/azure(?:_ai)?/", "", route, flags=re.IGNORECASE)
+    return azure_router_model_in_endpoint(endpoint, frozenset(llm_router.get_model_names()))
 
 
 def _model_from_bedrock_route(route: str) -> str | None:
