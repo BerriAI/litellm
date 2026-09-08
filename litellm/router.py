@@ -13038,13 +13038,17 @@ class Router:
             return None
 
         # Encrypted content affinity check (Issue #40237):
-        optional_checks = getattr(self, "optional_pre_call_checks", None) or []
+        callbacks = (
+            (getattr(self, "optional_callbacks", None) or [])
+            + (getattr(self, "callbacks", None) or [])
+            + (getattr(self, "pre_call_checks", None) or [])
+        )
         affinity_enabled = (
-            "encrypted_content_affinity" in optional_checks
+            "encrypted_content_affinity" in callbacks
             or getattr(self, "enable_encrypted_content_affinity", False)
             or any(
                 getattr(c, "__class__", None).__name__ == "EncryptedContentAffinityCheck"
-                for c in getattr(self, "pre_call_checks", [])
+                for c in callbacks
             )
         )
         if affinity_enabled:
@@ -13065,8 +13069,24 @@ class Router:
                 raw_input
             )
             if extracted_model_id:
+                # Security constraint: only allow deployment if it belongs to this complexity router tiers
+                strategy_params = getattr(selected_strategy, "litellm_params", {}) or {}
+                if isinstance(strategy_params, dict):
+                    cfg = strategy_params.get("complexity_router_config") or {}
+                    def_model = strategy_params.get("complexity_router_default_model")
+                else:
+                    cfg = getattr(strategy_params, "complexity_router_config", {}) or {}
+                    def_model = getattr(strategy_params, "complexity_router_default_model", None)
+
+                allowed_models = set((cfg.get("tiers", {}) if isinstance(cfg, dict) else {}).values())
+                if def_model:
+                    allowed_models.add(def_model)
+
                 originating_deployment = self.get_deployment(model_id=extracted_model_id)
-                if originating_deployment and originating_deployment.model_name:
+                if (
+                    originating_deployment
+                    and getattr(originating_deployment, "model_name", None) in allowed_models
+                ):
                     from litellm.types.router import PreRoutingHookResponse
 
                     return PreRoutingHookResponse(
