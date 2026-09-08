@@ -189,7 +189,8 @@ const openModal = async (props: Partial<React.ComponentProps<typeof CreateKey>> 
   return view;
 };
 
-const userSearchInput = (): Promise<HTMLElement> => screen.findByPlaceholderText("Type email or user ID to search for users");
+const userSearchInput = (): Promise<HTMLElement> =>
+  screen.findByPlaceholderText("Type email or user ID to search for users");
 
 const openSection = async (name: RegExp) => {
   await userEvent.click(await screen.findByRole("button", { name }));
@@ -1022,9 +1023,7 @@ describe("CreateKey", () => {
       ];
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
-          Promise.resolve(
-            directory.filter((entry) => entry.user_email.includes(params.get("search") ?? "")),
-          ) as never,
+          Promise.resolve(directory.filter((entry) => entry.user_email.includes(params.get("search") ?? ""))) as never,
       );
 
       const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
