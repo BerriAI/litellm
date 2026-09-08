@@ -13151,17 +13151,21 @@ class Router:
             return None
 
         # Encrypted content affinity check (Issue #40237):
-        callbacks = (
-            (getattr(self, "optional_callbacks", None) or [])
-            + (getattr(self, "callbacks", None) or [])
-            + (getattr(self, "pre_call_checks", None) or [])
-        )
+        configured_callbacks: list[Any] = []
+        if hasattr(self, "optional_callbacks") and isinstance(self.optional_callbacks, list):  # guard-ok: type discipline
+            configured_callbacks.extend(self.optional_callbacks)
+        if hasattr(self, "callbacks") and isinstance(self.callbacks, list):  # guard-ok: type discipline
+            configured_callbacks.extend(self.callbacks)
+        if hasattr(self, "pre_call_checks") and isinstance(self.pre_call_checks, list):  # guard-ok: type discipline
+            configured_callbacks.extend(self.pre_call_checks)
+
         affinity_enabled = (
-            "encrypted_content_affinity" in callbacks
-            or getattr(self, "enable_encrypted_content_affinity", False)
+            "encrypted_content_affinity" in configured_callbacks
+            or bool(getattr(self, "enable_encrypted_content_affinity", False))  # guard-ok: boolean flag fallback
             or any(
-                getattr(c, "__class__", None).__name__ == "EncryptedContentAffinityCheck"
-                for c in callbacks
+                c.__class__.__name__ == "EncryptedContentAffinityCheck"
+                for c in configured_callbacks
+                if hasattr(c, "__class__")  # guard-ok: class inspection
             )
         )
         if affinity_enabled:
@@ -13182,27 +13186,37 @@ class Router:
                 raw_input
             )
             if extracted_model_id:
-                strategy_params = getattr(selected_strategy, "litellm_params", {}) or {}
+                strategy_params = getattr(selected_strategy, "litellm_params", None)  # guard-ok: type discipline
+                allowed_models: set[str] = set()
                 if isinstance(strategy_params, dict):
-                    cfg = strategy_params.get("complexity_router_config") or {}
+                    cfg_dict = strategy_params.get("complexity_router_config")
+                    if isinstance(cfg_dict, dict):
+                        tiers_dict = cfg_dict.get("tiers")
+                        if isinstance(tiers_dict, dict):
+                            allowed_models.update(str(v) for v in tiers_dict.values() if v)
                     def_model = strategy_params.get("complexity_router_default_model")
-                else:
-                    cfg = getattr(strategy_params, "complexity_router_config", {}) or {}
-                    def_model = getattr(strategy_params, "complexity_router_default_model", None)
-
-                allowed_models = set((cfg.get("tiers", {}) if isinstance(cfg, dict) else {}).values())
-                if def_model:
-                    allowed_models.add(def_model)
+                    if isinstance(def_model, str) and def_model:
+                        allowed_models.add(def_model)
+                elif strategy_params is not None:
+                    cfg_obj = getattr(strategy_params, "complexity_router_config", None)  # guard-ok: type discipline
+                    if isinstance(cfg_obj, dict):
+                        tiers_dict = cfg_obj.get("tiers")
+                        if isinstance(tiers_dict, dict):
+                            allowed_models.update(str(v) for v in tiers_dict.values() if v)
+                    def_model_obj = getattr(strategy_params, "complexity_router_default_model", None)  # guard-ok: type discipline
+                    if isinstance(def_model_obj, str) and def_model_obj:
+                        allowed_models.add(def_model_obj)
 
                 originating_deployment = self.get_deployment(model_id=extracted_model_id)
+                dep_model_name = getattr(originating_deployment, "model_name", None)  # guard-ok: type discipline
                 if (
                     originating_deployment
-                    and getattr(originating_deployment, "model_name", None) in allowed_models
+                    and dep_model_name in allowed_models
                 ):
                     from litellm.types.router import PreRoutingHookResponse
 
                     return PreRoutingHookResponse(
-                        model=originating_deployment.model_name,
+                        model=dep_model_name,
                         messages=messages if isinstance(messages, list) else None,
                     )
 
