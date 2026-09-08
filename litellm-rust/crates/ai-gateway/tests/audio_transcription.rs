@@ -2,9 +2,8 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
+use litellm_ai_gateway::audio_transcription::{AudioTranscriptionRequest, audio_transcription};
 use serde_json::{Map, json};
-
-use super::{AudioTranscriptionRequest, audio_transcription};
 
 #[tokio::test]
 async fn bedrock_request_is_signed_and_contains_audio() {

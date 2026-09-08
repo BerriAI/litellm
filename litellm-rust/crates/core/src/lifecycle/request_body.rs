@@ -1,18 +1,12 @@
-/// Representation exposed to `pre_call`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallbackBodyView {
-    /// A mutable structured object.
     Structured,
-    /// An encoded string.
     Serialized,
 }
 
-/// When transport captures the request body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyReadPoint {
-    /// Before `pre_call`.
     BuildRequest,
-    /// After `pre_call`.
     Send,
 }
 
