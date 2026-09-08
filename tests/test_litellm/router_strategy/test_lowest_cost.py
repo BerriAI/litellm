@@ -8,8 +8,8 @@ from litellm.caching.caching import DualCache
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 
 DEPLOYMENT_ID = "9876"
-COST_KEY = "gpt-5.5-pool_cost_map"
-LATENCY_KEY = "gpt-5.5-pool_map"
+COST_KEY = "cost_map:gpt-5.5-pool"
+LATENCY_KEYS = ("gpt-5.5-pool_map", "gpt-5.5-pool_cost_map")
 KWARGS = {
     "litellm_params": {
         "metadata": {"model_group": "gpt-5.5-pool"},
@@ -52,7 +52,8 @@ def test_log_success_event_counts_a_response_with_no_completion_tokens():
 async def test_log_success_event_keeps_cost_bookkeeping_out_of_the_latency_routing_entry(use_async: bool):
     cache = DualCache()
     latency_entry = {DEPLOYMENT_ID: {"latency": [0.5], "time_to_first_token": [0.1]}}
-    cache.set_cache(key=LATENCY_KEY, value=copy.deepcopy(latency_entry))
+    for latency_key in LATENCY_KEYS:
+        cache.set_cache(key=latency_key, value=copy.deepcopy(latency_entry))
     handler = LowestCostLoggingHandler(router_cache=cache)
     call_args = {
         "kwargs": KWARGS,
@@ -66,7 +67,7 @@ async def test_log_success_event_keeps_cost_bookkeeping_out_of_the_latency_routi
     else:
         handler.log_success_event(**call_args)
 
-    assert cache.get_cache(key=LATENCY_KEY) == latency_entry
+    assert [cache.get_cache(key=latency_key) for latency_key in LATENCY_KEYS] == [latency_entry, latency_entry]
     assert _recorded_minute_counters(cache) == {"tpm": 12, "rpm": 1}
 
 
