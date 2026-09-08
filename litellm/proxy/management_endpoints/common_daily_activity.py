@@ -14,6 +14,7 @@ from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_emails,
     recover_double_hashed_key_metadata,
+    recover_key_metadata_from_spend_logs,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
@@ -433,15 +434,37 @@ def update_breakdown_metrics(
     return breakdown
 
 
+def _spend_logs_window(dates: AbstractSet[str | None]) -> tuple[datetime, datetime] | None:
+    parsed: Final = sorted(day for day in (_parse_spend_date(raw) for raw in dates) if day is not None)
+    if not parsed:
+        return None
+    return (parsed[0] - timedelta(days=1), parsed[-1] + timedelta(days=2))
+
+
+def _parse_spend_date(raw: str | None) -> datetime | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+_EMPTY_KEY_METADATA: Final[Mapping[str, _KeyMetadataDict]] = MappingProxyType({})
+
+
 async def get_api_key_metadata(
     prisma_client: PrismaClient,
     api_keys: AbstractSet[str],
+    spend_logs_window: tuple[datetime, datetime] | None = None,
 ) -> Mapping[str, _KeyMetadataDict]:
     """Get api key metadata, falling back to deleted keys table for keys not found in active table.
 
     This ensures that key_alias and team_id are preserved in historical activity logs
     even after a key is deleted or regenerated. Also recovers aliases for api_key
-    values that were double-hashed by the v1.99 spend-log provenance gate.
+    values that were double-hashed by the v1.99 spend-log provenance gate, and, when
+    spend_logs_window is given, for keys never written to either token table (CLI
+    session tokens) from the spend-log rows those requests wrote in that window.
     """
     key_records: Sequence[PrismaVerificationToken] = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"token": {"in": list(api_keys)}}
@@ -481,11 +504,17 @@ async def get_api_key_metadata(
             )
 
     still_missing: Final = api_keys - frozenset(result)
-    combined: Final = (
-        result
-        if not still_missing
-        else MappingProxyType({**result, **(await recover_double_hashed_key_metadata(prisma_client, still_missing))})
+    from_reverse_hash: Final = (
+        await recover_double_hashed_key_metadata(prisma_client, still_missing) if still_missing else _EMPTY_KEY_METADATA
     )
+    after_token_recovery: Final = MappingProxyType({**result, **from_reverse_hash})
+    unresolved: Final = api_keys - frozenset(after_token_recovery)
+    from_spend_logs: Final = (
+        await recover_key_metadata_from_spend_logs(prisma_client, unresolved, spend_logs_window)
+        if unresolved and spend_logs_window is not None
+        else _EMPTY_KEY_METADATA
+    )
+    combined: Final = MappingProxyType({**after_token_recovery, **from_spend_logs})
     return await attach_user_emails(prisma_client, combined)
 
 
@@ -898,7 +927,9 @@ async def _aggregate_spend_records(
 
     api_key_metadata: dict[str, _KeyMetadataDict] = {}
     if api_keys:
-        api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
+        api_key_metadata = await get_api_key_metadata(
+            prisma_client, api_keys, _spend_logs_window(frozenset(record.date for record in records))
+        )
 
     return await asyncio.to_thread(
         _aggregate_spend_records_sync,
@@ -1094,7 +1125,9 @@ async def _aggregate_grouping_sets_records(
 
     api_key_metadata: dict[str, _KeyMetadataDict] = {}
     if api_keys:
-        api_key_metadata = await get_api_key_metadata(prisma_client, api_keys)
+        api_key_metadata = await get_api_key_metadata(
+            prisma_client, api_keys, _spend_logs_window(frozenset(r.date for r in records))
+        )
 
     return await asyncio.to_thread(
         _aggregate_grouping_sets_records_sync,
@@ -1357,7 +1390,9 @@ async def get_daily_activity_aggregated(
                 r.api_key for r in entity_records if r.api_key and r.api_key != PTU_SENTINEL_API_KEY
             )
             entity_key_metadata: Final = (
-                await get_api_key_metadata(prisma_client, entity_api_keys)
+                await get_api_key_metadata(
+                    prisma_client, entity_api_keys, _spend_logs_window(frozenset(r.date for r in entity_records))
+                )
                 if entity_api_keys
                 else {}  # mutable-ok: matches the helper's dict return
             )

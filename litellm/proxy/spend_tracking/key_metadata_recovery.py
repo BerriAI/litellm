@@ -1,5 +1,6 @@
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final, TypeVar
 
@@ -25,6 +26,19 @@ SELECT DISTINCT ON (token)
 FROM "LiteLLM_DeletedVerificationToken"
 WHERE encode(sha256(convert_to(token, 'UTF8')), 'hex') = ANY($1::text[])
 ORDER BY token, deleted_at DESC
+"""
+
+_SPEND_LOG_ALIAS_SQL: Final = """
+SELECT DISTINCT ON (api_key)
+    api_key AS digest,
+    metadata->>'user_api_key_alias' AS key_alias,
+    COALESCE(NULLIF(team_id, ''), metadata->>'user_api_key_team_id') AS team_id,
+    COALESCE(NULLIF("user", ''), metadata->>'user_api_key_user_id') AS user_id
+FROM "LiteLLM_SpendLogs"
+WHERE api_key = ANY($1::text[])
+  AND "startTime" >= $2::timestamp
+  AND "startTime" < $3::timestamp
+ORDER BY api_key, (metadata->>'user_api_key_alias') IS NULL, "startTime" DESC
 """
 
 
@@ -166,6 +180,40 @@ async def recover_double_hashed_key_metadata(
         warning="Failed reverse-hash recovery against deleted keys for %d missing keys: %s",
     )
     return MappingProxyType({**from_active, **from_deleted})
+
+
+async def recover_key_metadata_from_spend_logs(
+    prisma_client: PrismaClient,
+    missing_keys: AbstractSet[str],
+    window: tuple[datetime, datetime],
+) -> Mapping[str, KeyMetadataDict]:
+    """
+    Recover key_alias/team_id/user_id for hashed api_key values absent from both
+    verification-token tables, e.g. in-memory CLI session tokens that never get a
+    token row. Their owner is written to LiteLLM_SpendLogs metadata at request
+    time under the same hashed api_key, so it is the only surviving source. Only
+    sha256 digests are looked up, matching the reverse-hash recovery gate, since
+    every current api_key value in spend logs is a token hash. The [start, end)
+    bound keeps the lookup on the startTime index instead of scanning the table.
+    """
+    sha_missing: Final = frozenset(key for key in missing_keys if is_valid_sha256_hash(key))
+    if not sha_missing:
+        return _EMPTY_KEY_METADATA
+    start, end = window
+    rows: Final = await _db_or_empty(
+        lambda: prisma_client.db.query_raw(_SPEND_LOG_ALIAS_SQL, sorted(sha_missing), start, end),
+        "Failed spend-log alias recovery for %d missing keys: %s",
+        len(sha_missing),
+    )
+    if rows is None:
+        return _EMPTY_KEY_METADATA
+    return MappingProxyType(
+        {
+            row.digest: KeyMetadataDict(key_alias=row.key_alias, team_id=row.team_id, user_id=row.user_id)
+            for row in _TOKEN_DIGEST_ROWS.validate_python(rows)
+            if row.digest in sha_missing and (row.key_alias or row.user_id or row.team_id)
+        }
+    )
 
 
 def _row_with_recovered_fields(

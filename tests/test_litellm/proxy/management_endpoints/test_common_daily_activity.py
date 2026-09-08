@@ -2105,3 +2105,56 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
     # Rollups with the entity bit set must still land in their usual buckets
     assert daily.breakdown.models["gpt-4o"].metrics.spend == 18.0
     assert daily.breakdown.api_keys["key-1"].metrics.spend == 12.0
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
+    """
+    A CLI session token has no verification-token row, so the active/deleted lookups
+    and reverse-hash all miss. Given a spend-log window, its alias and owner are
+    recovered from the spend-log metadata and its email is filled from the user table.
+    """
+    from litellm.proxy.utils import hash_token
+
+    session_digest = hash_token("cli-session-user-42")
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="user-42", user_email="user42@example.com")]
+    )
+
+    async def query_raw(sql, *params):
+        if "LiteLLM_SpendLogs" in sql:
+            return [{"digest": session_digest, "key_alias": "cli-session-user-42", "team_id": None, "user_id": "user-42"}]
+        return []
+
+    mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+
+    result = await get_api_key_metadata(
+        prisma_client=mock_prisma,
+        api_keys={session_digest},
+        spend_logs_window=(datetime(2026, 9, 7), datetime(2026, 9, 10)),
+    )
+
+    assert result[session_digest]["key_alias"] == "cli-session-user-42"
+    assert result[session_digest]["user_id"] == "user-42"
+    assert result[session_digest]["user_email"] == "user42@example.com"
+    spend_log_calls = [call.args for call in mock_prisma.db.query_raw.call_args_list if "LiteLLM_SpendLogs" in call.args[0]]
+    ((_, digests, start, end),) = spend_log_calls
+    assert digests == [session_digest]
+    assert (start, end) == (datetime(2026, 9, 7), datetime(2026, 9, 10))
+
+
+def test_spend_logs_window_pads_min_minus_one_day_and_max_plus_two_days():
+    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+
+    window = _spend_logs_window({"2026-09-08", "2026-09-05", "not-a-date"})
+
+    assert window == (datetime(2026, 9, 4), datetime(2026, 9, 10))
+
+
+def test_spend_logs_window_is_none_when_no_date_parses():
+    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+
+    assert _spend_logs_window({"garbage", ""}) is None
