@@ -37,6 +37,7 @@ Safe to enable globally:
 """
 
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, Protocol, cast
 
 import httpx
@@ -48,6 +49,7 @@ from litellm.exceptions import (
     ServiceUnavailableError,
 )
 from litellm.integrations.custom_logger import CustomLogger, Span
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_utils.cooldown_cache import CooldownCacheValue
 from litellm.types.llms.openai import AllMessageValues
@@ -161,11 +163,13 @@ class EncryptedContentAffinityCheck(CustomLogger):
     @staticmethod
     def _encryption_boundary_key(
         litellm_params: object,
-    ) -> tuple | None:
+    ) -> tuple[object, object] | None:
         """
         ``(api_base, api_key)`` pair identifying an Azure resource. Two
         deployments sharing both are interchangeable for ``encrypted_content``
         follow-ups; Azure rejects content produced by any other resource.
+        Missing values are resolved from ``litellm_credential_name`` without
+        modifying the deployment, and explicit deployment values take precedence.
 
         Accepts any object exposing dict-style ``.get(key, default)``: plain
         dicts (the common case in ``healthy_deployments``) as well as
@@ -180,9 +184,29 @@ class EncryptedContentAffinityCheck(CustomLogger):
             return None
         api_base: Final = getter("api_base")
         api_key: Final = getter("api_key")
-        if not api_base or not api_key:
+        credential_name: Final = getter("litellm_credential_name")
+        credential_values: Final[Mapping[str, object] | None] = (
+            CredentialAccessor.get_credential_values(credential_name)
+            if isinstance(credential_name, str) and credential_name and (api_base is None or api_key is None)
+            else None
+        )
+        effective_api_base: Final = (
+            api_base
+            if api_base is not None
+            else credential_values.get("api_base")
+            if credential_values is not None
+            else None
+        )
+        effective_api_key: Final = (
+            api_key
+            if api_key is not None
+            else credential_values.get("api_key")
+            if credential_values is not None
+            else None
+        )
+        if not effective_api_base or not effective_api_key:
             return None
-        return (api_base, api_key)
+        return (effective_api_base, effective_api_key)
 
     def _find_deployments_on_same_encryption_boundary(
         self,
