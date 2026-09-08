@@ -406,6 +406,74 @@ class TestVertexAILivePassthroughLoggingHandler:
         usage = self._session_usage(handler, mock_logging_obj, grounded, self.NATIVE_AUDIO_MODEL)
         assert usage.prompt_tokens_details.tool_use_tokens == sum(self.TOOL_USE_PER_TURN)
 
+    @staticmethod
+    def _grounding_frame(metadata: dict[str, object]) -> dict[str, object]:
+        """One server frame carrying grounding metadata, the way Live reports it."""
+        return {"type": "response.done", "serverContent": {"groundingMetadata": metadata}}
+
+    def test_web_grounding_is_counted_so_it_can_be_billed(self, handler, mock_logging_obj):
+        """Live reports grounding in the server frames and never in usageMetadata.
+
+        Nothing read those frames, so web_search_requests stayed unset and the cost path's only
+        trigger for the per-query grounding charge never fired. Google bills a grounded Live
+        prompt on top of its tokens, so the whole fee was missing from the bill.
+        """
+        messages = [
+            self._grounding_frame(
+                {
+                    "webSearchQueries": ["who won the 2026 world cup final"],
+                    "groundingChunks": [{"web": {"uri": "https://example.com"}}],
+                }
+            ),
+            *self._live_messages(self.AUDIO_SESSION[:1]),
+        ]
+
+        usage = self._session_usage(handler, mock_logging_obj, messages, self.NATIVE_AUDIO_MODEL)
+
+        assert usage.prompt_tokens_details.web_search_requests == 1, "a grounded turn must report its query"
+        assert getattr(usage.prompt_tokens_details, "google_maps_grounding_requests", None) is None
+
+    def test_maps_grounding_is_counted_under_its_own_sku(self, handler, mock_logging_obj):
+        """Maps grounding is a separate SKU from web search, so it needs its own counter.
+
+        A maps-only turn carries grounding chunks but no webSearchQueries, so counting queries
+        alone would report nothing and bill nothing.
+        """
+        messages = [
+            self._grounding_frame({"groundingChunks": [{"maps": {"placeId": "abc123"}}]}),
+            *self._live_messages(self.AUDIO_SESSION[:1]),
+        ]
+
+        usage = self._session_usage(handler, mock_logging_obj, messages, self.NATIVE_AUDIO_MODEL)
+
+        assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
+        assert getattr(usage.prompt_tokens_details, "web_search_requests", None) is None
+
+    def test_an_ungrounded_session_reports_no_grounding(self, handler, mock_logging_obj):
+        """The counters must stay absent when no tool ran, or every session pays a grounding fee."""
+        usage = self._session_usage(
+            handler, mock_logging_obj, self._live_messages(self.AUDIO_SESSION[:1]), self.NATIVE_AUDIO_MODEL
+        )
+
+        assert getattr(usage.prompt_tokens_details, "web_search_requests", None) is None
+        assert getattr(usage.prompt_tokens_details, "google_maps_grounding_requests", None) is None
+
+    def test_grounding_adds_its_query_fee_to_the_session_bill(self, handler, mock_logging_obj):
+        """The counter only matters if it reaches the bill, so assert against the cost, not the field.
+
+        Same tokens either way: the difference between the two sessions is the grounding fee alone.
+        """
+        turns = self.AUDIO_SESSION[:1]
+        plain = self._session_cost(handler, mock_logging_obj, self._live_messages(turns), self.NATIVE_AUDIO_MODEL)
+        grounded = self._session_cost(
+            handler,
+            mock_logging_obj,
+            [self._grounding_frame({"webSearchQueries": ["q"]}), *self._live_messages(turns)],
+            self.NATIVE_AUDIO_MODEL,
+        )
+
+        assert grounded > plain, "a grounded session must cost more than the same tokens ungrounded"
+
     def test_reporting_tool_use_tokens_does_not_move_the_bill(self, handler, mock_logging_obj):
         """Deliberate boundary: these tokens are reported here, and priced nowhere.
 

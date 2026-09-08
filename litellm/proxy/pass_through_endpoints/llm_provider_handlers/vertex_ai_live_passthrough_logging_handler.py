@@ -43,6 +43,23 @@ def _detail_entries(raw: object) -> tuple[Mapping[str, object], ...]:
     return tuple(entry for entry in raw if isinstance(entry, Mapping)) if isinstance(raw, Sequence) else ()
 
 
+def _grounding_metadata(websocket_messages: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    """Collect every ``serverContent.groundingMetadata`` a session emitted.
+
+    Live reports grounding in the server frames, never in ``usageMetadata``, so the per-query
+    charge has to be counted here rather than derived from the token totals.
+    """
+    return tuple(
+        metadata
+        for message in websocket_messages
+        if isinstance(message, Mapping)
+        for server_content in (message.get("serverContent"),)
+        if isinstance(server_content, Mapping)
+        for metadata in (server_content.get("groundingMetadata"),)
+        if isinstance(metadata, Mapping)
+    )
+
+
 class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
     """
     Handles cost tracking and logging for Vertex AI Live API WebSocket passthrough.
@@ -173,6 +190,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
     def _create_usage_object_from_metadata(
         usage_metadata: dict,
         model: str,
+        grounding_metadata: Sequence[Mapping[str, object]] = (),
     ) -> Usage:
         """
         Create a LiteLLM Usage object from Live API usage metadata.
@@ -180,6 +198,8 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         Args:
             usage_metadata: Usage metadata from the Live API response
             model: The model name
+            grounding_metadata: Every ``serverContent.groundingMetadata`` the session emitted, so
+                Search and Maps grounding carry their per-query charge
 
         Returns:
             LiteLLM Usage object
@@ -199,7 +219,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         prompt_tokens: Final = usage_metadata.get("promptTokenCount", 0) or sum(prompt_by_modality.values())
         completion_tokens: Final = usage_metadata.get("candidatesTokenCount", 0) or sum(candidates_by_modality.values())
 
-        return Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=usage_metadata.get("totalTokenCount", 0) or (prompt_tokens + completion_tokens),
@@ -217,6 +237,15 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 video_tokens=candidates_by_modality.get("VIDEO"),
             ),
         )
+        if grounding_metadata:
+            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                VertexGeminiConfig,
+            )
+
+            VertexGeminiConfig._set_grounding_usage_counters(  # pyright: ignore[reportPrivateUsage]  # shared with the chat path; no public alias exists yet
+                usage, grounding_metadata
+            )
+        return usage
 
     def vertex_ai_live_passthrough_handler(
         self,
@@ -264,6 +293,7 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             # Create Usage object for standard LiteLLM logging
             usage: Final = self._create_usage_object_from_metadata(
                 usage_metadata=usage_metadata,
+                grounding_metadata=_grounding_metadata(websocket_messages),
                 model=model,
             )
 

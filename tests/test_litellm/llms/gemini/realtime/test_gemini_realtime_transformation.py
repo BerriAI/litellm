@@ -1,11 +1,16 @@
 import json
-from unittest.mock import MagicMock
+from collections.abc import Mapping
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+from litellm.types.llms.gemini import BidiGenerateContentServerMessage
+from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
+from litellm.types.utils import Usage
 
 
 def test_gemini_realtime_transformation_session_created():
@@ -2178,3 +2183,91 @@ def test_unbilled_usage_on_session_close_flushes_trailing_audio(patch_gemini_tra
     }
     assert usage == expected
     assert config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live") is None
+
+
+def _grounded_live_frame(grounding_metadata: Mapping[str, object] | None) -> Mapping[str, object]:
+    """One Live server frame. Grounding metadata and usageMetadata arrive together, as Vertex sends them."""
+    from typing import Final
+
+    server_content: Final = {
+        "turnComplete": True,
+        **({} if grounding_metadata is None else {"groundingMetadata": grounding_metadata}),
+    }
+    return {
+        "serverContent": server_content,
+        "usageMetadata": {
+            "promptTokenCount": 19,
+            "candidatesTokenCount": 157,
+            "totalTokenCount": 176,
+            "promptTokensDetails": ({"modality": "TEXT", "tokenCount": 19},),
+            "candidatesTokensDetails": ({"modality": "AUDIO", "tokenCount": 157},),
+        },
+    }
+
+
+def _usage_built_for_response_done(message: Mapping[str, object]) -> Usage:
+    """Capture the chat-completion Usage transform_response_done_event builds, before it is bridged.
+
+    The Usage object is local to the method, so the bridge call is the only place it is observable.
+    """
+    from typing import Final
+
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    captured: Final[list[Usage]] = []  # mutable-ok: a spy has to accumulate what it observes
+    original: Final = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage
+
+    def _spy(usage: Usage) -> object:
+        captured.append(usage)
+        return original(usage)
+
+    config: Final = GeminiRealtimeConfig()
+    with patch.object(
+        LiteLLMCompletionResponsesConfig,
+        "_transform_chat_completion_usage_to_responses_usage",
+        staticmethod(_spy),
+    ):
+        config.transform_response_done_event(
+            message=cast(  # cast-ok: a test fixture stands in for the server frame TypedDict
+                BidiGenerateContentServerMessage, message
+            ),
+            current_response_id="resp_grounding",
+            current_conversation_id="conv_grounding",
+            output_items=None,
+        )
+    assert captured, "response.done must build a Usage object"
+    return captured[0]
+
+
+def test_gemini_realtime_response_done_counts_web_grounding():
+    """Regression: Live reports grounding in the server frames and never in usageMetadata.
+
+    Nothing read those frames on the realtime path, so web_search_requests stayed unset and the
+    cost path's only trigger for Google's per-query grounding charge never fired.
+
+    Scope boundary, deliberate: this asserts the counter on the Usage object that response.done is
+    built from, not on the emitted event. The Responses usage bridge copies a fixed allow-list of
+    detail fields and drops the rest, so the counter does not reach response.done yet. Widening
+    that bridge is a separate change; do not read this test as proving end-to-end billing.
+    """
+    usage = _usage_built_for_response_done(
+        _grounded_live_frame(
+            {
+                "webSearchQueries": ["who won the 2026 world cup final"],
+                "groundingChunks": [{"web": {"uri": "https://example.com"}}],
+            }
+        )
+    )
+
+    assert usage.prompt_tokens_details.web_search_requests == 1, "a grounded turn must report its query"
+    assert usage.prompt_tokens_details.text_tokens == 19, "the modality breakdown must survive alongside it"
+
+
+def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
+    """The counter must stay unset on an ordinary turn, or every session pays a grounding fee."""
+    usage = _usage_built_for_response_done(_grounded_live_frame(None))
+
+    assert getattr(usage.prompt_tokens_details, "web_search_requests", None) is None
+    assert getattr(usage.prompt_tokens_details, "google_maps_grounding_requests", None) is None

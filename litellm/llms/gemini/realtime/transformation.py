@@ -115,6 +115,19 @@ def _parse_setup(session_configuration_request: str) -> BidiGenerateContentSetup
     return envelope.get("setup", empty_setup)
 
 
+def _grounding_metadata_from_frame(frame: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    """Read ``serverContent.groundingMetadata`` off the frame that carries the turn's usage.
+
+    Live reports grounding in the server frames rather than in ``usageMetadata``, and it emits both
+    on the same frame, so the per-query charge is countable at the point usage is built.
+    """
+    server_content: Final = frame.get("serverContent")
+    if not isinstance(server_content, Mapping):
+        return ()
+    metadata: Final = server_content.get("groundingMetadata")
+    return (metadata,) if isinstance(metadata, Mapping) else ()
+
+
 # Google bills Live transcription at an estimated 25 audio tokens/sec of input and
 # 175 text tokens/min of output (ai.google.dev/gemini-api/docs/pricing).
 GEMINI_LIVE_TRANSCRIBE_AUDIO_TOKENS_PER_SECOND: Final = 25
@@ -323,7 +336,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
             elif key == "input_audio_transcription" and value is not None:
                 optional_params["inputAudioTranscription"] = {}
-            elif key == "turn_detection":
+            elif key == "turn_detection" and value is not None:
                 value_typed = cast(OpenAIRealtimeTurnDetection, value)
                 if (
                     isinstance(value_typed, dict)
@@ -1049,6 +1062,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     {**cast(dict, message), "usageMetadata": resolved_usage_metadata},
                 ),
             )
+            grounding_metadata: Final = _grounding_metadata_from_frame(message)
+            if grounding_metadata:
+                VertexGeminiConfig._set_grounding_usage_counters(  # pyright: ignore[reportPrivateUsage]  # shared with the chat path; no public alias exists yet
+                    _chat_completion_usage, grounding_metadata
+                )
         else:
             _chat_completion_usage = get_empty_usage()
 
