@@ -315,6 +315,8 @@ def calculate_img_tokens(
 
 
 TokenCounterFunction = Callable[[str], int]
+
+EXTRAPOLATION_SAMPLES: Final = 16
 """
 Type for a function that counts tokens in a string.
 """
@@ -547,9 +549,21 @@ def _get_extrapolating_count_function(
     def count_tokens(text: str) -> int:
         if len(text) <= max_exact_chars:
             return count_exactly(text)
-        return round(count_exactly(text[:max_exact_chars]) * len(text) / max_exact_chars)
+        samples: Final = _evenly_spaced_samples(text, max_exact_chars)
+        sampled_chars: Final = sum(len(sample) for sample in samples)
+        return round(sum(count_exactly(sample) for sample in samples) * len(text) / sampled_chars)
 
     return count_tokens
+
+
+def _evenly_spaced_samples(text: str, total_chars: int) -> tuple[str, ...]:
+    sample_count: Final = min(EXTRAPOLATION_SAMPLES, total_chars)
+    sample_chars: Final = total_chars // sample_count
+    last_start: Final = len(text) - sample_chars
+    return tuple(
+        text[start : start + sample_chars]
+        for start in (last_start * index // max(sample_count - 1, 1) for index in range(sample_count))
+    )
 
 
 def _get_count_function(
