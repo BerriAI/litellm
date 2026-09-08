@@ -1,5 +1,9 @@
 //! Parity tests between the Python and Rust.
 
+use libtest_mimic::{Arguments, Completion, Failed, Trial, run};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use similar::{ChangeTag, TextDiff};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -11,10 +15,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use libtest_mimic::{Arguments, Completion, Failed, Trial, run};
-use serde::Deserialize;
-use serde_json::{Value, json};
-use similar::{ChangeTag, TextDiff};
 
 const REAL_ENV: &str = "LITELLM_RUN_REAL";
 const REAL_FLAG: &str = "--real";
