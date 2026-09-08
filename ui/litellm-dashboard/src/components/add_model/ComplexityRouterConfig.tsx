@@ -50,6 +50,7 @@ import EscalationKeywords from "./EscalationKeywords";
 import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
 import SemanticKeywordMatching from "./SemanticKeywordMatching";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
+import { type CustomDimensionRow } from "./custom_dimensions";
 import CompressionControls from "./CompressionControls";
 import { type AutoRouterCompressionState, DEFAULT_AUTO_ROUTER_COMPRESSION } from "./buildAutoRouterCompression";
 
@@ -432,6 +433,11 @@ export interface ComplexityRouterConfigValue {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  /**
+   * Operator-added scoring dimensions, each carrying its own inline weight. Undefined means the router has
+   * none and keeps the key out of the payload; an empty array is a real "the last row was removed" state.
+   */
+  custom_dimensions?: CustomDimensionRow[];
   /**
    * Score floor the reasoning-marker override must clear. Undefined keeps the key out of the payload, so the
    * floor tracks tier_boundaries.simple_medium; an explicit 0 is a real floor that promotes on the markers alone.

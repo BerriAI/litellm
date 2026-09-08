@@ -40,7 +40,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
 )
 from litellm.router_strategy import simple_shuffle
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, RetryPolicy
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -6130,6 +6130,50 @@ def test_update_kwargs_with_deployment_no_tags():
 
     # No tags key should be added if deployment has no tags
     assert "tags" not in kwargs["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_narrow_tag_filtered_group_to_failed_deployments_tags():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tagged-group",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "fake-key",
+                    "tags": ["free"],
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000001,
+                    "mock_response": "litellm.ContextWindowExceededError",
+                },
+                "model_info": {"id": "tagged-failing"},
+            },
+            {
+                "model_name": "tagged-group",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "fake-key",
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.001,
+                    "mock_response": "ok",
+                },
+                "model_info": {"id": "untagged-healthy"},
+            },
+        ],
+        routing_strategy="cost-based-routing",
+        enable_tag_filtering=True,
+        num_retries=2,
+        retry_after=0,
+        retry_policy=RetryPolicy(BadRequestErrorRetries=2),
+    )
+    metadata: Final[dict[str, object]] = {}
+
+    response = await router.acompletion(
+        model="tagged-group", messages=[{"role": "user", "content": "hi"}], metadata=metadata
+    )
+
+    assert response._hidden_params["model_id"] == "untagged-healthy"
+    assert metadata["tags"] == ["free"]
 
 
 def test_update_kwargs_with_deployment_merges_tools():
@@ -14390,3 +14434,70 @@ async def test_router_max_parallel_requests_slot_released_when_stream_closed_ear
 
     assert tracker.peak == 1
     assert tracker.current == 0
+
+
+@pytest.mark.asyncio
+async def test_router_deployment_drop_params_string_true_is_honored(monkeypatch):
+    from litellm import Router
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-nano",
+                "litellm_params": {
+                    "model": "openai/gpt-5-nano",
+                    "api_key": "sk-fake",
+                    "temperature": 1,
+                    "reasoning_effort": "minimal",
+                    "drop_params": "true",
+                    "mock_response": "Hello, world!",
+                },
+            }
+        ],
+        num_retries=0,
+    )
+
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-nano")
+    assert deployment is not None
+    assert deployment.litellm_params.drop_params is True
+
+    response = await router.acompletion(
+        model="gpt-5-nano",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.1,
+    )
+    assert response.choices[0].message.content == "Hello, world!"
+
+
+@pytest.mark.parametrize("value", ["ture", "enabled"])
+def test_router_warns_when_a_deployment_drop_params_string_is_not_a_flag(value, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5-nano",
+                    "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-fake", "drop_params": value},
+                }
+            ]
+        )
+
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-nano")
+    assert deployment is not None
+    assert deployment.litellm_params.drop_params == value
+    assert f"model=gpt-5-nano drop_params={value!r} is not a flag value, treating it as unset" in caplog.text
+
+
+@pytest.mark.parametrize("value", [True, "true", "off", None])
+def test_router_stays_quiet_when_a_deployment_drop_params_is_a_flag(value, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5-nano",
+                    "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-fake", "drop_params": value},
+                }
+            ]
+        )
+
+    assert "is not a flag value" not in caplog.text
