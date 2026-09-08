@@ -171,6 +171,7 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.mcp import (
     MCPDuringCallResponseObject,
     MCPPreCallRequestObject,
@@ -525,15 +526,21 @@ def _post_call_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "Guardr
     )
 
 
-def _warn_background_skips_post_call_pipelines(data: Mapping[str, object]) -> None:
-    if data.get("background") is not True:
-        return
+_PENDING_BACKGROUND_RESPONSE_STATUSES: Final = frozenset(("queued", "in_progress"))
+
+
+def _is_pending_background_response(response: LLMResponseTypes) -> bool:
+    return isinstance(response, ResponsesAPIResponse) and response.status in _PENDING_BACKGROUND_RESPONSE_STATUSES
+
+
+def _log_deferred_post_call_pipelines(data: Mapping[str, object], response: ResponsesAPIResponse) -> None:
     policy_names: Final = tuple(policy_name for policy_name, _pipeline in _post_call_pipelines(data))
     if not policy_names:
         return
-    verbose_proxy_logger.warning(
-        "Policies with post_call guardrail pipelines do not run on background responses yet; "
-        "the response is released ungoverned by them: %s",
+    verbose_proxy_logger.debug(
+        "Post_call guardrail pipelines wait for background response %s (status=%s) to be retrieved complete: %s",
+        response.id,
+        response.status,
         ", ".join(policy_names),
     )
 
@@ -1956,8 +1963,6 @@ class ProxyLogging:
         )
 
         try:
-            _warn_background_skips_post_call_pipelines(data)
-
             # Execute guardrail pipelines before the normal callback loop
             data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
                 data=data,
@@ -2927,6 +2932,24 @@ class ProxyLogging:
             daemon=True,
         ).start()
 
+    async def _run_post_call_pipelines(
+        self,
+        data: dict,  # mutable-ok: same request-payload shape as post_call_success_hook's data
+        user_api_key_dict: UserAPIKeyAuth,
+        response: LLMResponseTypes,
+    ) -> LLMResponseTypes | None:
+        if _is_pending_background_response(response):
+            _log_deferred_post_call_pipelines(data, response)
+            return None
+        _, pipeline_response = await self._maybe_execute_pipelines(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            call_type=getattr(data.get("litellm_logging_obj"), "call_type", None) or "acompletion",
+            event_hook="post_call",
+            response=response,
+        )
+        return pipeline_response
+
     async def post_call_success_hook(
         self,
         data: dict,
@@ -2946,11 +2969,9 @@ class ProxyLogging:
         from litellm.proxy.proxy_server import llm_router
         from litellm.types.guardrails import GuardrailEventHooks
 
-        _, pipeline_response = await self._maybe_execute_pipelines(
+        pipeline_response: Final = await self._run_post_call_pipelines(
             data=data,
             user_api_key_dict=user_api_key_dict,
-            call_type=getattr(data.get("litellm_logging_obj"), "call_type", None) or "acompletion",
-            event_hook="post_call",
             response=response,
         )
         if pipeline_response is not None:
