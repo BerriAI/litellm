@@ -148,4 +148,4 @@ async def flush_tool_usage_transactions(
         except DB_RETRY_SAFE_ERROR_TYPES:
             if attempt >= n_retry_times:
                 raise
-            await asyncio.sleep(2**attempt + random.uniform(0, 1))
+            await asyncio.sleep(2.0**attempt + random.uniform(0, 1))

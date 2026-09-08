@@ -166,7 +166,8 @@ def up(ctx: click.Context) -> None:
     is already running (this does not start one for you). Cursor is not
     supported: it has no equivalent file-based config to patch.
     """
-    base_url: Final = ctx.obj["base_url"]
+    ctx_obj: Final[CliContextObj] = ctx.obj
+    base_url: Final = ctx_obj["base_url"]
 
     try:
         _ensure_fresh_login(ctx)

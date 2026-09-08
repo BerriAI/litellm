@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import click
@@ -5,10 +6,17 @@ import rich
 import rich.table
 
 from ... import Client
+from ._cli_context import cli_context_values
 
 
 def create_client(ctx: click.Context) -> Client:
-    return Client(base_url=ctx.obj["base_url"], api_key=ctx.obj["api_key"])
+    context: Final = cli_context_values(ctx)
+    return Client(base_url=context["base_url"], api_key=context["api_key"])
+
+
+def _rendered_field(group: Mapping[str, object], key: str, default: str) -> str:
+    """The rendered value of one model group field, or ``default`` when the group omits it."""
+    return str(group.get(key, default))
 
 
 @click.group(name="model-groups")
@@ -46,10 +54,10 @@ def list_model_groups(ctx: click.Context, output_format: Literal["table", "json"
 
     for group in groups:
         table.add_row(
-            str(group.get("model_group", "")),
-            str(group.get("mode", "chat")),
-            str(group.get("input_cost_per_token", "")),
-            str(group.get("output_cost_per_token", "")),
+            _rendered_field(group, "model_group", ""),
+            _rendered_field(group, "mode", "chat"),
+            _rendered_field(group, "input_cost_per_token", ""),
+            _rendered_field(group, "output_cost_per_token", ""),
         )
     rich.print(table)
 

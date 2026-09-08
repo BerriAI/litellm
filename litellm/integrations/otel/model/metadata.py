@@ -36,7 +36,7 @@ model. They coincide on the SDK path, which is correct.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -57,7 +57,7 @@ class RequestIdentity:
     # The team's free-form metadata, carried raw (empty/missing -> None) and
     # filtered to an operator allowlist only at Baggage-promotion time, so an
     # unconfigured deployment never promotes any of it.
-    team_metadata: Mapping[str, Any] | None = None
+    team_metadata: Mapping[str, object] | None = None
     key_hash: str | None = None
     end_user: str | None = None
     # The model litellm dispatched to the provider. Only known once the call
@@ -103,7 +103,7 @@ class RequestIdentity:
         ``user_api_key_*`` names that ``baggage.DEFAULT_BAGGAGE_METADATA_KEYS``
         promotes.
         """
-        get: Final = lambda name: getattr(auth, name, None)  # noqa: E731
+        get: Final[Callable[[str], object]] = lambda name: getattr(auth, name, None)  # noqa: E731
         metadata: Final = {
             meta_key: str(value)
             for meta_key, attr in (
@@ -217,7 +217,7 @@ class LLMCallEvent:
     time_to_first_chunk_seconds: float | None
 
     @classmethod
-    def from_dict(cls, kwargs: Mapping[str, Any]) -> LLMCallEvent:
+    def from_dict(cls, kwargs: Mapping[str, object]) -> LLMCallEvent:
         raw_payload: Final = kwargs.get("standard_logging_object")
         payload: Final = cast("StandardLoggingPayload", raw_payload) if raw_payload else None
         operation: Final = resolve_operation(as_str(kwargs.get("call_type")))
@@ -239,7 +239,7 @@ def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
     to the first streamed chunk (``completion_start_time``); ``None`` for
     non-streaming calls, where ``completion_start_time`` is backfilled with the
     end time and would not measure first-chunk latency."""
-    optional_params: Final = cast(Mapping[str, Any], kwargs.get("optional_params") or {})
+    optional_params: Final = cast(Mapping[str, object], kwargs.get("optional_params") or {})
     if not optional_params.get("stream"):
         return None
     api_call_start: Final = to_seconds(kwargs.get("api_call_start_time"))
@@ -307,7 +307,7 @@ def _metadata_dicts(
     )
 
 
-def _call_id(payload: StandardLoggingPayload | None, kwargs: Mapping[str, Any]) -> str | None:
+def _call_id(payload: StandardLoggingPayload | None, kwargs: Mapping[str, object]) -> str | None:
     """The call id from the payload (when closed) or the bare kwargs (at pre_call)."""
     if payload is not None:
         call_id: Final = as_str(payload.get("litellm_call_id")) or as_str(payload.get("id"))
@@ -351,7 +351,7 @@ def _model_info_id(model_info: object) -> str | None:
     return None
 
 
-def _team_metadata_dict(value: object) -> Mapping[str, Any] | None:
+def _team_metadata_dict(value: object) -> Mapping[str, object] | None:
     """The team's free-form metadata as a raw mapping, or ``None`` when missing
     or empty.
 

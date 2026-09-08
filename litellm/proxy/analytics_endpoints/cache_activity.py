@@ -2,14 +2,24 @@ import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final
+from typing import Final, Protocol
 
 from pydantic import BaseModel, TypeAdapter
 
-if TYPE_CHECKING:
-    from litellm.proxy.utils import PrismaClient
-
 UNKNOWN_CALL_TYPE: Final = "Unknown"
+
+
+class _SupportsQueryRaw(Protocol):
+    """The single database operation the cache-activity queries issue."""
+
+    async def query_raw(self, query: str, *args: object) -> Sequence[object]: ...
+
+
+class _SupportsRawQueryDb(Protocol):
+    """A prisma client handle, narrowed to the raw-query surface used here."""
+
+    @property
+    def db(self) -> _SupportsQueryRaw: ...
 
 
 class CacheActivityGroup(BaseModel):
@@ -143,7 +153,7 @@ def compute_totals(groups: Sequence[CacheActivityGroup]) -> CacheActivityTotals:
 
 
 async def get_cache_activity(
-    prisma_client: "PrismaClient",
+    prisma_client: _SupportsRawQueryDb,
     start_date: datetime,
     end_date: datetime,
     key_aliases: Sequence[str],

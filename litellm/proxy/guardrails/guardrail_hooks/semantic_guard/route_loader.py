@@ -6,6 +6,7 @@ then builds a SemanticRouter for prompt matching.
 """
 
 import os
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import yaml
@@ -66,7 +67,7 @@ class SemanticGuardRouteLoader:
         cls,
         route_templates: list[str] | None,
         custom_routes_file: str | None,
-        custom_routes: list[dict[str, Any]] | None,
+        custom_routes: Sequence[Mapping[str, object]] | None,
         global_threshold: float = DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD,
     ) -> list["Route"]:
         """Build semantic-router Route objects from templates + custom config."""

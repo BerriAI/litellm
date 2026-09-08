@@ -17,6 +17,7 @@ from litellm.proxy.spend_tracking.key_metadata_recovery import (
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
@@ -1155,8 +1156,10 @@ async def get_daily_activity(
             include_current_utc_day=include_current_utc_day,
         )
 
+        spend_table: Final[TableActions[DailySpendRecord]] = getattr(prisma_client.db, table_name)
+
         # Get total count for pagination
-        total_count: Final[int] = await getattr(prisma_client.db, table_name).count(where=where_conditions)
+        total_count: Final[int] = await spend_table.count(where=where_conditions)
 
         # Fetch paginated results.
         # ``date`` alone is not a unique sort key -- a busy tenant has many
@@ -1168,7 +1171,7 @@ async def get_daily_activity(
         # total. Adding ``id`` (the row's UUID primary key, present on both
         # LiteLLM_DailyUserSpend and LiteLLM_DailyTeamSpend) as a tiebreaker
         # gives every page a stable cursor (#30164).
-        daily_spend_data: Final[Sequence[DailySpendRecord]] = await getattr(prisma_client.db, table_name).find_many(
+        daily_spend_data: Final[Sequence[DailySpendRecord]] = await spend_table.find_many(
             where=where_conditions,
             order=[
                 {"date": "desc"},
