@@ -219,13 +219,13 @@ describe("Settings", () => {
     expect(vi.mocked(setCallbacksCall)).not.toHaveBeenCalled();
   });
 
-  it("should post the chosen export protocol when a select dynamic param is saved", async () => {
+  const mockOtelCallback = (variables: Record<string, string | null>) => {
     mockGetCallbacksCall.mockResolvedValue({
-      callbacks: [{ name: "otel", variables: { OTEL_ENDPOINT: "http://collector:4318" } }],
+      callbacks: [{ name: "otel", variables }],
       available_callbacks: {
         otel: {
           litellm_callback_name: "otel",
-          litellm_callback_params: ["OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_HEADERS"],
+          litellm_callback_params: ["OTEL_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_ENDPOINT", "OTEL_HEADERS"],
           ui_callback_name: "OpenTelemetry",
         },
       },
@@ -246,14 +246,21 @@ describe("Settings", () => {
         },
       },
     ]);
+  };
 
+  const openOtelEditModal = async () => {
     const user = userEvent.setup();
     render(<Settings {...defaultProps} />);
-
     await user.click(await screen.findByTestId("callback-actions-otel-success"));
     await user.click(await screen.findByTestId("callback-action-edit"));
+    return user;
+  };
 
-    fireEvent.change(await screen.findByLabelText("Endpoint URL"), { target: { value: "http://collector:4318" } });
+  it("should post the chosen export protocol when a select dynamic param is saved", async () => {
+    mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318" });
+    const user = await openOtelEditModal();
+
+    expect(await screen.findByLabelText("Endpoint URL")).toHaveValue("http://collector:4318");
     await user.click(screen.getByLabelText("Export Protocol"));
     await user.click(await screen.findByRole("option", { name: "http/json" }));
     expect(screen.getByLabelText("Export Protocol")).toHaveTextContent("http/json");
@@ -271,6 +278,27 @@ describe("Settings", () => {
           }),
         }),
       );
+    });
+  });
+
+  it("should show the saved export protocol in the edit modal and keep it on an unchanged save", async () => {
+    mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318", OTEL_EXPORTER_OTLP_PROTOCOL: "http/json" });
+    const user = await openOtelEditModal();
+
+    expect(await screen.findByLabelText("Endpoint URL")).toHaveValue("http://collector:4318");
+    expect(screen.getByLabelText("Export Protocol")).toHaveTextContent("http/json");
+
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith("token", {
+        environment_variables: {
+          callback: "otel",
+          otel_endpoint: "http://collector:4318",
+          otel_exporter_otlp_protocol: "http/json",
+        },
+        litellm_settings: { success_callback: ["otel"] },
+      });
     });
   });
 

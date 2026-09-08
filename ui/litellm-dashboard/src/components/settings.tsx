@@ -298,15 +298,22 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
   useEffect(() => {
     if (showEditCallback && selectedEditCallback) {
+      const params = getDynamicParamsForCallback(
+        selectedEditCallback.name,
+        callbackConfigs,
+        selectedEditCallback.variables,
+      );
+      const fieldNameFor = (variable: string) =>
+        params.find((param) => param.toUpperCase() === variable.toUpperCase()) ?? variable;
       const normalized = Object.fromEntries(
-        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [k, v ?? ""]),
+        Object.entries(selectedEditCallback.variables || {}).map(([k, v]) => [fieldNameFor(k), v ?? ""]),
       );
       editForm.reset({
         ...normalized,
         callback: selectedEditCallback.name,
       });
     }
-  }, [showEditCallback, selectedEditCallback, editForm]);
+  }, [showEditCallback, selectedEditCallback, editForm, callbackConfigs]);
 
   const handleSwitchChange = (alertName: string) => {
     if (activeAlerts.includes(alertName)) {
