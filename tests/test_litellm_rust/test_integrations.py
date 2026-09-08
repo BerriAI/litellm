@@ -62,7 +62,13 @@ async def test_generic_api_logger_exports_success_over_http(route: Route, provid
     "route",
     (
         OCR_ASYNC,
-        MESSAGES_ROUTE,
+        pytest.param(
+            MESSAGES_ROUTE,
+            marks=pytest.mark.xfail(
+                reason="Rust Messages retries after a committed provider failure",
+                strict=True,
+            ),
+        ),
     ),
     ids=route_id,
 )

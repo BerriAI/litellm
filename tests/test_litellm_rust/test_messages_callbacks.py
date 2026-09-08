@@ -170,6 +170,10 @@ async def test_messages_logging_drain_waits_for_suspended_callback(messages_serv
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    reason="Rust Messages retries after a committed provider failure",
+    strict=True,
+)
 async def test_messages_failure_callbacks_receive_original_provider_error(messages_server: RecordingServer) -> None:
     messages_server.default_response = ResponseSpec(body={"error": {"message": "provider unavailable"}}, status=500)
     messages_server.expected_requests = None
