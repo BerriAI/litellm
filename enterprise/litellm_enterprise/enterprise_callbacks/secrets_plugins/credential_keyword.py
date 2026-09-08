@@ -4,7 +4,7 @@ from typing import Final
 
 from detect_secrets.plugins.keyword import KeywordDetector
 
-_CREDENTIAL_VALUE: Final = re.compile(r"[A-Za-z0-9_.~+/-]+={0,2}")
+_CREDENTIAL_VALUE: Final = re.compile(r"[^\s()\[\]]+")
 _ENVIRONMENT_REFERENCE: Final = re.compile(r"os\.environ/\w+", re.IGNORECASE)
 _ENVIRONMENT_VARIABLE_NAME: Final = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
 _LOWERCASE_WORD_SEQUENCE: Final = re.compile(r"[a-z]+(?:[-._/][a-z]+)+")
