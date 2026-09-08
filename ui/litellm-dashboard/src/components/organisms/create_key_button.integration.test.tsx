@@ -199,7 +199,7 @@ const openModal = async (props: Partial<React.ComponentProps<typeof CreateKey>> 
   return view;
 };
 
-const userSearchInput = (): Promise<HTMLElement> => screen.findByPlaceholderText("Type email to search for users");
+const userSearchInput = (): Promise<HTMLElement> => screen.findByPlaceholderText("Type email or user ID to search for users");
 
 const openSection = async (name: RegExp) => {
   await userEvent.click(await screen.findByRole("button", { name }));
@@ -614,7 +614,7 @@ describe("CreateKey", () => {
 
     it("mounts the user search control only once Another User is chosen", async () => {
       await openModal();
-      expect(screen.queryByPlaceholderText("Type email to search for users")).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("Type email or user ID to search for users")).not.toBeInTheDocument();
 
       await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
 
@@ -901,7 +901,7 @@ describe("CreateKey", () => {
 
         expect(vi.mocked(userFilterUICall)).toHaveBeenCalledTimes(1);
         const params = vi.mocked(userFilterUICall).mock.calls[0][1] as URLSearchParams;
-        expect(params.get("user_email")).toBe("alice");
+        expect(params.get("search")).toBe("alice");
       } finally {
         vi.useRealTimers();
       }
@@ -912,7 +912,7 @@ describe("CreateKey", () => {
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
           new Promise((resolve) => {
-            answers.set(params.get("user_email") ?? "", resolve);
+            answers.set(params.get("search") ?? "", resolve);
           }) as never,
       );
 
@@ -944,7 +944,7 @@ describe("CreateKey", () => {
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
           new Promise((resolve) => {
-            answers.set(params.get("user_email") ?? "", resolve);
+            answers.set(params.get("search") ?? "", resolve);
           }) as never,
       );
 
@@ -972,7 +972,7 @@ describe("CreateKey", () => {
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
           new Promise((resolve) => {
-            answers.set(params.get("user_email") ?? "", resolve);
+            answers.set(params.get("search") ?? "", resolve);
           }) as never,
       );
 
@@ -1007,7 +1007,7 @@ describe("CreateKey", () => {
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
           new Promise((resolve, reject) => {
-            answers.set(params.get("user_email") ?? "", { resolve, reject });
+            answers.set(params.get("search") ?? "", { resolve, reject });
           }) as never,
       );
 
@@ -1055,7 +1055,7 @@ describe("CreateKey", () => {
       vi.mocked(userFilterUICall).mockImplementation(
         (_accessToken, params) =>
           Promise.resolve(
-            directory.filter((entry) => entry.user_email.includes(params.get("user_email") ?? "")),
+            directory.filter((entry) => entry.user_email.includes(params.get("search") ?? "")),
           ) as never,
       );
 
