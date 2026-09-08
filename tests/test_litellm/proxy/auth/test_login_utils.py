@@ -186,6 +186,7 @@ async def test_authenticate_user_invalid_credentials():
         assert exc_info.value.type == ProxyErrorTypes.auth_error
         assert exc_info.value.code == "401"
         assert "Invalid credentials" in exc_info.value.message
+        assert "UI_USERNAME" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -829,6 +830,8 @@ class TestDisableEnvCredentialLogin:
 
         assert exc_info.value.type == ProxyErrorTypes.auth_error
         assert exc_info.value.code == "401"
+        assert "UI_USERNAME" not in exc_info.value.message
+        assert "UI_PASSWORD" not in exc_info.value.message
 
     @pytest.mark.asyncio
     async def test_rejects_master_key_fallback_when_disabled(self):
