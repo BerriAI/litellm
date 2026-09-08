@@ -16,6 +16,13 @@ pyo3::create_exception!(
     "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
 );
 
+pyo3::create_exception!(
+    _native,
+    RustBridgeDriverError,
+    pyo3::exceptions::PyRuntimeError,
+    "The Rust bridge could not initialize a route driver."
+);
+
 pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     match err {
         Error::InvalidProvider(_) => PyValueError::new_err("Invalid provider configuration"),
@@ -81,7 +88,11 @@ pub(crate) fn messages_provider_error_to_pyerr(err: Error) -> PyErr {
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
     module.add("RustBridgeDeclined", py.get_type::<RustBridgeDeclined>())?;
-    module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())
+    module.add("RustUpstreamError", py.get_type::<RustUpstreamError>())?;
+    module.add(
+        "RustBridgeDriverError",
+        py.get_type::<RustBridgeDriverError>(),
+    )
 }
 
 #[cfg(test)]

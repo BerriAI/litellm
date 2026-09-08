@@ -35,6 +35,7 @@ mod tests {
             let expected = [
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "RustBridgeDriverError",
                 "ocr",
                 "aocr",
                 "transcription",
