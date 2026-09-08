@@ -160,7 +160,7 @@ interface CreateKeyProps {
 
 interface User {
   user_id: string;
-  user_email: string;
+  user_email: string | null;
   role?: string;
 }
 
@@ -578,7 +578,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       const data: User[] = response;
       const options: SearchSelectOption[] = data.map((user) => ({
-        label: `${user.user_email} (${user.user_id})`,
+        label: user.user_email ? `${user.user_email} (${user.user_id})` : user.user_id,
         value: user.user_id,
       }));
 
