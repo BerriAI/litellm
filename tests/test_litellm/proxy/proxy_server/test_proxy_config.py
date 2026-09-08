@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
@@ -1156,6 +1157,28 @@ async def test_ProxyConfig_load_config_builds_the_secret_manager_exactly_once(tm
         "constructions": _construction_count(tmp_path),
         "master_key": general_settings["master_key"],
     } == {"constructions": 1, "master_key": "master-from-vault"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("raw_value", "expected"), (("true", True), ("false", False)))
+async def test_load_config_normalizes_hosted_input_sequence_length_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, raw_value: str, expected: bool
+) -> None:
+    monkeypatch.setattr(litellm, "prometheus_emit_input_sequence_length_label", not expected)
+    monkeypatch.delenv("PROM_FLAG", raising=False)
+    config_yaml: Final = (
+        VAULT_BACKED_CONFIG.replace("master_key: os.environ/LITELLM_MASTER_KEY", "master_key: null")
+        .replace("      - MY_PROVIDER_KEY", "      - MY_PROVIDER_KEY\n      - PROM_FLAG")
+        + "\nlitellm_settings:\n  prometheus_emit_input_sequence_length_label: os.environ/PROM_FLAG\n"
+    )
+    config_file_path: Final = _write_vault_backed_config(tmp_path, monkeypatch, config_yaml)
+    (tmp_path / "vault_secret_manager.py").write_text(
+        VAULT_SECRET_MANAGER_MODULE + f"\nVAULT['PROM_FLAG'] = {raw_value!r}\n"
+    )
+
+    await ProxyConfig().load_config(router=None, config_file_path=config_file_path)
+
+    assert litellm.prometheus_emit_input_sequence_length_label is expected
 
 
 @pytest.mark.asyncio

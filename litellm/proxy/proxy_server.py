@@ -5510,6 +5510,8 @@ class ProxyConfig:
 
                     parse_budget_reset_time(value)
                     setattr(litellm, key, value)
+                elif key == "prometheus_emit_input_sequence_length_label":
+                    self._apply_safe_litellm_setting_override(key, value)
                 else:
                     verbose_proxy_logger.debug(
                         "%s setting litellm.%s=%s%s",
