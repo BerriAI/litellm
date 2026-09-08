@@ -54,7 +54,7 @@ class TestChatGPTResponsesAPITransformation:
             "chatgpt/gpt-5.6-terra",
         ],
     )
-    def test_chatgpt_responses_model_metadata(self, model_name, local_model_cost_map):
+    def test_chatgpt_responses_model_metadata(self, model_name: str, local_model_cost_map: None) -> None:
         model_info = litellm.get_model_info(model_name)
 
         assert model_info["litellm_provider"] == "chatgpt"
@@ -75,7 +75,9 @@ class TestChatGPTResponsesAPITransformation:
             "gpt-5.6-terra",
         ],
     )
-    def test_chatgpt_models_bridge_chat_completions_to_responses(self, model_name, local_model_cost_map):
+    def test_chatgpt_models_bridge_chat_completions_to_responses(
+        self, model_name: str, local_model_cost_map: None
+    ) -> None:
         """A chat completions request for these models must take the Responses bridge.
 
         `gpt-5.6-*` also exists as an openai chat model, so an unregistered
