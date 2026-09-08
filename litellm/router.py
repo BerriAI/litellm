@@ -13100,6 +13100,82 @@ class Router:
         )
         return registered_model_name
 
+    def _resolve_encrypted_content_affinity_hook(
+        self,
+        selected_strategy: Any,
+        request_kwargs: dict,
+        messages: list[dict[str, Any]] | None = None,
+        input: str | list | None = None,
+    ) -> Optional["PreRoutingHookResponse"]:
+        configured_callbacks: list[Any] = []
+        if hasattr(self, "optional_callbacks") and isinstance(self.optional_callbacks, list):  # guard-ok: type discipline
+            configured_callbacks.extend(self.optional_callbacks)
+        if hasattr(self, "callbacks") and isinstance(self.callbacks, list):  # guard-ok: type discipline
+            configured_callbacks.extend(self.callbacks)
+        if hasattr(self, "pre_call_checks") and isinstance(self.pre_call_checks, list):  # guard-ok: type discipline
+            configured_callbacks.extend(self.pre_call_checks)
+
+        affinity_enabled = (
+            "encrypted_content_affinity" in configured_callbacks
+            or bool(getattr(self, "enable_encrypted_content_affinity", False))  # guard-ok: boolean flag fallback
+            or any(
+                c.__class__.__name__ == "EncryptedContentAffinityCheck"
+                for c in configured_callbacks
+                if hasattr(c, "__class__")  # guard-ok: class inspection
+            )
+        )
+        if not affinity_enabled:
+            return None
+
+        from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+            EncryptedContentAffinityCheck,
+        )
+
+        raw_input = (
+            input
+            if input is not None
+            else (
+                messages
+                if messages is not None
+                else (request_kwargs.get("input") or request_kwargs.get("messages"))
+            )
+        )
+        extracted_model_id = EncryptedContentAffinityCheck._extract_model_id_from_input(raw_input)
+        if not extracted_model_id:
+            return None
+
+        strategy_params = getattr(selected_strategy, "litellm_params", None)  # guard-ok: type discipline
+        allowed_models: set[str] = set()
+        if isinstance(strategy_params, dict):
+            cfg_dict = strategy_params.get("complexity_router_config")
+            if isinstance(cfg_dict, dict):
+                tiers_dict = cfg_dict.get("tiers")
+                if isinstance(tiers_dict, dict):
+                    allowed_models.update(str(v) for v in tiers_dict.values() if v)
+            def_model = strategy_params.get("complexity_router_default_model")
+            if isinstance(def_model, str) and def_model:
+                allowed_models.add(def_model)
+        elif strategy_params is not None:
+            cfg_obj = getattr(strategy_params, "complexity_router_config", None)  # guard-ok: type discipline
+            if isinstance(cfg_obj, dict):
+                tiers_dict = cfg_obj.get("tiers")
+                if isinstance(tiers_dict, dict):
+                    allowed_models.update(str(v) for v in tiers_dict.values() if v)
+            def_model_obj = getattr(strategy_params, "complexity_router_default_model", None)  # guard-ok: type discipline
+            if isinstance(def_model_obj, str) and def_model_obj:
+                allowed_models.add(def_model_obj)
+
+        originating_deployment = self.get_deployment(model_id=extracted_model_id)
+        dep_model_name = getattr(originating_deployment, "model_name", None)  # guard-ok: type discipline
+        if originating_deployment and dep_model_name in allowed_models:
+            from litellm.types.router import PreRoutingHookResponse
+
+            return PreRoutingHookResponse(
+                model=dep_model_name,
+                messages=messages if isinstance(messages, list) else None,
+            )
+        return None
+
     async def async_pre_routing_hook(
         self,
         model: str,
@@ -13151,74 +13227,14 @@ class Router:
             return None
 
         # Encrypted content affinity check (Issue #40237):
-        configured_callbacks: list[Any] = []
-        if hasattr(self, "optional_callbacks") and isinstance(self.optional_callbacks, list):  # guard-ok: type discipline
-            configured_callbacks.extend(self.optional_callbacks)
-        if hasattr(self, "callbacks") and isinstance(self.callbacks, list):  # guard-ok: type discipline
-            configured_callbacks.extend(self.callbacks)
-        if hasattr(self, "pre_call_checks") and isinstance(self.pre_call_checks, list):  # guard-ok: type discipline
-            configured_callbacks.extend(self.pre_call_checks)
-
-        affinity_enabled = (
-            "encrypted_content_affinity" in configured_callbacks
-            or bool(getattr(self, "enable_encrypted_content_affinity", False))  # guard-ok: boolean flag fallback
-            or any(
-                c.__class__.__name__ == "EncryptedContentAffinityCheck"
-                for c in configured_callbacks
-                if hasattr(c, "__class__")  # guard-ok: class inspection
-            )
+        affinity_resp = self._resolve_encrypted_content_affinity_hook(
+            selected_strategy=selected_strategy,
+            request_kwargs=request_kwargs,
+            messages=messages,
+            input=input,
         )
-        if affinity_enabled:
-            from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-                EncryptedContentAffinityCheck,
-            )
-
-            raw_input = (
-                input
-                if input is not None
-                else (
-                    messages
-                    if messages is not None
-                    else (request_kwargs.get("input") or request_kwargs.get("messages"))
-                )
-            )
-            extracted_model_id = EncryptedContentAffinityCheck._extract_model_id_from_input(
-                raw_input
-            )
-            if extracted_model_id:
-                strategy_params = getattr(selected_strategy, "litellm_params", None)  # guard-ok: type discipline
-                allowed_models: set[str] = set()
-                if isinstance(strategy_params, dict):
-                    cfg_dict = strategy_params.get("complexity_router_config")
-                    if isinstance(cfg_dict, dict):
-                        tiers_dict = cfg_dict.get("tiers")
-                        if isinstance(tiers_dict, dict):
-                            allowed_models.update(str(v) for v in tiers_dict.values() if v)
-                    def_model = strategy_params.get("complexity_router_default_model")
-                    if isinstance(def_model, str) and def_model:
-                        allowed_models.add(def_model)
-                elif strategy_params is not None:
-                    cfg_obj = getattr(strategy_params, "complexity_router_config", None)  # guard-ok: type discipline
-                    if isinstance(cfg_obj, dict):
-                        tiers_dict = cfg_obj.get("tiers")
-                        if isinstance(tiers_dict, dict):
-                            allowed_models.update(str(v) for v in tiers_dict.values() if v)
-                    def_model_obj = getattr(strategy_params, "complexity_router_default_model", None)  # guard-ok: type discipline
-                    if isinstance(def_model_obj, str) and def_model_obj:
-                        allowed_models.add(def_model_obj)
-
-                originating_deployment = self.get_deployment(model_id=extracted_model_id)
-                dep_model_name = getattr(originating_deployment, "model_name", None)  # guard-ok: type discipline
-                if (
-                    originating_deployment
-                    and dep_model_name in allowed_models
-                ):
-                    from litellm.types.router import PreRoutingHookResponse
-
-                    return PreRoutingHookResponse(
-                        model=dep_model_name,
-                        messages=messages if isinstance(messages, list) else None,
-                    )
+        if affinity_resp is not None:
+            return affinity_resp
 
         from litellm.proxy.guardrails.auto_router_compression import (
             messages_for_routing,
