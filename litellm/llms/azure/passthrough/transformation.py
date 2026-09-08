@@ -61,11 +61,11 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         routed_endpoint: Final = replace_path_segment(endpoint, model_group, model) if model_group else endpoint
         native_endpoint: Final = strip_leading_model_segment(routed_endpoint, (model,))
 
+        caller_api_version: Final = request_query_params.get("api-version") if request_query_params else None
         complete_url: Final = BaseAzureLLM._get_base_azure_url(
             api_base=base_target_url,
-            litellm_params=litellm_params,
+            litellm_params={**litellm_params, "api_version": caller_api_version or litellm_params.get("api_version")},
             route=native_endpoint,
-            default_api_version=request_query_params.get("api-version") if request_query_params else None,
         )
         return (
             httpx.URL(complete_url),

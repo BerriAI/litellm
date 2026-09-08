@@ -207,17 +207,23 @@ def _complete_url(request_query_params: dict, litellm_params: dict) -> httpx.URL
     return url
 
 
-def test_azure_passthrough_url_falls_back_to_the_callers_api_version():
+def test_azure_passthrough_url_forwards_the_callers_api_version():
     url = _complete_url(request_query_params={"api-version": "2025-04-01-preview"}, litellm_params={})
 
     assert url.path == "/openai/deployments/gpt-4.1-mini/chat/completions"
     assert url.params["api-version"] == "2025-04-01-preview"
 
 
-def test_azure_passthrough_url_prefers_the_deployments_api_version():
+def test_azure_passthrough_url_prefers_the_callers_api_version_over_the_deployments():
     url = _complete_url(
         request_query_params={"api-version": "2025-04-01-preview"}, litellm_params={"api_version": "2024-10-21"}
     )
+
+    assert url.params["api-version"] == "2025-04-01-preview"
+
+
+def test_azure_passthrough_url_fills_in_the_deployments_api_version_when_the_caller_sends_none():
+    url = _complete_url(request_query_params={}, litellm_params={"api_version": "2024-10-21"})
 
     assert url.params["api-version"] == "2024-10-21"
 
