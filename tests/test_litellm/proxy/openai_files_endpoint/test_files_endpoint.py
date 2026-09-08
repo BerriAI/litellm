@@ -4668,7 +4668,9 @@ def test_create_file_path_traversal_filename_rejected_before_forwarding(monkeypa
     assert forwarded_calls == []
 
 
-def _setup_managed_file_route_answering_404(mocker: MockerFixture, monkeypatch, llm_router: Router):
+def _setup_managed_file_route_answering_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
     """Wire the single-file routes to a managed file store that knows no file, the way the
     managed files hook answers once a file has been deleted or was never the caller's."""
     import litellm.proxy.proxy_server as ps
@@ -4676,7 +4678,7 @@ def _setup_managed_file_route_answering_404(mocker: MockerFixture, monkeypatch, 
     from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
     from litellm.proxy._types import LitellmUserRoles
 
-    async def _file_not_found(file_id: str, **kwargs):
+    async def _file_not_found(file_id: str, **kwargs: object) -> None:
         raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
 
     proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
@@ -4694,7 +4696,7 @@ def _setup_managed_file_route_answering_404(mocker: MockerFixture, monkeypatch, 
     )
 
 
-def _call_managed_file_route(method: str, path: str):
+def _call_managed_file_route(method: str, path: str) -> httpx.Response:
     try:
         return client.request(method, path, headers={"Authorization": "Bearer test-key"})
     finally:
@@ -4703,7 +4705,7 @@ def _call_managed_file_route(method: str, path: str):
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
 
-def _missing_managed_file_error(file_id: str) -> dict:
+def _missing_managed_file_error(file_id: str) -> dict[str, dict[str, str | None]]:
     return {
         "error": {
             "message": f"File not found: {file_id}",
@@ -4714,7 +4716,9 @@ def _missing_managed_file_error(file_id: str) -> dict:
     }
 
 
-def test_create_file_reports_a_half_specified_expires_after_as_a_400(monkeypatch, llm_router: Router):
+def test_create_file_reports_a_half_specified_expires_after_as_a_400(
+    monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
     """A 400 raised inside the route answers with the type a 400 stands for and a JSON null
     param, not the literal string "None" in both fields, so a client can classify it."""
     setup_proxy_logging_object(monkeypatch, llm_router)
@@ -4735,7 +4739,9 @@ def test_create_file_reports_a_half_specified_expires_after_as_a_400(monkeypatch
     assert error["code"] == "400"
 
 
-def test_get_file_reports_a_missing_managed_file_as_a_404(mocker: MockerFixture, monkeypatch, llm_router: Router):
+def test_get_file_reports_a_missing_managed_file_as_a_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
     _setup_managed_file_route_answering_404(mocker, monkeypatch, llm_router)
     file_id = _unified_managed_file_id()
 
@@ -4745,7 +4751,9 @@ def test_get_file_reports_a_missing_managed_file_as_a_404(mocker: MockerFixture,
     assert response.json() == _missing_managed_file_error(file_id)
 
 
-def test_delete_file_reports_a_missing_managed_file_as_a_404(mocker: MockerFixture, monkeypatch, llm_router: Router):
+def test_delete_file_reports_a_missing_managed_file_as_a_404(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
     _setup_managed_file_route_answering_404(mocker, monkeypatch, llm_router)
     file_id = _unified_managed_file_id()
 
@@ -4756,7 +4764,7 @@ def test_delete_file_reports_a_missing_managed_file_as_a_404(mocker: MockerFixtu
 
 
 def test_get_file_content_reports_a_missing_managed_file_as_a_404(
-    mocker: MockerFixture, monkeypatch, llm_router: Router
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
 ):
     _setup_managed_file_route_answering_404(mocker, monkeypatch, llm_router)
     file_id = _unified_managed_file_id()

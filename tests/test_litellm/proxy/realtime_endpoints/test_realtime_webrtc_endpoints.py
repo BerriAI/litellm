@@ -6,10 +6,12 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 
 import json
 import time
+from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 
@@ -1199,3 +1201,43 @@ async def test_transcription_sessions_wraps_route_exception(
         assert "Model not allowed" in response.text
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_realtime_calls_upstream_rejection_answers_an_openai_typed_error(
+    proxy_app: FastAPI,
+    mock_add_litellm_data: Callable[..., Awaitable[object]],
+    mock_pre_call_hook: Callable[..., Awaitable[object]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A bare HTTPException carries no type or param, so the tail used to ship the
+    literal string "None" in both fields of the error the browser client reads."""
+    token_payload = _encode_realtime_token_payload(
+        ephemeral_key="fake_upstream_epk",
+        model_id="gpt-4o-realtime-preview",
+        user_id=None,
+        team_id=None,
+        expires_at=int(time.time()) + 3600,
+    )
+    encrypted_token = encrypt_value_helper(token_payload)
+
+    async def failing_route_request(*args: object, **kwargs: object) -> None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "realtime: Invalid model name passed in model=gpt-4o-realtime-preview"},
+        )
+
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.route_request", failing_route_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", mock_add_litellm_data)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+
+    response = TestClient(proxy_app).post(
+        "/v1/realtime/calls",
+        headers={"Authorization": f"Bearer {encrypted_token}"},
+        content=b"v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\n",
+    )
+
+    assert response.status_code == 404
+    assert (response.json()["error"]["type"], response.json()["error"]["param"]) == ("invalid_request_error", None)

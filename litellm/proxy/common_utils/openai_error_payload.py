@@ -12,6 +12,7 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
     {
         status.HTTP_401_UNAUTHORIZED: "authentication_error",
         status.HTTP_403_FORBIDDEN: "permission_error",
+        status.HTTP_408_REQUEST_TIMEOUT: "timeout_error",
         status.HTTP_429_TOO_MANY_REQUESTS: "rate_limit_error",
     }
 )
@@ -22,9 +23,13 @@ def attribute_of(value: object, name: str, default: object = None) -> object:
 
 
 def error_status_code(exc: object, default: int) -> int:
-    """The HTTP status an exception carries, or ``default`` when it carries none."""
+    """The HTTP status an exception carries as ``status_code`` or, the way ``ProxyException``
+    stores it, as a stringified ``code``; ``default`` when it carries neither."""
     carried: Final = attribute_of(exc, "status_code")
-    return carried if isinstance(carried, int) and not isinstance(carried, bool) else default
+    if isinstance(carried, int) and not isinstance(carried, bool):
+        return carried
+    stringified: Final = attribute_of(exc, "code")
+    return int(stringified) if isinstance(stringified, str) and stringified.isdecimal() else default
 
 
 def openai_error_type(exc: object, status_code: int) -> str:

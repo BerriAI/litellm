@@ -18,6 +18,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
         (401, "authentication_error"),
         (403, "permission_error"),
         (404, "invalid_request_error"),
+        (408, "timeout_error"),
         (422, "invalid_request_error"),
         (429, "rate_limit_error"),
         (499, "invalid_request_error"),
@@ -107,6 +108,33 @@ def test_a_non_int_carried_status_falls_back_to_the_default(carried_status: obje
         status_code = carried_status
 
     assert error_status_code(_Carrier("boom"), 500) == 500
+
+
+def test_a_proxy_exception_keeps_the_status_it_was_raised_with():
+    """ProxyException stores its status as the string ``code`` rather than ``status_code``,
+    so a route tail that rewraps one used to answer a 4xx rejection as a 500."""
+    rejection = ProxyException(message="session_id is required", type="bad_request_error", param="session_id", code=400)
+
+    assert error_status_code(rejection, 500) == 400
+
+
+@pytest.mark.parametrize("carried_code", [None, "None", "", "rate_limited", "4xx", 404])
+def test_a_code_that_is_not_a_decimal_string_falls_back_to_the_default(carried_code: object):
+    """Only ProxyException's stringified status is a status; ``code`` on anything else
+    (OpenAI's ``invalid_api_key``, a stray int) says nothing about the HTTP answer."""
+
+    class _Carrier(Exception):
+        code = carried_code
+
+    assert error_status_code(_Carrier("boom"), 500) == 500
+
+
+def test_a_status_code_wins_over_a_stringified_code():
+    class _Carrier(Exception):
+        status_code = 429
+        code = "400"
+
+    assert error_status_code(_Carrier("boom"), 500) == 429
 
 
 def test_a_status_carried_by_an_exception_drives_the_type_it_reports():
