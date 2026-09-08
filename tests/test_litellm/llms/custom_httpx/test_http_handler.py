@@ -6,6 +6,7 @@ import pathlib
 import ssl
 import threading
 import weakref
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import certifi
@@ -753,6 +754,23 @@ async def _read_http_request(reader: asyncio.StreamReader) -> None:
     )
     while len(body) < content_length:
         body += await reader.read(content_length - len(body))
+
+
+@pytest.mark.asyncio
+async def test_async_handler_leaves_injected_client_lifecycle_to_caller():
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="ok", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler: Final = AsyncHTTPHandler(client=client)
+        response: Final = await handler.post("https://transport.test/v1/compress", json={"messages": []})
+        assert response.status_code == 200
+        assert response.text == "ok"
+        await handler.close()
+        assert not client.is_closed
+
+    assert client.is_closed
+    assert handler.client is client
 
 
 @pytest.mark.asyncio

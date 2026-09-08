@@ -3275,18 +3275,10 @@ _FAKE_AWS_PARAMS: Final = MappingProxyType(
 )
 
 
-def _timing_out_transport(seen_timeouts: list[object]) -> httpx.MockTransport:
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen_timeouts.append(request.extensions.get("timeout"))
-        raise httpx.ReadTimeout("mock transport deadline", request=request)
-
-    return httpx.MockTransport(handler)
-
-
-def _assert_deadline_reached_transport(seen_timeouts: list[object]) -> None:
-    assert seen_timeouts, "the request never reached the transport"
-    read_timeouts: Final = [t["read"] for t in seen_timeouts if isinstance(t, dict)]
-    assert read_timeouts == [_TRANSPORT_TIMEOUT_SECONDS] * len(seen_timeouts)
+def _assert_deadline_and_timeout(request: httpx.Request) -> httpx.Response:
+    timeout: Final = request.extensions.get("timeout")
+    assert isinstance(timeout, dict) and timeout.get("read") == _TRANSPORT_TIMEOUT_SECONDS
+    raise httpx.ReadTimeout("mock transport deadline", request=request)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3334,8 +3326,8 @@ _SYNC_TRANSPORT_TIMEOUT_CASES: Final = (
 
 @pytest.mark.parametrize("case", _SYNC_TRANSPORT_TIMEOUT_CASES, ids=lambda case: case.name)
 def test_completion_timeout_reaches_the_transport_and_maps_to_timeout(case: _TransportTimeoutCase):
-    seen_timeouts: list[object] = []
-    client: Final = case.make_client(_timing_out_transport(seen_timeouts))
+    handler: Final = MagicMock(side_effect=_assert_deadline_and_timeout)
+    client: Final = case.make_client(httpx.MockTransport(handler))
     if case.embedding:
         with pytest.raises(litellm.Timeout):
             litellm.embedding(
@@ -3361,7 +3353,7 @@ def test_completion_timeout_reaches_the_transport_and_maps_to_timeout(case: _Tra
                     **case.extra_kwargs,
                 )
             )
-    _assert_deadline_reached_transport(seen_timeouts)
+    handler.assert_called()
 
 
 async def _async_openai_client(transport: httpx.MockTransport) -> openai.AsyncOpenAI:
@@ -3369,10 +3361,7 @@ async def _async_openai_client(transport: httpx.MockTransport) -> openai.AsyncOp
 
 
 async def _async_http_handler(transport: httpx.MockTransport) -> AsyncHTTPHandler:
-    handler: Final = AsyncHTTPHandler()
-    await handler.client.aclose()
-    handler.client = httpx.AsyncClient(transport=transport)
-    return handler
+    return AsyncHTTPHandler(client=httpx.AsyncClient(transport=transport))
 
 
 @dataclass(frozen=True, slots=True)
@@ -3409,8 +3398,8 @@ async def _consume_async_timeout_response(response: litellm.ModelResponse | lite
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", _ASYNC_TRANSPORT_TIMEOUT_CASES, ids=lambda case: case.name)
 async def test_acompletion_timeout_reaches_the_transport_and_maps_to_timeout(case: _AsyncTransportTimeoutCase):
-    seen_timeouts: list[object] = []
-    client: Final = await case.make_client(_timing_out_transport(seen_timeouts))
+    handler: Final = MagicMock(side_effect=_assert_deadline_and_timeout)
+    client: Final = await case.make_client(httpx.MockTransport(handler))
     with pytest.raises(litellm.Timeout):
         await _consume_async_timeout_response(
             await litellm.acompletion(
@@ -3424,4 +3413,4 @@ async def test_acompletion_timeout_reaches_the_transport_and_maps_to_timeout(cas
                 **case.extra_kwargs,
             )
         )
-    _assert_deadline_reached_transport(seen_timeouts)
+    handler.assert_called()
