@@ -1,6 +1,8 @@
 import copy
+import json
 import sys
 from types import ModuleType, SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -17,6 +19,7 @@ from litellm.proxy.common_utils.callback_utils import (
     sanitize_openai_provider_metadata,
     strip_callback_config,
 )
+from litellm.types.guardrails import GuardrailEventHooks
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
@@ -189,20 +192,81 @@ def test_get_logging_caching_headers_merges_metadata_and_litellm_metadata():
     assert headers["x-litellm-policy-sources"] == "global-baseline=team_default"
 
 
+def _record(
+    request_data: dict[str, object],
+    scan_id: str | None,
+    guardrail_name: str = "airs",
+    provider: str = "panw_prisma_airs",
+    stage: GuardrailEventHooks = GuardrailEventHooks.pre_call,
+) -> None:
+    add_guardrail_scan_id(
+        request_data=request_data, scan_id=scan_id, guardrail_name=guardrail_name, provider=provider, stage=stage
+    )
+
+
 def test_add_guardrail_scan_id_dedupes_and_becomes_response_header():
     request_data = {"litellm_metadata": {}}
 
-    add_guardrail_scan_id(request_data=request_data, scan_id="scan-1")
-    add_guardrail_scan_id(request_data=request_data, scan_id="scan-1")
-    add_guardrail_scan_id(request_data=request_data, scan_id="scan-2")
-    add_guardrail_scan_id(request_data=request_data, scan_id=None)
+    _record(request_data, "scan-1")
+    _record(request_data, "scan-1")
+    _record(request_data, "scan-2")
+    _record(request_data, None)
 
     assert request_data["litellm_metadata"]["guardrail_scan_ids"] == ("scan-1", "scan-2")
     assert get_logging_caching_headers(request_data)["x-litellm-guardrail-scan-id"] == "scan-1,scan-2"
 
 
-def test_get_logging_caching_headers_omits_scan_id_header_without_scans():
-    assert "x-litellm-guardrail-scan-id" not in get_logging_caching_headers({"litellm_metadata": {}})
+def test_scan_metadata_header_maps_each_id_to_its_guardrail_stage_and_provider():
+    request_data: Final[dict[str, object]] = {"litellm_metadata": {}}
+
+    _record(
+        request_data, "scan-1", guardrail_name="airs", provider="panw_prisma_airs", stage=GuardrailEventHooks.pre_call
+    )
+    _record(
+        request_data, "mod-1", guardrail_name="mod", provider="openai_moderation", stage=GuardrailEventHooks.pre_call
+    )
+    _record(
+        request_data, "scan-2", guardrail_name="airs", provider="panw_prisma_airs", stage=GuardrailEventHooks.post_call
+    )
+    _record(
+        request_data, "scan-2", guardrail_name="airs", provider="panw_prisma_airs", stage=GuardrailEventHooks.post_call
+    )
+    _record(request_data, None, guardrail_name="mod", provider="openai_moderation", stage=GuardrailEventHooks.post_call)
+
+    headers: Final = get_logging_caching_headers(request_data)
+    assert headers is not None
+    assert headers["x-litellm-guardrail-scan-id"] == "scan-1,mod-1,scan-2"
+    assert json.loads(headers["x-litellm-guardrail-scan-metadata"]) == [
+        {"guardrail": "airs", "stage": "pre_call", "provider": "panw_prisma_airs", "scan_id": "scan-1"},
+        {"guardrail": "mod", "stage": "pre_call", "provider": "openai_moderation", "scan_id": "mod-1"},
+        {"guardrail": "airs", "stage": "post_call", "provider": "panw_prisma_airs", "scan_id": "scan-2"},
+    ]
+
+
+def test_scan_metadata_keeps_same_id_reused_across_stages():
+    request_data: Final[dict[str, object]] = {"metadata": {}}
+
+    _record(request_data, "scan-1", stage=GuardrailEventHooks.pre_call)
+    _record(request_data, "scan-1", stage=GuardrailEventHooks.post_call)
+
+    headers: Final = get_logging_caching_headers(request_data)
+    assert headers is not None
+    assert headers["x-litellm-guardrail-scan-id"] == "scan-1"
+    assert [entry["stage"] for entry in json.loads(headers["x-litellm-guardrail-scan-metadata"])] == [
+        "pre_call",
+        "post_call",
+    ]
+
+
+def test_scan_metadata_is_an_internal_metadata_key():
+    assert sanitize_openai_provider_metadata({"guardrail_scan_metadata": "x", "keep": "y"}) == {"keep": "y"}
+
+
+def test_get_logging_caching_headers_omits_scan_headers_without_scans():
+    headers: Final = get_logging_caching_headers({"litellm_metadata": {}})
+    assert headers is not None
+    assert "x-litellm-guardrail-scan-id" not in headers
+    assert "x-litellm-guardrail-scan-metadata" not in headers
 
 
 def test_initialize_callbacks_on_proxy_instantiates_compression_interception(
