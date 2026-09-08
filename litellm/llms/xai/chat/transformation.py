@@ -68,8 +68,10 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
+            raw_token_file: Final = (litellm_params or {}).get("xai_oauth_token_file")
+            token_file: Final = raw_token_file if isinstance(raw_token_file, str) else None
             try:
-                headers["Authorization"] = f"Bearer {XAIOAuthAuthenticator().get_access_token()}"
+                headers["Authorization"] = f"Bearer {XAIOAuthAuthenticator(auth_file=token_file).get_access_token()}"
             except XAIOAuthError as exc:
                 raise AuthenticationError(
                     model=model,
@@ -103,7 +105,9 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         if should_use_xai_oauth(litellm_params) and not dynamic_api_key:
-            api_base = XAIOAuthAuthenticator().get_api_base()
+            raw_token_file: Final = (litellm_params or {}).get("xai_oauth_token_file")
+            token_file: Final = raw_token_file if isinstance(raw_token_file, str) else None
+            api_base = XAIOAuthAuthenticator(auth_file=token_file).get_api_base()
 
         return super().get_complete_url(
             api_base=api_base,
