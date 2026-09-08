@@ -204,8 +204,8 @@ class TestExceptionTypeCountersTrackedIndependently:
                 cache_key_suffix="RateLimitError",
             )
 
-        rl_counter = router.failed_calls.get_cache(key="primary:RateLimitError") or 0
-        generic_counter = router.failed_calls.get_cache(key="primary:generic") or 0
+        rl_counter = router.cache.get_cache(key="deployment:primary:allowed_fails:RateLimitError") or 0
+        generic_counter = router.cache.get_cache(key="deployment:primary:allowed_fails:generic") or 0
 
         assert rl_counter == 3, "RateLimitError counter should be 3"
         assert generic_counter == 0, "generic counter must be untouched by RateLimitError increments"
@@ -218,8 +218,8 @@ class TestExceptionTypeCountersTrackedIndependently:
             cache_key_suffix="generic",
         )
 
-        generic_counter_after = router.failed_calls.get_cache(key="primary:generic") or 0
-        rl_counter_after = router.failed_calls.get_cache(key="primary:RateLimitError") or 0
+        generic_counter_after = router.cache.get_cache(key="deployment:primary:allowed_fails:generic") or 0
+        rl_counter_after = router.cache.get_cache(key="deployment:primary:allowed_fails:RateLimitError") or 0
 
         assert generic_counter_after == 1, "generic counter should now be 1"
         assert rl_counter_after == 3, "RateLimitError counter must remain unchanged after InternalServerError"
