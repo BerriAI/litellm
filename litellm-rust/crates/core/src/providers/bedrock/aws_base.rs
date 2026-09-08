@@ -19,7 +19,7 @@ use super::constants::{
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
-const MAX_CACHED_CREDENTIALS: usize = 200;
+pub(crate) const MAX_CACHED_CREDENTIALS: usize = 200;
 
 pub type AwsCredentialFuture<'a> =
     std::pin::Pin<Box<dyn std::future::Future<Output = Result<Credentials, Error>> + Send + 'a>>;
@@ -257,7 +257,7 @@ pub fn classify_auth(
     AwsAuthFlow::DefaultChain
 }
 
-async fn resolve_credentials_with_state<R, C>(
+pub(crate) async fn resolve_credentials_with_state<R, C>(
     config: AwsAuthConfig,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     state: &CredentialState<R, C>,
@@ -305,7 +305,7 @@ where
         }
         AwsAuthFlow::Profile { name } => state.runtime().profile(&name).await.map_err(auth_error),
         AwsAuthFlow::AssumeRole { role, session_name } => {
-            if is_already_running_as_role(&role, &resolved, state.runtime()).await? {
+            if is_already_running_as_role(&role, &resolved, env_lookup, state.runtime()).await? {
                 let ambient_flow = AwsAuthFlow::DefaultChain;
                 return state
                     .get_or_acquire(
@@ -372,14 +372,15 @@ fn auth_error(error: litellm_auth_aws::Error) -> Error {
 async fn is_already_running_as_role(
     role: &str,
     config: &AwsAuthConfig,
+    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     runtime: &impl CredentialRuntime,
 ) -> Result<bool, Error> {
     if litellm_auth_aws::role_identity(role).is_none() {
         return Ok(false);
     }
-    if let (Ok(current_role), Ok(token_file)) = (
-        std::env::var(AWS_ROLE_ARN),
-        std::env::var(AWS_WEB_IDENTITY_TOKEN_FILE),
+    if let (Some(current_role), Some(token_file)) = (
+        env_lookup(AWS_ROLE_ARN),
+        env_lookup(AWS_WEB_IDENTITY_TOKEN_FILE),
     ) && !token_file.is_empty()
     {
         return Ok(litellm_auth_aws::same_role_arns(role, &current_role));

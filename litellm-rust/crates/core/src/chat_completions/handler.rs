@@ -2,6 +2,7 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::http_utils::{HttpClientProfile, http_client, http_request, truncate_error_body};
+use crate::runtime::{HttpRequest, HttpTransport};
 
 use super::request::build_provider_request_with_services;
 use super::types::{
@@ -15,7 +16,33 @@ pub(super) async fn execute_chat_completions_provider_call<S>(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error>
 where
-    S: crate::providers::auth::AuthorizationServices,
+    S: crate::providers::auth::ChatAuthorizationServices,
+{
+    execute_settled_request(settle_provider_request(services, request).await?).await
+}
+
+pub(crate) async fn execute_chat_completions_provider_call_with_transport<S, T>(
+    services: &S,
+    transport: &T,
+    request: ResolvedChatCompletionsRequest<'_>,
+) -> Result<ChatCompletionsResponse, Error>
+where
+    S: crate::providers::auth::ChatAuthorizationServices,
+    T: HttpTransport,
+{
+    execute_settled_request_with_transport(
+        transport,
+        settle_provider_request(services, request).await?,
+    )
+    .await
+}
+
+async fn settle_provider_request<S>(
+    services: &S,
+    request: ResolvedChatCompletionsRequest<'_>,
+) -> Result<SettledChatRequest, Error>
+where
+    S: crate::providers::auth::ChatAuthorizationServices,
 {
     let request = build_provider_request_with_services(services, request)?;
     let body = crate::lifecycle::WireBody::encode(&request.body, "chat completions request")?;
@@ -23,19 +50,55 @@ where
         .config
         .authorize(services, request.authorization_context(), body)
         .await?;
-    let endpoint = ChatEndpoint {
-        model: request.model,
-        config: request.config,
-        url: request.url,
-        auth: request.auth,
-        optional_params: request.optional_params,
-        timeout: request.timeout,
-    };
-    execute_settled_request(SettledChatRequest {
-        endpoint,
+    Ok(SettledChatRequest {
+        endpoint: ChatEndpoint {
+            model: request.model,
+            config: request.config,
+            url: request.url,
+            auth: request.auth,
+            optional_params: request.optional_params,
+            timeout: request.timeout,
+        },
         http: authorized.settle(),
     })
-    .await
+}
+
+pub(crate) async fn execute_settled_request_with_transport<T>(
+    transport: &T,
+    request: SettledChatRequest,
+) -> Result<ChatCompletionsResponse, Error>
+where
+    T: HttpTransport,
+{
+    let SettledChatRequest { endpoint, http } = request;
+    let (body, headers) = http.into_parts();
+    let response = transport
+        .execute(HttpRequest {
+            method: reqwest::Method::POST,
+            url: endpoint.url.clone(),
+            headers,
+            body,
+            timeout: endpoint.timeout,
+        })
+        .await?;
+    let text = String::from_utf8(response.body).map_err(|error| {
+        Error::InvalidResponse(format!("invalid chat completions response body: {error}"))
+    })?;
+
+    if !(200..300).contains(&response.status) {
+        return Err(Error::Http {
+            status: response.status,
+            body: truncate_error_body(&text),
+        });
+    }
+
+    let body: Value = serde_json::from_str(&text).map_err(|err| {
+        Error::InvalidResponse(format!("invalid chat completions response JSON: {err}"))
+    })?;
+    endpoint
+        .config
+        .transform_response(&endpoint.model, ProviderChatResponseData { body })
+        .map_err(as_response_error)
 }
 
 pub(super) async fn execute_settled_request(
@@ -121,7 +184,7 @@ pub async fn signed_headers_with_services<S>(
     body: &[u8],
 ) -> Result<Vec<(String, String)>, Error>
 where
-    S: crate::providers::auth::AuthorizationServices,
+    S: crate::providers::auth::ChatAuthorizationServices,
 {
     request
         .config

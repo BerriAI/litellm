@@ -112,7 +112,7 @@ pub struct ChatPreCallRequest {
 impl ChatEndpoint {
     pub async fn authorize(
         self,
-        services: &dyn crate::providers::auth::AuthorizationServices,
+        services: &dyn crate::providers::auth::ChatAuthorizationServices,
         body: crate::lifecycle::WireBody,
         headers: Vec<(String, String)>,
     ) -> Result<SettledChatRequest, crate::Error> {

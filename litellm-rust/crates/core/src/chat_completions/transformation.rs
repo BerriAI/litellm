@@ -35,7 +35,7 @@ const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 pub trait ChatCompletionsProviderConfig: Sync {
     fn authorize<'a>(
         &'a self,
-        _services: &'a dyn crate::providers::auth::AuthorizationServices,
+        _services: &'a dyn crate::providers::auth::ChatAuthorizationServices,
         request: ChatAuthorizationContext<'a>,
         body: WireBody,
     ) -> crate::providers::AuthorizationFuture<'a> {

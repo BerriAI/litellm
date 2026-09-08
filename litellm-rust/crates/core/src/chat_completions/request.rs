@@ -64,7 +64,7 @@ pub fn resolve_request(
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn validate_environment(
-    services: &impl crate::providers::auth::AuthorizationServices,
+    services: &impl crate::providers::auth::ChatAuthorizationServices,
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
     config: &dyn ChatCompletionsProviderConfig,
@@ -127,7 +127,7 @@ pub fn build_provider_request(
 }
 
 pub fn build_provider_request_with_services(
-    services: &impl crate::providers::auth::AuthorizationServices,
+    services: &impl crate::providers::auth::ChatAuthorizationServices,
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
     let (headers, auth) = validate_environment(services, &request, &request.model, request.config)?;
@@ -166,7 +166,7 @@ pub async fn build_pre_call_request(
 }
 
 pub async fn build_pre_call_request_with_services(
-    services: &impl crate::providers::auth::AuthorizationServices,
+    services: &impl crate::providers::auth::ChatAuthorizationServices,
     request: ChatCompletionsRequest<'_>,
 ) -> Result<super::types::ChatPreCallRequest, Error> {
     use super::types::{ChatEndpoint, ChatPreCallRequest};

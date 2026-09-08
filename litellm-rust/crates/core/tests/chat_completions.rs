@@ -885,43 +885,71 @@ async fn provider_authorization_signs_the_supplied_bytes_without_reserializing()
 #[cfg(feature = "bedrock-auth")]
 #[tokio::test]
 async fn provider_authorization_uses_supplied_credential_and_clock_services() {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use litellm_auth_aws::static_credentials;
-    use litellm_core::providers::auth::AuthorizationServices;
-    use litellm_core::providers::bedrock::aws_base::{AwsAuthConfig, AwsCredentialFuture};
+    use litellm_auth_aws::{
+        AssumeRoleRequest, CredentialFuture, CredentialRuntime, Credentials, WebIdentityRequest,
+        static_credentials,
+    };
+    use litellm_core::providers::auth::{AwsMechanisms, Environment, SigningClock};
 
-    struct Credentials(AtomicUsize);
+    struct Mechanisms(Arc<AtomicUsize>);
 
-    impl Credentials {
-        fn resolve<'a>(&'a self, config: AwsAuthConfig) -> AwsCredentialFuture<'a> {
+    impl CredentialRuntime for Mechanisms {
+        fn profile<'a>(&'a self, name: &'a str) -> CredentialFuture<'a, Credentials> {
             self.0.fetch_add(1, Ordering::Relaxed);
             Box::pin(async move {
-                assert_eq!(config.profile_name.as_deref(), Some("injected-profile"));
+                assert_eq!(name, "injected-profile");
                 Ok(static_credentials("injected-access", "injected-secret"))
             })
+        }
+
+        fn ambient(&self) -> CredentialFuture<'_, Credentials> {
+            unreachable!()
+        }
+
+        fn assume_role(&self, _: AssumeRoleRequest) -> CredentialFuture<'_, Credentials> {
+            unreachable!()
+        }
+
+        fn web_identity(&self, _: WebIdentityRequest) -> CredentialFuture<'_, Credentials> {
+            unreachable!()
+        }
+
+        fn caller_identity(
+            &self,
+            _: Option<String>,
+            _: Option<String>,
+        ) -> CredentialFuture<'_, Option<String>> {
+            unreachable!()
         }
     }
 
     struct Services {
-        credentials: Credentials,
+        credentials: litellm_core::providers::auth::AwsCredentialState,
+        acquisitions: Arc<AtomicUsize>,
         environment_calls: AtomicUsize,
         signing_time: SystemTime,
     }
 
-    impl AuthorizationServices for Services {
+    impl Environment for Services {
         fn environment(&self, _: &str) -> Option<String> {
             self.environment_calls.fetch_add(1, Ordering::Relaxed);
             None
         }
+    }
 
+    impl SigningClock for Services {
         fn signing_time(&self) -> SystemTime {
             self.signing_time
         }
+    }
 
-        fn resolve_aws_credentials<'a>(&'a self, config: AwsAuthConfig) -> AwsCredentialFuture<'a> {
-            self.credentials.resolve(config)
+    impl AwsMechanisms for Services {
+        fn aws_credential_state(&self) -> &litellm_core::providers::auth::AwsCredentialState {
+            &self.credentials
         }
     }
 
@@ -933,8 +961,14 @@ async fn provider_authorization_uses_supplied_credential_and_clock_services() {
     );
     call.api_key = None;
     let built = build_chat_completions_request(call).unwrap();
+    let acquisitions = Arc::new(AtomicUsize::new(0));
     let services = Services {
-        credentials: Credentials(AtomicUsize::new(0)),
+        credentials: litellm_core::providers::auth::AwsCredentialState::with_clock(
+            Arc::new(Mechanisms(acquisitions.clone())),
+            8,
+            Arc::new(litellm_auth_aws::SystemClock),
+        ),
+        acquisitions,
         environment_calls: AtomicUsize::new(0),
         signing_time: UNIX_EPOCH + Duration::from_secs(1_704_164_645),
     };
@@ -946,7 +980,7 @@ async fn provider_authorization_uses_supplied_credential_and_clock_services() {
     .await
     .unwrap();
 
-    assert_eq!(services.credentials.0.load(Ordering::Relaxed), 1);
+    assert_eq!(services.acquisitions.load(Ordering::Relaxed), 1);
     assert!(services.environment_calls.load(Ordering::Relaxed) > 0);
     assert!(signed.iter().any(|(name, value)| {
         name.eq_ignore_ascii_case("authorization") && value.contains("Credential=injected-access/")

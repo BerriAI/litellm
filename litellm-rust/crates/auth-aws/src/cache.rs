@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
@@ -92,6 +92,15 @@ impl CredentialScope {
 
 pub trait Clock: Send + Sync {
     fn now(&self) -> Duration;
+}
+
+impl<T> Clock for Arc<T>
+where
+    T: Clock + ?Sized,
+{
+    fn now(&self) -> Duration {
+        (**self).now()
+    }
 }
 
 #[derive(Default)]

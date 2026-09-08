@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use aws_credential_types::provider::ProvideCredentials;
@@ -40,6 +41,35 @@ pub trait CredentialRuntime: Send + Sync {
         region: Option<String>,
         endpoint: Option<String>,
     ) -> CredentialFuture<'_, Option<String>>;
+}
+
+impl<T> CredentialRuntime for Arc<T>
+where
+    T: CredentialRuntime + ?Sized,
+{
+    fn profile<'a>(&'a self, name: &'a str) -> CredentialFuture<'a, Credentials> {
+        (**self).profile(name)
+    }
+
+    fn ambient(&self) -> CredentialFuture<'_, Credentials> {
+        (**self).ambient()
+    }
+
+    fn assume_role(&self, request: AssumeRoleRequest) -> CredentialFuture<'_, Credentials> {
+        (**self).assume_role(request)
+    }
+
+    fn web_identity(&self, request: WebIdentityRequest) -> CredentialFuture<'_, Credentials> {
+        (**self).web_identity(request)
+    }
+
+    fn caller_identity(
+        &self,
+        region: Option<String>,
+        endpoint: Option<String>,
+    ) -> CredentialFuture<'_, Option<String>> {
+        (**self).caller_identity(region, endpoint)
+    }
 }
 
 #[derive(Default)]

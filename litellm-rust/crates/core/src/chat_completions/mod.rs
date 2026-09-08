@@ -45,7 +45,7 @@ pub async fn chat_completions_with_services<S>(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error>
 where
-    S: crate::providers::auth::AuthorizationServices,
+    S: crate::providers::auth::ChatAuthorizationServices,
 {
     execute_chat_completions_provider_call(services, resolve_request(request)?).await
 }

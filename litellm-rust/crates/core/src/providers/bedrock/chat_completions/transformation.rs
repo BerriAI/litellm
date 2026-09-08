@@ -108,7 +108,7 @@ fn has_blank_text(message: &ChatMessage) -> bool {
 impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
     fn authorize<'a>(
         &'a self,
-        services: &'a dyn crate::providers::auth::AuthorizationServices,
+        services: &'a dyn crate::providers::auth::ChatAuthorizationServices,
         request: ChatAuthorizationContext<'a>,
         body: crate::lifecycle::WireBody,
     ) -> crate::providers::AuthorizationFuture<'a> {
@@ -314,7 +314,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
 }
 
 async fn signed_headers(
-    services: &dyn crate::providers::auth::AuthorizationServices,
+    services: &dyn crate::providers::auth::ChatAuthorizationServices,
     request: ChatAuthorizationContext<'_>,
     body: crate::lifecycle::WireBody,
 ) -> Result<crate::lifecycle::AuthorizedBody, Error> {
@@ -351,9 +351,12 @@ async fn signed_headers(
     let credentials = match host_supplied_credentials(request.optional_params()) {
         Some(credentials) => credentials,
         None => {
-            services
-                .resolve_aws_credentials(aws_auth_config(request.optional_params(), &env_lookup))
-                .await?
+            crate::providers::bedrock::aws_base::resolve_credentials_with_state(
+                aws_auth_config(request.optional_params(), &env_lookup),
+                &env_lookup,
+                services.aws_credential_state(),
+            )
+            .await?
         }
     };
     let signature = sign_bedrock_post(
