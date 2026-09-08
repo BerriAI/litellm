@@ -732,11 +732,11 @@ def test_tool_only_turn_does_not_close_a_message_item_it_never_opened():
     # The tool call itself is still opened and closed as before.
     assert (
         ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-        "tooluse_8G8H6h8nrt79WT4b8sHNd0",
+        "fc_tooluse_8G8H6h8nrt79WT4b8sHNd0",
     ) in events
     assert (
         ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
-        "tooluse_8G8H6h8nrt79WT4b8sHNd0",
+        "fc_tooluse_8G8H6h8nrt79WT4b8sHNd0",
     ) in events
     assert events[-1][0] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
 
