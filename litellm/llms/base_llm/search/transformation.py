@@ -95,6 +95,18 @@ class BaseSearchConfig:
         """
         return "Unknown Search Provider"
 
+    def supports_rich_search_input(self) -> bool:
+        """
+        Whether this provider's search API accepts a natural-language
+        objective plus multiple keyword queries in one request.
+
+        Integrations that collect the richer shape (e.g. websearch
+        interception) forward ``query`` as a list plus an ``objective``
+        optional param to providers that return True; every other provider
+        keeps receiving the single query string.
+        """
+        return False
+
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         Get HTTP method for search requests.
@@ -185,12 +197,20 @@ class BaseSearchConfig:
 
     def sign_request(
         self,
-        headers: dict[str, str],  # mutable-ok: matches the request header dict every other hook on this base takes
-        optional_params: dict[str, object],  # mutable-ok: matches every other hook on this base
-        request_data: dict[str, object] | list[dict[str, object]],  # mutable-ok: transform_search_request's body
+        headers: dict[
+            str, str
+        ],  # mutable-ok: matches the request header dict every other hook on this base takes
+        optional_params: dict[
+            str, object
+        ],  # mutable-ok: matches every other hook on this base
+        request_data: (
+            dict[str, object] | list[dict[str, object]]
+        ),  # mutable-ok: transform_search_request's body
         api_base: str,
         api_key: str | None = None,
-    ) -> tuple[dict[str, str], bytes | None]:  # mutable-ok: the handler passes these headers straight to httpx
+    ) -> tuple[
+        dict[str, str], bytes | None
+    ]:  # mutable-ok: the handler passes these headers straight to httpx
         """
         OPTIONAL
 
@@ -250,7 +270,9 @@ class BaseSearchConfig:
         Returns:
             Dict with request data
         """
-        raise NotImplementedError("transform_search_request must be implemented by provider")
+        raise NotImplementedError(
+            "transform_search_request must be implemented by provider"
+        )
 
     def transform_search_response(
         self,
@@ -262,7 +284,9 @@ class BaseSearchConfig:
         Transform provider-specific Search response to standard format.
         Override in provider-specific implementations.
         """
-        raise NotImplementedError("transform_search_response must be implemented by provider")
+        raise NotImplementedError(
+            "transform_search_response must be implemented by provider"
+        )
 
     def get_error_class(
         self,
