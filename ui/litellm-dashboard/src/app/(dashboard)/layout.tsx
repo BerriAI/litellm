@@ -134,7 +134,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <NoRedisWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
-        <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
+        <main className="relative min-w-0 flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>
   );
