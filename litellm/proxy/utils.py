@@ -544,7 +544,7 @@ def _guardrails_outside_pipeline(policy_name: str, pipeline: "GuardrailPipeline"
 
 
 def _without_names(
-    bucket: dict,  # mutable-ok: the applied_* header slots live in the request-state dict every hook writes in place
+    bucket: dict[str, object],  # mutable-ok: the applied_* header slots live in the request-state dict hooks write
     slot: str,
     names: frozenset[str],
 ) -> None:
@@ -561,7 +561,7 @@ def _without_names(
 
 
 def _withdraw_deferred_claims(
-    data: dict,  # mutable-ok: same request-payload shape as post_call_success_hook's data
+    data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
     deferred: Sequence[tuple[str, "GuardrailPipeline"]],
 ) -> None:
     outside_by_policy: Final = MappingProxyType(
@@ -586,7 +586,7 @@ def _withdraw_deferred_claims(
 
 
 def _defer_post_call_pipelines(
-    data: dict,  # mutable-ok: same request-payload shape as post_call_success_hook's data
+    data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
     response: ResponsesAPIResponse,
 ) -> None:
     deferred: Final = _post_call_pipelines(data)
@@ -2990,7 +2990,7 @@ class ProxyLogging:
 
     async def _run_post_call_pipelines(
         self,
-        data: dict,  # mutable-ok: same request-payload shape as post_call_success_hook's data
+        data: dict[str, object],  # mutable-ok: same request-payload shape as post_call_success_hook's data
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes | None:
