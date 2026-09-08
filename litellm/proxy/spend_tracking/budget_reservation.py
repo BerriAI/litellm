@@ -183,11 +183,17 @@ _UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
         "/openai/v1/responses/input_tokens",
     }
 )
-_UNBILLED_ROUTE_SUFFIXES: Final[tuple[str, ...]] = ("/v1/messages/count_tokens", ":countTokens")
+_TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
+_TOKEN_COUNTING_ACTION: Final = "countTokens"
+
+
+def _is_token_counting_route(route: str) -> bool:
+    resource, _, action = route.rsplit("/", 1)[-1].partition(":")
+    return resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
 
 
 def _is_unbilled_route(route: str) -> bool:
-    return route in _UNBILLED_ROUTES or route.endswith(_UNBILLED_ROUTE_SUFFIXES)
+    return route in _UNBILLED_ROUTES or _is_token_counting_route(route)
 
 
 async def reserve_budget_for_request(

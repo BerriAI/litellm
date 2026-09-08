@@ -17,6 +17,10 @@ TOKEN_COUNTING_ROUTES: Final = (
     "/v1/messages/count_tokens",
     "/v1beta/models/gemini-3.8-flash:countTokens",
     "/models/gemini-3.8-flash:countTokens",
+    "/bedrock/v1/messages/count-tokens",
+    "/bedrock/model/us.anthropic.claude-sonnet-4-6/count-tokens",
+    "/vertex_ai/v1/projects/p/locations/us-east5/publishers/anthropic/models/count-tokens:rawPredict",
+    "/vertex-ai/v1/projects/p/locations/us-east5/publishers/anthropic/models/count-tokens:rawPredict",
 )
 
 
@@ -56,6 +60,11 @@ ANTHROPIC_MESSAGES: Final = [{"role": "user", "content": "hello!!!"}]
 COUNT_TOKENS_REQUESTS: Final[tuple[tuple[str, dict[str, object]], ...]] = (
     ("/v1/messages/count_tokens", {"model": "claude-sonnet-5", "messages": ANTHROPIC_MESSAGES}),
     ("/v1beta/models/gemini-3.8-flash:countTokens", {"contents": [{"role": "user", "parts": [{"text": "hello!!!"}]}]}),
+    (
+        "/vertex_ai/v1/projects/p/locations/us-east5/publishers/anthropic/models/count-tokens:rawPredict",
+        {"model": "claude-sonnet-5", "messages": ANTHROPIC_MESSAGES},
+    ),
+    ("/bedrock/v1/messages/count-tokens", {"model": "claude-sonnet-5", "messages": ANTHROPIC_MESSAGES}),
 )
 TINY_BUDGET_KEY_TOKEN: Final = "hashed-count-tokens-key"
 
