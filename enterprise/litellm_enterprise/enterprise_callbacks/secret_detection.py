@@ -448,6 +448,8 @@ _default_detect_secrets_config = {
 
 _CONFIG_SECTION: Final = "litellm-prompt"
 
+_ASSIGNMENT_LINE: Final = re.compile(r"[^\s\[#;:=][^:=]*[:=]")
+
 # A .py suffix keeps detect_secrets' own config transformers off this file (they only fire on
 # FileType.OTHER and FileType.YAML) while leaving every plugin's regex set unchanged.
 _SCAN_SUFFIX: Final = ".py"
@@ -480,6 +482,38 @@ def _scan_lines(lines: Sequence[str]) -> frozenset[tuple[str, str]]:
     )
 
 
+def _parseable_lines(text: str) -> Generator[str, None, None]:
+    """Yields the lines of ``text`` that configparser can read.
+
+    A prompt is mostly prose, and one unreadable line aborts the whole parse, so the prose
+    is dropped rather than allowed to take the assignments down with it.
+    """
+    open_option = False
+    for number, line in enumerate(text.splitlines()):
+        stripped = line.strip()
+        assignment = _ASSIGNMENT_LINE.match(stripped)
+        if not stripped:
+            yield line
+        elif stripped[0] in "#;":
+            open_option = False
+            yield line
+        elif stripped[0] == "[":
+            open_option = False
+            # configparser needs a closing bracket and something inside it; without one
+            # it aborts the whole parse, taking every assignment below down with it.
+            if "]" in stripped[2:]:
+                yield line
+        elif assignment is not None:
+            open_option = True
+            # Dedenting reaches the assignments inside a pasted config, and the line number
+            # keeps every key distinct so a config repeating api_key per model keeps them all.
+            yield f"{assignment.group()[:-1].strip()}_{number}{stripped[assignment.end() - 1:]}"
+        elif line[0].isspace() and open_option:
+            yield line
+        else:
+            open_option = False
+
+
 def _quoted_assignments(text: str) -> tuple[str, ...]:
     """Rewrites the bare ``key = value`` assignments in ``text`` as quoted ones.
 
@@ -487,11 +521,12 @@ def _quoted_assignments(text: str) -> tuple[str, ...]:
     nothing, so one vendor-prefixed key in a message hides every unquoted assignment beside
     it. Interpolation stays off so that no emitted value is one the message never contained.
     """
-    parser: Final = configparser.ConfigParser(interpolation=None)
+    parser: Final = configparser.ConfigParser(interpolation=None, strict=False)
     # Keys keep their case, exactly as detect_secrets' own parser does.
     parser.optionxform = str  # pyright: ignore[reportAttributeAccessIssue]  # configparser types optionxform as a method
+    body: Final = "\n".join(_parseable_lines(text))
     try:
-        parser.read_string(f"[{_CONFIG_SECTION}]\n{text}")
+        parser.read_string(f"[{_CONFIG_SECTION}]\n{body}")
     except (configparser.Error, UnicodeDecodeError):
         return ()
 
@@ -500,6 +535,8 @@ def _quoted_assignments(text: str) -> tuple[str, ...]:
         for section in parser
         for key, values in parser.items(section)
         for value in values.splitlines()
+        # A quoted value is already visible to every plugin in the raw text, and
+        # re-quoting it here only invents matches the message never held.
         if value and '"' not in value
     )
 

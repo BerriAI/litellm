@@ -150,6 +150,9 @@ def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, s
         "private_key_path: keys/prod/server-cert.pem",
         "litellm.completion(model=model, api_key=openai_api_key)",
         "params['aws_secret_access_key'] = aws_secret_access_key",
+        'api_key = "OPENAI_API_KEY"',
+        "model_list:\n  - litellm_params:\n      api_key: 'PERPLEXITY_API_KEY'",
+        'config = build(_provider("ve_missing", api_key_env="VE_MISSING_KEY"))',
     ],
     ids=[
         "prose-password",
@@ -183,6 +186,9 @@ def test_scan_message_redacts_credentials_assigned_to_credential_keys(content, s
         "path-under-credential-key",
         "snake-case-argument",
         "snake-case-assignment",
+        "quoted-env-variable-name",
+        "quoted-env-name-in-a-config",
+        "quoted-env-name-in-a-code-paste",
     ],
 )
 def test_scan_message_keeps_benign_values(content):
@@ -248,6 +254,49 @@ def test_credential_keyword_detector_rejects_an_unusable_minimum_length(minimum_
 
 
 @pytest.mark.parametrize(
+    "content",
+    [
+        "[db\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n",
+        "[\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n",
+        "[note] have a look\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n",
+        "]\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n",
+        "[]\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n",
+    ],
+    ids=["unclosed", "bare-bracket", "bracketed-prose", "stray-close", "empty-header"],
+)
+def test_scan_message_reads_a_config_with_a_broken_section_header(content):
+    """A half-typed section header must not take the assignments below it down with it."""
+    guardrail = _guardrail()
+
+    assert "Zx4Kp9Lm2Qr7Ns3Vt" not in guardrail.redact_text(content)
+
+
+def test_scan_message_reads_a_config_that_repeats_a_section():
+    """A pasted ini can name the same section twice, and refusing to parse it would drop
+    every assignment in the message, not just the repeated one."""
+    guardrail = _guardrail()
+    content = "[db]\nhost = localhost\n[db]\npassword = Zx4Kp9Lm2Qr7Ns3Vt\n"
+
+    assert "Zx4Kp9Lm2Qr7Ns3Vt" not in guardrail.redact_text(content)
+
+
+def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
+    """A litellm config names api_key once per model, so keeping only the last one would
+    leave every earlier model's credential in the prompt."""
+    guardrail = _guardrail()
+    content = (
+        "model_list:\n"
+        "  - model_name: gpt-4o\n    litellm_params:\n      api_key: aB3dE6gH9jK2mN5p\n"
+        "  - model_name: claude\n    litellm_params:\n      api_key: Kp7Nq2Wz9Bt4Xr6Vm1Ls\n"
+    )
+
+    redacted = guardrail.redact_text(content)
+
+    assert "aB3dE6gH9jK2mN5p" not in redacted
+    assert "Kp7Nq2Wz9Bt4Xr6Vm1Ls" not in redacted
+
+
+@pytest.mark.parametrize(
     "content,secret",
     [
         (
@@ -262,8 +311,34 @@ def test_credential_keyword_detector_rejects_an_unusable_minimum_length(minimum_
             f"api_key: {OPENAI_KEY}\npassword =\n    Zx4Kp9Lm2Qr7Ns3Vt",
             "Zx4Kp9Lm2Qr7Ns3Vt",
         ),
+        (
+            "Here is my config, can you review it?\nREDIS_PASSWORD=aB3dE6gH9jK2mN5p",
+            "aB3dE6gH9jK2mN5p",
+        ),
+        (
+            "REDIS_PASSWORD=aB3dE6gH9jK2mN5p\nCan you tell me what is wrong with it?",
+            "aB3dE6gH9jK2mN5p",
+        ),
+        (
+            "Hi team\nplease rotate this before Friday\n"
+            "db_password=Zx4Kp9Lm2Qr7Ns3Vt\nthanks!",
+            "Zx4Kp9Lm2Qr7Ns3Vt",
+        ),
+        (
+            "model_list:\n  - model_name: gpt-4o\n    litellm_params:\n"
+            "      api_key: aB3dE6gH9jK2mN5p\n",
+            "aB3dE6gH9jK2mN5p",
+        ),
     ],
-    ids=["flat-assignment", "env-file", "continuation-line"],
+    ids=[
+        "flat-assignment",
+        "env-file",
+        "continuation-line",
+        "prose-before",
+        "prose-after",
+        "prose-both-sides",
+        "indented-config",
+    ],
 )
 def test_scan_message_still_sees_assignments_sharing_a_message_with_a_vendor_key(
     content, secret
