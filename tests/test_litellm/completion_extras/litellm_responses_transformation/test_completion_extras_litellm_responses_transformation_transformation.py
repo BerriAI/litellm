@@ -4147,3 +4147,100 @@ def test_streaming_final_chunk_carries_provider_metadata():
     assert chunks[-1]["content_filters"] == content_filters
     assert "background" not in chunks[-1]
     assert all("service_tier" not in chunk for chunk in chunks[:-1])
+
+
+_EXPLICIT_BREAKPOINT: Final = {"mode": "explicit"}
+
+
+def _dispatched_parts(messages):
+    handler = LiteLLMResponsesTransformationHandler()
+    items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+    return [part for item in items for part in (item.get("content") or []) if isinstance(part, dict)]
+
+
+def test_convert_chat_completion_messages_carries_prompt_cache_breakpoint_on_text():
+    """A caller's explicit cache breakpoint must survive the chat -> responses conversion.
+
+    The bridge rebuilds each text block as {"type", "text"}, so the marker was dropped and
+    the target never saw a breakpoint: it writes the prefix on every request and reads it on
+    none. Only the marked block carries the marker through.
+    """
+    parts = _dispatched_parts(
+        [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "stable head", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    {"type": "text", "text": "per-request tail"},
+                ],
+            }
+        ]
+    )
+
+    assert parts == [
+        {"type": "input_text", "text": "stable head", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+        {"type": "input_text", "text": "per-request tail"},
+    ]
+
+
+def test_convert_chat_completion_messages_carries_prompt_cache_breakpoint_on_image():
+    parts = _dispatched_parts(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/a.png", "detail": "high"},
+                        "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT,
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert parts == [
+        {
+            "type": "input_image",
+            "image_url": "https://example.com/a.png",
+            "detail": "high",
+            "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT,
+        }
+    ]
+
+
+def test_convert_chat_completion_messages_carries_prompt_cache_breakpoint_on_file():
+    parts = _dispatched_parts(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {"filename": "a.pdf", "file_data": "data:application/pdf;base64,QQ=="},
+                        "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT,
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert parts[0]["type"] == "input_file"
+    assert parts[0]["prompt_cache_breakpoint"] == _EXPLICIT_BREAKPOINT
+    assert parts[0]["filename"] == "a.pdf"
+
+
+def test_convert_chat_completion_messages_leaves_unmarked_content_untouched():
+    """with_prompt_cache_breakpoint returns the block unchanged when there is no marker, so a
+    request that sets no breakpoint converts exactly as it did before."""
+    parts = _dispatched_parts(
+        [
+            {"role": "system", "content": [{"type": "text", "text": "sys"}]},
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}]},
+        ]
+    )
+
+    assert parts == [
+        {"type": "input_text", "text": "sys"},
+        {"type": "input_image", "image_url": "https://example.com/a.png", "detail": "auto"},
+    ]
