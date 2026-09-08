@@ -2,13 +2,16 @@ import json
 
 import pytest
 
+import litellm
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.embed.twelvelabs_marengo_3_transformation import (
+    MARENGO_2_7_ONLY_PARAMS,
     build_marengo_3_request,
     is_marengo_3_model,
 )
 from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import (
     TwelveLabsMarengoEmbeddingConfig,
+    drop_params_enabled,
 )
 
 MARENGO_3_BASE = "twelvelabs.marengo-embed-3-0-v1:0"
@@ -27,6 +30,7 @@ OUTPUT_S3_URI = "s3://out-bucket/marengo/"
         ("async_invoke/twelvelabs.marengo-embed-3-0-v1:0", True),
         (MARENGO_27_US, False),
         ("twelvelabs.marengo-embed-2-7-v1:0", False),
+        ("twelvelabs.marengo-embed-30-v1:0", False),
         (None, False),
     ],
 )
@@ -266,3 +270,89 @@ def test_marengo_3_only_params_are_forwarded_by_map_openai_params():
         "embeddingScope": ["clip"],
         "inferenceId": "req-1",
     }
+
+
+@pytest.mark.parametrize(
+    "params,problem",
+    [
+        (
+            {"input_type": "clip"},
+            "input_type: Input should be 'text', 'image', 'video', 'audio', 'text_image' or 'multi_input'",
+        ),
+        ({"input_type": "video", "embeddingOption": "visual"}, "embeddingOption: Input should be a valid tuple"),
+        (
+            {"input_type": "multi_input", "media_sources": ["not", "a", "mapping"]},
+            "media_sources: Input should be a valid dictionary",
+        ),
+    ],
+)
+def test_invalid_marengo_3_params_name_the_field_and_the_reason(params, problem):
+    with pytest.raises(BedrockError) as excinfo:
+        build_marengo_3_request("s3://media/clip.mp4", params)
+    assert excinfo.value.message == f"Invalid Marengo 3.0 parameters: {problem}"
+
+
+MARENGO_2_7_ONLY_VALUES = {"textTruncate": "end", "lengthSec": 5, "useFixedLengthSec": True, "minClipSec": 2}
+
+
+@pytest.mark.parametrize("name", MARENGO_2_7_ONLY_PARAMS)
+def test_marengo_2_7_only_params_are_rejected_on_3_0_unless_dropped(name):
+    params = {"input_type": "text", name: MARENGO_2_7_ONLY_VALUES[name]}
+    with pytest.raises(BedrockError) as excinfo:
+        build_marengo_3_request("hello", params)
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.message == (
+        f"Marengo 3.0 does not accept the Marengo 2.7 parameters {name}; set drop_params to drop them"
+    )
+    assert build_marengo_3_request("hello", params, drop_params=True) == {
+        "inputType": "text",
+        "text": {"inputText": "hello"},
+    }
+
+
+def test_marengo_2_7_only_params_are_advertised_only_for_2_7():
+    marengo_3 = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_US).get_supported_openai_params()
+    marengo_27 = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_27_US).get_supported_openai_params()
+    assert set(MARENGO_2_7_ONLY_PARAMS).isdisjoint(marengo_3)
+    assert set(MARENGO_2_7_ONLY_PARAMS) <= set(marengo_27)
+    assert set(marengo_3) <= set(marengo_27)
+
+
+def test_drop_params_comes_from_the_call_or_the_global(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert drop_params_enabled({}) is False
+    assert drop_params_enabled({"drop_params": True}) is True
+    monkeypatch.setattr(litellm, "drop_params", True)
+    assert drop_params_enabled({}) is True
+
+
+def test_config_drops_marengo_2_7_only_params_only_when_asked():
+    config = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_US)
+    with pytest.raises(BedrockError, match=r"Marengo 2\.7 parameters textTruncate"):
+        config._transform_request("hello", {"textTruncate": "end"})
+    assert config._transform_request("hello", {"textTruncate": "end"}, drop_params=True) == {
+        "inputType": "text",
+        "text": {"inputText": "hello"},
+    }
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"input_type": "text"},
+        {"input_type": "image"},
+        {"input_type": "text_image", "media_source": DUCK_DATA_URL},
+        {"input_type": "multi_input", "media_sources": {"bird": DUCK_DATA_URL}},
+    ],
+)
+def test_timed_media_options_are_rejected_on_untimed_input_types_unless_dropped(params):
+    timed = {**params, "startSec": 0, "embeddingOption": ["visual"]}
+    with pytest.raises(BedrockError) as excinfo:
+        build_marengo_3_request(DUCK_DATA_URL, timed)
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.message == (
+        f"Input type '{params['input_type']}' does not accept startSec, embeddingOption; set drop_params to drop them"
+    )
+    assert build_marengo_3_request(DUCK_DATA_URL, timed, drop_params=True) == build_marengo_3_request(
+        DUCK_DATA_URL, params
+    )

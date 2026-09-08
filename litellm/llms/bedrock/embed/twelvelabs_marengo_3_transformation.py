@@ -35,7 +35,7 @@ from litellm.types.llms.bedrock import (
 )
 from litellm.utils import get_base64_str
 
-MARENGO_3_MODEL_MARKER: Final = "marengo-embed-3"
+MARENGO_3_MODEL_MARKER: Final = "marengo-embed-3-"
 S3_URI_PREFIX: Final = "s3://"
 TIMED_MEDIA_OPTION_FIELDS: Final = MappingProxyType(
     {
@@ -48,6 +48,9 @@ TIMED_MEDIA_OPTION_FIELDS: Final = MappingProxyType(
     }
 )
 TIMED_MEDIA_OPTIONS: Final = TypeAdapter(TwelveLabsMarengo3TimedMediaOptions)
+TIMED_INPUT_TYPES: Final = frozenset({"video", "audio"})
+MARENGO_2_7_ONLY_PARAMS: Final = ("textTruncate", "lengthSec", "useFixedLengthSec", "minClipSec")
+MARENGO_2_7_ONLY_FIELDS: Final = MappingProxyType({name: True for name in MARENGO_2_7_ONLY_PARAMS})
 
 
 def is_marengo_3_model(model: str | None) -> bool:
@@ -69,15 +72,23 @@ class Marengo3Params(BaseModel):
     embeddingType: tuple[TWELVELABS_MARENGO_3_EMBEDDING_TYPES, ...] | None = None
     embeddingScope: tuple[TWELVELABS_MARENGO_3_EMBEDDING_SCOPES, ...] | None = None
     inferenceId: str | None = None
+    textTruncate: object = None
+    lengthSec: object = None
+    useFixedLengthSec: object = None
+    minClipSec: object = None
 
     @property
     def resolved_input_type(self) -> TWELVELABS_MARENGO_3_INPUT_TYPES:
         return self.inputType or self.input_type or "text"
 
     def timed_media_options(self) -> TwelveLabsMarengo3TimedMediaOptions:
-        return TIMED_MEDIA_OPTIONS.validate_python(
-            self.model_dump(include=TIMED_MEDIA_OPTION_FIELDS, exclude_none=True)
-        )
+        return TIMED_MEDIA_OPTIONS.validate_python(self.given_timed_media_options())
+
+    def given_timed_media_options(self) -> dict[str, object]:
+        return self.model_dump(include=TIMED_MEDIA_OPTION_FIELDS, exclude_none=True)
+
+    def given_2_7_only_params(self) -> dict[str, object]:
+        return self.model_dump(include=MARENGO_2_7_ONLY_FIELDS, exclude_none=True)
 
 
 def _s3_location(uri: str, bucket_owner: str | None) -> TwelveLabsS3Location:
@@ -113,11 +124,23 @@ def _timed_media_input(media: str, params: Marengo3Params) -> TwelveLabsMarengo3
     return timed
 
 
+def _describe(error: ValidationError) -> str:
+    return "; ".join(
+        f"{'.'.join(str(part) for part in problem['loc'])}: {problem['msg']}" for problem in error.errors()
+    )
+
+
 def _validated_params(inference_params: Mapping[str, object]) -> Marengo3Params:
     try:
         return Marengo3Params.model_validate(inference_params)
     except ValidationError as error:
-        raise BedrockError(status_code=400, message=f"Invalid Marengo 3.0 parameters: {error}") from error
+        raise BedrockError(status_code=400, message=f"Invalid Marengo 3.0 parameters: {_describe(error)}") from error
+
+
+def _reject_unless_dropped(given: Mapping[str, object], drop_params: bool, reason: str) -> None:
+    if not given or drop_params:
+        return
+    raise BedrockError(status_code=400, message=f"{reason} {', '.join(given)}; set drop_params to drop them")
 
 
 def _require(value: str | None, input_type: str, param_name: str) -> str:
@@ -143,10 +166,19 @@ def _request_base(inference_id: str | None) -> TwelveLabsMarengo3RequestBase:
     return identified
 
 
-def build_marengo_3_request(input: str, inference_params: Mapping[str, object]) -> TwelveLabsMarengo3EmbeddingRequest:
+def build_marengo_3_request(
+    input: str, inference_params: Mapping[str, object], drop_params: bool = False
+) -> TwelveLabsMarengo3EmbeddingRequest:
     params: Final = _validated_params(inference_params)
     base: Final = _request_base(params.inferenceId)
     input_type: Final = params.resolved_input_type
+    _reject_unless_dropped(
+        params.given_2_7_only_params(), drop_params, "Marengo 3.0 does not accept the Marengo 2.7 parameters"
+    )
+    if input_type not in TIMED_INPUT_TYPES:
+        _reject_unless_dropped(
+            params.given_timed_media_options(), drop_params, f"Input type '{input_type}' does not accept"
+        )
     match input_type:
         case "text":
             text_request: Final[TwelveLabsMarengo3TextRequest] = {

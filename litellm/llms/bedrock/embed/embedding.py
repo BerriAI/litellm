@@ -35,7 +35,7 @@ from .amazon_titan_multimodal_transformation import (
 )
 from .amazon_titan_v2_transformation import AmazonTitanV2Config
 from .cohere_transformation import BedrockCohereEmbeddingConfig
-from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
+from .twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig, drop_params_enabled
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -480,6 +480,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     async_invoke_route=has_async_invoke,
                     model_id=modelId,
                     output_s3_uri=inference_params.get("output_s3_uri"),
+                    drop_params=drop_params_enabled(litellm_params),
                 )
                 batch_data.append(twelvelabs_request)
         elif provider == "nova":

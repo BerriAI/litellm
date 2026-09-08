@@ -13,7 +13,9 @@ from typing import Final, cast
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
+import litellm
 from litellm.llms.bedrock.embed.twelvelabs_marengo_3_transformation import (
+    MARENGO_2_7_ONLY_PARAMS,
     build_marengo_3_request,
     is_marengo_3_model,
 )
@@ -99,6 +101,25 @@ def _billed_usage(batch_data: list[dict] | None) -> Usage:
     return Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0, prompt_tokens_details=details)
 
 
+MARENGO_SHARED_PARAMS: Final = (
+    "encoding_format",
+    "embeddingOption",
+    "startSec",
+    "input_type",
+    "endSec",
+    "segmentation",
+    "embeddingType",
+    "embeddingScope",
+    "inferenceId",
+    "media_source",
+    "media_sources",
+)
+
+
+def drop_params_enabled(litellm_params: Mapping[str, object]) -> bool:
+    return litellm.drop_params is True or litellm_params.get("drop_params") is True
+
+
 class TwelveLabsMarengoEmbeddingConfig:
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo.html
@@ -115,23 +136,9 @@ class TwelveLabsMarengoEmbeddingConfig:
         self.is_marengo_3: Final = is_marengo_3_model(model)
 
     def get_supported_openai_params(self) -> list[str]:
-        return [
-            "encoding_format",
-            "textTruncate",
-            "embeddingOption",
-            "startSec",
-            "lengthSec",
-            "useFixedLengthSec",
-            "minClipSec",
-            "input_type",
-            "endSec",
-            "segmentation",
-            "embeddingType",
-            "embeddingScope",
-            "inferenceId",
-            "media_source",
-            "media_sources",
-        ]
+        if self.is_marengo_3:
+            return list(MARENGO_SHARED_PARAMS)
+        return [*MARENGO_SHARED_PARAMS, *MARENGO_2_7_ONLY_PARAMS]
 
     def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         for k, v in non_default_params.items():
@@ -179,6 +186,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         async_invoke_route: bool = False,
         model_id: str | None = None,
         output_s3_uri: str | None = None,
+        drop_params: bool = False,
     ) -> TwelveLabsMarengoEmbeddingRequest | TwelveLabsMarengo3EmbeddingRequest | TwelveLabsAsyncInvokeRequest:
         """
         Transform OpenAI-style input to TwelveLabs Marengo format/async-invoke format.
@@ -203,7 +211,9 @@ class TwelveLabsMarengoEmbeddingConfig:
             )
 
         if self.is_marengo_3:
-            marengo_3_request: Final = build_marengo_3_request(input=input, inference_params=inference_params)
+            marengo_3_request: Final = build_marengo_3_request(
+                input=input, inference_params=inference_params, drop_params=drop_params
+            )
             if async_invoke_route and model_id:
                 return self._wrap_async_invoke_request(
                     model_input=marengo_3_request, model_id=model_id, output_s3_uri=output_s3_uri
