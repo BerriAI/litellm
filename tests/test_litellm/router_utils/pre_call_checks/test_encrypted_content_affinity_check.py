@@ -1174,7 +1174,7 @@ def test_boundary_key_resolves_missing_values_from_named_credential():
     assert boundary == ("https://account-a.example.com", "credential-key-a")
 
 
-def test_boundary_key_prefers_explicit_values_over_named_credential():
+def test_boundary_key_matches_named_credential_precedence():
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -1198,11 +1198,44 @@ def test_boundary_key_prefers_explicit_values_over_named_credential():
         boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
             {
                 "api_base": "https://deployment.example.com",
+                "api_key": "deployment-key",
                 "litellm_credential_name": "account-a",
             }
         )
 
-    assert boundary == ("https://deployment.example.com", "credential-key-a")
+    assert boundary == ("https://credential.example.com", "credential-key-a")
+
+
+def test_boundary_key_resolves_credential_when_explicit_values_are_empty():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    with (
+        patch.object(  # test-quality-ok: credential registry is the direct dependency under test
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="account-a",
+                    credential_values={
+                        "api_base": "https://credential.example.com",
+                        "api_key": "credential-key-a",
+                    },
+                    credential_info={},
+                )
+            ],
+        )
+    ):
+        boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
+            {
+                "api_base": "",
+                "api_key": "",
+                "litellm_credential_name": "account-a",
+            }
+        )
+
+    assert boundary == ("https://credential.example.com", "credential-key-a")
 
 
 def test_boundary_fallback_matches_deployments_with_same_named_credential_values():
