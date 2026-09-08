@@ -20,6 +20,7 @@ from botocore.exceptions import (
 )
 
 import litellm
+from litellm.llms.bedrock_mantle.common_utils import mantle_base_segment
 from litellm.llms.bedrock_mantle.responses.transformation import (
     BedrockMantleResponsesAPIConfig,
 )
@@ -1801,6 +1802,19 @@ class TestBedrockMantleResponsesPricing:
         assert info["cache_read_input_token_cost"] == pytest.approx(1.375e-06)
         assert info["output_cost_per_token"] == pytest.approx(8.25e-05)
         assert info["max_input_tokens"] == 272000
+
+    def test_gpt_daybreak_blue_pricing_and_route(self, local_cost_map):
+        info = litellm.get_model_info("bedrock_mantle/openai.gpt-daybreak-blue-5.6-sol")
+        assert info["mode"] == "responses"
+        assert info["input_cost_per_token"] == pytest.approx(5.5e-06)
+        assert info["cache_creation_input_token_cost"] == pytest.approx(6.875e-06)
+        assert info["cache_read_input_token_cost"] == pytest.approx(5.5e-07)
+        assert info["output_cost_per_token"] == pytest.approx(3.3e-05)
+        assert info["input_cost_per_token_above_272k_tokens"] == pytest.approx(1.1e-05)
+        assert info["output_cost_per_token_above_272k_tokens"] == pytest.approx(4.95e-05)
+        assert info["max_input_tokens"] == 1050000
+        assert info["supported_endpoints"] == ["/v1/responses"]
+        assert mantle_base_segment("openai.gpt-daybreak-blue-5.6-sol", litellm.model_cost) == "openai/v1"
 
     @pytest.mark.parametrize(
         "model, input_cost, cache_creation_cost, cache_read_cost, output_cost",
