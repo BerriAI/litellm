@@ -4209,15 +4209,15 @@ def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing():
 
 
 def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk():
-    """When the underlying stream ends without ever emitting an explicit
-    finish_reason chunk, __next__ synthesizes one via finish_reason_handler()
-    and returns it. That chunk is still this call's own data - the caller's
-    own (application-level) log statements processing it run immediately
-    after this return, in the same synchronous frame, so context must NOT be
-    restored yet or those log lines would carry the wrong ids. A caller that
-    keeps iterating (the common, non-early-break pattern) still gets a
-    correct, deterministic restore on the very next __next__() call, since
-    completion_stream is already exhausted and immediately re-raises
+    """When the provider already supplied a finish_reason (e.g. stripped from a
+    content chunk) and the underlying stream then ends, __next__ synthesizes the
+    terminal chunk via finish_reason_handler() and returns it. That chunk is still
+    this call's own data - the caller's own (application-level) log statements
+    processing it run immediately after this return, in the same synchronous
+    frame, so context must NOT be restored yet or those log lines would carry the
+    wrong ids. A caller that keeps iterating (the common, non-early-break pattern)
+    still gets a correct, deterministic restore on the very next __next__() call,
+    since completion_stream is already exhausted and immediately re-raises
     StopIteration."""
     trace_id_var.set("outer-trace-finish-reason")
     session_id_var.set("outer-session-finish-reason")
@@ -4237,6 +4237,7 @@ def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_rea
             model="gpt-3.5-turbo",
             logging_obj=log_obj,
         )
+        wrapper.received_finish_reason = "stop"
         assert trace_id_var.get() == log_obj.litellm_trace_id
         assert session_id_var.get() == "finish-reason-session"
 
@@ -4282,6 +4283,7 @@ def test_stream_wrapper_del_cleans_up_after_synthesized_finish_reason_chunk():
             model="gpt-3.5-turbo",
             logging_obj=log_obj,
         )
+        wrapper.received_finish_reason = "stop"
 
         chunk = next(wrapper)
         assert chunk.choices[0].finish_reason is not None
@@ -4323,6 +4325,7 @@ async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_fin
             model="gpt-3.5-turbo",
             logging_obj=log_obj,
         )
+        wrapper.received_finish_reason = "stop"
         assert trace_id_var.get() == log_obj.litellm_trace_id
         assert session_id_var.get() == "anext-finish-reason-session"
 
@@ -4875,3 +4878,96 @@ class TestStableStreamingResponseId:
         )
         wrapper.response_id = "chatcmpl-from-provider"
         assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
+
+@pytest.mark.asyncio
+async def test_clean_eof_without_finish_reason_raises_midstream_error_issue_40260():
+    """OpenAI/Azure clean EOF with partial content and no finish_reason must not
+    synthesize finish_reason=stop (#40260)."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    async def source():
+        yield ModelResponseStream(
+            id="chatcmpl-offline-repro",
+            created=0,
+            model="gpt-5.6",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content='{"findings":[{"title":"unfinished'),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+    log = Logging(
+        model="gpt-5.6",
+        messages=[{"role": "user", "content": "Return JSON"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="offline-eof-repro",
+        function_id="offline-eof-repro",
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=source(),
+        model="gpt-5.6",
+        custom_llm_provider="azure",
+        logging_obj=log,
+        stream_options={"include_usage": True},
+    )
+
+    chunks = []
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        async for c in wrapper:
+            chunks.append(c)
+
+    assert chunks, "partial content should have been yielded before the error"
+    assert all(getattr(c.choices[0], "finish_reason", None) is None for c in chunks)
+    assert wrapper.received_finish_reason is None
+    assert "without a finish_reason" in str(excinfo.value).lower() or "finish_reason" in str(excinfo.value)
+    assert '{"findings"' in (excinfo.value.generated_content or "")
+
+
+def test_clean_eof_without_finish_reason_raises_sync_issue_40260():
+    """Sync sibling of #40260: empty/exhausted stream with no provider finish_reason."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    log = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="sync-eof-repro",
+        function_id="sync-eof-repro",
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-3.5-turbo",
+        custom_llm_provider="openai",
+        logging_obj=log,
+    )
+    with pytest.raises(MidStreamFallbackError):
+        next(wrapper)
+
+
+def test_provider_finish_reason_still_synthesizes_terminal_chunk_issue_40260():
+    """Valid provider finish_reason (length) must still produce a successful terminal chunk."""
+    log = Logging(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="length-finish-repro",
+        function_id="length-finish-repro",
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-3.5-turbo",
+        custom_llm_provider="openai",
+        logging_obj=log,
+    )
+    wrapper.received_finish_reason = "length"
+    chunk = next(wrapper)
+    assert chunk.choices[0].finish_reason == "length"
