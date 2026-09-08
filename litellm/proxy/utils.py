@@ -3401,7 +3401,7 @@ class _ConfigRow:
 
     __slots__ = ("param_name", "param_value")
 
-    def __init__(self, param_name: str, param_value: Any) -> None:
+    def __init__(self, param_name: str, param_value: object) -> None:
         self.param_name = param_name
         self.param_value = param_value
 
@@ -3414,7 +3414,7 @@ def _pack_config_row(row: Any) -> dict[str, object]:
     return {"param_name": row.param_name, "param_value": row.param_value}
 
 
-def _unpack_config_row(cached: Any) -> _ConfigRow | None:
+def _unpack_config_row(cached: object) -> _ConfigRow | None:
     if cached is None or cached == _CONFIG_CACHE_MISS:
         return None
     if isinstance(cached, dict):
@@ -3557,6 +3557,7 @@ class PrismaClient:
         verbose_proxy_logger.debug("Creating Prisma Client..")
         try:
             from prisma import Prisma
+            from prisma.types import DatasourceOverride
         except Exception as e:
             verbose_proxy_logger.error("Failed to import Prisma client: %s", e)
             verbose_proxy_logger.error("This usually means 'prisma generate' hasn't been run yet.")
@@ -3607,11 +3608,11 @@ class PrismaClient:
                     reader_token: Final = mint_database_token(token_auth, reader_iam_endpoint)
                     read_replica_url = reader_iam_endpoint.build_url(reader_token)
                     os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
-                reader_kwargs: Final[dict[str, Any]] = {"datasource": {"url": read_replica_url}}
+                reader_datasource: Final = DatasourceOverride(url=read_replica_url)
                 if http_client is not None:
-                    reader_prisma = Prisma(http=http_client, **reader_kwargs)
+                    reader_prisma = Prisma(http=http_client, datasource=reader_datasource)
                 else:
-                    reader_prisma = Prisma(**reader_kwargs)
+                    reader_prisma = Prisma(datasource=reader_datasource)
                 reader_wrapper: Final = PrismaWrapper(
                     original_prisma=reader_prisma,
                     token_auth=token_auth,

@@ -37,6 +37,7 @@ from litellm.repositories.table_repositories import (
     MCPServerOAuthClientRepository,
     MCPServerRepository,
     MCPUserCredentialsRepository,
+    PrismaTableRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import (
@@ -522,11 +523,14 @@ def _user_credential_actions(
     return table
 
 
+class _MCPUserEnvVarsRepository(PrismaTableRepository["prisma_db_models.LiteLLM_MCPUserEnvVars"]):
+    table_name = "litellm_mcpuserenvvars"
+
+
 def _user_env_var_actions(
     prisma_client: PrismaClient,
 ) -> "TableActions[prisma_db_models.LiteLLM_MCPUserEnvVars]":
-    table: Final[TableActions[prisma_db_models.LiteLLM_MCPUserEnvVars]] = prisma_client.db.litellm_mcpuserenvvars
-    return table
+    return _MCPUserEnvVarsRepository(prisma_client).table
 
 
 async def _db_find_user_credential_row(

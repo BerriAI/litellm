@@ -1,7 +1,7 @@
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
 
@@ -2754,7 +2754,12 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         message_thread: Final = await openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread(
+            id=message_thread.id,
+            created_at=message_thread.created_at,
+            metadata=message_thread.metadata,
+            object=message_thread.object,
+        )
 
     # fmt: off
 
@@ -2840,7 +2845,12 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         message_thread: Final = openai_client.beta.threads.create(**data)
 
-        return Thread(**message_thread.dict())
+        return Thread(
+            id=message_thread.id,
+            created_at=message_thread.created_at,
+            metadata=message_thread.metadata,
+            object=message_thread.object,
+        )
 
     async def async_get_thread(
         self,
@@ -2863,7 +2873,12 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         response: Final = await openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread(
+            id=response.id,
+            created_at=response.created_at,
+            metadata=response.metadata,
+            object=response.object,
+        )
 
     # fmt: off
 
@@ -2929,7 +2944,12 @@ class OpenAIAssistantsAPI(BaseLLM):
 
         response: Final = openai_client.beta.threads.retrieve(thread_id=thread_id)
 
-        return Thread(**response.dict())
+        return Thread(
+            id=response.id,
+            created_at=response.created_at,
+            metadata=response.metadata,
+            object=response.object,
+        )
 
     def delete_thread(self):
         pass
@@ -2986,18 +3006,27 @@ class OpenAIAssistantsAPI(BaseLLM):
         tools: Iterable[AssistantToolParam] | None,
         event_handler: AssistantEventHandler | None,
     ) -> AsyncAssistantStreamManager[AsyncAssistantEventHandler]:
-        data: Final[dict[str, Any]] = {
-            "thread_id": thread_id,
-            "assistant_id": assistant_id,
-            "additional_instructions": additional_instructions,
-            "instructions": instructions,
-            "metadata": metadata,
-            "model": model,
-            "tools": tools,
-        }
+        runs_stream: Final = client.beta.threads.runs.stream
         if event_handler is not None:
-            data["event_handler"] = event_handler
-        return client.beta.threads.runs.stream(**data)
+            return runs_stream(
+                thread_id=thread_id,
+                assistant_id=assistant_id,
+                additional_instructions=additional_instructions,
+                instructions=instructions,
+                metadata=metadata,
+                model=model,
+                tools=tools,
+                event_handler=event_handler,
+            )
+        return runs_stream(
+            thread_id=thread_id,
+            assistant_id=assistant_id,
+            additional_instructions=additional_instructions,
+            instructions=instructions,
+            metadata=metadata,
+            model=model,
+            tools=tools,
+        )
 
     def run_thread_stream(
         self,
