@@ -403,6 +403,10 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
+def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
+    return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
+
+
 def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
     """
     Realtime client-secret requests carry the model inside ``session`` as well, and the caller's copy of it still
@@ -610,6 +614,38 @@ RETRY_BREADCRUMB_EXCLUDED_KWARGS: Final = frozenset(
     )
 )
 RETRY_BREADCRUMB_LIMIT: Final = 4
+
+
+class FallbackAwareStreamWrapper(CustomStreamWrapper):
+    """Base for the Router's chat-completion stream wrappers, which are built around the
+    attempt the Router picked first and have to repoint themselves when a fallback takes over."""
+
+    fallback_headers_adopted: bool = False
+
+    def adopt_fallback_response_headers(
+        self,
+        fallback_response: object,
+        prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
+    ) -> None:
+        """Repoint this wrapper at the deployment that served the stream.
+
+        Replaces rather than merges, so the failed attempt's `x-request-id`, rate limit
+        counters, `model_id` and `api_base` cannot reach the proxy's response headers or
+        its callbacks.
+        """
+        self._response_headers = getattr(fallback_response, "_response_headers", None)
+        fallback_hidden_params, fallback_headers = prepared_fallback_hidden_params
+        if fallback_hidden_params:
+            self._hidden_params = {  # mutable-ok: the rest of litellm writes into _hidden_params
+                **fallback_hidden_params,
+                # dict() because add_retry_fallback_headers mutates additional_headers in place
+                "additional_headers": dict(fallback_headers),  # mutable-ok: see above
+            }
+            self._base_hidden_params = {  # mutable-ok: CustomStreamWrapper keeps this snapshot as a dict
+                **self._hidden_params,
+                "response_cost": None,
+            }
+        self.fallback_headers_adopted = True
 
 
 class Router:
@@ -2573,6 +2609,18 @@ class Router:
         return fallback_hidden_params, cast("dict[str, object]", fallback_headers)
 
     @staticmethod
+    def _adopt_fallback_response_headers(
+        wrapper_ref: "weakref.ref[FallbackAwareStreamWrapper]",
+        fallback_response: object,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        """Repoint the wrapper at `fallback_response`, returning its prepared hidden params."""
+        prepared: Final = Router._prepare_fallback_hidden_params(fallback_response)
+        adopting_wrapper: Final = wrapper_ref()
+        if adopting_wrapper is not None:
+            adopting_wrapper.adopt_fallback_response_headers(fallback_response, prepared)
+        return prepared
+
+    @staticmethod
     def _apply_fallback_hidden_params_to_item(
         fallback_item: object,
         prepared_fallback_hidden_params: tuple[dict[str, object], dict[str, object]],
@@ -2611,7 +2659,7 @@ class Router:
 
         held_slot: Final = deployment_slot if deployment_slot is not None else contextlib.AsyncExitStack()
 
-        class FallbackStreamWrapper(CustomStreamWrapper):
+        class FallbackStreamWrapper(FallbackAwareStreamWrapper):
             def __init__(self, async_generator: AsyncGenerator):
                 # Copy attributes from the original model_response
                 super().__init__(
@@ -2619,6 +2667,7 @@ class Router:
                     model=model_response.model,
                     custom_llm_provider=model_response.custom_llm_provider,
                     logging_obj=model_response.logging_obj,
+                    _response_headers=getattr(model_response, "_response_headers", None),
                 )
                 self._async_generator = async_generator
                 inner_chunks: Final[object] = getattr(model_response, "chunks", None)
@@ -2695,8 +2744,17 @@ class Router:
 
                     # If fallback returns a streaming response, iterate over it
                     if hasattr(fallback_response, "__aiter__"):
-                        prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
+                        prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                            wrapper_ref, fallback_response
+                        )
+                        fallback_headers_are_settled = False
                         async for fallback_item in fallback_response:
+                            if not fallback_headers_are_settled:
+                                fallback_headers_are_settled = True  # rebind-ok: one-shot latch
+                                # a fallback that failed over again only repoints itself once it yields
+                                prepared_fallback_hidden_params = (  # rebind-ok: re-read once the fallback yields
+                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
+                                )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
                                 fallback_item
@@ -2738,7 +2796,11 @@ class Router:
                                 e,
                             )
 
-        return FallbackStreamWrapper(stream_with_fallbacks())
+        wrapped_response: Final = FallbackStreamWrapper(stream_with_fallbacks())
+        # weak, so the generator closing over it does not keep the wrapper out of
+        # refcount teardown and delay the `finally` that releases the deployment slot
+        wrapper_ref: Final = weakref.ref(wrapped_response)
+        return wrapped_response
 
     @staticmethod
     def _extract_partial_responses_usage(
@@ -3167,13 +3229,14 @@ class Router:
         """
         from litellm.exceptions import MidStreamFallbackError
 
-        class SyncFallbackStreamWrapper(CustomStreamWrapper):
+        class SyncFallbackStreamWrapper(FallbackAwareStreamWrapper):
             def __init__(self, sync_generator: Generator):
                 super().__init__(
                     completion_stream=sync_generator,
                     model=model_response.model,
                     custom_llm_provider=model_response.custom_llm_provider,
                     logging_obj=model_response.logging_obj,
+                    _response_headers=getattr(model_response, "_response_headers", None),
                 )
                 self._sync_generator = sync_generator
                 if hasattr(model_response, "_hidden_params"):
@@ -3229,8 +3292,17 @@ class Router:
                     )
 
                     if hasattr(fallback_response, "__iter__"):
-                        prepared_fallback_hidden_params = Router._prepare_fallback_hidden_params(fallback_response)
+                        prepared_fallback_hidden_params = Router._adopt_fallback_response_headers(
+                            wrapper_ref, fallback_response
+                        )
+                        fallback_headers_are_settled = False
                         for fallback_item in fallback_response:
+                            if not fallback_headers_are_settled:
+                                fallback_headers_are_settled = True  # rebind-ok: one-shot latch
+                                # a fallback that failed over again only repoints itself once it yields
+                                prepared_fallback_hidden_params = (  # rebind-ok: re-read once the fallback yields
+                                    Router._adopt_fallback_response_headers(wrapper_ref, fallback_response)
+                                )
                             Router._apply_fallback_hidden_params_to_item(fallback_item, prepared_fallback_hidden_params)
                             if (
                                 fallback_item
@@ -3268,7 +3340,10 @@ class Router:
                             close_err,
                         )
 
-        return SyncFallbackStreamWrapper(stream_with_fallbacks())
+        wrapped_response: Final = SyncFallbackStreamWrapper(stream_with_fallbacks())
+        # weak, for the same reason as the async twin
+        wrapper_ref: Final = weakref.ref(wrapped_response)
+        return wrapped_response
 
     async def _silent_experiment_acompletion(self, silent_model: str, messages: Sequence[Mapping[str, str]], **kwargs):
         """
@@ -4451,7 +4526,7 @@ class Router:
                 self.fail_calls[model_name] += 1
             raise e
 
-    async def aspeech(self, model: str, input: str, voice: str, **kwargs):
+    async def aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
         """
         Example Usage:
 
@@ -4503,7 +4578,7 @@ class Router:
             )
             raise e
 
-    async def _aspeech(self, model: str, input: str, voice: str, **kwargs):
+    async def _aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
         model_name: Final = model
         try:
             verbose_router_logger.debug("Inside _aspeech()- model: %s; kwargs: %s", model, kwargs)
@@ -4527,7 +4602,7 @@ class Router:
                 **{
                     **data,
                     "input": input,
-                    "voice": voice,
+                    "voice": data.get("voice") if voice is None else voice,
                     "client": model_client,
                     **kwargs,
                 }
@@ -7460,6 +7535,21 @@ class Router:
                     Context_Policy_Fallbacks={content_policy_fallbacks}",
             )
 
+    @staticmethod
+    def _deployment_ids_to_skip_on_retry(exception: Exception, already_skipped: object) -> tuple[str, ...]:
+        failed_deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
+        status_code: Final = getattr(exception, "status_code", None)
+        if not failed_deployment_id or not isinstance(status_code, int):
+            return ()
+        if litellm._should_retry(status_code):  # pyright: ignore[reportPrivateUsage]  # as in should_retry_this_error
+            return ()
+        already_skipped_ids: Final = _as_retry_skipped_deployment_ids(already_skipped)
+        skipped: Final = tuple(sorted(frozenset((*already_skipped_ids, failed_deployment_id))))
+        verbose_router_logger.debug(
+            "Retry skips deployments that already answered %s to this request: %s", status_code, skipped
+        )
+        return skipped
+
     @tracer.wrap()
     async def async_function_with_retries(self, *args, **kwargs):
         verbose_router_logger.debug("Inside async function with retries.")
@@ -7555,6 +7645,12 @@ class Router:
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
+                first_skipped_ids: Final = self._deployment_ids_to_skip_on_retry(
+                    exception=original_exception,
+                    already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
+                )
+                if first_skipped_ids:
+                    kwargs["_retry_skipped_deployment_ids"] = first_skipped_ids  # rebind-ok: the next attempt reads it
             else:
                 raise
 
@@ -7624,6 +7720,12 @@ class Router:
                         except Exception:
                             raise e
 
+                    skipped_ids = self._deployment_ids_to_skip_on_retry(
+                        exception=e,
+                        already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
+                    )
+                    if skipped_ids:
+                        kwargs["_retry_skipped_deployment_ids"] = skipped_ids  # rebind-ok: the next attempt reads it
                     _timeout = self._time_to_sleep_before_retry(
                         e=e,
                         remaining_retries=remaining_retries,
@@ -12456,7 +12558,7 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        healthy_deployments = litellm.utils._get_order_filtered_deployments(
+        healthy_deployments = litellm.utils.get_order_filtered_deployments(
             cast(list[dict], healthy_deployments), target_order=_target_order
         )
 
@@ -12464,9 +12566,22 @@ class Router:
         ## this request via weighted-failover. Always honored, regardless of the
         ## router-level flag, so a stale exclusion key on kwargs cannot escape.
         _excluded_deployment_ids: Final = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
-        healthy_deployments = litellm.utils._get_excluded_filtered_deployments(
+        healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
             cast(list[dict], healthy_deployments),
             excluded_deployment_ids=_excluded_deployment_ids,
+        )
+
+        ## RETRY SKIP ## -> drop deployments that already refused this request with a
+        ## non-retryable status, unless that leaves nothing, so the caller still gets
+        ## the provider's own error instead of a no-deployments error.
+        _retry_skipped_deployment_ids: Final = _as_retry_skipped_deployment_ids(
+            request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
+        )
+        healthy_deployments = (
+            litellm.utils.get_excluded_filtered_deployments(
+                healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
+            )
+            or healthy_deployments
         )
 
         if len(healthy_deployments) == 0:
@@ -13361,7 +13476,7 @@ class Router:
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)
         _target_order: Final = (request_kwargs or {}).pop("_target_order", None)
-        healthy_deployments = litellm.utils._get_order_filtered_deployments(
+        healthy_deployments = litellm.utils.get_order_filtered_deployments(
             healthy_deployments, target_order=_target_order
         )
 
@@ -13369,9 +13484,20 @@ class Router:
         ## this request via weighted-failover. See async counterpart in
         ## async_get_healthy_deployments for details.
         _excluded_deployment_ids: Final = (request_kwargs or {}).pop("_excluded_deployment_ids", None)
-        healthy_deployments = litellm.utils._get_excluded_filtered_deployments(
+        healthy_deployments = litellm.utils.get_excluded_filtered_deployments(
             healthy_deployments,
             excluded_deployment_ids=_excluded_deployment_ids,
+        )
+
+        ## RETRY SKIP ## -> see async counterpart in async_get_healthy_deployments.
+        _retry_skipped_deployment_ids: Final = _as_retry_skipped_deployment_ids(
+            request_kwargs.pop("_retry_skipped_deployment_ids", None) if request_kwargs else None
+        )
+        healthy_deployments = (
+            litellm.utils.get_excluded_filtered_deployments(
+                healthy_deployments, excluded_deployment_ids=_retry_skipped_deployment_ids
+            )
+            or healthy_deployments
         )
 
         if len(healthy_deployments) == 0:

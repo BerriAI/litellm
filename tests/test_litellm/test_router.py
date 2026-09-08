@@ -39,6 +39,7 @@ from litellm.router import (
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
 )
+from litellm.router_strategy import simple_shuffle
 from litellm.types.router import DeploymentTypedDict
 
 
@@ -2384,6 +2385,580 @@ async def test_acompletion_streaming_iterator_preserves_hidden_params():
     )
     assert result._hidden_params.get("litellm_call_id") == "test-call-id"
     assert result._hidden_params.get("_response_ms") == 500.0
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_preserves_response_headers():
+    """LIT-6767: the returned wrapper must carry the provider's raw response headers.
+
+    Proxy callbacks read ``_response_headers`` off the object the router hands
+    back. The wrapper used to be built without it, so every streaming chat
+    completion reported zero raw provider headers while the non-streaming path
+    reported the full set.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    async def _empty():
+        return
+        yield  # make it an async generator
+
+    provider_headers = {
+        "x-request-id": "req-provider-123",
+        "x-ratelimit-remaining-requests": "42",
+        # a provider must never be able to spoof an internal header
+        "x-litellm-model-id": "spoofed",
+    }
+    source = CustomStreamWrapper(
+        completion_stream=_empty(),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers=provider_headers,
+    )
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=source,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    assert result._response_headers == provider_headers
+    additional_headers = result._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "req-provider-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+    # internal-header protection survives: the provider value is namespaced, never promoted
+    assert additional_headers["llm_provider-x-litellm-model-id"] == "spoofed"
+    assert "x-litellm-model-id" not in additional_headers
+
+
+def test_completion_streaming_iterator_preserves_response_headers():
+    """LIT-6767, sync counterpart of the async header-preservation test."""
+    from unittest.mock import MagicMock
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    provider_headers = {"x-request-id": "req-provider-sync", "openai-organization": "org-real"}
+    source = CustomStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers=provider_headers,
+    )
+
+    result = router._completion_streaming_iterator(
+        model_response=source,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    assert result._response_headers == provider_headers
+    assert result._hidden_params["additional_headers"]["llm_provider-x-request-id"] == "req-provider-sync"
+
+
+def test_adopt_fallback_response_headers_replaces_rather_than_merges():
+    """LIT-6767: direct unit for FallbackAwareStreamWrapper.adopt_fallback_response_headers.
+
+    Values from the failed attempt must not survive, so the wrapper replaces both
+    ``_response_headers`` and ``_hidden_params`` instead of merging them.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.router import FallbackAwareStreamWrapper, Router
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers={"x-request-id": "req-FAILED"},
+    )
+    wrapper._hidden_params = {
+        "model_id": "failed-deployment",
+        "only_on_failed_attempt": "stale",
+        "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+    }
+
+    fallback = MagicMock()
+    fallback._response_headers = {"x-request-id": "req-FALLBACK"}
+    fallback._hidden_params = {
+        "model_id": "fallback-deployment",
+        "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
+    }
+
+    wrapper.adopt_fallback_response_headers(
+        fallback, Router._prepare_fallback_hidden_params(fallback)
+    )
+
+    assert wrapper._response_headers == {"x-request-id": "req-FALLBACK"}
+    assert wrapper._hidden_params["model_id"] == "fallback-deployment"
+    assert "only_on_failed_attempt" not in wrapper._hidden_params
+    assert wrapper._hidden_params is not fallback._hidden_params
+    # the snapshot CustomStreamWrapper caches at init has to follow, or a chunk built
+    # from it would still be stamped with the deployment that failed
+    assert wrapper._base_hidden_params["model_id"] == "fallback-deployment"
+    # the nested header dict is copied too, so a later mutation on the fallback
+    # response cannot reach headers the proxy has already published
+    assert wrapper._hidden_params["additional_headers"] is not fallback._hidden_params["additional_headers"]
+    fallback._hidden_params["additional_headers"]["llm_provider-x-request-id"] = "req-MUTATED"
+    assert wrapper._hidden_params["additional_headers"] == {"llm_provider-x-request-id": "req-FALLBACK"}
+
+
+def test_adopt_fallback_response_headers_survives_a_collected_wrapper():
+    """LIT-6767: adoption still returns the fallback's params once the wrapper is gone."""
+    import weakref
+    from unittest.mock import MagicMock
+
+    from litellm.router import FallbackAwareStreamWrapper, Router
+
+    fallback: Final = MagicMock()
+    fallback._response_headers = {"x-request-id": "req-FALLBACK"}
+    fallback._hidden_params = {
+        "model_id": "fallback-deployment",
+        "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
+    }
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+    )
+    live_ref: Final = weakref.ref(wrapper)
+    prepared: Final = Router._adopt_fallback_response_headers(live_ref, fallback)
+    assert prepared == (fallback._hidden_params, fallback._hidden_params["additional_headers"])
+    assert wrapper.fallback_headers_adopted is True
+    assert wrapper._response_headers == {"x-request-id": "req-FALLBACK"}
+
+    dead_ref: Final = weakref.ref(wrapper)
+    del wrapper
+    assert dead_ref() is None
+    assert Router._adopt_fallback_response_headers(dead_ref, fallback) == prepared
+
+
+def test_adopt_fallback_response_headers_drops_headers_the_fallback_cannot_replace():
+    """LIT-6767: a fallback that carries no raw provider headers publishes none.
+
+    Keeping the failed attempt's raw headers would hand the client and the callbacks a
+    provider ``x-request-id`` for a request that deployment never served, which is the
+    leak this fix exists to close.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.router import FallbackAwareStreamWrapper, Router
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers={"x-request-id": "req-FAILED"},
+    )
+    wrapper._hidden_params = {"model_id": "failed-deployment", "additional_headers": {}}
+
+    fallback = MagicMock()
+    fallback._response_headers = None
+    fallback._hidden_params = {"model_id": "fallback-deployment"}
+
+    wrapper.adopt_fallback_response_headers(
+        fallback, Router._prepare_fallback_hidden_params(fallback)
+    )
+
+    assert wrapper._response_headers is None
+    assert wrapper._hidden_params["model_id"] == "fallback-deployment"
+    assert wrapper.fallback_headers_adopted is True
+
+
+def test_adopt_fallback_response_headers_keeps_identity_when_fallback_has_none():
+    """A fallback response carrying no hidden params keeps the identity headers.
+
+    Publishing no ``x-litellm-*`` header at all for a request the fallback served is
+    worse than keeping what is there, so only the raw provider headers are dropped.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.router import FallbackAwareStreamWrapper, Router
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers={"x-request-id": "req-FAILED"},
+    )
+    hidden_params_before = wrapper._hidden_params
+
+    fallback = object()
+    wrapper.adopt_fallback_response_headers(
+        fallback, Router._prepare_fallback_hidden_params(fallback)
+    )
+
+    assert wrapper._response_headers is None
+    assert wrapper._hidden_params is hidden_params_before
+    assert wrapper.fallback_headers_adopted is True
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_adopts_fallback_response_headers():
+    """LIT-6767: after a successful pre-first-chunk fallback, the wrapper must
+    describe the deployment that served the stream, with no value left over
+    from the attempt that failed."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "api_base": "https://failed.example",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+                "only_on_failed_attempt": "stale",
+            }
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise failed_error
+
+    class FallbackStream:
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-FALLBACK"}
+            self._hidden_params = {
+                "model_id": "fallback-deployment",
+                "api_base": "https://fallback.example",
+                "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
+            }
+            self._chunks = iter([litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "OK"}}])])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    fallback_stream = FallbackStream()
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=fallback_stream,
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        # the failed attempt is what the wrapper is built from
+        assert result._response_headers == {"x-request-id": "req-FAILED"}
+        # the very first chunk the fallback produces must already be published under
+        # the fallback's identity: the proxy commits response headers once that chunk
+        # is buffered, so adopting any later is adopting too late
+        await result.__anext__()
+        assert result._response_headers == {"x-request-id": "req-FALLBACK"}
+        assert result._hidden_params["model_id"] == "fallback-deployment"
+        async for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-FALLBACK"}
+    assert result._hidden_params["model_id"] == "fallback-deployment"
+    assert result._hidden_params["api_base"] == "https://fallback.example"
+    assert result._hidden_params["additional_headers"] == {"llm_provider-x-request-id": "req-FALLBACK"}
+    # stale values are removed, not merged over
+    assert "only_on_failed_attempt" not in result._hidden_params
+    # and the wrapper holds its own copy, so later fallback mutations cannot leak in
+    assert result._hidden_params is not fallback_stream._hidden_params
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_adopts_the_deployment_that_served_a_nested_fallback():
+    """LIT-6767: a fallback that itself fails over before its first chunk.
+
+    The selected fallback still describes its own failed attempt at selection time, so
+    the wrapper has to re-read it once a chunk exists or it publishes a deployment that
+    produced no output.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error: Final = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+            }
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise failed_error
+
+    class NestedFallbackStream:
+        """A fallback that repoints itself at a third deployment as it yields."""
+
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-MIDDLE"}
+            self._hidden_params = {
+                "model_id": "middle-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-MIDDLE"},
+            }
+            self._chunks = iter([litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "OK"}}])])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                chunk = next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+            self._response_headers = {"x-request-id": "req-SERVED"}
+            self._hidden_params = {
+                "model_id": "served-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-SERVED"},
+            }
+            return chunk
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=NestedFallbackStream(),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        first_chunk: Final = await result.__anext__()
+        # the proxy commits response headers once this chunk is buffered
+        assert result._response_headers == {"x-request-id": "req-SERVED"}
+        assert result._hidden_params["model_id"] == "served-deployment"
+        assert result._hidden_params["additional_headers"] == {"llm_provider-x-request-id": "req-SERVED"}
+        # and the chunk itself carries the same deployment
+        assert first_chunk._hidden_params["model_id"] == "served-deployment"
+        async for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-SERVED"}
+    assert result._hidden_params["model_id"] == "served-deployment"
+
+
+def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_nested_fallback():
+    """LIT-6767, sync counterpart of the nested-fallback adoption test."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error: Final = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+            }
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise failed_error
+
+    class NestedFallbackStream:
+        """A fallback that repoints itself at a third deployment as it yields."""
+
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-MIDDLE"}
+            self._hidden_params = {
+                "model_id": "middle-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-MIDDLE"},
+            }
+            self._chunks = iter([litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "OK"}}])])
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            chunk = next(self._chunks)
+            self._response_headers = {"x-request-id": "req-SERVED"}
+            self._hidden_params = {
+                "model_id": "served-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-SERVED"},
+            }
+            return chunk
+
+    with patch.object(router, "function_with_fallbacks", return_value=NestedFallbackStream()):
+        result = router._completion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        first_chunk: Final = next(result)
+        assert result._response_headers == {"x-request-id": "req-SERVED"}
+        assert result._hidden_params["model_id"] == "served-deployment"
+        assert first_chunk._hidden_params["model_id"] == "served-deployment"
+        for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-SERVED"}
+    assert result._hidden_params["model_id"] == "served-deployment"
+
+
+def test_completion_streaming_iterator_adopts_fallback_response_headers():
+    """LIT-6767, sync counterpart of the fallback-adoption test."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+                "only_on_failed_attempt": "stale",
+            }
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise failed_error
+
+    class FallbackStream:
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-FALLBACK"}
+            self._hidden_params = {
+                "model_id": "fallback-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
+            }
+
+        def __iter__(self):
+            return iter([])
+
+    with patch.object(router, "function_with_fallbacks", return_value=FallbackStream()):
+        result = router._completion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        assert result._response_headers == {"x-request-id": "req-FAILED"}
+        for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-FALLBACK"}
+    assert result._hidden_params["model_id"] == "fallback-deployment"
+    assert "only_on_failed_attempt" not in result._hidden_params
 
 
 def test_completion_streaming_iterator_fallback_on_429():
@@ -12805,6 +13380,82 @@ class TestTierParamsTheTargetAccepts:
         assert accepted == {"reasoning_effort": "max"}
 
 
+@pytest.mark.asyncio
+async def test_router_aspeech_without_voice_dispatches_ref_audio_cloning(respx_mock, monkeypatch):
+    import base64
+
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    audio_bytes = b"RIFFfake-wav-bytes"
+    respx_mock.post("https://api.mistral.ai/v1/audio/speech").respond(
+        json={"audio_data": base64.b64encode(audio_bytes).decode()}
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "voxtral-tts",
+                "litellm_params": {"model": "mistral/voxtral-mini-tts-2603"},
+            }
+        ]
+    )
+
+    response = await router.aspeech(model="voxtral-tts", input="clone me", ref_audio="ZmFrZQ==")
+
+    request_body = json.loads(respx_mock.calls.last.request.content)
+    assert request_body == {"model": "voxtral-mini-tts-2603", "input": "clone me", "ref_audio": "ZmFrZQ=="}
+    assert response.content == audio_bytes
+
+
+@pytest.mark.asyncio
+async def test_router_aspeech_without_voice_keeps_deployment_default_voice(respx_mock, monkeypatch):
+    import base64
+
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    audio_bytes = b"RIFFfake-wav-bytes"
+    respx_mock.post("https://api.mistral.ai/v1/audio/speech").respond(
+        json={"audio_data": base64.b64encode(audio_bytes).decode()}
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "voxtral-tts",
+                "litellm_params": {"model": "mistral/voxtral-mini-tts-2603", "voice": "en_paul_neutral"},
+            }
+        ]
+    )
+
+    await router.aspeech(model="voxtral-tts", input="use my default")
+
+    request_body = json.loads(respx_mock.calls.last.request.content)
+    assert request_body["voice_id"] == "en_paul_neutral"
+
+
+@pytest.mark.asyncio
+async def test_router_aspeech_request_voice_overrides_deployment_default(respx_mock, monkeypatch):
+    import base64
+
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    audio_bytes = b"RIFFfake-wav-bytes"
+    respx_mock.post("https://api.mistral.ai/v1/audio/speech").respond(
+        json={"audio_data": base64.b64encode(audio_bytes).decode()}
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "voxtral-tts",
+                "litellm_params": {"model": "mistral/voxtral-mini-tts-2603", "voice": "en_paul_neutral"},
+            }
+        ]
+    )
+
+    await router.aspeech(model="voxtral-tts", input="override me", voice="gb_oliver_neutral")
+
+    request_body = json.loads(respx_mock.calls.last.request.content)
+    assert request_body["voice_id"] == "gb_oliver_neutral"
+
+
 class TestRequestReasoningEffortOverride:
     def test_drop_effort_from_nested_carrier_preserves_other_nested_values(self):
         params: dict[str, object] = {"output_config": {"effort": "high", "format": "json"}}
@@ -13116,6 +13767,7 @@ async def test_prompt_management_factory_marks_injection_for_every_deployment(mo
         ({"DefaultRetries": 0}, 502, litellm.BadGatewayError, 1),
         ({"DefaultRetries": 0, "ServiceUnavailableErrorRetries": 1}, 503, litellm.ServiceUnavailableError, 2),
         ({"ServiceUnavailableErrorRetries": 0}, 502, litellm.BadGatewayError, 3),
+        ({"BadRequestErrorRetries": 2}, 400, litellm.BadRequestError, 3),
     ],
 )
 async def test_router_retry_policy_controls_upstream_attempt_count(
@@ -13150,6 +13802,323 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
             await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
     assert upstream.call_count == expected_upstream_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "retry_policy,upstream_error",
+    [
+        (
+            {"BadRequestErrorRetries": 2},
+            {
+                "message": "This model's maximum context length is 16385 tokens",
+                "type": "invalid_request_error",
+                "code": "context_length_exceeded",
+            },
+        ),
+        (
+            {"ContentPolicyViolationErrorRetries": 2},
+            {
+                "message": "Your request was rejected as a result of our safety system",
+                "type": "invalid_request_error",
+                "code": "content_policy_violation",
+            },
+        ),
+    ],
+)
+async def test_router_retry_policy_400_retries_on_sibling_deployment(
+    monkeypatch: pytest.MonkeyPatch, retry_policy, upstream_error
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://rejecting.local/v1",
+                    "weight": 1,
+                },
+                "model_info": {"id": "rejecting"},
+            },
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://accepting.local/v1",
+                    "weight": 0,
+                },
+                "model_info": {"id": "accepting"},
+            },
+        ],
+        num_retries=2,
+        retry_policy=retry_policy,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        rejecting = respx_mock.post("https://rejecting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": upstream_error})
+        )
+        accepting = respx_mock.post("https://accepting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-lit-7036",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-5.6",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "hi back"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                },
+            )
+        )
+        response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert rejecting.call_count == 1
+    assert accepting.call_count == 1
+    assert response.choices[0].message.content == "hi back"
+    assert response._hidden_params["additional_headers"]["x-litellm-attempted-retries"] == 1
+
+
+_UPSTREAM_400 = {"message": "upstream refused this request", "type": "invalid_request_error", "code": "bad_request"}
+
+
+def _retry_skip_deployment(deployment_id, host, litellm_params=None, model_info=None):
+    return {
+        "model_name": "gpt-5.6",
+        "litellm_params": {
+            "model": "openai/gpt-5.6",
+            "api_key": "sk-fake",
+            "api_base": f"https://{host}.local/v1",
+            **(litellm_params or {}),
+        },
+        "model_info": {"id": deployment_id, **(model_info or {})},
+    }
+
+
+@pytest.mark.parametrize(
+    "status_code,failed_deployment_id,already_skipped,expected",
+    [
+        (400, "rejecting", None, ("rejecting",)),
+        (403, "rejecting", None, ("rejecting",)),
+        (400, "second", ("first",), ("first", "second")),
+        (400, "first", ("first",), ("first",)),
+        (429, "rejecting", None, ()),
+        (503, "rejecting", None, ()),
+        (408, "rejecting", None, ()),
+        (400, None, None, ()),
+        (None, "rejecting", None, ()),
+        ("400", "rejecting", None, ()),
+        (400, "second", 7, ("second",)),
+        (400, "second", "first", ("second",)),
+        (400, "second", ["first"], ("second",)),
+        (400, "second", ("first", 7), ("first", "second")),
+    ],
+)
+def test_router_deployment_ids_to_skip_on_retry(status_code, failed_deployment_id, already_skipped, expected):
+    exception = Exception("upstream refused this request")
+    exception.status_code = status_code
+    exception.failed_deployment_id = failed_deployment_id
+
+    assert litellm.Router._deployment_ids_to_skip_on_retry(exception, already_skipped) == expected
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (("first", "second"), ("first", "second")),
+        ((), ()),
+        (("first", 7, None, "second"), ("first", "second")),
+        (None, ()),
+        (7, ()),
+        ("first", ()),
+        (["first"], ()),
+        ({"first": True}, ()),
+        (object(), ()),
+    ],
+)
+def test_router_as_retry_skipped_deployment_ids_keeps_only_a_tuple_of_strings(value, expected):
+    from litellm.router import _as_retry_skipped_deployment_ids
+
+    assert _as_retry_skipped_deployment_ids(value) == expected
+
+
+@pytest.mark.parametrize(
+    "deployment_ids,skipped,expected",
+    [
+        (["rejecting", "sibling"], ("rejecting",), ["sibling"]),
+        (["rejecting"], ("rejecting",), ["rejecting"]),
+        (["rejecting", "sibling"], ("rejecting", "sibling"), ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], (), ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], None, ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], ("absent",), ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], 7, ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], "rejecting", ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], ["rejecting"], ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], {"rejecting": True}, ["rejecting", "sibling"]),
+        (["rejecting", "sibling"], ("rejecting", 7), ["sibling"]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_router_healthy_deployments_keep_the_last_candidate_a_retry_skipped(deployment_ids, skipped, expected):
+    router = litellm.Router(
+        model_list=[_retry_skip_deployment(deployment_id, deployment_id) for deployment_id in deployment_ids],
+        disable_cooldowns=True,
+    )
+    request_kwargs = {"_retry_skipped_deployment_ids": skipped}
+
+    healthy_deployments = await router.async_get_healthy_deployments(model="gpt-5.6", request_kwargs=request_kwargs)
+
+    assert sorted(deployment["model_info"]["id"] for deployment in healthy_deployments) == sorted(expected)
+    assert "_retry_skipped_deployment_ids" not in request_kwargs
+
+
+@pytest.mark.parametrize("client_supplied", [7, "rejecting", ["rejecting"], {"rejecting": True}, object()])
+@pytest.mark.asyncio
+async def test_router_retry_policy_400_keeps_upstream_error_when_a_client_forges_the_skip_list(
+    monkeypatch: pytest.MonkeyPatch, client_supplied
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[_retry_skip_deployment("rejecting", "rejecting"), _retry_skip_deployment("sibling", "sibling")],
+        num_retries=2,
+        retry_policy={"BadRequestErrorRetries": 2},
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        respx_mock.post("https://rejecting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        respx_mock.post("https://sibling.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await router.acompletion(
+                model="gpt-5.6",
+                messages=[{"role": "user", "content": "hi"}],
+                _retry_skipped_deployment_ids=client_supplied,
+            )
+
+    assert "upstream refused this request" in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_router_retry_policy_400_keeps_upstream_error_on_order_fallback_hop(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("order1", "order1", litellm_params={"order": 1}),
+            _retry_skip_deployment("order2", "order2", litellm_params={"order": 2}),
+        ],
+        num_retries=2,
+        retry_policy={"BadRequestErrorRetries": 2},
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        order1 = respx_mock.post("https://order1.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        order2 = respx_mock.post("https://order2.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert "upstream refused this request" in str(raised.value)
+    assert "No deployments available" not in str(raised.value)
+    assert order1.call_count >= 1
+    assert order2.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_router_retry_policy_400_keeps_upstream_error_when_tags_narrow_the_group(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment(
+                "tagged", "tagged", litellm_params={"tags": ["free"]}, model_info={"enable_tag_filtering": True}
+            ),
+            _retry_skip_deployment("untagged", "untagged", model_info={"enable_tag_filtering": True}),
+        ],
+        num_retries=2,
+        retry_policy={"BadRequestErrorRetries": 2},
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        tagged = respx_mock.post("https://tagged.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        untagged = respx_mock.post("https://untagged.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        with pytest.raises(litellm.BadRequestError) as raised:
+            await router.acompletion(
+                model="gpt-5.6",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"tags": ["free"]},
+            )
+
+    assert "upstream refused this request" in str(raised.value)
+    assert "No deployments available" not in str(raised.value)
+    assert tagged.call_count == 3
+    assert untagged.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_router_retry_policy_400_never_returns_to_a_deployment_that_already_refused(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(simple_shuffle.random, "choice", lambda deployments: deployments[0])
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("first-refuser", "first-refuser", litellm_params={"weight": 1}),
+            _retry_skip_deployment("second-refuser", "second-refuser", litellm_params={"weight": 0}),
+            _retry_skip_deployment("accepting", "accepting", litellm_params={"weight": 0}),
+        ],
+        num_retries=3,
+        retry_policy={"BadRequestErrorRetries": 3},
+        disable_cooldowns=True,
+    )
+
+    with respx.mock as respx_mock:
+        first = respx_mock.post("https://first-refuser.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        second = respx_mock.post("https://second-refuser.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        accepting = respx_mock.post("https://accepting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-lit-7036",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-5.6",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "hi back"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+                },
+            )
+        )
+        response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert first.call_count == 1
+    assert second.call_count == 1
+    assert accepting.call_count == 1
+    assert response.choices[0].message.content == "hi back"
 
 
 def _make_failure_logging_obj():

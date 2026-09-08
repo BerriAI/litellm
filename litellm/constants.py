@@ -55,6 +55,7 @@ S3_PREFIX_DIGEST_CHARS: Final = 16
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
+budget_reservation_disabled_info_emitted = False
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
 DEFAULT_SQS_BATCH_SIZE: Final = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION: Final = "SendMessage"
@@ -1899,6 +1900,16 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
         "proxy-authenticate",
         "proxy-authorization",
     }
+)
+
+PROVIDER_REQUEST_ID_HEADERS: Final[tuple[str, ...]] = (
+    "x-amzn-requestid",
+    "x-request-id",
+    "request-id",
+    "x-ms-request-id",
+    "apim-request-id",
+    "x-goog-request-id",
+    "cf-ray",
 )
 
 # Browser-facing security headers that a malicious or misconfigured upstream

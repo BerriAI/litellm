@@ -198,6 +198,11 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
     assert via_provider["mode"] == "responses"
 
 
+def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
+    info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
+    assert info["key"] == "ft:gpt-4o-2024-08-06"
+
+
 def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
     """The provider-prefixed candidate is tried last, after every candidate that
     already existed, so no model that resolves today can change answer. `perplexity/sonar`
@@ -5239,52 +5244,6 @@ def test_client_side_timeout_marker_never_reaches_the_provider():
     )
 
 
-def test_rust_flag_not_forwarded_as_provider_param():
-    forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
-    assert "rust" not in forwarded
-
-
-def test_completion_does_not_leak_rust_flag_into_provider_request_body():
-    mock_response = MagicMock()
-    mock_response.model_dump.return_value = {
-        "id": "chatcmpl-1",
-        "object": "chat.completion",
-        "created": 1234567890,
-        "model": "gpt-4o-mini",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "hi"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 1,
-            "completion_tokens": 1,
-            "total_tokens": 2,
-        },
-    }
-
-    mock_raw_response = MagicMock()
-    mock_raw_response.headers = {}
-    mock_raw_response.parse.return_value = mock_response
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
-
-    litellm.completion(
-        model="openai/gpt-4o-mini",
-        messages=[{"role": "user", "content": "hi"}],
-        rust=True,
-        api_key="sk-test",
-        client=mock_client,
-    )
-
-    create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
-    assert "rust" not in create_kwargs
-    assert "rust" not in (create_kwargs.get("extra_body") or {})
-
-
 class _RecordingDeploymentFailureLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -6133,3 +6092,47 @@ class TestFinalOptionalParamsLineRedaction:
 
         assert "'max_tokens': 17" in printed
         assert "'temperature': 0.25" in printed
+
+
+def _credential_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if "litellm_credential_name=" in record.getMessage()]
+
+
+def test_load_credentials_from_list_warns_when_the_named_credential_is_not_loaded(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.utils import load_credentials_from_list
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    assert _credential_warnings(caplog) == [
+        "litellm_credential_name=openai-cred matched none of the 0 loaded credentials; the request runs without it"
+    ]
+
+
+def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_without_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.types.utils import CredentialItem
+    from litellm.utils import load_credentials_from_list
+
+    loaded = CredentialItem(
+        credential_name="openai-cred",
+        credential_values={"api_key": "sk-from-db", "api_base": "https://credential.example"},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [loaded])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "api_base": "https://request.example"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {
+        "litellm_credential_name": "openai-cred",
+        "api_base": "https://request.example",
+        "api_key": "sk-from-db",
+    }
+    assert _credential_warnings(caplog) == []
