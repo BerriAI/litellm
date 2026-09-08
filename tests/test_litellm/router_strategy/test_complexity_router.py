@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.auto_router_model_naming import (
     CUSTOMIZATION_CAPABILITY,
     GATED_AUTO_ROUTER_CAPABILITIES,
@@ -24,7 +25,12 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import RETURN_RAW_MODEL_NAME_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
+from litellm.constants import (
+    OUTPUT_TOKEN_CEILING_PARAMS,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+)
+from litellm.router import as_output_cap
 from litellm.router_strategy.complexity_router.complexity_router import (
     _CLASSIFICATION_CURRENT_MESSAGE_ONLY,
     _CLASSIFICATION_WITH_CONVERSATION,
@@ -1511,6 +1517,7 @@ class TestRouterComplexityDeploymentMethods:
     def test_the_shipped_rubric_and_default_prompt_stay_free(self) -> None:
         """Only an operator-written prompt is gated: picking a shipped rubric preset, or writing no
         prompt at all, leaves a router unmetered, so several of them register under a ceiling of one."""
+
         def rubric(model_name: str, model_id: str, preset: str | None) -> dict[str, object]:
             llm_config: dict[str, object] = {"model": "gpt-4o-mini"}
             if preset is not None:
@@ -1647,6 +1654,7 @@ class TestRouterComplexityDeploymentMethods:
     def test_renaming_built_in_tiers_is_not_a_custom_tier_set(self) -> None:
         """tier_labels renames the built-in ladder without defining one, so it stays ungated: two such
         routers register under a ceiling of one."""
+
         def labeled(model_name: str, model_id: str) -> dict[str, object]:
             row = self._router_row(model_name, model_id, "heuristic")
             row["litellm_params"]["complexity_router_config"]["tier_labels"] = {"SIMPLE": "Cheap", "MEDIUM": "Standard"}
@@ -2520,9 +2528,7 @@ class TestLLMClassifier:
         assert outcome.classifier_cost == pytest.approx(1.35e-05)
 
     @pytest.mark.asyncio
-    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(
-        self, llm_classifier_config
-    ):
+    async def test_aclassify_timeout_does_not_inherit_router_retries_or_fallbacks(self, llm_classifier_config):
         real_router = Router(
             model_list=[
                 {
@@ -2565,9 +2571,7 @@ class TestLLMClassifier:
         assert real_router.total_calls["openai/mock-backup-classifier"] == 0
 
     @pytest.mark.asyncio
-    async def test_aclassify_enforces_total_classifier_deadline(
-        self, mock_router_instance, llm_classifier_config
-    ):
+    async def test_aclassify_enforces_total_classifier_deadline(self, mock_router_instance, llm_classifier_config):
         cancelled = asyncio.Event()
 
         async def slow_classifier(**_kwargs: object) -> None:
@@ -3333,11 +3337,11 @@ class TestRouterPreRoutingAliasOverrides:
 
     def test_drop_client_effort_carriers_helper_edge_shapes(self):
         no_pin: Dict = {"thinking": {"type": "adaptive"}}
-        Router._drop_client_effort_carriers_a_tier_pin_supersedes(no_pin, {"temperature": 0.1})
+        Router._drop_client_carriers_a_tier_pin_supersedes(no_pin, {"temperature": 0.1})
         assert no_pin == {"thinking": {"type": "adaptive"}}
 
         non_dict_carriers: Dict = {"output_config": "max", "reasoning": 3}
-        Router._drop_client_effort_carriers_a_tier_pin_supersedes(non_dict_carriers, {"reasoning_effort": "low"})
+        Router._drop_client_carriers_a_tier_pin_supersedes(non_dict_carriers, {"reasoning_effort": "low"})
         assert non_dict_carriers == {"output_config": "max", "reasoning": 3}
 
         effort_only: Dict = {"output_config": {"effort": "max"}, "reasoning": {"effort": "high"}}
@@ -3791,11 +3795,11 @@ class TestRouterPreRoutingSharedAliasName:
         }
 
     @staticmethod
-    async def _routed_call_kwargs(router: Router, **request_params) -> dict:
+    async def _routed_call_kwargs(router: Router, prompt: str = "hi", **request_params) -> dict:
         mock_acompletion = AsyncMock(return_value=litellm.ModelResponse(choices=[{"message": {"content": "hi"}}]))
         with patch.object(litellm, "acompletion", mock_acompletion):
             await router.acompletion(
-                model="smart-router", messages=[{"role": "user", "content": "hi"}], **request_params
+                model="smart-router", messages=[{"role": "user", "content": prompt}], **request_params
             )
         return mock_acompletion.call_args.kwargs
 
@@ -12414,9 +12418,7 @@ class TestTierHealthFailover:
                     llm_provider="",
                 )
             filtered = (*cooling, *blocked, *excluded)
-            healthy = [
-                {"model_name": model, "model_info": {"id": i}} for i in ids_by_model[model] if i not in filtered
-            ]
+            healthy = [{"model_name": model, "model_info": {"id": i}} for i in ids_by_model[model] if i not in filtered]
             if not healthy:
                 raise RouterRateLimitError(
                     model=model, cooldown_time=60.0, enable_pre_call_checks=False, cooldown_list=[]
@@ -12845,9 +12847,7 @@ class TestTierHealthFailover:
         assert all(probed is not request_kwargs for probed in router.litellm_router_instance.probed_kwargs)
 
     @pytest.mark.asyncio
-    async def test_a_peer_whose_every_deployment_is_over_its_rpm_is_not_a_failover_target(
-        self, mock_router_instance
-    ):
+    async def test_a_peer_whose_every_deployment_is_over_its_rpm_is_not_a_failover_target(self, mock_router_instance):
         """RPM exhaustion is its own verdict from the owner (RouterRateLimitErrorBasic). A peer
         in that state would be rejected downstream, so it cannot be the substitute."""
         from litellm.types.router import RouterRateLimitErrorBasic
@@ -12880,9 +12880,7 @@ class TestTierHealthFailover:
         assert {r.model for r in results} == {"live-c"}
 
     @pytest.mark.asyncio
-    async def test_the_probe_forwards_input_so_window_checks_run_on_input_only_surfaces(
-        self, mock_router_instance
-    ):
+    async def test_the_probe_forwards_input_so_window_checks_run_on_input_only_surfaces(self, mock_router_instance):
         """The Responses API carries its prompt as `input`, never as messages. The owner only
         runs its context-window pre-call check when one of them is present, so dropping `input`
         would silently skip window filtering on that whole surface."""
@@ -12908,9 +12906,7 @@ class TestTierHealthFailover:
         ), "the eligibility probe must forward `input` to the owner"
 
     @pytest.mark.asyncio
-    async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(
-        self, mock_router_instance
-    ):
+    async def test_a_group_the_router_has_no_deployment_for_is_not_a_failover_target(self, mock_router_instance):
         """The owner answers an unconfigured group with BadRequestError. Reading that as live
         would both skip failover off it and let it be chosen as a substitute."""
         router = self._router(
@@ -13099,9 +13095,7 @@ class TestClassifierVision:
         routed as default_fallback on text the request never contained.
         """
         router = self._router(mock_router_instance, vision={"enabled": True})
-        response = await router.async_pre_routing_hook(
-            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
-        )
+        response = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self._turn(IMG_PART))
         assert response.routing_decision["cause"] == "llm_classifier"
         assert response.model == "t-complex"
         assert [block["type"] for block in self._classifier_user_content(mock_router_instance)] == [
@@ -13112,9 +13106,7 @@ class TestClassifierVision:
     @pytest.mark.asyncio
     async def test_image_only_turn_still_falls_back_when_vision_is_off(self, mock_router_instance):
         router = self._router(mock_router_instance, vision={"enabled": False})
-        response = await router.async_pre_routing_hook(
-            model="m", request_kwargs={}, messages=self._turn(IMG_PART)
-        )
+        response = await router.async_pre_routing_hook(model="m", request_kwargs={}, messages=self._turn(IMG_PART))
         assert response.routing_decision["cause"] == "default_fallback"
         mock_router_instance.acompletion.assert_not_awaited()
 
@@ -13184,9 +13176,7 @@ class TestClassifierVision:
         makes the image the only variable; a margin loose enough to leave the score undecided
         would pass whether or not the guard exists.
         """
-        router = self._router(
-            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
-        )
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
         response = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=self._turn({"type": "text", "text": "what is this"}, IMG_PART)
         )
@@ -13200,9 +13190,7 @@ class TestClassifierVision:
         self, mock_router_instance, classifier_type, extra, short_circuit_cause
     ):
         """The negative class: same router, same text, no image, and the scorer still decides."""
-        router = self._router(
-            mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra
-        )
+        router = self._router(mock_router_instance, vision={"enabled": True}, classifier_type=classifier_type, **extra)
         response = await router.async_pre_routing_hook(
             model="m", request_kwargs={}, messages=[{"role": "user", "content": "what is this"}]
         )
@@ -13212,3 +13200,379 @@ class TestClassifierVision:
     def test_max_images_must_be_positive(self):
         with pytest.raises(ValidationError):
             ClassifierLLMConfig(model="clf", vision={"enabled": True, "max_images": 0})
+
+
+class TestMaxTokensFromTierModel:
+    """The auto-router replaces the caller's output ceiling with the tier model's own, so one
+    client-side value no longer starves a bigger tier or gets rejected by a smaller one."""
+
+    COMPLEX_PROMPT: Final = (
+        "Design a distributed rate limiter with Redis, sharding and failover. Analyze the consistency "
+        "tradeoffs and implement the algorithm step by step with tests."
+    )
+    SMALL: Final = {
+        "model_name": "small",
+        "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "k"},
+        "model_info": {"max_output_tokens": 8192},
+    }
+
+    @staticmethod
+    def _router(
+        tier_litellm_params: dict | None = None,
+        max_tokens_from_tier_model: bool | None = None,
+        simple_deployments: list[dict] | None = None,
+        extra_config: dict | None = None,
+    ) -> Router:
+        simple_tier: dict = {"model_name": "small"}
+        if tier_litellm_params:
+            simple_tier["litellm_params"] = tier_litellm_params
+        config: dict = {
+            "tiers": {"SIMPLE": simple_tier, "MEDIUM": "big", "COMPLEX": "big", "REASONING": "big"},
+            **(extra_config or {}),
+        }
+        if max_tokens_from_tier_model is not None:
+            config["max_tokens_from_tier_model"] = max_tokens_from_tier_model
+        return Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {"model": "auto_router/complexity_router", "complexity_router_config": config},
+                },
+                *(simple_deployments or [TestMaxTokensFromTierModel.SMALL]),
+                {
+                    "model_name": "big",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "k"},
+                    "model_info": {"max_output_tokens": 64000},
+                },
+            ]
+        )
+
+    @staticmethod
+    async def _routed(router: Router, prompt: str = "hi", **request_kwargs) -> dict:
+        """Drive the real routing entry point and return the request kwargs it leaves behind."""
+        deployment = await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=request_kwargs, messages=[{"role": "user", "content": prompt}]
+        )
+        return {"model": deployment["litellm_params"]["model"], **request_kwargs}
+
+    @staticmethod
+    async def _routed_responses(router: Router, prompt: str = "hi", **request_kwargs) -> dict:
+        """The Responses surface hands the router `input` both as the prompt argument and inside the
+        request kwargs, so the hook sees the same shape the real call carries."""
+        routed: dict = {"input": prompt, **request_kwargs}
+        deployment = await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=routed, input=prompt
+        )
+        return {"model": deployment["litellm_params"]["model"], **routed}
+
+    @pytest.mark.asyncio
+    async def test_client_ceiling_is_replaced_by_the_routed_tier_models_ceiling(self):
+        router = self._router()
+
+        simple = await self._routed(router, max_tokens=8192)
+        complex_ = await self._routed(router, self.COMPLEX_PROMPT, max_tokens=8192)
+
+        assert (simple["model"], simple["max_tokens"]) == ("anthropic/claude-haiku-4-5", 8192)
+        assert (complex_["model"], complex_["max_tokens"]) == ("anthropic/claude-sonnet-5", 64000)
+        assert "max_output_tokens" not in complex_
+
+    @pytest.mark.asyncio
+    async def test_every_client_carrier_of_the_ceiling_is_replaced(self):
+        sent = await self._routed(self._router(), self.COMPLEX_PROMPT, max_completion_tokens=8192)
+
+        assert sent["max_tokens"] == 64000
+        assert "max_completion_tokens" not in sent
+
+    @pytest.mark.asyncio
+    async def test_responses_surface_gets_the_ceiling_under_its_own_name(self):
+        sent = await self._routed_responses(self._router(), self.COMPLEX_PROMPT, max_output_tokens=8192)
+
+        assert (sent["model"], sent["max_output_tokens"]) == ("anthropic/claude-sonnet-5", 64000)
+        assert "max_tokens" not in sent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tier_params, responses_call",
+        [
+            ({"max_tokens": 4321}, False),
+            ({"max_tokens": 4321}, True),
+            ({"max_completion_tokens": 4321}, False),
+            ({"max_completion_tokens": 4321}, True),
+            ({"max_output_tokens": 4321}, False),
+        ],
+    )
+    async def test_operators_own_tier_ceiling_wins_under_the_surface_name(self, tier_params, responses_call):
+        router = self._router(tier_litellm_params=tier_params)
+        if responses_call:
+            sent = await self._routed_responses(router, max_output_tokens=8192)
+        else:
+            sent = await self._routed(router, max_tokens=8192)
+
+        surface_key = "max_output_tokens" if responses_call else "max_tokens"
+        assert sent[surface_key] == 4321
+        assert not (OUTPUT_TOKEN_CEILING_PARAMS - {surface_key}) & sent.keys()
+
+    @pytest.mark.asyncio
+    async def test_opting_out_forwards_the_client_value_unchanged(self):
+        sent = await self._routed(self._router(max_tokens_from_tier_model=False), self.COMPLEX_PROMPT, max_tokens=8192)
+
+        assert sent["max_tokens"] == 8192
+
+    @pytest.mark.asyncio
+    async def test_a_tier_model_with_an_unknown_ceiling_keeps_the_client_value(self):
+        unmapped: dict = {"model_name": "small", "litellm_params": {"model": "openai/not-in-any-map", "api_key": "k"}}
+
+        sent = await self._routed(self._router(simple_deployments=[self.SMALL, unmapped]), max_tokens=4000)
+
+        assert sent["max_tokens"] == 4000
+
+    @pytest.mark.asyncio
+    async def test_a_multi_deployment_tier_model_uses_its_smallest_ceiling(self):
+        smaller: dict = {
+            **self.SMALL,
+            "litellm_params": {**self.SMALL["litellm_params"], "api_key": "k2"},
+            "model_info": {"max_output_tokens": 4096},
+        }
+
+        sent = await self._routed(self._router(simple_deployments=[self.SMALL, smaller]), max_tokens=100000)
+
+        assert sent["max_tokens"] == 4096
+
+    @pytest.mark.asyncio
+    async def test_ceiling_falls_back_to_the_cost_map(self, monkeypatch):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "auto-cap-probe-model",
+            {"litellm_provider": "openai", "mode": "chat", "max_output_tokens": 4242, "max_input_tokens": 100000},
+        )
+        mapped_only: dict = {
+            "model_name": "small",
+            "litellm_params": {"model": "openai/auto-cap-probe-model", "api_key": "k"},
+        }
+
+        sent = await self._routed(self._router(simple_deployments=[mapped_only]), max_tokens=8192)
+
+        assert sent["max_tokens"] == 4242
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("client_kwargs", [{}, {"max_tokens": 0}], ids=["omitted", "zero"])
+    async def test_omitted_and_zero_are_replaced_like_any_other_value(self, client_kwargs):
+        sent = await self._routed(self._router(), self.COMPLEX_PROMPT, **client_kwargs)
+
+        assert sent["max_tokens"] == 64000
+
+    @pytest.mark.parametrize(
+        "tier_params, responses_call, expected",
+        [
+            ({"max_tokens": 1, "temperature": 0.2}, False, {"max_tokens": 1, "temperature": 0.2}),
+            ({"max_tokens": 1}, True, {"max_output_tokens": 1}),
+            ({"max_completion_tokens": 2}, False, {"max_tokens": 2}),
+            ({"max_completion_tokens": 2}, True, {"max_output_tokens": 2}),
+            ({"max_output_tokens": 3}, False, {"max_tokens": 3}),
+            ({"max_output_tokens": 3}, True, {"max_output_tokens": 3}),
+            ({"max_tokens": 1, "max_completion_tokens": 2, "max_output_tokens": 3}, False, {"max_tokens": 1}),
+            ({"max_tokens": 1, "max_completion_tokens": 2, "max_output_tokens": 3}, True, {"max_output_tokens": 3}),
+            ({"max_completion_tokens": 2, "max_output_tokens": 3}, False, {"max_tokens": 2}),
+            ({"reasoning_effort": "low"}, True, {"reasoning_effort": "low"}),
+        ],
+    )
+    def test_every_tier_alias_collapses_onto_the_surface_key(self, tier_params, responses_call, expected):
+        assert dict(Router._tier_ceiling_under_the_surface_name(tier_params, responses_call=responses_call)) == expected
+
+    @pytest.mark.asyncio
+    async def test_the_default_fallback_exit_carries_the_ceiling(self):
+        routed: dict = {"max_tokens": 8192}
+        deployment = await self._router().async_get_available_deployment(
+            model="smart-router", request_kwargs=routed, messages=[{"role": "system", "content": "be nice"}]
+        )
+
+        assert routed["metadata"]["routing_decision"]["cause"] == "default_fallback"
+        assert (deployment["litellm_params"]["model"], routed["max_tokens"]) == ("anthropic/claude-sonnet-5", 64000)
+
+    @pytest.mark.asyncio
+    async def test_the_plan_mode_exit_carries_the_ceiling(self):
+        routed: dict = {"max_tokens": 8192}
+        deployment = await self._router(
+            extra_config={"plan_mode_min_tier": "REASONING"}
+        ).async_get_available_deployment(
+            model="smart-router",
+            request_kwargs=routed,
+            messages=[
+                {"role": "user", "content": "plan the refactor"},
+                {"role": "system", "content": "Plan mode is active"},
+            ],
+        )
+
+        assert routed["metadata"]["routing_decision"]["cause"] == "plan_mode"
+        assert (deployment["litellm_params"]["model"], routed["max_tokens"]) == ("anthropic/claude-sonnet-5", 64000)
+
+    @pytest.mark.asyncio
+    async def test_a_default_model_landing_with_no_tier_still_gets_its_ceiling(self):
+        strategy = ComplexityRouter(
+            model_name="smart-router",
+            litellm_router_instance=self._router(),
+            complexity_router_config={"tiers": {"SIMPLE": "small"}, "default_model": "big"},
+        )
+
+        assert dict(strategy._litellm_params_for_model(None, "big")) == {"max_tokens": 64000}
+
+    @pytest.mark.asyncio
+    async def test_a_fallback_into_a_plain_group_gets_the_callers_ceiling_back(self):
+        """A model-group fallback re-enters routing with the same kwargs; a Sonnet-sized ceiling
+        must not ride onto the plain group the caller configured as the fallback."""
+        big: dict = {
+            "model_name": "big",
+            "litellm_params": {
+                "model": "anthropic/claude-sonnet-5",
+                "api_key": "k",
+                "mock_response": "litellm.InternalServerError",
+            },
+            "model_info": {"max_output_tokens": 64000},
+        }
+        plain: dict = {
+            "model_name": "plain",
+            "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "k", "mock_response": "ok"},
+        }
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {"SIMPLE": "big", "MEDIUM": "big", "COMPLEX": "big", "REASONING": "big"}
+                        },
+                    },
+                },
+                big,
+                plain,
+            ],
+            fallbacks=[{"smart-router": ["plain"]}],
+            num_retries=0,
+        )
+        recorder = _OutputCeilingRecorder()
+        litellm.callbacks.append(recorder)
+        try:
+            await router.acompletion(
+                model="smart-router", messages=[{"role": "user", "content": self.COMPLEX_PROMPT}], max_tokens=8192
+            )
+        finally:
+            litellm.callbacks.remove(recorder)
+
+        assert recorder.seen == [("claude-sonnet-5", 64000), ("claude-haiku-4-5", 8192)]
+
+    @pytest.mark.asyncio
+    async def test_a_caller_seeded_stamp_cannot_inject_kwargs_on_a_plain_group(self):
+        """The stamp sits in a metadata bucket a caller can write; a planted one must yield
+        nothing but integer ceiling carriers, never a redirected api_base or credential."""
+        planted: dict = {
+            "api_base": "https://attacker.example",
+            "api_key": "stolen",
+            "max_tokens": "not-an-int",
+            "max_completion_tokens": True,
+            "max_output_tokens": 321,
+        }
+        routed: dict = {"max_tokens": 8192, "metadata": {"_client_output_ceiling": planted}}
+
+        await self._router().async_get_available_deployment(
+            model="big", request_kwargs=routed, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert {k: v for k, v in routed.items() if k not in ("metadata", "model_info")} == {"max_output_tokens": 321}
+
+    @pytest.mark.asyncio
+    async def test_the_pass_through_routing_entry_point_pins_and_restores_the_same_way(self):
+        pass_through: dict = {**self.SMALL["litellm_params"], "use_in_pass_through": True}
+        small: dict = {**self.SMALL, "litellm_params": pass_through}
+        plain: dict = {**small, "model_name": "plain"}
+        router = self._router(simple_deployments=[small, plain])
+        for deployment in router.model_list:
+            deployment["litellm_params"]["use_in_pass_through"] = True
+        routed: dict = {"max_tokens": 8192}
+
+        deployment = await router.async_get_available_deployment_for_pass_through(
+            model="smart-router", request_kwargs=routed, messages=[{"role": "user", "content": self.COMPLEX_PROMPT}]
+        )
+        pinned = routed["max_tokens"]
+        await router.async_get_available_deployment_for_pass_through(
+            model="plain", request_kwargs=routed, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert (deployment["litellm_params"]["model"], pinned, routed["max_tokens"]) == (
+            "anthropic/claude-sonnet-5",
+            64000,
+            8192,
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_classifier_fallback_exit_carries_the_ceiling(self):
+        router = self._router(
+            extra_config={
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "no-such-classifier", "timeout_ms": 400},
+                "classifier_fallback": "default_model",
+                "default_model": "big",
+            }
+        )
+        routed: dict = {"max_tokens": 8192}
+
+        deployment = await router.async_get_available_deployment(
+            model="smart-router", request_kwargs=routed, messages=[{"role": "user", "content": "hi"}]
+        )
+
+        assert routed["metadata"]["routing_decision"]["cause"] == "default_model_fallback"
+        assert (deployment["litellm_params"]["model"], routed["max_tokens"]) == ("anthropic/claude-sonnet-5", 64000)
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [(8192, 8192), ("8192", 8192), (100.9, 100), (0, 0), (-1, None), (True, None), ("x", None), (None, None)],
+    )
+    def test_a_client_cap_is_read_as_an_integer_or_ignored(self, value, expected):
+        assert as_output_cap(value) == expected
+
+    def test_restoring_the_callers_ceiling_reads_the_stamp_and_replaces_every_carrier(self):
+        stamped: dict = {"max_output_tokens": 500, "metadata": {"_client_output_ceiling": {"max_tokens": 8192}}}
+        Router._restore_client_ceiling_no_tier_pins(stamped)
+        assert {k: v for k, v in stamped.items() if k != "metadata"} == {"max_tokens": 8192}
+
+        coerced: dict = {
+            "max_tokens": 64000,
+            "metadata": {"_client_output_ceiling": {"max_tokens": "8192", "max_completion_tokens": 100.0}},
+        }
+        Router._restore_client_ceiling_no_tier_pins(coerced)
+        assert {k: v for k, v in coerced.items() if k != "metadata"} == {
+            "max_tokens": 8192,
+            "max_completion_tokens": 100,
+        }
+
+        unstamped: dict = {"max_tokens": 64000, "metadata": {}}
+        Router._restore_client_ceiling_no_tier_pins(unstamped)
+        assert unstamped["max_tokens"] == 64000
+
+    @pytest.mark.asyncio
+    async def test_pinning_stamps_the_callers_carriers_once(self):
+        router = self._router()
+        request_kwargs: dict = {"max_completion_tokens": 8192}
+
+        first = router._pin_tier_params_onto_request(
+            model="big", tier_litellm_params={"max_tokens": 64000}, request_kwargs=request_kwargs, responses_call=False
+        )
+        second = router._pin_tier_params_onto_request(
+            model="big", tier_litellm_params={"max_tokens": 32000}, request_kwargs=request_kwargs, responses_call=False
+        )
+        none = router._pin_tier_params_onto_request(
+            model="big", tier_litellm_params=None, request_kwargs=request_kwargs, responses_call=False
+        )
+
+        assert (first, second, none) == (True, True, False)
+        assert request_kwargs["max_tokens"] == 32000
+        assert request_kwargs["metadata"]["_client_output_ceiling"] == {"max_completion_tokens": 8192}
+
+
+class _OutputCeilingRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[tuple[str, int | None]] = []
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        self.seen.append((model, kwargs.get("optional_params", {}).get("max_tokens")))

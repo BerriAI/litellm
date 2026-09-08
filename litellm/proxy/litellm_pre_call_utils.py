@@ -18,6 +18,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm._uuid import uuid
 from litellm.constants import (
+    CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     LITELLM_PROXY_MASTER_KEY_ALIAS,
@@ -325,7 +326,9 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info", "standard_logg
 # ``attempted_fallbacks`` and ``original_model_group`` are written by the router
 # and read by spend logs as fact; a client value has no legitimate meaning and no
 # key or team setting keeps it, so the strip is never gated.
-_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset({"attempted_fallbacks", "original_model_group"})
+_ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
+    {"attempted_fallbacks", "original_model_group", CLIENT_OUTPUT_CEILING_METADATA_KEY}
+)
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY: Final = "allow_client_pricing_override"
 
 # Request fields whose value, when URL-valued, becomes the outbound destination
