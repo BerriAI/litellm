@@ -2193,3 +2193,36 @@ class TestVertexBase:
 
             assert token == "cached-token"
             assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+
+class TestLoadAuthCredentialFileErrors:
+    def test_missing_credential_file_names_path(self):
+        vertex_base = VertexBase()
+        with pytest.raises(Exception, match="File not found"):
+            vertex_base.load_auth(
+                credentials="/nonexistent/vertexai.json", project_id="p"
+            )
+
+    def test_unreadable_credential_file_names_path(self):
+        vertex_base = VertexBase()
+        with patch(
+            "builtins.open", side_effect=PermissionError(13, "Permission denied")
+        ):
+            with pytest.raises(Exception, match="not readable"):
+                vertex_base.load_auth(
+                    credentials="/some/vertexai.json", project_id="p"
+                )
+
+    def test_malformed_credential_file_keeps_json_advice(self, tmp_path):
+        bad_file = tmp_path / "vertexai.json"
+        bad_file.write_text("{not json")
+        vertex_base = VertexBase()
+        with pytest.raises(Exception, match="Ensure the JSON is valid"):
+            vertex_base.load_auth(
+                credentials=str(bad_file), project_id="p"
+            )
+
+    def test_malformed_inline_json_keeps_environment_message(self):
+        vertex_base = VertexBase()
+        with pytest.raises(Exception, match="from environment"):
+            vertex_base.load_auth(credentials="{not json", project_id="p")
