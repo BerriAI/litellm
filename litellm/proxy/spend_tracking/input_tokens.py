@@ -19,6 +19,7 @@ from typing import Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.token_counter import messages_contain_input_audio_content_blocks
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.token_counter import (
@@ -128,15 +129,26 @@ def _count_input_tokens_for_models(
 def count_input_tokens_for_model(request_body: dict, model: str) -> int | None:
     try:
         if "messages" in request_body:
+            messages: Final = request_body.get("messages")
             try:
-                return litellm.token_counter(
+                counted: Final = litellm.token_counter(
                     model=model,
-                    messages=request_body.get("messages") or (),
+                    messages=messages or (),
                     tools=request_body.get("tools"),
                     tool_choice=request_body.get("tool_choice"),
                 )
             except ValueError:
-                return _count_text_tokens(model=model, text=request_body.get("messages"))
+                return _count_text_tokens(model=model, text=messages)
+            # An ``input_audio`` block counts as a size-derived estimate at a
+            # deliberately low assumed bitrate, and this reservation prices it
+            # at the text rate. Before such blocks were countable (#38459) an
+            # audio request RAISED in token_counter and reserved from the
+            # serialised-messages fallback above; floor it there again so a
+            # large or highly compressed audio payload cannot be admitted
+            # against a budget more cheaply than it was before.
+            if messages_contain_input_audio_content_blocks(messages):
+                return max(counted, _count_text_tokens(model=model, text=messages))
+            return counted
         if "prompt" in request_body:
             return _count_text_tokens(model=model, text=request_body.get("prompt"))
         if "input" in request_body:
