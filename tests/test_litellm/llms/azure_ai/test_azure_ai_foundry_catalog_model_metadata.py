@@ -8,7 +8,7 @@ from pydantic import TypeAdapter
 from litellm import cost_per_token, get_model_info
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
-REPO_ROOT: Final = Path(__file__).parents[2]
+REPO_ROOT: Final = Path(__file__).parents[4]
 COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 AZURE_OPENAI_PRICING: Final = "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/"
 FOUNDRY_AOAI_PRICING: Final = "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/aoai/"
