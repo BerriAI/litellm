@@ -1222,6 +1222,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 "type": "response.completed",
                 "response": {
                     "id": "resp_123",
+                    "created_at": 1,
                     "model": "gpt-4o",
                     "output": [item('{"fruit": "persimmon"}', "completed")],
                     "status": "completed",
@@ -1267,6 +1268,51 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[4]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
         assert events[5]["response"]["output"][0]["arguments"] == '{"fruit": "[MASKED]"}'
         assert events[5]["response"]["output"][0]["name"] == "lookup_fruit"
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_syncs_typed_function_call_events(self):
+        from litellm.types.llms.openai import (
+            FunctionCallArgumentsDeltaEvent,
+            FunctionCallArgumentsDoneEvent,
+            OutputItemAddedEvent,
+            OutputItemDoneEvent,
+            ResponseCompletedEvent,
+            ResponsesAPIResponse,
+        )
+
+        handler = OpenAIResponsesHandler()
+        typed_events: List[Any] = [
+            model.model_validate(event)
+            for model, event in zip(
+                (
+                    OutputItemAddedEvent,
+                    FunctionCallArgumentsDeltaEvent,
+                    FunctionCallArgumentsDeltaEvent,
+                    FunctionCallArgumentsDoneEvent,
+                    OutputItemDoneEvent,
+                    ResponseCompletedEvent,
+                ),
+                self._ended_function_call_stream_events(),
+            )
+        ]
+        completed_event = typed_events[5]
+        assert isinstance(completed_event, ResponseCompletedEvent)
+        assert isinstance(completed_event.response, ResponsesAPIResponse)
+        assert isinstance(completed_event.response.output[0], ResponseFunctionToolCall)
+
+        await handler.process_output_streaming_response(
+            responses_so_far=typed_events,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert typed_events[1].delta == '{"fruit": "[MASKED]"}'
+        assert typed_events[2].delta == ""
+        assert typed_events[3].arguments == '{"fruit": "[MASKED]"}'
+        assert typed_events[4].item.arguments == '{"fruit": "[MASKED]"}'
+        assert completed_event.response.output[0].arguments == '{"fruit": "[MASKED]"}'
+        assert completed_event.response.output[0].name == "lookup_fruit"
 
     @pytest.mark.asyncio
     async def test_ended_stream_function_call_rewrite_leaves_events_untouched_by_default(self):
