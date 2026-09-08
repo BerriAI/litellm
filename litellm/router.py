@@ -395,6 +395,34 @@ _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
+_EXACT_KEY_FALLBACK_ENTRY_ADAPTER: Final = TypeAdapter(dict[str, list[str]])
+
+
+def _exact_key_fallback_entries(
+    fallbacks: object,
+) -> list[dict[str, list[str]]]:  # mutable-ok: mirrors the exact-key resolver's contract
+    """
+    The well-formed ``{model_group: [chain]}`` entries of an untyped fallback list, typed for
+    _get_fallback_model_group_for_lookup_groups.
+
+    Entries of any other shape are dropped rather than rejecting the whole list, because the
+    resolver walks entries one at a time and can return an earlier well-formed entry's chain
+    without ever reading a malformed one.
+    """
+    if not isinstance(fallbacks, list):
+        return []
+    return [
+        typed for entry in cast(list[object], fallbacks) if (typed := _as_exact_key_fallback_entry(entry)) is not None
+    ]
+
+
+def _as_exact_key_fallback_entry(entry: object) -> dict[str, list[str]] | None:
+    try:
+        return _EXACT_KEY_FALLBACK_ENTRY_ADAPTER.validate_python(entry)
+    except ValidationError:
+        return None
+
+
 def _with_router_resolved_session_model(session: object, model_name: str) -> Mapping[str, Mapping[str, object]]:
     """
     Realtime client-secret requests carry the model inside ``session`` as well, and the caller's copy of it still
@@ -8158,14 +8186,20 @@ class Router:
         on adaptive-thinking models, where the first content_block_delta can lag
         message_start by well over a minute).
 
-        Matching mirrors what async_function_with_fallbacks_common_utils actually resolves
-        at retry time, not just an exact model-group key: get_fallback_model_group_for_lookup_groups
-        also checks a stripped model-group match (e.g. a fallback keyed by the bare model name
-        still arming a request routed with a provider prefix), and a client-supplied non-standard
-        ``fallbacks`` list (a plain list of model names, or of full override params) applies to
-        every model group unconditionally rather than being keyed by one at all - self._get_fallback_model_group_for_lookup_groups
-        checks neither, so using it here would report "nothing to fall back to" for a request
-        that a real error would in fact retry.
+        Matching mirrors what async_function_with_fallbacks_common_utils actually resolves at
+        retry time, which is not one rule for all three lists. Generic ``fallbacks`` resolve
+        through get_fallback_model_group_for_lookup_groups, which accepts a stripped model-group
+        match (a fallback keyed by the bare model name still arming a request routed with a
+        provider prefix) and a "*" chain on top of an exact key, and a client-supplied
+        non-standard ``fallbacks`` list (a plain list of model names, or of full override params)
+        applies to every model group unconditionally rather than being keyed by one at all.
+        ``context_window_fallbacks`` and ``content_policy_fallbacks`` instead resolve through
+        self._get_fallback_model_group_for_lookup_groups, which matches an exact key only and
+        raises the original exception on a miss. Using one resolver for both kinds gets it wrong
+        in both directions: the permissive one arms the buffer on wildcard- or stripped-keyed
+        special fallbacks the retry path would reject, paying the lifecycle delay for a retry that
+        can never happen, and the strict one reports "nothing to fall back to" for a stripped or
+        wildcard generic chain a real error would in fact retry.
 
         Two more retry paths in the same dispatcher fire without any of `fallbacks` /
         `context_window_fallbacks` / `content_policy_fallbacks` configured at all: order-based
@@ -8190,16 +8224,20 @@ class Router:
         if len(order_values) > 1:
             return True
         lookup_groups: Final = fallback_lookup_groups(kwargs, model_group)
-        candidate_fallback_lists: Final = (
-            fallbacks,
+        if (
+            fallbacks is not None
+            and get_fallback_model_group_for_lookup_groups(fallbacks=fallbacks, lookup_groups=lookup_groups)[0]
+            is not None
+        ):
+            return True
+        special_fallback_lists: Final = (
             kwargs.get("context_window_fallbacks", self.context_window_fallbacks),
             kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks),
         )
         if any(
-            fallbacks_value is not None
-            and get_fallback_model_group_for_lookup_groups(fallbacks=fallbacks_value, lookup_groups=lookup_groups)[0]
-            is not None
-            for fallbacks_value in candidate_fallback_lists
+            self._get_fallback_model_group_for_lookup_groups(fallbacks=entries, lookup_groups=lookup_groups) is not None
+            for entries in map(_exact_key_fallback_entries, special_fallback_lists)
+            if entries
         ):
             return True
         return self._has_default_fallbacks()
