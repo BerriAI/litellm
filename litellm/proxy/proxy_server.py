@@ -16,7 +16,16 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Collection, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
@@ -30,6 +39,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypedDict,
+    TypeVar,
     Union,
     cast,
     get_args,
@@ -261,6 +271,7 @@ from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MAX_TIME,
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
     PROXY_CONFIG_RELOAD_INTERVAL_SECONDS,
+    PROXY_CONFIG_SYNC_DB_TIMEOUT_SECONDS,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
@@ -2298,6 +2309,34 @@ heuristic_v1_tuning_baselines: Mapping[str, str] | None = None
 # Module-level rather than per-ProxyConfig because llm_router is a module global and a
 # second ProxyConfig instance must not get its own independent lock over it.
 MODEL_RECONCILE_LOCK: Final = asyncio.Lock()
+
+_T = TypeVar("_T")
+
+
+async def _with_sync_db_timeout(awaitable: Awaitable[_T], step: str) -> _T:
+    """Guard a config-sync DB call with PROXY_CONFIG_SYNC_DB_TIMEOUT_SECONDS.
+
+    A query that lands on a dead pooled connection never errors and never
+    returns; with APScheduler max_instances=1 that single hang freezes the
+    periodic config sync (and the in-memory model list) until process restart,
+    while holding MODEL_RECONCILE_LOCK blocks every other reconcile caller.
+    Timeout <= 0 disables the guard (previous behavior).
+    """
+    if PROXY_CONFIG_SYNC_DB_TIMEOUT_SECONDS <= 0:
+        return await awaitable
+    try:
+        return await asyncio.wait_for(awaitable, timeout=PROXY_CONFIG_SYNC_DB_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        verbose_proxy_logger.error(
+            "Config sync DB step '%s' timed out after %ss; "
+            "skipping this step. If this repeats, the DB connection pool "
+            "may have dead connections (check NAT keepalive / socket timeout).",
+            step,
+            PROXY_CONFIG_SYNC_DB_TIMEOUT_SECONDS,
+        )
+        raise
+
+
 general_settings: dict = {}
 config_passthrough_endpoints: list[dict[str, Any]] | None = None
 log_file: Final = "api_log.json"
@@ -7211,29 +7250,48 @@ class ProxyConfig:
 
         still_desired_ids: frozenset[str] | None = None
 
+        # Each DB step is wrapped with its own timeout so a query stuck on a
+        # dead pooled connection cancels and frees this job (and the reconcile
+        # lock) instead of hanging forever and freezing the in-memory model
+        # list until process restart.
         try:
             # warm the config cache so the per-param reads below all hit
-            await prefetch_config_params(
-                prisma_client,
-                [
-                    "general_settings",
-                    "router_settings",
-                    "litellm_settings",
-                    "environment_variables",
-                    "anthropic_beta_headers_reload_config",
-                ],
+            await _with_sync_db_timeout(
+                prefetch_config_params(
+                    prisma_client,
+                    [
+                        "general_settings",
+                        "router_settings",
+                        "litellm_settings",
+                        "environment_variables",
+                        "anthropic_beta_headers_reload_config",
+                    ],
+                ),
+                step="prefetch_config_params",
             )
 
             load_models: Final = self._should_load_db_object(object_type="models")
-            new_models: Final = await self._get_models_from_db(prisma_client=prisma_client) if load_models else None
-            await self.get_credentials(prisma_client=prisma_client)
+            new_models: Final = (
+                await _with_sync_db_timeout(
+                    self._get_models_from_db(prisma_client=prisma_client),
+                    step="_get_models_from_db",
+                )
+                if load_models
+                else None
+            )
+            await _with_sync_db_timeout(
+                self.get_credentials(prisma_client=prisma_client),
+                step="get_credentials",
+            )
             if load_models:
-                still_desired_ids = await self._update_llm_router(
-                    new_models=new_models, proxy_logging_obj=proxy_logging_obj
+                still_desired_ids = await _with_sync_db_timeout(
+                    self._update_llm_router(new_models=new_models, proxy_logging_obj=proxy_logging_obj),
+                    step="_update_llm_router",
                 )
 
-            db_general_settings: Final[_ConfigParamRow | None] = await get_config_param(
-                prisma_client, "general_settings"
+            db_general_settings: Final[_ConfigParamRow | None] = await _with_sync_db_timeout(
+                get_config_param(prisma_client, "general_settings"),
+                step="get_config_param(general_settings)",
             )
 
             # update general settings
@@ -7243,7 +7301,10 @@ class ProxyConfig:
                 )
 
             # initialize vector stores, guardrails, etc. table in db
-            await self._init_non_llm_objects_in_db(prisma_client=prisma_client)
+            await _with_sync_db_timeout(
+                self._init_non_llm_objects_in_db(prisma_client=prisma_client),
+                step="_init_non_llm_objects_in_db",
+            )
 
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:add_deployment - %s", e)

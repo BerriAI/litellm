@@ -1704,6 +1704,13 @@ PROXY_BUDGET_RESCHEDULER_MAX_TIME: Final = int(os.getenv("PROXY_BUDGET_RESCHEDUL
 PROXY_BATCH_WRITE_AT: Final = int(os.getenv("PROXY_BATCH_WRITE_AT", 10))  # in seconds, increased from 10
 PROXY_CONFIG_RELOAD_INTERVAL_SECONDS: Final = get_env_int("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS", 30)
 
+# Per-step timeout (seconds) for DB calls made by the periodic config-sync job
+# (ProxyConfig.add_deployment). A DB query stuck on a dead pooled connection
+# would otherwise hang forever; with max_instances=1 that freezes the job and
+# the in-memory model list never sees new deployments.
+# <=0 disables the timeout (previous behavior).
+PROXY_CONFIG_SYNC_DB_TIMEOUT_SECONDS: Final = get_env_int("PROXY_CONFIG_SYNC_DB_TIMEOUT_SECONDS", 60)
+
 # APScheduler Configuration - MEMORY LEAK FIX
 # These settings prevent memory leaks in APScheduler's normalize() and _apply_jitter() functions
 APSCHEDULER_COALESCE: Final = os.getenv("APSCHEDULER_COALESCE", "True").lower() in [
