@@ -263,6 +263,35 @@ def _validate_file_id_against_configured_buckets(
     return validate_against(configured_bucket_names[-1])
 
 
+_REJECTED_FILE_ID_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
+
+
+def _rejected_file_id(reason: ValueError) -> BedrockError:
+    message: Final = str(reason)
+    return BedrockError(
+        status_code=400,
+        message=message,
+        response=httpx.Response(
+            status_code=400,
+            text=message,
+            request=httpx.Request(method="GET", url=_REJECTED_FILE_ID_REQUEST_URL),
+        ),
+    )
+
+
+def _resolve_managed_s3_object(file_id: str, litellm_params: Mapping[str, object]) -> tuple[str, str]:
+    configured_bucket_names: Final = get_configured_s3_bucket_names(litellm_params)
+    allow_legacy_cloud_file_ids: Final = should_allow_legacy_cloud_file_ids(litellm_params)
+    try:
+        return _validate_file_id_against_configured_buckets(
+            s3_uri=extract_s3_uri_from_file_id(file_id),
+            configured_bucket_names=configured_bucket_names,
+            allow_legacy_cloud_file_ids=allow_legacy_cloud_file_ids,
+        )
+    except ValueError as reason:
+        raise _rejected_file_id(reason) from reason
+
+
 _ANY_MANAGED_LISTING_PREFIX: Final = os.path.commonprefix(BEDROCK_MANAGED_S3_PREFIXES)
 _MANAGED_LISTING_PREFIX_BY_PURPOSE: Final = MappingProxyType(
     {
@@ -1279,11 +1308,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
     ) -> tuple[str, dict[str, str]]:
         if not file_id:
             raise ValueError("file_id is required for Bedrock file deletion")
-        bucket_name, object_key = _validate_file_id_against_configured_buckets(
-            s3_uri=extract_s3_uri_from_file_id(file_id),
-            configured_bucket_names=get_configured_s3_bucket_names(litellm_params),
-            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
-        )
+        bucket_name, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
         target: Final = self._s3_request_target(optional_params=optional_params, litellm_params=litellm_params)
         url: Final = f"{target.endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
         signed_headers: Final = self._sign_s3_empty_body_request(
@@ -1307,6 +1332,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 status_code=raw_response.status_code,
                 message=raw_response.text,
                 headers=raw_response.headers,
+                response=raw_response,
             )
         return FileDeleted(id=str(litellm_params.get(DELETED_FILE_ID_PARAM, "")), deleted=True, object="file")
 
@@ -1371,6 +1397,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 status_code=raw_response.status_code,
                 message=raw_response.text,
                 headers=raw_response.headers,
+                response=raw_response,
             )
         purpose: Final = _requested_listing_purpose(litellm_params)
         configured_bucket_name: Final = _listing_bucket_name(litellm_params, purpose)
@@ -1406,12 +1433,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if not file_id:
             raise ValueError("file_id is required for Bedrock file content retrieval")
 
-        s3_uri: Final = extract_s3_uri_from_file_id(file_id)
-        bucket_name, object_key = _validate_file_id_against_configured_buckets(
-            s3_uri=s3_uri,
-            configured_bucket_names=get_configured_s3_bucket_names(litellm_params),
-            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(litellm_params),
-        )
+        bucket_name, object_key = _resolve_managed_s3_object(file_id=file_id, litellm_params=litellm_params)
         target: Final = self._s3_request_target(optional_params=optional_params, litellm_params=litellm_params)
         url: Final = f"{target.endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
 
@@ -1502,6 +1524,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 status_code=raw_response.status_code,
                 message=raw_response.text,
                 headers=raw_response.headers,
+                response=raw_response,
             )
         return HttpxBinaryResponseContent(response=raw_response)
 

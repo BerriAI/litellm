@@ -4733,3 +4733,52 @@ def test_list_files_target_model_names_passes_trusted_bedrock_credentials(
     assert isinstance(trusted_credentials, MappingProxyType)
     assert trusted_credentials["s3_bucket_name"] == "my-bucket"
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+def test_delete_file_answers_400_for_an_id_outside_the_configured_bucket(mocker: MockerFixture, monkeypatch):
+    from urllib.parse import quote
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    bedrock_router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "aws_access_key_id": "AKIAEXAMPLE",
+                    "aws_secret_access_key": "secret",
+                    "aws_region_name": "us-west-2",
+                    "s3_bucket_name": "my-bucket",
+                },
+            },
+        ]
+    )
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, bedrock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", bedrock_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=[])
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+    foreign_file_id: Final = quote("s3://other-bucket/litellm-bedrock-files/job-123/input.jsonl", safe="")
+
+    try:
+        with respx.mock:
+            response = client.delete(
+                f"/v1/files/{foreign_file_id}?model=bedrock-claude",
+                headers={"Authorization": "Bearer test-key"},
+            )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 400, response.text
+    assert "configured storage bucket" in response.json()["error"]["message"]

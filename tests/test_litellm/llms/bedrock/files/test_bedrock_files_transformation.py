@@ -1930,11 +1930,12 @@ class TestBedrockFileContentTransformation:
         assert url == self.EXPECTED_URL
 
     def test_transform_file_content_request_rejects_foreign_bucket(self, monkeypatch):
+        from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
 
-        with pytest.raises(ValueError, match="configured storage bucket"):
+        with pytest.raises(BedrockError, match="configured storage bucket") as rejection:
             BedrockFilesConfig().transform_file_content_request(
                 file_content_request={
                     "file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"
@@ -1943,17 +1944,24 @@ class TestBedrockFileContentTransformation:
                 litellm_params=self._litellm_params(),
             )
 
+        assert rejection.value.status_code == 400
+
+
     def test_transform_file_content_request_rejects_unmanaged_key(self, monkeypatch):
+        from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
 
-        with pytest.raises(ValueError, match="LiteLLM-managed"):
+        with pytest.raises(BedrockError, match="LiteLLM-managed") as rejection:
             BedrockFilesConfig().transform_file_content_request(
                 file_content_request={"file_id": "s3://my-bucket/private/x.jsonl"},
                 optional_params={},
                 litellm_params=self._litellm_params(),
             )
+
+        assert rejection.value.status_code == 400
+
 
     def test_extract_s3_uri_rejects_non_managed_file_id(self):
         """A file id that is neither an s3:// URI nor a unified id must be rejected."""
@@ -2083,12 +2091,13 @@ class TestBedrockFileContentTransformation:
     def test_rejects_bucket_outside_input_and_output(self, monkeypatch):
         """A file id whose bucket is neither the input nor the output bucket is
         still rejected (SSRF / bucket-confusion guard)."""
+        from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.delenv("AWS_S3_BUCKET_NAME", raising=False)
         monkeypatch.delenv("AWS_S3_OUTPUT_BUCKET_NAME", raising=False)
 
-        with pytest.raises(ValueError, match="configured storage bucket"):
+        with pytest.raises(BedrockError, match="configured storage bucket") as rejection:
             BedrockFilesConfig().transform_file_content_request(
                 file_content_request={
                     "file_id": "s3://other-bucket/litellm-batch-outputs/job/x.jsonl.out"
@@ -2098,6 +2107,9 @@ class TestBedrockFileContentTransformation:
                     s3_bucket_name="in-bucket", s3_output_bucket_name="out-bucket"
                 ),
             )
+
+        assert rejection.value.status_code == 400
+
 
     def test_sign_request_without_botocore_raises_helpful_error(self, monkeypatch):
         """A missing botocore must surface an actionable 'install boto3' error
@@ -2622,28 +2634,36 @@ class TestBedrockFileDeletionTransformation:
         assert url == self.EXPECTED_URL
 
     def test_transform_delete_file_request_rejects_foreign_bucket(self, monkeypatch):
+        from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
 
-        with pytest.raises(ValueError, match="configured storage bucket"):
+        with pytest.raises(BedrockError, match="configured storage bucket") as rejection:
             BedrockFilesConfig().transform_delete_file_request(
                 file_id="s3://other-bucket/litellm-bedrock-files/job-123/input.jsonl",
                 optional_params={},
                 litellm_params=_bedrock_s3_params(),
             )
 
+        assert rejection.value.status_code == 400
+
+
     def test_transform_delete_file_request_rejects_unmanaged_key(self, monkeypatch):
+        from litellm.llms.bedrock.common_utils import BedrockError
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
         monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
 
-        with pytest.raises(ValueError, match="LiteLLM-managed"):
+        with pytest.raises(BedrockError, match="LiteLLM-managed") as rejection:
             BedrockFilesConfig().transform_delete_file_request(
                 file_id="s3://my-bucket/private/x.jsonl",
                 optional_params={},
                 litellm_params=_bedrock_s3_params(),
             )
+
+        assert rejection.value.status_code == 400
+
 
     def test_transform_delete_file_response_echoes_the_deleted_id(self):
         import httpx
@@ -2727,6 +2747,57 @@ class TestBedrockFileDeletionTransformation:
         assert _sent_signature(request.headers) == _s3_signature_for("DELETE", str(request.url), request.headers)
         assert response.id == self.S3_URI
         assert response.deleted is True
+
+    def test_file_delete_end_to_end_answers_400_for_a_foreign_bucket(self, monkeypatch):
+        import respx
+
+        import litellm
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with respx.mock, pytest.raises(BedrockError) as rejection:
+            litellm.file_delete(
+                file_id="s3://other-bucket/litellm-bedrock-files/job-123/input.jsonl",
+                custom_llm_provider="bedrock",
+                **_bedrock_s3_params(),
+            )
+
+        assert rejection.value.status_code == 400
+        assert "configured storage bucket" in rejection.value.message
+
+    def test_file_delete_end_to_end_answers_400_for_a_non_managed_id(self, monkeypatch):
+        import respx
+
+        import litellm
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with respx.mock, pytest.raises(BedrockError) as rejection:
+            litellm.file_delete(file_id="file-1234567890", custom_llm_provider="bedrock", **_bedrock_s3_params())
+
+        assert rejection.value.status_code == 400
+        assert "managed LiteLLM S3 file id" in rejection.value.message
+
+    def test_file_delete_end_to_end_surfaces_the_s3_error_body(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with respx.mock:
+            respx.delete(self.EXPECTED_URL).mock(
+                return_value=httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>")
+            )
+            with pytest.raises(BedrockError) as denied:
+                litellm.file_delete(file_id=self.S3_URI, custom_llm_provider="bedrock", **_bedrock_s3_params())
+
+        assert denied.value.status_code == 403
+        assert "AccessDenied" in denied.value.message
 
 
 class TestBedrockFileListTransformation:
@@ -3305,3 +3376,22 @@ class TestBedrockFileListTransformation:
             )
 
         self._assert_capped_listing(route, files)
+
+    def test_file_list_end_to_end_surfaces_the_s3_error_body(self, monkeypatch):
+        import httpx
+        import respx
+
+        import litellm
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        monkeypatch.setenv("AWS_S3_BUCKET_NAME", "my-bucket")
+
+        with respx.mock:
+            respx.get(self.BUCKET_URL, params__contains=self.BATCH_QUERY).mock(
+                return_value=httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>")
+            )
+            with pytest.raises(BedrockError) as denied:
+                litellm.file_list(custom_llm_provider="bedrock", purpose="batch", **_bedrock_s3_params())
+
+        assert denied.value.status_code == 403
+        assert "AccessDenied" in denied.value.message
