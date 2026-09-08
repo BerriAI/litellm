@@ -171,7 +171,7 @@ async def test_messages_logging_drain_waits_for_suspended_callback(messages_serv
 
 @pytest.mark.asyncio
 @pytest.mark.xfail(
-    reason="Rust Messages retries after a committed provider failure",
+    reason="Rust Messages sends two provider requests before invoking failure callbacks",
     strict=True,
 )
 async def test_messages_failure_callbacks_receive_original_provider_error(messages_server: RecordingServer) -> None:

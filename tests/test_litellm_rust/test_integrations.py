@@ -19,6 +19,8 @@ from tests.test_litellm_rust.callback_recorder import RecordingLogger, drain_log
 from tests.test_litellm_rust.integrations import (
     ALL_ROUTES,
     ASYNC_ROUTES,
+    AZURE_MODERATION_ALLOW_RESPONSE,
+    AZURE_MODERATION_BLOCK_RESPONSE,
     MESSAGES_ROUTE,
     NON_STREAM_ASYNC_ROUTES,
     OCR_ASYNC,
@@ -27,6 +29,7 @@ from tests.test_litellm_rust.integrations import (
     RecordingGuardrail,
     ReviewGuardrail,
     Route,
+    azure_text_moderation,
     metric_value,
     route_id,
 )
@@ -65,7 +68,7 @@ async def test_generic_api_logger_exports_success_over_http(route: Route, provid
         pytest.param(
             MESSAGES_ROUTE,
             marks=pytest.mark.xfail(
-                reason="Rust Messages retries after a committed provider failure",
+                reason="Rust Messages retries HTTP 500 despite num_retries=0",
                 strict=True,
             ),
         ),
@@ -193,6 +196,64 @@ async def test_content_filter_post_call_blocks_provider_response(route: Route, p
     with pytest.raises(HTTPException, match="Content blocked") as blocked:
         await route.invoke(provider, guardrails=["enforced-content-review"])
     assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="Azure text moderation only scans ModelResponse and skips native Messages responses",
+)
+async def test_azure_text_moderation_allows_messages_response_over_http(
+    recording_server: RecordingServer, otel: OtelHarness
+) -> None:
+    recording_server.expected_requests = None
+    recording_server.default_response = ResponseSpec(body=AZURE_MODERATION_ALLOW_RESPONSE)
+    recording_server.enqueue(ResponseSpec(body=MESSAGES_ROUTE.provider_response))
+    guardrail: Final = azure_text_moderation(recording_server)
+    recorder: Final = RecordingLogger()
+    litellm.callbacks.append(guardrail)
+
+    response: Final = await MESSAGES_ROUTE.invoke(
+        recording_server,
+        callbacks=[otel.logger, recorder],
+        guardrails=[guardrail.guardrail_name],
+    )
+    await recorder.wait_for_async("async_log_success_event")
+
+    assert len(recording_server.requests) == 2
+    moderation_request: Final = recording_server.requests[1]
+    assert moderation_request.path == "/contentsafety/text:analyze?api-version=2024-09-01"
+    assert moderation_request.headers["ocp-apim-subscription-key"] == "test-azure-key"
+    assert moderation_request.body == {
+        "text": MESSAGES_ROUTE.response_text,
+        "categories": ["Hate", "Sexual", "SelfHarm", "Violence"],
+        "blocklistNames": None,
+        "haltOnBlocklistHit": False,
+        "outputType": "FourSeverityLevels",
+    }
+    assert response["content"][0]["text"] == MESSAGES_ROUTE.response_text
+    assert len(await otel.wait_for_spans()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(
+    strict=True,
+    raises=pytest.fail.Exception,
+    reason="Azure text moderation only scans ModelResponse and skips native Messages responses",
+)
+async def test_azure_text_moderation_blocks_messages_response_over_http(recording_server: RecordingServer) -> None:
+    recording_server.expected_requests = None
+    recording_server.default_response = ResponseSpec(body=AZURE_MODERATION_BLOCK_RESPONSE)
+    recording_server.enqueue(ResponseSpec(body=MESSAGES_ROUTE.provider_response))
+    guardrail: Final = azure_text_moderation(recording_server)
+    litellm.callbacks.append(guardrail)
+
+    with pytest.raises(HTTPException, match="Violence crossed severity 2") as blocked:
+        await MESSAGES_ROUTE.invoke(recording_server, guardrails=[guardrail.guardrail_name])
+
+    assert blocked.value.status_code == 400
+    assert recording_server.requests[1].body["text"] == MESSAGES_ROUTE.response_text
 
 
 def test_prometheus_registry_restores_collectors_after_failure() -> None:

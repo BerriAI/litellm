@@ -15,8 +15,12 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.opentelemetry import LITELLM_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
+    AzureContentSafetyTextModerationGuardrail,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
+from tests.test_litellm_rust.callback_recorder import drain_logging
 from tests.test_litellm_rust.contracts import (
     MESSAGES,
     MESSAGES_MODEL,
@@ -26,7 +30,6 @@ from tests.test_litellm_rust.contracts import (
     call_native_ocr,
 )
 from tests.test_litellm_rust.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.callback_recorder import drain_logging
 
 RouteName = Literal["ocr-sync", "ocr-async", "messages", "messages-stream"]
 GuardrailObservation = tuple[Literal["request", "response"], tuple[str, ...]]
@@ -118,10 +121,32 @@ MESSAGES_STREAM: Final = Route(
 ALL_ROUTES: Final = (OCR_SYNC, OCR_ASYNC, MESSAGES_ROUTE, MESSAGES_STREAM)
 ASYNC_ROUTES: Final = tuple(route for route in ALL_ROUTES if route.fires_async_hooks)
 NON_STREAM_ASYNC_ROUTES: Final = (OCR_ASYNC, MESSAGES_ROUTE)
+AZURE_MODERATION_ALLOW_RESPONSE: Final = {
+    "blocklistsMatch": [],
+    "categoriesAnalysis": [
+        {"category": "Hate", "severity": 0},
+        {"category": "Sexual", "severity": 0},
+        {"category": "SelfHarm", "severity": 0},
+        {"category": "Violence", "severity": 0},
+    ],
+}
+AZURE_MODERATION_BLOCK_RESPONSE: Final = {
+    **AZURE_MODERATION_ALLOW_RESPONSE,
+    "categoriesAnalysis": [{"category": "Violence", "severity": 6}],
+}
 
 
 def route_id(route: Route) -> str:
     return route.name
+
+
+def azure_text_moderation(server: RecordingServer) -> AzureContentSafetyTextModerationGuardrail:
+    return AzureContentSafetyTextModerationGuardrail(
+        guardrail_name="azure-text-review",
+        api_key="test-azure-key",
+        api_base=server.base_url,
+        event_hook=GuardrailEventHooks.post_call,
+    )
 
 
 @pytest.fixture
