@@ -1146,6 +1146,7 @@ def _assert_passed_with_discard_warning(result, caplog):
     assert result.terminal_action == "allow"
     assert [step.outcome for step in result.step_results] == ["pass"]
     assert any("'masker'" in record.getMessage() and "discarded" in record.getMessage() for record in caplog.records)
+    assert "masker" not in ((result.modified_data or {}).get("metadata") or {}).get("applied_guardrails", [])
 
 
 @pytest.mark.asyncio

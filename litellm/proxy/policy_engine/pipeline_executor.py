@@ -387,7 +387,8 @@ class PipelineExecutor:
         yet (a tool-call rewrite, a text rewrite on a translation without write-back, or one
         the translation or adapter refused with ``UndeliverableStreamRewrite``) is discarded:
         the buffered chunks go back to the originals and the step passes, so the client gets
-        the stream the merge base sent. The response an earlier step's translation stored under
+        the stream the merge base sent, and the guardrail stays out of the applied-guardrails
+        header since its output never reached the client. The response an earlier step's translation stored under
         ``request_data["response"]`` is dropped first, so this step's hook sees the stream as
         the steps before it left it."""
         scanner: Final = (
@@ -419,9 +420,10 @@ class PipelineExecutor:
                 )
         except UndeliverableStreamRewrite:
             _release_original_chunks(step.guardrail, streaming_chunks, originals)
-        else:
-            if observer.rewrote_tool_calls or (observer.rewrote_texts and not deliver_rewrites):
-                _release_original_chunks(step.guardrail, streaming_chunks, originals)
+            return
+        if observer.rewrote_tool_calls or (observer.rewrote_texts and not deliver_rewrites):
+            _release_original_chunks(step.guardrail, streaming_chunks, originals)
+            return
         if not callback.records_own_guardrail_information:
             add_guardrail_to_applied_guardrails_header(request_data=hook_input, guardrail_name=step.guardrail)
 
