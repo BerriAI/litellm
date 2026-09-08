@@ -268,6 +268,22 @@ gateway:
   config:
     create: true
     proxy_config: {}
+  # Serve Prometheus /metrics from a `metrics` sidecar container (same image,
+  # `python -m litellm.proxy.prometheus_metrics_server`) that aggregates the
+  # workers' PROMETHEUS_MULTIPROC_DIR samples over a shared emptyDir, so a
+  # scrape never runs on an inference worker. Adds a `metrics` port to the pod
+  # and a dedicated ClusterIP `<gateway>-metrics` Service; point your scrape
+  # config at it. The port has no virtual-key auth: keep it off public ingress.
+  # Needs the gateway image v1.101.0 or newer.
+  metricsServer:
+    enabled: false
+    port: 4001
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
   image:
     repository: ghcr.io/berriai/litellm-gateway
     tag: ""              # defaults to .Chart.AppVersion

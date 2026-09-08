@@ -11,6 +11,7 @@ import {
   tierRowByName,
 } from "./tier_rows";
 import { emptyKeywordTierRuleIndexes, serializeKeywordTierRules } from "./complexity_router_keywords";
+import { type CustomDimension, type CustomDimensionRow, serializeCustomDimensions } from "./custom_dimensions";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -92,6 +93,7 @@ interface ScorerKnobInputs {
   tierBoundaries: TierBoundaries | undefined;
   tokenThresholds: TokenThresholds | undefined;
   dimensionWeights: DimensionWeights | undefined;
+  customDimensions: CustomDimensionRow[] | undefined;
   reasoningOverrideMinScore: number | undefined;
 }
 
@@ -106,16 +108,23 @@ const scorerKnobPayload = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
-}: ScorerKnobInputs) =>
-  heuristicScoringRoleFor(classifierType, classifierFallback) === "never"
+}: ScorerKnobInputs) => {
+  const role = heuristicScoringRoleFor(classifierType, classifierFallback);
+  return role === "never"
     ? {}
     : {
         ...(tierBoundaries && { tier_boundaries: tierBoundaries }),
         ...(tokenThresholds && { token_thresholds: tokenThresholds }),
         ...(dimensionWeights && { dimension_weights: dimensionWeights }),
+        // Only a scorer that decides accepts these; the backend rejects them on every other
+        // classifier, so a fallback-only router must not carry rows a switch left behind.
+        ...(role === "decides" &&
+          customDimensions !== undefined && { custom_dimensions: serializeCustomDimensions(customDimensions) }),
         ...(reasoningOverrideMinScore !== undefined && { reasoning_override_min_score: reasoningOverrideMinScore }),
       };
+};
 
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
@@ -155,6 +164,7 @@ export interface BuildComplexityRouterConfigParams {
   tierBoundaries?: TierBoundaries;
   tokenThresholds?: TokenThresholds;
   dimensionWeights?: DimensionWeights;
+  customDimensions?: CustomDimensionRow[];
   reasoningOverrideMinScore?: number;
   tierModelParams?: TierModelParamsByTier;
   enableContextWindowEscalation?: boolean;
@@ -219,6 +229,7 @@ export interface ComplexityRouterConfigPayload {
   tier_boundaries?: TierBoundaries;
   token_thresholds?: TokenThresholds;
   dimension_weights?: DimensionWeights;
+  custom_dimensions?: CustomDimension[];
   reasoning_override_min_score?: number;
   enable_context_window_escalation?: boolean;
   context_window_escalation_buffer?: number;
@@ -496,6 +507,7 @@ export const buildComplexityRouterConfig = ({
   tierBoundaries,
   tokenThresholds,
   dimensionWeights,
+  customDimensions,
   reasoningOverrideMinScore,
   tierModelParams,
   enableContextWindowEscalation,
@@ -517,6 +529,7 @@ export const buildComplexityRouterConfig = ({
     tierBoundaries,
     tokenThresholds,
     dimensionWeights,
+    customDimensions,
     reasoningOverrideMinScore,
   };
   const scorerKnobs = scorerKnobPayload(scorerInputs);

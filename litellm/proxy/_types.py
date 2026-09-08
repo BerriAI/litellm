@@ -848,6 +848,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
+        "/vector_store/info",
         # Project read routes - endpoint scopes results to caller's teams (non-admin)
         "/project/list",
         "/project/info",
@@ -1276,6 +1277,7 @@ class UpdateKeyRequest(KeyRequestBase):
     # else they will get overwritten
     duration: str | None = None
     spend: float | None = None
+    soft_budget: float | None = None
     metadata: dict | None = None
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
@@ -2831,7 +2833,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "Enable only if your deployment is experiencing phantom "
             "BudgetExceededError responses caused by leaked reservations "
             "(see GitHub issue #27639). "
-            "A proxy-level WARNING is logged on every request while this flag "
+            "An INFO notice is logged once per worker at config load while this flag "
             "is active as a reminder that hard enforcement is relaxed."
         ),
     )
@@ -3583,6 +3585,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         litellm_callback_params=[
             "OTEL_EXPORTER",
             "OTEL_ENDPOINT",
+            "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
         ],
     )
