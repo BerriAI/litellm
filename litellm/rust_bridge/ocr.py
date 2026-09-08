@@ -301,7 +301,7 @@ class _OcrHost:
         self.state: object | None = None
         self.response: object = None
         self.error: BaseException | None = None
-        self.start: datetime = datetime.now()
+        self.start: datetime = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
         self.end: datetime | None = None
 
     def invoke(self) -> tuple[bool, object]:
@@ -331,11 +331,11 @@ class _OcrHost:
 
     def send_sync(self) -> None:
         self.response = self.bindings.send_sync(self.state)
-        self.end = datetime.now()
+        self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def send(self) -> None:
         self.response = self.bindings.finish(await self.bindings.send(self.state))
-        self.end = datetime.now()
+        self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def deployment_success(self) -> None:
         from litellm.types.utils import CallTypes

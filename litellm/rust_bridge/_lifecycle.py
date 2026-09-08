@@ -61,7 +61,7 @@ class MutableLifecycleHost(LifecycleHost, Protocol):
 
 def advance_host(host: MutableLifecycleHost, outcome: NativeOutcome, error: BaseException | None) -> None:
     if error is not None and host.end is None:
-        host.end = datetime.now()
+        host.end = datetime.now()  # noqa: DTZ005  # lifecycle timestamps preserve Logging's naive timestamp contract
     if host.logger is None:
         host.logger = host.arguments.get(LOGGING_OBJECT_KEY)
     replace: Final = host.machine.advance(
@@ -103,7 +103,7 @@ async def deployment_failure(arguments: dict[str, object], error: BaseException 
     from litellm import utils
 
     if not isinstance(error, Exception):
-        raise RuntimeError("native lifecycle failure did not retain an exception")
+        raise TypeError("native lifecycle failure did not retain an exception")
     await utils.async_post_call_failure_deployment_hook(arguments, error, call_type)
 
 
@@ -130,9 +130,9 @@ def drive_sync(host: LifecycleHost) -> object:
     while host.machine.complete() is None:
         try:
             _invoke_sync(host)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001  # lifecycle converts every ordinary host failure into a machine outcome
             host.advance(NativeOutcome.FAILURE, error)
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001  # cancellation and interrupts must advance the machine as aborts
             host.advance(NativeOutcome.ABORT, error)
         else:
             host.advance(NativeOutcome.SUCCESS)
@@ -143,9 +143,9 @@ async def drive_async(host: LifecycleHost) -> object:
     while host.machine.complete() is None:
         try:
             await _invoke_async(host)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001  # lifecycle converts every ordinary host failure into a machine outcome
             host.advance(NativeOutcome.FAILURE, error)
-        except BaseException as error:
+        except BaseException as error:  # noqa: BLE001  # cancellation and interrupts must advance the machine as aborts
             host.advance(NativeOutcome.ABORT, error)
         else:
             host.advance(NativeOutcome.SUCCESS)

@@ -624,7 +624,7 @@ class _ChatCompletionsHost:
         self.state: object | None = None
         self.response: object = None
         self.error: BaseException | None = None
-        self.start: datetime = datetime.now()
+        self.start: datetime = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
         self.end: datetime | None = None
 
     def invoke(self) -> tuple[bool, object]:
@@ -648,14 +648,14 @@ class _ChatCompletionsHost:
         if not isinstance(model_response, ModelResponse):
             raise TypeError("chat completions model_response must be a ModelResponse")
         self.response = build_model_response(self.bindings.send_sync(self.state), model_response)
-        self.end = datetime.now()
+        self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def send(self) -> None:
         model_response: Final = self.arguments["model_response"]
         if not isinstance(model_response, ModelResponse):
             raise TypeError("chat completions model_response must be a ModelResponse")
         self.response = build_model_response(await self.bindings.send(self.state), model_response)
-        self.end = datetime.now()
+        self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def deployment_success(self) -> None:
         from litellm.types.utils import CallTypes

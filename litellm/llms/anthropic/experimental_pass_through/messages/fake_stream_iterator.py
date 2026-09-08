@@ -251,5 +251,5 @@ class FakeAnthropicMessagesStreamIterator:
     def __del__(self) -> None:
         try:
             self.close()
-        except Exception:
+        except Exception:  # noqa: BLE001  # destructors cannot safely propagate cleanup failures
             pass
