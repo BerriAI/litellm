@@ -1,5 +1,6 @@
-import json
+import asyncio
 import copy
+import json
 import threading
 import time
 from collections.abc import Iterator
@@ -43,6 +44,11 @@ class RecordingServer:
 
     def enqueue(self, response: ResponseSpec) -> None:
         self.responses.append(response)
+
+    async def wait_for_requests(self, count: int) -> None:
+        async with asyncio.timeout(2):
+            while len(self.requests) < count:
+                await asyncio.sleep(0.01)
 
 
 @contextmanager

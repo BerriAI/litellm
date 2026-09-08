@@ -129,6 +129,7 @@ async def test_generic_guardrail_logging_only_verdict_is_exported_over_http(
     response: Final = await route.invoke(provider, callbacks=[guardrail, logger, recorder])
     await recorder.wait_for_async("async_log_success_event")
     await drain_logging()
+    await provider.wait_for_requests(3)
 
     scan: Final = provider.requests[1]
     assert scan.path == "/beta/litellm_basic_guardrail_api"
