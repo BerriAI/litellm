@@ -6,7 +6,7 @@ from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -31,7 +31,11 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    PassThroughEndpointLoggingResultValues,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
@@ -5859,14 +5863,14 @@ ANTHROPIC_SSE_STREAM = (
 )
 
 
-def _log_passthrough_stream(url: str):
+def _log_passthrough_stream(url: str) -> tuple[PassThroughEndpointLoggingResultValues, dict]:
     from datetime import datetime
 
     from litellm.proxy.pass_through_endpoints.streaming_handler import (
         PassThroughStreamingHandler,
     )
 
-    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj: Final = MagicMock(spec=LiteLLMLoggingObj)
     logging_obj.model_call_details = {}
     logging_obj.optional_params = {}
     logging_obj.litellm_call_id = "test-call-id"
@@ -5886,11 +5890,8 @@ def _log_passthrough_stream(url: str):
 
 def test_anthropic_compatible_passthrough_stream_is_billed_off_api_anthropic_com():
     """
-    Regression for #40117: the endpoint type was resolved from the hostname alone, so a
-    stream from a provider that speaks the Anthropic Messages API on any other host fell
-    through to GENERIC, matched no branch in the streaming logging dispatch, and was
-    recorded as "cannot parse chunks to standard response object" with no usage and no
-    cost. The same bytes must produce the same accounting whatever host served them.
+    Regression for #40117: classified off the hostname alone, this stream reached the
+    generic branch and logged "cannot parse chunks to standard response object" at zero cost.
     """
     anthropic_result, anthropic_kwargs = _log_passthrough_stream("https://api.anthropic.com/v1/messages")
     custom_result, custom_kwargs = _log_passthrough_stream("https://my-provider.example.com/v1/messages")
@@ -5916,8 +5917,7 @@ def test_openai_compatible_passthrough_route_resolves_off_api_openai_com():
 
 def test_passthrough_routes_outside_the_known_shapes_stay_generic():
     """
-    The path fallback must only claim the two canonical routes. Sending a body the
-    Anthropic or OpenAI handler cannot parse into that handler drops the log row
+    Over-claiming a route feeds a body the handler cannot parse and drops the log row
     entirely, which is the failure mode LIT-4527 fixed for Vertex.
     """
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
