@@ -6,6 +6,7 @@ import os
 import re
 import socket
 import subprocess
+import time
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,7 +29,7 @@ from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.litellm_core_utils.get_model_cost_map import ModelCostMapReloaded
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, TokenCountRequest, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -12857,3 +12858,34 @@ async def test_update_general_settings_keeps_yaml_openai_websocket_passthrough()
         import litellm.proxy.proxy_server as ps
 
         assert ps.general_settings["enable_openai_websocket_passthrough"] is False
+
+
+async def _loop_wake_lags(until: asyncio.Event) -> tuple[float, ...]:
+    async def wake_lag() -> float:
+        started: Final = time.perf_counter()
+        await asyncio.sleep(0.001)
+        return time.perf_counter() - started - 0.001
+
+    return tuple([await wake_lag() for _ in iter(until.is_set, True)])
+
+
+async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_count(monkeypatch):
+    from tests.large_text import text
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    counted: Final = asyncio.Event()
+
+    async def count_off_the_loop() -> tuple[int, float]:
+        started: Final = time.perf_counter()
+        try:
+            response: Final = await proxy_server_module.token_counter(
+                TokenCountRequest(model="claude-fable-5", prompt=text * 100)
+            )
+            return response.total_tokens, time.perf_counter() - started
+        finally:
+            counted.set()
+
+    (tokens, took), lags = await asyncio.gather(count_off_the_loop(), _loop_wake_lags(counted))
+
+    assert tokens > 0
+    assert max(lags) < took / 4, f"the event loop stalled {max(lags):.3f}s during a {took:.3f}s count"

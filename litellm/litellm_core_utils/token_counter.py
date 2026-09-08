@@ -8,6 +8,7 @@ from typing import Final, Literal, cast
 
 import httpx
 import tiktoken
+from tokenizers import Tokenizer
 
 import litellm
 from litellm import verbose_logger
@@ -21,6 +22,7 @@ from litellm.constants import (
     MAX_TILE_HEIGHT,
     MAX_TILE_WIDTH,
     TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS,
+    TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.litellm_core_utils.url_utils import safe_get
@@ -538,7 +540,26 @@ def _count_extra(
     return num_tokens
 
 
+def _get_extrapolating_count_function(
+    count_exactly: TokenCounterFunction,
+    max_exact_chars: int = TOKEN_COUNTER_MAX_EXACT_CHARS,
+) -> TokenCounterFunction:
+    def count_tokens(text: str) -> int:
+        if len(text) <= max_exact_chars:
+            return count_exactly(text)
+        return round(count_exactly(text[:max_exact_chars]) * len(text) / max_exact_chars)
+
+    return count_tokens
+
+
 def _get_count_function(
+    model: str | None,
+    custom_tokenizer: dict | SelectTokenizerResponse | None = None,
+) -> TokenCounterFunction:
+    return _get_extrapolating_count_function(_get_exact_count_function(model, custom_tokenizer))
+
+
+def _get_exact_count_function(
     model: str | None,
     custom_tokenizer: dict | SelectTokenizerResponse | None = None,
 ) -> TokenCounterFunction:
@@ -549,10 +570,10 @@ def _get_count_function(
     if model is not None or custom_tokenizer is not None:
         tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model)
         if tokenizer_json["type"] == "huggingface_tokenizer":
+            tokenizer: Final[Tokenizer] = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
-                enc: Final = tokenizer_json["tokenizer"].encode(text)
-                return len(enc.ids)
+                return len(tokenizer.encode_batch_fast([text])[0])
 
             return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":
