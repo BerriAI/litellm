@@ -1297,16 +1297,19 @@ async def test_streaming_step_restores_chunks_when_translation_refuses_the_rewri
 class _LegacyHookGuardrail(CustomGuardrail):
     """A guardrail with only the legacy post-call hook: it never defines apply_guardrail."""
 
-    def __init__(self, replacement=None, raises=None, guardrail_name="masker"):
+    def __init__(self, replacement=None, raises=None, guardrail_name="masker", rewrite_in_place=None):
         super().__init__(guardrail_name=guardrail_name, event_hook="post_call", default_on=True)
         self.replacement = replacement
         self.raises = raises
+        self.rewrite_in_place = rewrite_in_place
         self.calls = []
 
     async def async_post_call_success_hook(self, data, user_api_key_dict, response):
         self.calls.append({"data": data, "user_api_key_dict": user_api_key_dict, "response": response})
         if self.raises is not None:
             raise self.raises
+        if self.rewrite_in_place is not None:
+            response["text"] = self.rewrite_in_place
         return self.replacement
 
 
@@ -1325,7 +1328,7 @@ class _LegacyScanningTranslation:
     delivers_ended_stream_text_rewrites = True
 
     def post_call_hook_response(self, response):
-        return {"native": True, "text": response["text"]}
+        return {"native": True, "text": response["text"], "tool_calls": response["tool_calls"]}
 
     async def process_output_streaming_response(
         self,
@@ -1336,7 +1339,9 @@ class _LegacyScanningTranslation:
         request_data=None,
         deliver_ended_stream_rewrites=False,
     ):
-        request_data.setdefault("response", {"text": responses_so_far[0]["text"]})
+        request_data.setdefault(
+            "response", {"text": responses_so_far[0]["text"], "tool_calls": [dict(responses_so_far[0]["tool_call"])]}
+        )
         outputs = await guardrail_to_apply.apply_guardrail(
             inputs={"texts": [responses_so_far[0]["text"]], "tool_calls": [dict(responses_so_far[0]["tool_call"])]},
             request_data=request_data,
@@ -1349,7 +1354,7 @@ class _LegacyScanningTranslation:
     async def process_output_response(
         self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None, request_data=None
     ):
-        inputs = {"texts": list(response["texts"])}
+        inputs = {"texts": [response["text"]] if "text" in response else list(response["texts"])}
         if response.get("tool_calls"):
             inputs["tool_calls"] = list(response["tool_calls"])
         await guardrail_to_apply.apply_guardrail(
@@ -1359,6 +1364,10 @@ class _LegacyScanningTranslation:
             logging_obj=litellm_logging_obj,
         )
         return response
+
+
+def _native(text):
+    return {"native": True, "text": text, "tool_calls": [_chunk()["tool_call"]]}
 
 
 def _legacy_replacement(*texts, tool_calls=None):
@@ -1403,9 +1412,23 @@ async def test_streaming_step_runs_legacy_hook_and_delivers_its_rewrite(monkeypa
     assert result.terminal_action == "allow"
     assert [step.outcome for step in result.step_results] == ["pass"]
     assert chunks[0]["text"] == "[REWRITTEN] hello world"
-    assert [call["response"] for call in guardrail.calls] == [{"native": True, "text": "hello world"}]
+    assert [call["response"] for call in guardrail.calls] == [_native("hello world")]
     assert guardrail.calls[0]["data"]["model"] == "m"
     assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_a_legacy_rewrite_made_in_place(monkeypatch, caplog):
+    guardrail = _LegacyHookGuardrail(rewrite_in_place="[REWRITTEN] hello world")
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    assert chunks[0]["text"] == "[REWRITTEN] hello world"
     assert not any("discarded" in record.getMessage() for record in caplog.records)
 
 
@@ -1500,5 +1523,5 @@ async def test_later_legacy_step_sees_the_stream_as_the_earlier_step_left_it(mon
     assert result.terminal_action == "allow"
     assert [step.outcome for step in result.step_results] == ["pass", "pass"]
     assert chunks[0]["text"] == "[REWRITTEN] hello world"
-    assert [call["response"] for call in masker.calls] == [{"native": True, "text": "hello world"}]
-    assert [call["response"] for call in auditor.calls] == [{"native": True, "text": "[REWRITTEN] hello world"}]
+    assert [call["response"] for call in masker.calls] == [_native("hello world")]
+    assert [call["response"] for call in auditor.calls] == [_native("[REWRITTEN] hello world")]
