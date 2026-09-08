@@ -3659,6 +3659,7 @@ def test_project_write_routes_reach_endpoint_for_internal_user(route):
         valid_token=valid_token,
         request_data={"team_id": "team-1"},
     )
+    assert RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.self_managed_routes.value)
 
 
 def test_project_delete_route_stays_proxy_admin_only():
