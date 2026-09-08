@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.cost_calculator import A2ACostCalculator
 from litellm.a2a_protocol.utils import A2ARequestUtils
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 if TYPE_CHECKING:
@@ -99,11 +100,11 @@ class A2AStreamingIterator:
             # Calculate tokens from collected text
             input_message: Final = A2ARequestUtils.get_input_message_from_request(self.request)
             input_text: Final = A2ARequestUtils.extract_text_from_message(input_message)
-            prompt_tokens: Final = A2ARequestUtils.count_tokens(input_text)
+            prompt_tokens: Final = await asyncify(A2ARequestUtils.count_tokens)(input_text)
 
             # Use the last (most complete) text from chunks
             output_text: Final = self.collected_text_parts[-1] if self.collected_text_parts else ""
-            completion_tokens: Final = A2ARequestUtils.count_tokens(output_text)
+            completion_tokens: Final = await asyncify(A2ARequestUtils.count_tokens)(output_text)
 
             total_tokens: Final = prompt_tokens + completion_tokens
 

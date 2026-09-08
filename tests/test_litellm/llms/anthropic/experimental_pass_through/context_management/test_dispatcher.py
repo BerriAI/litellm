@@ -129,3 +129,35 @@ async def test_malformed_edit_entries_are_skipped():
     )
     assert result.applied_edits == []
     assert result.messages == messages
+
+
+async def test_sync_editor_counts_tokens_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer(MODEL)
+    messages = [{"role": "user", "content": text * 100}, *_history_with_two_tool_pairs()]
+
+    result, took, lags = await timed_with_loop_lags(
+        lambda: apply_context_management(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            context_management_spec={
+                "edits": [
+                    {
+                        "type": "clear_tool_uses_20250919",
+                        "trigger": {"type": "input_tokens", "value": 10_000_000},
+                    }
+                ]
+            },
+        )
+    )
+
+    assert result.messages == messages
+    assert_loop_stayed_free(took, lags)

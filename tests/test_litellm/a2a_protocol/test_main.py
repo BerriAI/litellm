@@ -1,5 +1,7 @@
 """Tests for litellm/a2a_protocol/main.py non-streaming send behavior."""
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -13,7 +15,8 @@ from a2a.compat.v0_3.types import (
 )
 
 import litellm
-from litellm.a2a_protocol.main import _send_message, _stream_messages, create_a2a_client
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.a2a_protocol.main import _send_message, _stream_messages, asend_message, create_a2a_client
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
 from litellm.llms.custom_httpx.http_handler import (
@@ -413,3 +416,51 @@ async def test_the_pooled_a2a_client_arrives_with_cookie_persistence_disabled(is
 
     assert dict(handler.client.cookies) == {}, "the pooled A2A client kept an upstream's cookie"
     await handler.close()
+
+
+class _UsageRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.logged = asyncio.Event()
+        self.payload = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payload = kwargs["standard_logging_object"]
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_asend_message_counts_usage_off_the_event_loop(monkeypatch):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("gpt-5.6-luna")
+    recorder = _UsageRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+
+    reply = _conv.pb2_v10.StreamResponse()
+    reply.message.message_id = "reply-1"
+    reply.message.role = _conv.pb2_v10.Role.ROLE_AGENT
+    reply.message.parts.add().text = text * 100
+    request = SendMessageRequest(
+        id="r1",
+        params=MessageSendParams(
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": text * 100}]}
+        ),
+    )
+
+    response, took, lags = await timed_with_loop_lags(
+        lambda: asend_message(a2a_client=_FakeClient(reply), request=request)
+    )
+
+    assert response.id == "r1"
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+    assert recorder.payload["prompt_tokens"] > 100_000
+    assert recorder.payload["completion_tokens"] > 100_000
+    assert_loop_stayed_free(took, lags)
