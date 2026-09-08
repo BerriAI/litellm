@@ -26,9 +26,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
-from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
+from litellm.proxy.auth.password_policy import (
+    validate_password_not_breached,
+    validate_password_policy,
+    validate_passwords_bulk,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.user_api_key_cache import (
     object_permission_cache_key,
@@ -157,11 +162,17 @@ def _team_membership_table(
     return team_membership_table
 
 
-async def _hash_password_in_dict(data: dict, general_settings: Mapping[str, object]) -> None:
-    """Validate and hash password field in-place if present."""
+async def _hash_password_in_dict(
+    data: dict, general_settings: Mapping[str, object], password_prevalidated: bool = False
+) -> None:
+    """Validate and hash password field in-place if present.
+
+    ``password_prevalidated`` skips the policy checks for callers that already
+    validated the password (the bulk path screens its whole batch upfront)."""
     if "password" in data and data["password"] is not None:
-        validate_password_policy(data["password"], general_settings)
-        await validate_password_not_breached(data["password"], general_settings)
+        if not password_prevalidated:
+            validate_password_policy(data["password"], general_settings)
+            await validate_password_not_breached(data["password"], general_settings)
         data["password"] = hash_password(data["password"])
 
 
@@ -1416,6 +1427,7 @@ async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
+    password_prevalidated: bool = False,
 ) -> dict[str, Any]:
     """
     Helper function to update a single user.
@@ -1438,7 +1450,7 @@ async def _update_single_user_helper(
 
     data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
     non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    await _hash_password_in_dict(non_default_values, general_settings)
+    await _hash_password_in_dict(non_default_values, general_settings, password_prevalidated=password_prevalidated)
 
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
@@ -1682,19 +1694,38 @@ async def bulk_update_processed_users(
     users_to_update: list[UpdateUserRequest],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
+    hibp_client: AsyncHTTPHandler | None = None,
 ) -> BulkUpdateUserResponse:
+    from litellm.proxy.proxy_server import general_settings
+
     results: Final[list[UserUpdateResult]] = []
     successful_updates = 0
     failed_updates = 0
+
+    # Screen the batch's passwords upfront and concurrently: done per-user
+    # inside the loop below, each HIBP lookup would be awaited serially and a
+    # degraded-slow HIBP could stretch a full batch to minutes, timing out the
+    # request after some updates already persisted.
+    password_verdicts: Final = await validate_passwords_bulk(
+        tuple(u.password for u in users_to_update if u.password is not None),
+        general_settings,
+        client=hibp_client,
+    )
 
     # Process each user update independently
     try:
         for user_request in users_to_update:
             try:
+                if (
+                    user_request.password is not None
+                    and (password_error := password_verdicts.get(user_request.password)) is not None
+                ):
+                    raise password_error
                 response = await _update_single_user_helper(
                     user_request=user_request,
                     user_api_key_dict=user_api_key_dict,
                     litellm_changed_by=litellm_changed_by,
+                    password_prevalidated=True,
                 )
                 # Record success
                 results.append(
