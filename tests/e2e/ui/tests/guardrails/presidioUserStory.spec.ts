@@ -137,8 +137,10 @@ async function deleteGuardrail(page: PlaywrightPage, guardrailName: string): Pro
   await expect(page.getByText(`Guardrail "${guardrailName}" deleted successfully`)).toBeVisible({ timeout: 10_000 });
 }
 
+test.use({ trace: "retain-on-failure" });
+
 test.describe("Presidio PII guardrail, end to end from the dashboard", () => {
-  test.use({ storageState: ADMIN_STORAGE_PATH, trace: "retain-on-failure" });
+  test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("masks PII sent from the Playground and shows the run in Logs", async ({ page, request, guardrailName }) => {
     const marker = `case-ref-${Math.random().toString(36).slice(2, 10)}`;
