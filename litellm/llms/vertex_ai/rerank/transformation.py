@@ -5,7 +5,7 @@ Why separate file? Make it easy to see how transformation works
 """
 
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
 import httpx
 
@@ -227,7 +227,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,

@@ -12,10 +12,13 @@ when the feature gate is off.
 """
 
 import os
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 # Routes excluded from server-span tracing by default: high-frequency pollers and
 # static UI/docs assets, none of which are LLM traffic. Entries are substring-matched
@@ -65,7 +68,17 @@ PASSTHROUGH_PREFIXES: Final = frozenset(
 )
 
 
-def _passthrough_span_name_hook(span: Any, scope: dict) -> None:
+class _RenameableSpan(Protocol):
+    """The span surface the passthrough naming hook drives."""
+
+    def is_recording(self) -> bool: ...
+
+    def update_name(self, name: str) -> None: ...
+
+    def set_attribute(self, key: str, value: str) -> None: ...
+
+
+def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: dict) -> None:
     """FastAPI ``server_request_hook``: give passthrough server spans a useful name.
 
     The instrumentation matches the route at span creation, so both the span name
@@ -88,7 +101,7 @@ def _passthrough_span_name_hook(span: Any, scope: dict) -> None:
         pass
 
 
-def instrument_fastapi_app(app: Any) -> None:
+def instrument_fastapi_app(app: "FastAPI") -> None:
     """Attach OTel server-span instrumentation to the proxy FastAPI app.
 
     Safe no-op when the V2 gate is off or ``opentelemetry-instrumentation-fastapi``

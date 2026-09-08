@@ -140,7 +140,7 @@ class ContainerFileObject(BaseModel):
     created_at: int
     path: str
     source: str
-    _hidden_params: dict[str, Any] = {}
+    _hidden_params: dict[str, builtins.object] = {}
 
     def __contains__(self, key: str) -> bool:
         return hasattr(self, key)

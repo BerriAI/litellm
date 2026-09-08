@@ -44,7 +44,7 @@ def _sanitize_prometheus_label_name(label: str) -> str:
 _PROMETHEUS_LABEL_VALUE_TRANSLATE_V1: Final = str.maketrans("\n", " ", "\r\u2028\u2029")
 
 
-def _sanitize_prometheus_label_value(value: Any | None) -> str | None:
+def _sanitize_prometheus_label_value(value: object | None) -> str | None:
     """
     Same semantics as :func:`_sanitize_prometheus_label_value`, implemented with
     ``str.translate`` plus a single escape pass instead of chained ``replace``.
@@ -1023,7 +1023,7 @@ class UserAPIKeyLabelValues:
         ``hashed_api_key``. This supports ``**standard_logging_payload`` in tests.
         """
         field_names: Final = {f.name for f in fields(self)}
-        merged: Final[dict[str, Any]] = {}
+        merged: Final[dict[str, object]] = {}
         for f in fields(self):
             if f.default_factory is not MISSING:
                 merged[f.name] = f.default_factory()
@@ -1060,9 +1060,9 @@ class UserAPIKeyLabelValues:
         # stays cheap. (Dataclass default `str()` delegates to `__repr__`.)
         return ""
 
-    def model_dump(self) -> dict[str, Any]:
+    def model_dump(self) -> dict[str, object]:
         """Same shape as the former Pydantic ``model_dump()`` (plain dict, list tags)."""
-        d: Final[dict[str, Any]] = {f.name: getattr(self, f.name) for f in fields(self)}
+        d: Final[dict[str, object]] = {f.name: getattr(self, f.name) for f in fields(self)}
         d["tags"] = list(self.tags)
         d["custom_metadata_labels"] = dict(self.custom_metadata_labels)
         return d

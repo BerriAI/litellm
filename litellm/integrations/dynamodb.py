@@ -3,10 +3,23 @@
 
 import os
 import traceback
-from typing import Any, Final
+from collections.abc import Mapping
+from typing import Final, Protocol
 
 import litellm
 from litellm._uuid import uuid
+
+
+class _DynamoTable(Protocol):
+    """The one boto3 DynamoDB table call this logger makes."""
+
+    def put_item(self, *, Item: Mapping[str, object]) -> object: ...
+
+
+class _DynamoResource(Protocol):
+    """The one boto3 DynamoDB resource call this logger makes."""
+
+    def Table(self, name: str) -> _DynamoTable: ...
 
 
 class DyanmoDBLogger:
@@ -16,7 +29,7 @@ class DyanmoDBLogger:
         # Instance variables
         import boto3
 
-        self.dynamodb: Any = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION_NAME"])
+        self.dynamodb: Final[_DynamoResource] = boto3.resource("dynamodb", region_name=os.environ["AWS_REGION_NAME"])
         if litellm.dynamodb_table_name is None:
             raise ValueError(
                 "LiteLLM Error, trying to use DynamoDB but not table name passed. Create a table and set `litellm.dynamodb_table_name=<your-table>`"
@@ -41,7 +54,7 @@ class DyanmoDBLogger:
             id: Final = response_obj.get("id", str(uuid.uuid4()))
 
             # Build the initial payload
-            payload: Final = {
+            payload: Final[dict[str, object]] = {
                 "id": id,
                 "call_type": call_type,
                 "startTime": start_time,
