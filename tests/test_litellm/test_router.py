@@ -40,7 +40,7 @@ from litellm.router import (
     _is_retriable_anthropic_status,
 )
 from litellm.router_strategy import simple_shuffle
-from litellm.types.router import DeploymentTypedDict
+from litellm.types.router import DeploymentTypedDict, RetryPolicy
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -6130,6 +6130,52 @@ def test_update_kwargs_with_deployment_no_tags():
 
     # No tags key should be added if deployment has no tags
     assert "tags" not in kwargs["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_retry_does_not_narrow_tag_filtered_group_to_failed_deployments_tags():
+    """
+    An untagged request that first lands on a tagged deployment must be able to
+    retry onto the untagged deployment of the same group, even though the failed
+    deployment's tags were merged into request metadata for spend attribution.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tagged-group",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "fake-key",
+                    "tags": ["free"],
+                    "weight": 999,
+                    "mock_response": "litellm.ContextWindowExceededError",
+                },
+                "model_info": {"id": "tagged-failing"},
+            },
+            {
+                "model_name": "tagged-group",
+                "litellm_params": {
+                    "model": "openai/gpt-5.5",
+                    "api_key": "fake-key",
+                    "weight": 1,
+                    "mock_response": "ok",
+                },
+                "model_info": {"id": "untagged-healthy"},
+            },
+        ],
+        enable_tag_filtering=True,
+        num_retries=2,
+        retry_after=0,
+        retry_policy=RetryPolicy(BadRequestErrorRetries=2),
+    )
+
+    for _ in range(5):
+        kwargs: dict = {"metadata": {}}
+        response = await router.acompletion(
+            model="tagged-group", messages=[{"role": "user", "content": "hi"}], **kwargs
+        )
+        assert response._hidden_params["model_id"] == "untagged-healthy"
+        assert "free" in kwargs["metadata"]["tags"]
 
 
 def test_update_kwargs_with_deployment_merges_tools():
