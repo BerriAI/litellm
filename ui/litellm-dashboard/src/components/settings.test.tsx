@@ -219,6 +219,61 @@ describe("Settings", () => {
     expect(vi.mocked(setCallbacksCall)).not.toHaveBeenCalled();
   });
 
+  it("should post the chosen export protocol when a select dynamic param is saved", async () => {
+    mockGetCallbacksCall.mockResolvedValue({
+      callbacks: [{ name: "otel", variables: { OTEL_ENDPOINT: "http://collector:4318" } }],
+      available_callbacks: {
+        otel: {
+          litellm_callback_name: "otel",
+          litellm_callback_params: ["OTEL_EXPORTER", "OTEL_ENDPOINT", "OTEL_HEADERS"],
+          ui_callback_name: "OpenTelemetry",
+        },
+      },
+      alerts: [],
+    });
+    mockGetCallbackConfigsCall.mockResolvedValue([
+      {
+        id: "otel",
+        displayName: "Open Telemetry",
+        dynamic_params: {
+          otel_endpoint: { type: "text", ui_name: "Endpoint URL", required: true },
+          otel_exporter_otlp_protocol: {
+            type: "select",
+            ui_name: "Export Protocol",
+            options: ["http/protobuf", "http/json"],
+            required: false,
+          },
+        },
+      },
+    ]);
+
+    const user = userEvent.setup();
+    render(<Settings {...defaultProps} />);
+
+    await user.click(await screen.findByTestId("callback-actions-otel-success"));
+    await user.click(await screen.findByTestId("callback-action-edit"));
+
+    fireEvent.change(await screen.findByLabelText("Endpoint URL"), { target: { value: "http://collector:4318" } });
+    await user.click(screen.getByLabelText("Export Protocol"));
+    await user.click(await screen.findByRole("option", { name: "http/json" }));
+    expect(screen.getByLabelText("Export Protocol")).toHaveTextContent("http/json");
+
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({
+          environment_variables: expect.objectContaining({
+            callback: "otel",
+            otel_endpoint: "http://collector:4318",
+            otel_exporter_otlp_protocol: "http/json",
+          }),
+        }),
+      );
+    });
+  });
+
   it("should send the typed webhook url for an alert type when the alerting tab is saved", async () => {
     const user = userEvent.setup();
     render(<Settings {...defaultProps} />);
