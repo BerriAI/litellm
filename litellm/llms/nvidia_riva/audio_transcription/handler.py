@@ -27,7 +27,6 @@ without the optional STT extras installed.
 import asyncio
 import inspect
 from collections.abc import Callable, Iterable
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -95,11 +94,37 @@ class _AudioEncoding(Protocol):
     def LINEAR_PCM(self) -> object: ...
 
 
-def _auth_factory(riva_module: ModuleType) -> Callable[..., _RivaAuth]:
+class _RivaClientModule(Protocol):
+    """The ``riva.client`` entry points this handler calls."""
+
+    @property
+    def Auth(self) -> Callable[..., _RivaAuth]: ...
+
+    @property
+    def ASRService(self) -> Callable[[_RivaAuth], _AsrService]: ...
+
+
+class _RivaAsrModule(Protocol):
+    """The protobuf constructors this handler calls, from whichever module exposes them."""
+
+    @property
+    def AudioEncoding(self) -> _AudioEncoding: ...
+
+    @property
+    def RecognitionConfig(self) -> Callable[..., _RecognitionConfig]: ...
+
+    @property
+    def StreamingRecognitionConfig(self) -> Callable[..., _StreamingRecognitionConfig]: ...
+
+    @property
+    def EndpointingConfig(self) -> Callable[..., _EndpointingConfig]: ...
+
+
+def _auth_factory(riva_module: _RivaClientModule) -> Callable[..., _RivaAuth]:
     return riva_module.Auth
 
 
-def _audio_encoding(riva_asr_module: ModuleType) -> _AudioEncoding:
+def _audio_encoding(riva_asr_module: _RivaAsrModule) -> _AudioEncoding:
     return riva_asr_module.AudioEncoding
 
 
@@ -317,7 +342,7 @@ class NvidiaRivaAudioTranscription:
 
     def _construct_auth(
         self,
-        riva_module: ModuleType,
+        riva_module: _RivaClientModule,
         api_base: str,
         api_key: str | None,
         optional_params: dict,
@@ -349,7 +374,7 @@ class NvidiaRivaAudioTranscription:
             return _auth_factory(riva_module)(None, use_ssl, api_base, metadata)
 
     def _build_recognition_config_proto(
-        self, riva_asr_module: ModuleType, recognition_config_dict: dict[str, Any]
+        self, riva_asr_module: _RivaAsrModule, recognition_config_dict: dict[str, Any]
     ) -> _RecognitionConfig:
         encoding_name: Final = (recognition_config_dict.get("encoding") or "LINEAR_PCM").upper()
         encoding_enum: Final[object] = getattr(
@@ -436,7 +461,7 @@ class NvidiaRivaAudioTranscription:
         return final_results
 
 
-def _import_riva() -> tuple[ModuleType, ModuleType]:
+def _import_riva() -> tuple[_RivaClientModule, _RivaAsrModule]:
     """
     Lazy import of ``riva.client`` and ``riva.client.proto.riva_asr_pb2``.
 

@@ -473,7 +473,7 @@ async def delete_team_callback(
             raise _callback_error(404, f"callback_name = {callback_name} is not registered for team_id = {team_id}.")
 
         updated_metadata: Final = {**team_metadata, "logging": remaining_callbacks}  # mutable-ok: persisted as JSON
-        encrypted_metadata: Final = encrypt_callback_vars(updated_metadata)
+        encrypted_metadata: Final[object] = encrypt_callback_vars(updated_metadata)
         team_metadata_json: Final = json.dumps(encrypted_metadata)
 
         updated_team: Final = await TeamRepository(prisma_client).table.update(
@@ -610,8 +610,8 @@ async def disable_team_logging(
         # _get_dynamic_logging_metadata stops at metadata["logging"], where the API
         # and Admin UI register callbacks, without ever reading callback_settings.
         team_metadata["logging"] = []  # mutable-ok: the disabled state is persisted as an empty JSON array
-        team_metadata = encrypt_callback_vars(team_metadata)
-        team_metadata_json: Final = json.dumps(team_metadata)
+        encrypted_metadata: Final[object] = encrypt_callback_vars(team_metadata)
+        team_metadata_json: Final = json.dumps(encrypted_metadata)
 
         # Update team in database
         updated_team: Final = await TeamRepository(prisma_client).table.update(
@@ -643,7 +643,7 @@ async def disable_team_logging(
         await _emit_team_callback_audit_log(
             team_id=team_id,
             before_metadata=before_metadata,
-            after_metadata=team_metadata,
+            after_metadata=encrypted_metadata,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=litellm_changed_by,
         )
