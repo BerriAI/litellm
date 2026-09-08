@@ -8,7 +8,7 @@ short-lived capability token minted at rewrite time (`shunt_capability_token.py`
 normal virtual key: only a shunt-generated command should ever call these routes.
 """
 
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final
@@ -128,6 +128,8 @@ async def _worker_text(
     message: str,
     user_api_key_dict: UserAPIKeyAuth,
     label: str,
+    make_processor: Callable[[dict[str, object]], ProxyBaseLLMRequestProcessing] = ProxyBaseLLMRequestProcessing,
+    send: Callable[..., Awaitable[Awaitable[object]]] = route_request,
 ) -> str:
     """The worker model's reply text, or a 502 if it produced none.
 
@@ -138,13 +140,16 @@ async def _worker_text(
     hand-rolled call here would have to re-derive each of those separately and correctly.
     Skips only the HTTP response/streaming shaping half of that pipeline, since a worker call
     is never itself an HTTP response and is never streamed.
+
+    `make_processor` and `send` are injected so a test can supply doubles for the pipeline
+    without patching attributes onto the real classes.
     """
     from litellm.proxy.proxy_server import general_settings, proxy_config, proxy_logging_obj
 
     system: Final = ChatCompletionSystemMessage(role="system", content=system_prompt)
     user: Final = ChatCompletionUserMessage(role="user", content=message)
-    processor: Final = ProxyBaseLLMRequestProcessing(
-        data={"model": model, "messages": [system, user], "temperature": WORKER_TEMPERATURE, "stream": False}
+    processor: Final = make_processor(
+        {"model": model, "messages": [system, user], "temperature": WORKER_TEMPERATURE, "stream": False}
     )
     try:
         data, _logging_obj = await processor.common_processing_pre_call_logic(  # pyright: ignore[reportUnknownVariableType]  # common_processing_pre_call_logic's own dict/Logging return is unrefined at this call shape
@@ -156,7 +161,7 @@ async def _worker_text(
             route_type="acompletion",
             llm_router=llm_router,
         )
-        llm_call: Final = await route_request(  # pyright: ignore[reportUnknownVariableType]  # route_request's own return type is intentionally an untyped union (see its ANN202 suppression)
+        llm_call: Final = await send(  # pyright: ignore[reportUnknownVariableType]  # route_request's own return type is intentionally an untyped union (see its ANN202 suppression)
             data=data,
             route_type="acompletion",
             llm_router=llm_router,
@@ -165,6 +170,8 @@ async def _worker_text(
         )
         # Two awaits: route_request resolves the deployment and hands back the provider
         # coroutine unawaited (see its own ANN202 note), so this second await is the call.
+        # `send`'s nested Awaitable[Awaitable[...]] encodes that, so dropping this await is
+        # a type error rather than a coroutine silently reaching the rest of the pipeline.
         response: Final = await llm_call  # pyright: ignore[reportUnknownVariableType]  # same untyped union as above
         processed: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,

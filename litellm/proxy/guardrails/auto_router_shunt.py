@@ -573,6 +573,11 @@ class ShuntGuardrail(CustomLogger):
         `content_block_stop` arrives. Unlike that guardrail, an unparseable stream passes through
         untouched rather than raising, since shunt is an optimization, not a safety control.
 
+        The shunt config is resolved *before* anything is buffered. This callback is registered
+        globally, so it sees every streaming response on the proxy; buffering first would hold
+        every unarmed request's whole stream in memory for no reason, and concurrent long streams
+        could exhaust a worker even with shunt switched off everywhere.
+
         Declared return type matches the base class and `tool_permission.py`'s own override; on
         the Anthropic path this actually yields raw `bytes` SSE frames, the same mismatch that
         guardrail's own override carries.
@@ -585,13 +590,6 @@ class ShuntGuardrail(CustomLogger):
         )
         from litellm.types.utils import ModelResponse, TextCompletionResponse
 
-        # Typed as ModelResponseStream, though the raw-SSE path really carries bytes here.
-        all_chunks: Final[
-            list[ModelResponseStream]
-        ] = [  # mutable-ok: stream_chunk_builder/is_raw_sse_stream take a list
-            chunk async for chunk in response
-        ]
-
         config: Final = None if request_data.get(_CALLER_OWNS_TOOL_NAME_KEY) else _resolve_shunt_config(request_data)
         model: Final = request_data.get("model")
         endpoints: Final = (
@@ -600,9 +598,16 @@ class ShuntGuardrail(CustomLogger):
             else None
         )
         if config is None or endpoints is None:
-            for chunk in all_chunks:
+            async for chunk in response:
                 yield chunk
             return
+
+        # Typed as ModelResponseStream, though the raw-SSE path really carries bytes here.
+        all_chunks: Final[
+            list[ModelResponseStream]
+        ] = [  # mutable-ok: stream_chunk_builder/is_raw_sse_stream take a list
+            chunk async for chunk in response
+        ]
 
         if is_raw_sse_stream(all_chunks):
             assembled: Final = assemble_anthropic_sse_stream(all_chunks)

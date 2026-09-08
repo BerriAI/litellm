@@ -569,3 +569,46 @@ class TestCallerWithNoMintableIdentity:
             data=self._armed_request_data(), user_api_key_dict=jwt_admitted_caller, response=response
         )
         assert result["content"][0]["name"] == "Read"
+
+
+# Regression: this hook is registered globally, so it runs on every streaming response the
+# proxy serves. It used to drain the whole stream into a list before checking whether shunt
+# was even armed for the request, so every unarmed request's full response sat in memory for
+# nothing, and enough concurrent long streams could exhaust a worker with shunt switched off.
+class TestUnarmedStreamsAreNotBuffered:
+    async def _counting_stream(self, chunks, produced: list[int]):
+        for i, chunk in enumerate(chunks):
+            produced.append(i)
+            yield chunk
+
+    @pytest.mark.asyncio
+    async def test_an_unarmed_stream_is_passed_through_incrementally(self):
+        """The hook must yield its first chunk before the source has produced its last one.
+        Draining first still returns the right chunks, so only the interleaving distinguishes
+        a pass-through from a buffer-then-replay."""
+        guardrail = ShuntGuardrail()
+        produced: list[int] = []
+        chunks = [f"chunk-{i}" for i in range(5)]
+        out = guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=_FAKE_USER_API_KEY_DICT,
+            response=self._counting_stream(chunks, produced),
+            request_data={"model": "not-a-shunt-router"},
+        )
+        first = await out.__anext__()
+        assert first == "chunk-0"
+        assert produced == [0], f"source produced {produced} before the first chunk was yielded"
+
+        rest = [chunk async for chunk in out]
+        assert [first, *rest] == chunks
+
+    @pytest.mark.asyncio
+    async def test_an_unarmed_stream_yields_every_chunk_unchanged(self):
+        guardrail = ShuntGuardrail()
+        produced: list[int] = []
+        chunks = [f"chunk-{i}" for i in range(3)]
+        out = guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=_FAKE_USER_API_KEY_DICT,
+            response=self._counting_stream(chunks, produced),
+            request_data={"model": "not-a-shunt-router"},
+        )
+        assert [chunk async for chunk in out] == chunks

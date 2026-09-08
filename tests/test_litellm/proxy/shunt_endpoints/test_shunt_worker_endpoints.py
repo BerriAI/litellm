@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, UploadFile
 
 import litellm.proxy.shunt_endpoints.endpoints as endpoints_mod
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.guardrails.auto_router_shunt import ShuntConfig
 from litellm.proxy.guardrails.shunt_capability_token import mint_shunt_capability_token
 from litellm.proxy.shunt_endpoints.endpoints import _caller_from_capability_token, _worker_text
@@ -118,16 +119,16 @@ class TestMasterKeyGrant:
         assert exc_info.value.status_code == 401
 
 
-# _worker_text no longer calls llm_router.acompletion directly -- route_request is faked at
-# module scope instead -- so this only needs to satisfy the type annotation, not do anything.
+# _worker_text no longer calls llm_router.acompletion directly -- the send function is
+# injected instead -- so this only needs to satisfy the type annotation, not do anything.
 class _FakeRouter:
     pass
 
 
 class _FakeProxyLogging:
     """post_call_success_hook is the one real dependency _worker_text calls on this object;
-    pre_call/rate-limit/budget enforcement now lives inside common_processing_pre_call_logic,
-    faked separately per test via _patch_pipeline."""
+    pre_call/rate-limit/budget enforcement lives inside common_processing_pre_call_logic,
+    supplied per test by the injected processor factory."""
 
     def __init__(self):
         self.post_call_success_hook_calls = []
@@ -149,15 +150,31 @@ def _fake_request() -> Request:
 # common_processing_pre_call_logic + route_request, the same pipeline /chat/completions uses).
 # A caller already over budget or rate-limited could keep spending through this endpoint.
 class TestWorkerTextGoesThroughTheSharedPipeline:
-    def _patch_pipeline(self, monkeypatch, *, fake_logging: _FakeProxyLogging, response_text: str):
-        async def _fake_pre_call_logic(self, **kwargs):
-            return self.data, object()
+    """_worker_text takes its processor factory and its send function as parameters, so these
+    pass doubles in rather than patching methods onto ProxyBaseLLMRequestProcessing itself.
+    Only the proxy_server startup globals are monkeypatched, which are module-level state with
+    no injection point, not class attributes."""
 
-        # Mirrors route_request's real contract: awaiting it resolves the deployment and
-        # hands back the provider coroutine *unawaited*, so the caller must await twice.
-        # A fake that returned the ModelResponse directly would pass against a caller that
-        # forgets the second await and hands a raw coroutine to the rest of the pipeline.
-        async def _fake_route_request(**kwargs):
+    def _processor_factory(self, *, pre_call_error: Exception | None = None):
+        """A stand-in for ProxyBaseLLMRequestProcessing that subclasses the real thing, so
+        _handle_llm_api_exception stays the production implementation. That conversion is
+        exactly what the blocked-pre-call test asserts on, so faking it would test nothing."""
+
+        class _StubProcessor(ProxyBaseLLMRequestProcessing):
+            async def common_processing_pre_call_logic(self, **kwargs):  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows to the kwargs _worker_text passes
+                if pre_call_error is not None:
+                    raise pre_call_error
+                return self.data, object()
+
+        return _StubProcessor
+
+    def _sender(self, response_text: str):
+        """Mirrors route_request's real contract: awaiting it resolves the deployment and
+        hands back the provider coroutine *unawaited*, so the caller must await twice. A
+        double that returned the ModelResponse directly would pass against a caller that
+        forgets the second await and hands a raw coroutine to the rest of the pipeline."""
+
+        async def _send(**kwargs):
             from litellm.types.utils import Choices, Message, ModelResponse
 
             async def _provider_call():
@@ -167,11 +184,9 @@ class TestWorkerTextGoesThroughTheSharedPipeline:
 
             return _provider_call()
 
-        monkeypatch.setattr(
-            "litellm.proxy.shunt_endpoints.endpoints.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
-            _fake_pre_call_logic,
-        )
-        monkeypatch.setattr("litellm.proxy.shunt_endpoints.endpoints.route_request", _fake_route_request)
+        return _send
+
+    def _patch_startup_globals(self, monkeypatch, fake_logging: _FakeProxyLogging):
         monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", fake_logging)
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
         monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", object())
@@ -179,16 +194,17 @@ class TestWorkerTextGoesThroughTheSharedPipeline:
     @pytest.mark.asyncio
     async def test_runs_the_pipeline_and_the_post_call_success_hook(self, monkeypatch):
         fake_logging = _FakeProxyLogging()
-        self._patch_pipeline(monkeypatch, fake_logging=fake_logging, response_text="the worker's answer")
-        holder = UserAPIKeyAuth(api_key="fakehash1234567890")
+        self._patch_startup_globals(monkeypatch, fake_logging)
         text = await _worker_text(
             _fake_request(),
             _FakeRouter(),
             model="claude-haiku-4-5",
             system_prompt="be precise",
             message="what does this do",
-            user_api_key_dict=holder,
+            user_api_key_dict=UserAPIKeyAuth(api_key="fakehash1234567890"),
             label="bulk_read",
+            make_processor=self._processor_factory(),
+            send=self._sender("the worker's answer"),
         )
         assert text == "the worker's answer"
         assert len(fake_logging.post_call_success_hook_calls) == 1
@@ -196,16 +212,7 @@ class TestWorkerTextGoesThroughTheSharedPipeline:
     @pytest.mark.asyncio
     async def test_a_blocked_pre_call_prevents_the_worker_call(self, monkeypatch):
         fake_logging = _FakeProxyLogging()
-        self._patch_pipeline(monkeypatch, fake_logging=fake_logging, response_text="should never be reached")
-
-        async def _raising_pre_call_logic(self, **kwargs):
-            raise HTTPException(status_code=429, detail="rate limited")
-
-        monkeypatch.setattr(
-            "litellm.proxy.shunt_endpoints.endpoints.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
-            _raising_pre_call_logic,
-        )
-        holder = UserAPIKeyAuth(api_key="fakehash1234567890")
+        self._patch_startup_globals(monkeypatch, fake_logging)
         # _worker_text lets a blocked pre-call raise through
         # ProxyBaseLLMRequestProcessing._handle_llm_api_exception, the same conversion every
         # other LLM route uses, so a raw HTTPException surfaces as the proxy-standard
@@ -217,8 +224,12 @@ class TestWorkerTextGoesThroughTheSharedPipeline:
                 model="claude-haiku-4-5",
                 system_prompt="be precise",
                 message="what does this do",
-                user_api_key_dict=holder,
+                user_api_key_dict=UserAPIKeyAuth(api_key="fakehash1234567890"),
                 label="bulk_read",
+                make_processor=self._processor_factory(
+                    pre_call_error=HTTPException(status_code=429, detail="rate limited")
+                ),
+                send=self._sender("should never be reached"),
             )
         assert exc_info.value.code == "429"
         assert len(fake_logging.post_call_success_hook_calls) == 0
