@@ -93,13 +93,11 @@ class CooldownCache:
             )
 
             # Set the cache with a TTL equal to the cooldown time
-            self.cache.in_memory_cache.delete_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
-                cooldown_key
-            )
             self.cache.set_cache(
                 value=cooldown_data,
                 key=cooldown_key,
                 ttl=_cooldown_time,
+                force_in_memory_ttl_override=True,
             )
         except Exception as e:
             verbose_logger.error("CooldownCache::add_deployment_to_cooldown - Exception occurred - %s", e)

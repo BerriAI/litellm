@@ -21,6 +21,20 @@ class _SlowInt(int):
         return _SlowInt(int(self) + value)
 
 
+class _BlockingCacheDict(dict[str, object]):
+    def __init__(self, values: dict[str, object]):
+        super().__init__(values)
+        self.value_written = threading.Event()
+        self.allow_ttl_write = threading.Event()
+        self.block_writes = False
+
+    def __setitem__(self, key: str, value: object) -> None:
+        super().__setitem__(key, value)
+        if self.block_writes:
+            self.value_written.set()
+            self.allow_ttl_write.wait(timeout=1)
+
+
 def test_increment_cache_is_atomic_under_thread_concurrency():
     cache = InMemoryCache()
     seed = 1000
@@ -115,6 +129,60 @@ def test_in_memory_cache_ttl_allow_override():
     new_ttl_time = in_memory_cache.ttl_dict["new-fake-key"]
     assert new_ttl_time is not None
     assert new_ttl_time != initial_ttl_time
+
+
+def test_in_memory_cache_ttl_force_override():
+    in_memory_cache = InMemoryCache()
+
+    with patch("time.time", return_value=100.0):
+        in_memory_cache.set_cache(key="my-fake-key", value="first", ttl=60)
+    with patch("time.time", return_value=110.0):
+        in_memory_cache.set_cache(
+            key="my-fake-key", value="second", ttl=60, force_ttl=True
+        )
+        cached_value = in_memory_cache.get_cache("my-fake-key")
+
+    assert in_memory_cache.ttl_dict["my-fake-key"] == 170.0
+    assert cached_value == "second"
+
+
+def test_in_memory_cache_ttl_force_override_is_atomic():
+    in_memory_cache = InMemoryCache()
+    with patch("time.time", return_value=100.0):
+        in_memory_cache.set_cache(key="my-fake-key", value="first", ttl=2)
+
+    blocking_cache_dict = _BlockingCacheDict(in_memory_cache.cache_dict)
+    blocking_cache_dict.block_writes = True
+    in_memory_cache.cache_dict = blocking_cache_dict
+    read_results: list[object] = []
+
+    def clock() -> float:
+        if threading.current_thread().name == "cache-reader":
+            return 102.1
+        return 101.9
+
+    with patch("time.time", side_effect=clock):
+        writer = threading.Thread(
+            target=lambda: in_memory_cache.set_cache(
+                key="my-fake-key", value="second", ttl=60, force_ttl=True
+            )
+        )
+        writer.start()
+        assert blocking_cache_dict.value_written.wait(timeout=1)
+
+        reader = threading.Thread(
+            target=lambda: read_results.append(in_memory_cache.get_cache("my-fake-key")),
+            name="cache-reader",
+        )
+        reader.start()
+        time.sleep(0.05)
+        reader_blocked_during_write = reader.is_alive()
+        blocking_cache_dict.allow_ttl_write.set()
+        writer.join(timeout=1)
+        reader.join(timeout=1)
+
+    assert reader_blocked_during_write
+    assert read_results == ["second"]
 
 
 def test_in_memory_cache_max_size_with_ttl():

@@ -117,14 +117,27 @@ class DualCache(BaseCache):
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
+            force_in_memory_ttl_override: Final = kwargs.get("force_in_memory_ttl_override") is True
+            backend_kwargs: Final = {
+                kwarg_name: kwarg_value
+                for kwarg_name, kwarg_value in kwargs.items()
+                if kwarg_name != "force_in_memory_ttl_override"
+            }
+            cache_kwargs: Final = (
+                {**backend_kwargs, "ttl": self.default_in_memory_ttl}
+                if "ttl" not in backend_kwargs and self.default_in_memory_ttl is not None
+                else backend_kwargs
+            )
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
-                    kwargs["ttl"] = self.default_in_memory_ttl
-
-                self.in_memory_cache.set_cache(key, value, **kwargs)
+                self.in_memory_cache.set_cache(
+                    key,
+                    value,
+                    force_ttl=force_in_memory_ttl_override,
+                    **cache_kwargs,
+                )
 
             if self.redis_cache is not None and local_only is False:
-                self.redis_cache.set_cache(key, value, **kwargs)
+                self.redis_cache.set_cache(key, value, **cache_kwargs)
         except Exception as e:
             print_verbose(e)
 

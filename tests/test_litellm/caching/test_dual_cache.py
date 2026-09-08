@@ -154,6 +154,25 @@ def test_dual_cache_batch_get_cache_returns_memory_only_when_redis_read_is_throt
     mock_redis.batch_get_cache.assert_not_called()
 
 
+def test_dual_cache_force_ttl_only_applies_to_in_memory_cache():
+    in_memory_cache = InMemoryCache()
+    mock_redis = MagicMock(spec=RedisCache)
+    dual_cache = DualCache(in_memory_cache=in_memory_cache, redis_cache=mock_redis)
+
+    with patch("time.time", return_value=100.0):
+        dual_cache.set_cache(key="cooldown", value="first", ttl=60)
+    with patch("time.time", return_value=110.0):
+        dual_cache.set_cache(
+            key="cooldown",
+            value="second",
+            ttl=60,
+            force_in_memory_ttl_override=True,
+        )
+
+    assert in_memory_cache.ttl_dict["cooldown"] == 170.0
+    mock_redis.set_cache.assert_called_with("cooldown", "second", ttl=60)
+
+
 def test_dual_cache_sync_batch_redis_backfill_injects_default_in_memory_ttl():
     """Sync batch_get_cache's Redis-to-memory backfill must honor
     default_in_memory_ttl, same as the async path."""
