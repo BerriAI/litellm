@@ -13,7 +13,9 @@ aws-sigv4 = "1.5.1"
 aws-smithy-runtime-api = "1.13.0"
 aws-types = "1.4.0"
 sha2.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
+veil = "0.3"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

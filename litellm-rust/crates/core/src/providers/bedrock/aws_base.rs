@@ -335,7 +335,7 @@ where
 }
 
 fn auth_error(error: litellm_auth_aws::Error) -> Error {
-    Error::Auth(error.message().to_string())
+    Error::Auth(error.to_string())
 }
 
 async fn is_already_running_as_role(
