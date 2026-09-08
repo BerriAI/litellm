@@ -7,10 +7,21 @@ Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request
 import json
 import socket
 import sys
-from contextlib import ExitStack
+from collections.abc import Awaitable, Callable, Mapping
+from contextlib import AbstractContextManager, ExitStack
+from typing import TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from litellm.proxy._types import UserAPIKeyAuth
+
+AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
+
+
+class CapturedAgentCall(TypedDict):
+    request_id: object
+    agent_extra_headers: dict[str, str] | None
 
 
 @pytest.mark.asyncio
@@ -364,7 +375,7 @@ def _make_agent_mock(url: str = "http://backend-agent:10001") -> MagicMock:
 
 
 def _make_request_mock(
-    method: str, params: dict, request_id: object = "req-1"
+    method: str, params: Mapping[str, object], request_id: object = "req-1"
 ) -> MagicMock:
     req = MagicMock()
     req.headers = {}
@@ -379,7 +390,9 @@ def _make_request_mock(
     return req
 
 
-def _base_patches(agent: MagicMock, add_litellm_data=None):
+def _base_patches(
+    agent: MagicMock, add_litellm_data: AddLiteLLMData | None = None
+) -> list[AbstractContextManager[object]]:
     return [
         patch(
             "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
@@ -399,7 +412,7 @@ def _base_patches(agent: MagicMock, add_litellm_data=None):
     ]
 
 
-async def _add_proxy_data(data, **kwargs):
+async def _add_proxy_data(data: dict[str, object], **kwargs: object) -> dict[str, object]:
     data["proxy_server_request"] = {
         "url": "http://localhost:4000",
         "method": "POST",
@@ -422,36 +435,40 @@ _HELLO_MESSAGE_PARAMS = {
 async def _invoke_message_method(
     method: str,
     mock_request: MagicMock,
-    user_api_key_dict,
-    add_litellm_data=None,
-) -> dict:
+    user_api_key_dict: UserAPIKeyAuth,
+    add_litellm_data: AddLiteLLMData | None = None,
+) -> CapturedAgentCall:
     from fastapi.responses import JSONResponse
 
     class MessageSendParams:
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs: object) -> None:
             self.__dict__.update(kwargs)
 
     class SendMessageRequest:
-        def __init__(self, **kwargs):
+        def __init__(self, **kwargs: object) -> None:
             self.__dict__.update(kwargs)
 
-    captured = {}
+    captured: CapturedAgentCall = {"request_id": None, "agent_extra_headers": None}
 
-    async def capture_asend_message(request, **kwargs):
-        captured["request_id"] = request.id
-        captured["agent_extra_headers"] = kwargs["agent_extra_headers"]
+    async def capture_asend_message(
+        request: SendMessageRequest, agent_extra_headers: dict[str, str] | None = None, **kwargs: object
+    ) -> MagicMock:
+        captured["request_id"] = request.__dict__["id"]
+        captured["agent_extra_headers"] = agent_extra_headers
         response = MagicMock()
         response.model_dump.return_value = {
             "jsonrpc": "2.0",
-            "id": request.id,
+            "id": request.__dict__["id"],
             "result": {"status": "success"},
         }
         return response
 
-    async def capture_stream_message(**kwargs):
-        captured["request_id"] = kwargs["request_id"]
-        captured["agent_extra_headers"] = kwargs["agent_extra_headers"]
-        return JSONResponse({"jsonrpc": "2.0", "id": kwargs["request_id"]})
+    async def capture_stream_message(
+        request_id: object, agent_extra_headers: dict[str, str] | None = None, **kwargs: object
+    ) -> JSONResponse:
+        captured["request_id"] = request_id
+        captured["agent_extra_headers"] = agent_extra_headers
+        return JSONResponse({"jsonrpc": "2.0", "id": request_id})
 
     mock_a2a_types = MagicMock()
     mock_a2a_types.MessageSendParams = MessageSendParams
@@ -497,8 +514,6 @@ async def _invoke_message_method(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_preserve_numeric_zero_request_id(method: str):
-    from litellm.proxy._types import UserAPIKeyAuth
-
     mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS, request_id=0)
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
@@ -510,8 +525,6 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_forward_caller_identity_headers(method: str):
-    from litellm.proxy._types import UserAPIKeyAuth
-
     mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="user-abc", team_id="team-xyz")
 
@@ -525,8 +538,6 @@ async def test_message_methods_forward_caller_identity_headers(method: str):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_caller_identity_headers_cannot_be_spoofed(method: str):
-    from litellm.proxy._types import UserAPIKeyAuth
-
     mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
     mock_request.headers = {
         "x-a2a-test-agent-x-litellm-user-id": "attacker-user",
@@ -548,13 +559,11 @@ async def test_message_methods_caller_identity_headers_cannot_be_spoofed(method:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_forward_key_bound_identity_not_pre_call_rewrite(method: str):
-    from litellm.proxy._types import UserAPIKeyAuth
-
     mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="key-user", team_id="key-team")
 
-    async def rewrite_user_id_like_header_mapping(data, **kwargs):
-        kwargs["user_api_key_dict"].user_id = "header-mapped-user"
+    async def rewrite_user_id_like_header_mapping(data: dict[str, object], **kwargs: object) -> dict[str, object]:
+        user_api_key_dict.user_id = "header-mapped-user"
         return await _add_proxy_data(data, **kwargs)
 
     captured = await _invoke_message_method(
