@@ -14268,6 +14268,9 @@ _SSE_CHUNKS: Final[tuple[bytes, ...]] = tuple(
     b'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"gpt-5.6",'
     b'"choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}\n\n'
     for _ in range(5)
+) + (
+    b'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"gpt-5.6",'
+    b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
 )
 
 
