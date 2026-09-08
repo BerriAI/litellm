@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,6 +10,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
+from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailTracingDetail
 
 if TYPE_CHECKING:
@@ -2378,10 +2379,107 @@ def _logged_call(messages: list | str) -> tuple[dict, object]:
     return kwargs, response
 
 
+class _NativeApplyGuardrail(_InheritedApplyGuardrail):
+    use_native_lifecycle_hooks: ClassVar[bool] = True
+
+
+@pytest.mark.parametrize("guardrail_type", (CustomGuardrail, _NativeApplyGuardrail, _InheritedApplyGuardrail))
+@pytest.mark.parametrize(
+    "event_hook",
+    (
+        GuardrailEventHooks.logging_only,
+        "logging_only",
+        [GuardrailEventHooks.pre_call, GuardrailEventHooks.logging_only],
+        ["pre_call", "logging_only"],
+        Mode(tags={"audit": "logging_only"}, default="pre_call"),
+        Mode(tags={"audit": ["pre_call", "logging_only"]}),
+        Mode(tags={"enforce": "pre_call"}, default="logging_only"),
+        Mode(tags={}, default=["pre_call", "logging_only"]),
+    ),
+)
+def test_logging_only_requires_framework_support_or_explicit_declaration(
+    guardrail_type: type[CustomGuardrail],
+    event_hook: GuardrailEventHooks | str | list[GuardrailEventHooks] | list[str] | Mode,
+) -> None:
+    supported: Final = [GuardrailEventHooks.pre_call]
+    if guardrail_type is _InheritedApplyGuardrail:
+        guardrail: Final = guardrail_type(event_hook=event_hook, supported_event_hooks=supported)
+        assert guardrail.event_hook == event_hook
+        assert supported == [GuardrailEventHooks.pre_call]
+    else:
+        with pytest.raises(ValueError, match=r"logging_only.*not in the supported event hooks"):
+            guardrail_type(event_hook=event_hook, supported_event_hooks=supported)
+
+    explicitly_supported: Final = guardrail_type(
+        event_hook=event_hook,
+        supported_event_hooks=[GuardrailEventHooks.pre_call, GuardrailEventHooks.logging_only],
+    )
+    assert explicitly_supported.event_hook == event_hook
+
+
+@pytest.mark.parametrize(
+    "event_hook",
+    (
+        GuardrailEventHooks.post_call,
+        "post_call",
+        [GuardrailEventHooks.logging_only, GuardrailEventHooks.post_call],
+        ["logging_only", "post_call"],
+        Mode(tags={"enforce": "post_call"}, default="logging_only"),
+        Mode(tags={"enforce": ["logging_only", "post_call"]}),
+        Mode(tags={"audit": "logging_only"}, default="post_call"),
+        Mode(tags={}, default=["logging_only", "post_call"]),
+    ),
+)
+def test_framework_logging_only_does_not_allow_other_unsupported_modes(
+    event_hook: GuardrailEventHooks | str | list[GuardrailEventHooks] | list[str] | Mode,
+) -> None:
+    with pytest.raises(ValueError, match=r"post_call.*not in the supported event hooks"):
+        _InheritedApplyGuardrail(event_hook=event_hook, supported_event_hooks=[GuardrailEventHooks.pre_call])
+
+
 class TestLoggingOnlyApplyGuardrail:
     """LIT-4876 regression: a guardrail in mode logging_only that implements only
     apply_guardrail must still run against the logged request and response and
     record guardrail_information, instead of inheriting the CustomLogger no-op."""
+
+    @pytest.mark.parametrize(
+        "event_hook",
+        (
+            GuardrailEventHooks.logging_only,
+            "logging_only",
+            [GuardrailEventHooks.pre_call, GuardrailEventHooks.logging_only],
+            ["pre_call", "logging_only"],
+            Mode(tags={"audit": "logging_only"}, default="pre_call"),
+            Mode(tags={"audit": ["pre_call", "logging_only"]}),
+            Mode(tags={"enforce": "pre_call"}, default="logging_only"),
+            Mode(tags={}, default=["pre_call", "logging_only"]),
+        ),
+    )
+    @pytest.mark.asyncio
+    async def test_content_filter_accepts_logging_only_and_records_detection(
+        self, event_hook: GuardrailEventHooks | str | list[GuardrailEventHooks] | list[str] | Mode
+    ) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+        from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="content-review",
+            event_hook=event_hook,
+            default_on=True,
+            blocked_words=[BlockedWord(keyword="hello", action=ContentFilterAction.BLOCK)],
+        )
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert out_response is response
+        assert out_kwargs["messages"] == kwargs["messages"]
+        assert (
+            out_kwargs["standard_logging_object"]["guardrail_information"][0]["guardrail_status"]
+            == "guardrail_intervened"
+        )
 
     @pytest.mark.asyncio
     async def test_runs_apply_guardrail_observe_only_and_records_verdict(self):

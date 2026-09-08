@@ -601,6 +601,12 @@ class CustomGuardrail(CustomLogger):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None,
         supported_event_hooks: list[GuardrailEventHooks],
     ) -> None:
+        allowed_hooks: Final = frozenset(supported_event_hooks) | (
+            frozenset((GuardrailEventHooks.logging_only,))
+            if self.uses_apply_guardrail_interface() and not self.use_native_lifecycle_hooks
+            else frozenset()
+        )
+
         def _validate_event_hook_list_is_in_supported_event_hooks(
             event_hook: list[GuardrailEventHooks] | list[str],
             supported_event_hooks: list[GuardrailEventHooks],
@@ -608,7 +614,7 @@ class CustomGuardrail(CustomLogger):
             for hook in event_hook:
                 if isinstance(hook, str):
                     hook = GuardrailEventHooks(hook)
-                if hook not in supported_event_hooks:
+                if hook not in allowed_hooks:
                     raise ValueError(f"Event hook {hook} is not in the supported event hooks {supported_event_hooks}")
 
         if event_hook is None:
@@ -629,7 +635,7 @@ class CustomGuardrail(CustomLogger):
                 default_list = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
                 _validate_event_hook_list_is_in_supported_event_hooks(default_list, supported_event_hooks)
         elif isinstance(event_hook, GuardrailEventHooks):
-            if event_hook not in supported_event_hooks:
+            if event_hook not in allowed_hooks:
                 raise ValueError(f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}")
 
     @staticmethod
