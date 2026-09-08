@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,6 +41,7 @@ from litellm.utils import (
     _is_streaming_request,
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
+    async_post_call_success_deployment_hook,
     client,
     get_llm_provider,
     get_non_default_completion_params,
@@ -50,6 +52,15 @@ from litellm.utils import (
 )
 
 # Adds the parent directory to the system path
+
+
+def test_get_utc_datetime_returns_current_aware_utc_time() -> None:
+    before: Final = datetime.now(timezone.utc)
+    result: Final = litellm.utils.get_utc_datetime()
+    after: Final = datetime.now(timezone.utc)
+
+    assert result.utcoffset() == timedelta(0)
+    assert before <= result <= after
 
 
 def test_usage_openai_cache_write_tokens_populates_both_names():
@@ -185,6 +196,11 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
     assert via_provider["input_cost_per_token"] == 1.4e-06
     assert via_provider["output_cost_per_token"] == 4.4e-06
     assert via_provider["mode"] == "responses"
+
+
+def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
+    info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
+    assert info["key"] == "ft:gpt-4o-2024-08-06"
 
 
 def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
@@ -330,6 +346,37 @@ def test_get_optional_params_image_gen():
     assert optional_params["n"] == 3
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_get_optional_params_image_gen_keeps_gpt_image_supported_params(custom_llm_provider):
+    """https://github.com/BerriAI/litellm/issues/38649"""
+    from litellm.types.utils import LlmProviders
+
+    provider_config = ProviderConfigManager.get_provider_image_generation_config(
+        model="gpt-image-2", provider=LlmProviders(custom_llm_provider)
+    )
+    optional_params = get_optional_params_image_gen(
+        model="gpt-image-2",
+        n=1,
+        size="1024x1024",
+        custom_llm_provider=custom_llm_provider,
+        provider_config=provider_config,
+        background="transparent",
+        output_format="png",
+        moderation="low",
+        output_compression=50,
+        unknown_param="kept-in-extra-body",
+    )
+    assert optional_params == {
+        "n": 1,
+        "size": "1024x1024",
+        "background": "transparent",
+        "output_format": "png",
+        "moderation": "low",
+        "output_compression": 50,
+        "extra_body": {"unknown_param": "kept-in-extra-body"},
+    }
+
+
 def test_get_optional_params_image_gen_vertex_ai_size():
     """Test that Vertex AI image generation properly handles size parameter and maps it to aspectRatio"""
     # Test with various size parameters
@@ -398,7 +445,7 @@ def test_gpt_image_2_provider_and_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
     assert (
         "/v1/images/generations"
@@ -440,7 +487,7 @@ def test_azure_gpt_image_2_model_info(local_model_cost_map):
     assert model_info["mode"] == "image_generation"
     assert model_info["input_cost_per_token"] == 5e-06
     assert model_info["input_cost_per_image_token"] == 8e-06
-    assert model_info["output_cost_per_token"] == 1e-05
+    assert model_info["output_cost_per_token"] == 0
     assert model_info["output_cost_per_image_token"] == 3e-05
 
 
@@ -864,7 +911,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
+                "cache_creation_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_creation_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_272k_tokens_flex": {
                     "type": "number"
@@ -875,7 +924,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
+                "cache_read_input_token_cost_above_128k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_200k_tokens": {"type": "number"},
+                "cache_read_input_token_cost_above_256k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_272k_tokens_flex": {
                     "type": "number"
@@ -1045,6 +1096,17 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_output_config": {"type": "boolean"},
                 "supports_speed": {"type": "boolean"},
+                "supported_audio_formats": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": ["mp3", "wav"],
+                    },
+                },
+                "vertex_ai_audio_api": {
+                    "type": "string",
+                    "enum": ["lyria_predict", "lyria_interactions"],
+                },
                 "bedrock_output_config_effort_ceiling": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "max", "xhigh"],
@@ -1067,6 +1129,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/images/variations",
                             "/v1/images/edits",
                             "/v1/batch",
+                            "/v1beta/interactions",
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
@@ -2748,7 +2811,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
     Model properties from OpenRouter API:
     - context_length: 262144
-    - pricing: prompt=$0.0000006, completion=$0.000003, input_cache_read=$0.0000001
+    - pricing: prompt=$0.00000045, completion=$0.00000225, input_cache_read=$0.00000007
     - modality: text+image->text (supports vision)
     - supports: tool_choice, tools (function calling)
     """
@@ -2773,9 +2836,9 @@ def test_model_info_for_openrouter_kimi_k2_5():
     assert model_info["max_tokens"] == 262144
 
     # Verify pricing
-    assert model_info["input_cost_per_token"] == 6e-07
-    assert model_info["output_cost_per_token"] == 3e-06
-    assert model_info["cache_read_input_token_cost"] == 1e-07
+    assert model_info["input_cost_per_token"] == 4.5e-07
+    assert model_info["output_cost_per_token"] == 2.25e-06
+    assert model_info["cache_read_input_token_cost"] == 7e-08
 
     # Verify capabilities
     assert model_info["supports_vision"] is True
@@ -2831,6 +2894,60 @@ def test_gemini_lyria_3_preview_models_in_cost_map():
     assert clip["litellm_provider"] == "gemini" and pro["litellm_provider"] == "gemini"
     assert clip["max_input_tokens"] == 131072 == pro["max_input_tokens"]
     assert clip["output_cost_per_image"] == 0.04
+
+
+def test_vertex_ai_lyria_models_in_cost_map():
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    lyria_2 = model_cost.get("vertex_ai/lyria-002")
+    clip = model_cost.get("vertex_ai/lyria-3-clip-preview")
+    pro = model_cost.get("vertex_ai/lyria-3-pro-preview")
+
+    assert lyria_2 is not None
+    assert clip is not None
+    assert pro is not None
+    assert lyria_2["litellm_provider"] == "vertex_ai"
+    assert clip["litellm_provider"] == "vertex_ai"
+    assert pro["litellm_provider"] == "vertex_ai"
+    assert lyria_2["mode"] == "audio_speech"
+    assert clip["mode"] == "audio_speech"
+    assert pro["mode"] == "audio_speech"
+    assert lyria_2["output_cost_per_image"] == 0.06
+    assert lyria_2["supported_modalities"] == ["text"]
+    assert lyria_2["supported_output_modalities"] == ["audio"]
+    assert lyria_2["supports_audio_output"] is True
+    assert lyria_2["supported_audio_formats"] == ["wav"]
+    assert lyria_2["vertex_ai_audio_api"] == "lyria_predict"
+    assert lyria_2["supported_endpoints"] == ["/v1/audio/speech"]
+    assert clip["output_cost_per_image"] == 0.04
+    assert pro["output_cost_per_image"] == 0.08
+    assert clip["supported_audio_formats"] == ["mp3"]
+    assert pro["supported_audio_formats"] == ["mp3", "wav"]
+    assert clip["vertex_ai_audio_api"] == "lyria_interactions"
+    assert pro["vertex_ai_audio_api"] == "lyria_interactions"
+    assert clip["supported_endpoints"] == [
+        "/v1beta/interactions",
+        "/v1/audio/speech",
+    ]
+    assert pro["supported_endpoints"] == [
+        "/v1beta/interactions",
+        "/v1/audio/speech",
+    ]
+    assert clip["supported_modalities"] == ["text"]
+    assert pro["supported_modalities"] == ["text"]
+    assert clip["supports_vision"] is False
+    assert pro["supports_vision"] is False
+    assert "supports_image_input" not in clip
+    assert "supports_image_input" not in pro
+    assert clip["supported_regions"] == ["global"]
+    assert pro["supported_regions"] == ["global"]
+    assert clip["supports_audio_output"] is True
+    assert pro["supports_audio_output"] is True
 
 
 def test_model_info_for_fireworks_short_form_models():
@@ -5127,52 +5244,6 @@ def test_client_side_timeout_marker_never_reaches_the_provider():
     )
 
 
-def test_rust_flag_not_forwarded_as_provider_param():
-    forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
-    assert "rust" not in forwarded
-
-
-def test_completion_does_not_leak_rust_flag_into_provider_request_body():
-    mock_response = MagicMock()
-    mock_response.model_dump.return_value = {
-        "id": "chatcmpl-1",
-        "object": "chat.completion",
-        "created": 1234567890,
-        "model": "gpt-4o-mini",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "hi"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 1,
-            "completion_tokens": 1,
-            "total_tokens": 2,
-        },
-    }
-
-    mock_raw_response = MagicMock()
-    mock_raw_response.headers = {}
-    mock_raw_response.parse.return_value = mock_response
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
-
-    litellm.completion(
-        model="openai/gpt-4o-mini",
-        messages=[{"role": "user", "content": "hi"}],
-        rust=True,
-        api_key="sk-test",
-        client=mock_client,
-    )
-
-    create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
-    assert "rust" not in create_kwargs
-    assert "rust" not in (create_kwargs.get("extra_body") or {})
-
-
 class _RecordingDeploymentFailureLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -5777,6 +5848,90 @@ class TestHuggingFaceConfigFetch:
         assert request_timeout["read"] == HF_CONFIG_FETCH_TIMEOUT_SECONDS
 
 
+@pytest.mark.asyncio
+async def test_success_deployment_hook_chains_past_callback_returning_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (LIT-5863): the dispatcher must run every callback, chaining each non-None
+    result into the next call, instead of returning at the first callback answering non-None.
+    A guardrail answering with the unmodified response used to starve every callback after it."""
+    from litellm.types.utils import ModelResponse
+
+    original = ModelResponse()
+    replacement = ModelResponse()
+
+    class PassthroughLogger(CustomLogger):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            return response
+
+    class ReplacingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list = []
+
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            self.seen.append(response)
+            return replacement
+
+    class ObservingLogger(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen: list = []
+
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            self.seen.append(response)
+            return None
+
+    replacer = ReplacingLogger()
+    observer = ObservingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [PassthroughLogger(), replacer, observer])
+
+    result = await async_post_call_success_deployment_hook(
+        request_data={}, response=original, call_type=CallTypes.acompletion
+    )
+
+    assert replacer.seen == [original]
+    assert observer.seen == [replacement]
+    assert result is replacement
+
+
+@pytest.mark.asyncio
+async def test_registered_guardrail_does_not_starve_vector_store_search_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (LIT-5863): with any guardrail registered ahead of the lazily-appended
+    VectorStorePreCallHook, /v1/chat/completions responses lost
+    provider_specific_fields["search_results"] because the guardrail answered the unmodified
+    response and the dispatcher stopped there."""
+    from types import SimpleNamespace
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+        VectorStorePreCallHook,
+    )
+    from litellm.types.utils import ModelResponse
+
+    search_results: Final = [{"search_query": "coolant", "data": [{"content": [{"text": "Cryoline-9", "type": "text"}]}]}]
+    logging_obj = SimpleNamespace(model_call_details={"search_results": search_results})
+    response = ModelResponse(choices=[{"message": {"role": "assistant", "content": "Cryoline-9"}}])
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [CustomGuardrail(guardrail_name="dummy-guardrail"), VectorStorePreCallHook()],
+    )
+
+    result = await async_post_call_success_deployment_hook(
+        request_data={"litellm_logging_obj": logging_obj},
+        response=response,
+        call_type=CallTypes.acompletion,
+    )
+
+    provider_fields = result.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert provider_fields["search_results"] == search_results
+
+
 class TestIsVisionExplicitlyDisabled:
     """github_copilot and chatgpt run an OAuth device flow inside get_llm_provider; the
     explicit-disable lookup must adopt the declared prefix instead of resolving it, exactly
@@ -5805,3 +5960,179 @@ class TestIsVisionExplicitlyDisabled:
             is_vision_explicitly_disabled("fireworks_ai/accounts/fireworks/models/deepseek-v4-flash-0731") is True
         )
         assert is_vision_explicitly_disabled("anthropic/claude-sonnet-4-5") is False
+
+
+class TestVerboseRequestLineRedaction:
+    """`litellm.set_verbose = True` echoes the caller's kwargs back as a `litellm.completion(...)`
+    line on stdout, so a credential kwarg lands in whatever collects stdout: a terminal, a
+    container log drain, a CI job log. Credential-named kwargs must not survive that echo,
+    at any nesting depth, while ordinary params still must, or the line stops telling the
+    developer what they called."""
+
+    FAKE_API_KEY: Final = "sk-fake-lit6823-0000000000000000"
+
+    def _verbose_request_line(self, capsys, monkeypatch, **kwargs) -> str:
+        monkeypatch.setattr(litellm, "set_verbose", True)
+        monkeypatch.setattr("litellm._logging.set_verbose", True)
+        capsys.readouterr()
+        litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hello"}],
+            mock_response="hi",
+            **kwargs,
+        )
+        captured: Final = capsys.readouterr()
+        return "\n".join(line for line in (captured.out + captured.err).splitlines() if "litellm.completion(" in line)
+
+    def test_api_key_never_reaches_the_request_line(self, capsys, monkeypatch):
+        printed: Final = self._verbose_request_line(capsys, monkeypatch, api_key=self.FAKE_API_KEY)
+
+        assert "litellm.completion(" in printed
+        assert self.FAKE_API_KEY not in printed
+        assert "api_key='REDACTED'" in printed
+
+    def test_credential_headers_never_reach_the_request_line(self, capsys, monkeypatch):
+        printed: Final = self._verbose_request_line(
+            capsys,
+            monkeypatch,
+            api_key=self.FAKE_API_KEY,
+            extra_headers={"Authorization": "Bearer fake-lit6823-header", "x-request-id": "abc123"},
+        )
+
+        assert "fake-lit6823-header" not in printed
+        assert "'Authorization': 'REDACTED'" in printed
+        assert "'x-request-id': 'abc123'" in printed
+
+    def test_credentials_nested_in_a_list_never_reach_the_request_line(self, capsys, monkeypatch):
+        printed: Final = self._verbose_request_line(
+            capsys,
+            monkeypatch,
+            api_key=self.FAKE_API_KEY,
+            extra_body={"providers": [{"name": "openai", "api_key": "sk-fake-lit6823-nested"}]},
+        )
+
+        assert "sk-fake-lit6823-nested" not in printed
+        assert "'name': 'openai'" in printed
+
+    def test_ordinary_params_still_printed(self, capsys, monkeypatch):
+        printed: Final = self._verbose_request_line(
+            capsys, monkeypatch, api_key=self.FAKE_API_KEY, max_tokens=17, temperature=0.25
+        )
+
+        assert "model='gpt-3.5-turbo'" in printed
+        assert "max_tokens=17" in printed
+        assert "temperature=0.25" in printed
+
+
+class TestFinalOptionalParamsLineRedaction:
+    """A verbose run echoes the fully built optional params too, and `extra_body` carries whatever the
+    caller nested inside it straight onto that line, so a credential tucked in there lands in a terminal
+    or a log drain in plaintext. It has to be redacted on both surfaces `print_verbose` writes to, and the
+    line has to keep printing on both, because `litellm.set_verbose` and the DEBUG logger are independent
+    switches and neither implies the other."""
+
+    FAKE_NESTED_KEY: Final = "sk-fake-lit6835-nested-0000000000"
+
+    def _complete(self, **kwargs) -> None:
+        litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "hello"}],
+            mock_response="hi",
+            **kwargs,
+        )
+
+    def _printed_line(self, capsys) -> str:
+        captured: Final = capsys.readouterr()
+        return "\n".join(
+            line for line in (captured.out + captured.err).splitlines() if "Final returned optional params" in line
+        )
+
+    def test_nested_credential_is_redacted_when_only_set_verbose_is_on(self, capsys, caplog, monkeypatch):
+        monkeypatch.setattr(litellm, "set_verbose", True)
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            capsys.readouterr()
+            self._complete(extra_body={"providers": [{"name": "openai", "api_key": self.FAKE_NESTED_KEY}]})
+            printed: Final = self._printed_line(capsys)
+
+        assert printed
+        assert self.FAKE_NESTED_KEY not in printed
+        assert "'api_key': 'REDACTED'" in printed
+        assert "'name': 'openai'" in printed
+
+    def test_line_still_reaches_the_logger_when_only_the_debug_logger_is_on(self, capsys, caplog, monkeypatch):
+        monkeypatch.setattr(litellm, "set_verbose", False)
+        with caplog.at_level(logging.DEBUG, logger=verbose_logger.name):
+            self._complete(extra_body={"providers": [{"name": "openai", "api_key": self.FAKE_NESTED_KEY}]})
+            logged: Final = "\n".join(
+                record.getMessage()
+                for record in caplog.records
+                if "Final returned optional params" in record.getMessage()
+            )
+
+        assert logged
+        assert self.FAKE_NESTED_KEY not in logged
+        assert "'name': 'openai'" in logged
+
+    def test_nothing_is_emitted_when_neither_verbose_switch_is_on(self, capsys, caplog, monkeypatch):
+        monkeypatch.setattr(litellm, "set_verbose", False)
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            capsys.readouterr()
+            self._complete(extra_body={"providers": [{"name": "openai", "api_key": self.FAKE_NESTED_KEY}]})
+            captured: Final = capsys.readouterr()
+
+        assert "Final returned optional params" not in captured.out + captured.err
+        assert self.FAKE_NESTED_KEY not in captured.out + captured.err
+
+    def test_ordinary_optional_params_still_reach_the_line(self, capsys, caplog, monkeypatch):
+        monkeypatch.setattr(litellm, "set_verbose", True)
+        with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+            capsys.readouterr()
+            self._complete(max_tokens=17, temperature=0.25)
+            printed: Final = self._printed_line(capsys)
+
+        assert "'max_tokens': 17" in printed
+        assert "'temperature': 0.25" in printed
+
+
+def _credential_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if "litellm_credential_name=" in record.getMessage()]
+
+
+def test_load_credentials_from_list_warns_when_the_named_credential_is_not_loaded(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.utils import load_credentials_from_list
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {"litellm_credential_name": "openai-cred", "model": "openai/gpt-5.4-mini"}
+    assert _credential_warnings(caplog) == [
+        "litellm_credential_name=openai-cred matched none of the 0 loaded credentials; the request runs without it"
+    ]
+
+
+def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_without_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.types.utils import CredentialItem
+    from litellm.utils import load_credentials_from_list
+
+    loaded = CredentialItem(
+        credential_name="openai-cred",
+        credential_values={"api_key": "sk-from-db", "api_base": "https://credential.example"},
+        credential_info={},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [loaded])
+    request_kwargs = {"litellm_credential_name": "openai-cred", "api_base": "https://request.example"}
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {
+        "litellm_credential_name": "openai-cred",
+        "api_base": "https://request.example",
+        "api_key": "sk-from-db",
+    }
+    assert _credential_warnings(caplog) == []

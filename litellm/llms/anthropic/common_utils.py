@@ -67,6 +67,96 @@ _BEDROCK_VERSION_SUFFIX_RE: Final = re.compile(r"-v\d+(?::\d+)?$")
 _INFERENCE_PROFILE_MINOR_RE: Final = re.compile(r":\d+$")
 _DATED_RELEASE_SUFFIX_RE: Final = re.compile(r"-\d{8}$")
 _DOTTED_VERSION_RE: Final = re.compile(r"(\d)\.(\d)")
+_CLAUDE_CODE_BILLING_HEADER_PREFIX: Final = "x-anthropic-billing-header:"
+_CLAUDE_CODE_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
+_CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+
+
+def is_claude_code_user_agent(user_agent: str) -> bool:
+    return user_agent.startswith("claude-cli/")
+
+
+def _validated_claude_code_mapping(value: object) -> dict[object, object] | None:
+    try:
+        return _CLAUDE_CODE_OBJECT_MAPPING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _validated_claude_code_list(value: object) -> list[object] | None:
+    try:
+        return _CLAUDE_CODE_OBJECT_LIST_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _claude_code_billing_fields(text: str) -> tuple[tuple[str, str], ...] | None:
+    stripped: Final = text.strip()
+    if "\n" in stripped or "\r" in stripped or not stripped.startswith(_CLAUDE_CODE_BILLING_HEADER_PREFIX):
+        return None
+    fields: Final = tuple(
+        field
+        for raw_field in stripped.removeprefix(_CLAUDE_CODE_BILLING_HEADER_PREFIX).split(";")
+        if (field := raw_field.strip())
+    )
+    if not fields or any("=" not in field for field in fields):
+        return None
+    parsed_fields: Final = tuple(
+        (parts[0].strip(), parts[1].strip()) for field in fields for parts in (field.split("=", 1),)
+    )
+    if any(not key or not value for key, value in parsed_fields):
+        return None
+    return parsed_fields
+
+
+def _claude_code_billing_texts(system: object) -> tuple[str, ...] | None:
+    if isinstance(system, str):
+        return (system,)
+    blocks: Final = _validated_claude_code_list(system)
+    if blocks is None:
+        return None
+    block_mappings: Final = tuple(_validated_claude_code_mapping(block) for block in blocks)
+    if any(block is None for block in block_mappings):
+        return None
+    text_values: Final = tuple(
+        block.get("text") for block in block_mappings if block is not None and block.get("type") == "text"
+    )
+    if len(text_values) != len(blocks) or any(not isinstance(text, str) for text in text_values):
+        return None
+    meaningful_text: Final = tuple(text for text in text_values if isinstance(text, str) and text.strip())
+    return meaningful_text or None
+
+
+def _is_claude_code_subagent_billing_system(system: object) -> bool:
+    billing_texts: Final = _claude_code_billing_texts(system)
+    if billing_texts is None:
+        return False
+    billing_fields: Final = tuple(
+        fields for text in billing_texts if (fields := _claude_code_billing_fields(text)) is not None
+    )
+    if len(billing_fields) != len(billing_texts):
+        return False
+    subagent_values: Final = tuple(
+        value for fields in billing_fields for key, value in fields if key == "cc_is_subagent"
+    )
+    return subagent_values == ("true",)
+
+
+def is_claude_code_one_shot_subagent_request(
+    messages: list[AllMessageValues],
+    system: object,
+    tools: object,
+    user_agent: str | None,
+) -> bool:
+    only_message: Final = _validated_claude_code_mapping(messages[0]) if len(messages) == 1 else None
+    return (
+        user_agent is not None
+        and is_claude_code_user_agent(user_agent)
+        and not tools
+        and only_message is not None
+        and only_message.get("role") == "user"
+        and _is_claude_code_subagent_billing_system(system)
+    )
 
 
 def _strip_bedrock_id_suffixes(model: str) -> str:
@@ -1409,6 +1499,25 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok:
     genuine Anthropic-issued blocks untouched.
     """
     return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
+
+
+def _without_provider_specific_fields(block: object) -> object:
+    if not isinstance(block, dict) or "provider_specific_fields" not in block:
+        return block
+    return {k: v for k, v in block.items() if k != "provider_specific_fields"}  # mutable-ok: JSON wire format
+
+
+def _strip_provider_specific_fields_in_message(message: object) -> object:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    content: Final = [_without_provider_specific_fields(b) for b in message["content"]]  # mutable-ok: JSON wire format
+    return {**message, "content": content}  # mutable-ok: JSON wire format
+
+
+def strip_provider_specific_fields_from_anthropic_messages(
+    messages: Sequence[object],
+) -> Sequence[object]:
+    return [_strip_provider_specific_fields_in_message(m) for m in messages]  # mutable-ok: JSON wire format
 
 
 def _normalized_cache_control(cache_control: object) -> dict[str, str] | None:  # mutable-ok: JSON wire format

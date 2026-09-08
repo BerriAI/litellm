@@ -443,6 +443,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           (formValues.allowed_mcp_servers_and_groups &&
             (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
               formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
+              formValues.allowed_mcp_servers_and_groups.toolsets?.length > 0 ||
               formValues.allowed_mcp_servers_and_groups.toolPermissions))
         ) {
           if (!formValues.object_permission) {
@@ -453,12 +454,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             delete formValues.allowed_vector_store_ids;
           }
           if (formValues.allowed_mcp_servers_and_groups) {
-            const { servers, accessGroups } = formValues.allowed_mcp_servers_and_groups;
+            const { servers, accessGroups, toolsets } = formValues.allowed_mcp_servers_and_groups;
             if (servers && servers.length > 0) {
               formValues.object_permission.mcp_servers = servers;
             }
             if (accessGroups && accessGroups.length > 0) {
               formValues.object_permission.mcp_access_groups = accessGroups;
+            }
+            if (toolsets && toolsets.length > 0) {
+              formValues.object_permission.mcp_toolsets = toolsets;
             }
             delete formValues.allowed_mcp_servers_and_groups;
           }
@@ -559,6 +563,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     {
       key: "your-teams",
       label: "Your Teams",
+      className: "flex min-h-0 flex-1 flex-col",
       children: (
         <>
           <TeamsTable
@@ -608,6 +613,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     {
       key: "available-teams",
       label: "Available Teams",
+      className: "min-h-0 flex-1 overflow-y-auto",
       children: <AvailableTeamsPanel accessToken={accessToken} userID={userID} />,
     },
     ...(isProxyAdminRole(userRole || "")
@@ -615,6 +621,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           {
             key: "default-settings",
             label: "Default Team Settings",
+            className: "min-h-0 flex-1 overflow-y-auto",
             children: <TeamSSOSettings accessToken={accessToken} userID={userID || ""} userRole={userRole || ""} />,
           },
         ]
@@ -622,7 +629,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   ];
 
   return (
-    <main className={selectedTeamId ? "px-12 py-6" : "p-8"}>
+    <main className={selectedTeamId ? "px-12 py-6" : "flex h-full flex-col p-8"}>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -642,7 +649,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
           premiumUser={premiumUser}
         />
       ) : (
-        <Tabs defaultValue={tabItems[0].key} className="gap-6">
+        <Tabs defaultValue={tabItems[0].key} className="min-h-0 flex-1 gap-6">
           <PageHeader
             icon={<Users />}
             title="Teams"
@@ -674,7 +681,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
             )}
           />
           {tabItems.map((item) => (
-            <TabsContent key={item.key} value={item.key}>
+            <TabsContent key={item.key} value={item.key} className={item.className}>
               {item.children}
             </TabsContent>
           ))}
@@ -1083,6 +1090,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                         <MCPToolPermissions
                           accessToken={accessToken || ""}
                           selectedServers={watchedMcpSelection?.servers || []}
+                          selectedAccessGroups={watchedMcpSelection?.accessGroups || []}
+                          selectedToolsets={watchedMcpSelection?.toolsets || []}
                           toolPermissions={watchedToolPermissions || {}}
                           onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
                         />

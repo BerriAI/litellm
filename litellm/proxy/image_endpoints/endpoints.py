@@ -2,7 +2,7 @@ import asyncio
 import io
 import traceback
 from collections.abc import Sequence
-from typing import Final
+from typing import Final, get_type_hints
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -16,15 +16,22 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_utils.http_parsing_utils import (
+    coerce_numeric_form_fields,
+    numeric_form_fields,
+)
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
 )
 from litellm.proxy.route_llm_request import route_request
+from litellm.types.images.main import ImageEditRequestParams
 from litellm.types.llms.openai import ChatCompletionUserMessage
 
 router: Final = APIRouter()
+
+IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -284,7 +291,12 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
-    data: Final = await _read_request_body(request=request)
+    data: Final = dict(
+        coerce_numeric_form_fields(
+            parsed_body=await _read_request_body(request=request),
+            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
+        )
+    )
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
     if image_files:

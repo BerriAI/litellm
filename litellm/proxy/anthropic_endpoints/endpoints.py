@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.anthropic_interface.exceptions import AnthropicExceptionMapping
+from litellm.anthropic_interface.exceptions import AnthropicErrorResponse, AnthropicExceptionMapping
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     AnthropicContextManagementError,
@@ -33,6 +33,27 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.types.utils import TokenCountResponse
 
 router: Final = APIRouter()
+
+
+def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSONResponse:
+    from litellm.proxy.proxy_server import (
+        _close_dangling_otel_server_span,  # pyright: ignore[reportPrivateUsage]  # proxy_server keeps the span-close helper private; error JSONResponses returned by the route must stamp the OTel server span like the global ProxyException handler does
+    )
+
+    status_code: Final = int(exc.code) if exc.code is not None and exc.code.isdigit() else 500
+    _close_dangling_otel_server_span(request, status_code, exc=exc)
+    envelope: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+        status_code=status_code,
+        raw_message=exc.message,
+        request_id=request.headers.get("x-request-id"),
+    )
+    if not exc.provider_specific_fields:
+        return JSONResponse(status_code=status_code, content=envelope, headers=exc.headers)
+    content: Final[AnthropicErrorResponse] = {
+        **envelope,
+        "error": {**envelope["error"], "provider_specific_fields": exc.provider_specific_fields},
+    }
+    return JSONResponse(status_code=status_code, content=content, headers=exc.headers)
 
 
 def _strip_total_tokens_from_anthropic_response(response: Any) -> None:
@@ -200,7 +221,7 @@ async def anthropic_response(
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.anthropic_response(): Exception occured - %s", e)
 
         if isinstance(e, ProxyException):
-            raise
+            return _anthropic_error_json_response(e, request)
 
         # Extract model_id from request metadata (same as success path)
         litellm_metadata: Final = data.get("litellm_metadata", {}) or {}
@@ -221,15 +242,18 @@ async def anthropic_response(
         )
 
         if isinstance(e, HTTPException):
-            raise proxy_exception_from_http_exception(e, headers)
+            return _anthropic_error_json_response(proxy_exception_from_http_exception(e, headers), request)
 
         error_msg: Final = f"{e}"
-        raise ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=openai_error_type(e, error_status_code(e, 500)),
-            param=openai_error_param(e),
-            code=error_status_code(e, 500),
-            headers=headers,
+        return _anthropic_error_json_response(
+            ProxyException(
+                message=getattr(e, "message", error_msg),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
+                headers=headers,
+            ),
+            request,
         )
 
 

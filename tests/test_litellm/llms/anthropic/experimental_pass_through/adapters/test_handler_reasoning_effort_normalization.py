@@ -82,3 +82,22 @@ class TestTheNormalizedTierIsTheTierSent:
         self, local_model_cost_map, model, provider, effort, expected
     ):
         assert _reasoning_effort_sent(model, provider, effort) == expected
+
+    @pytest.mark.parametrize(
+        "model, provider",
+        [
+            ("gpt-6-astra", "azure_ai"),
+            ("azure_ai/gpt-6-astra", "azure_ai"),
+            ("gpt-6-astra", "azure"),
+            ("us/gpt-6-astra", "azure"),
+        ],
+    )
+    def test_an_azure_hosted_astra_deployment_drops_to_the_tier_it_accepts(
+        self, local_model_cost_map, model, provider
+    ):
+        """The deployment answers ``max`` with a 400 naming ``none`` through ``xhigh``, so the rows
+        say so and the adapter sends the tier below instead of the rejected one."""
+        assert _reasoning_effort_sent(model, provider, "max") == "xhigh"
+
+    def test_the_openai_hosted_twin_still_sends_max(self, local_model_cost_map):
+        assert _reasoning_effort_sent("gpt-6-astra", "openai", "max") == "max"

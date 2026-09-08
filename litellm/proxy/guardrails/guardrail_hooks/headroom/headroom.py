@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeGuard
 
 import httpx
@@ -15,6 +17,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.compression.compress import get_protected_indices
+from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -47,11 +50,18 @@ from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
+_STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
+    (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
+)
+# The shared GuardrailCallback client carries no per-call bound, so without this a
+# stalled service holds the caller's request and a pooled connection for 600s or more.
+_COMPRESS_TIMEOUT_SECONDS: Final = 60.0
 HEADROOM_RETRIEVE_TOOL_NAME: Final = "headroom_retrieve"
-_HASH_PATTERN: Final = re.compile(r"hash=([a-f0-9]{24})")
+_HASH_PATTERN: Final = re.compile(r"[a-f0-9]{12,24}")
 _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
 # Narrows the base class's bare-dict ``request_data`` at the boundary so its
 # untranslated messages can be read with concrete types (values pass through by
@@ -230,15 +240,25 @@ def _protected_indices(
     tool exchanges the way ``compress()`` expands it, so a protected assistant
     tool call cannot end up answered by a marker standing in for the result the
     model just asked for.
+
+    Every assistant row is then withheld without expanding its tool exchange:
+    the service protects assistant text blocks but has no gate for assistant
+    strings, and the Anthropic adapter hands assistant blocks over as strings,
+    so the model's own earlier tables came back rewritten and it imitated the
+    shape. The tool results those turns asked for stay compressible.
     """
     protected: Final = frozenset(get_protected_indices(messages)) | _retrieval_result_indices(
         messages, extra_retrieve_call_ids
     )
-    return protected | frozenset(
-        index
-        for group in group_tool_exchanges(messages)
-        if any(member in protected for member in group)
-        for index in group
+    return (
+        protected
+        | frozenset(
+            index
+            for group in group_tool_exchanges(messages)
+            if any(member in protected for member in group)
+            for index in group
+        )
+        | frozenset(index for index, message in enumerate(messages) if message.get("role") == "assistant")
     )
 
 
@@ -281,19 +301,23 @@ def _build_compress_failure_detail(status_code: int, body: str) -> dict[str, obj
     return {"status_code": status_code, "body": body}
 
 
-def extract_hashes_from_messages(messages: list[dict[str, object]]) -> list[str]:
-    hashes: Final[list[str]] = []
-    for msg in messages:
-        content = msg.get("content")
-        if isinstance(content, str):
-            hashes.extend(_HASH_PATTERN.findall(content))
-        elif isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict):
-                    text = block.get("text")
-                    if isinstance(text, str):
-                        hashes.extend(_HASH_PATTERN.findall(text))
-    return hashes
+def _read_ccr_hashes(body: Mapping[str, object]) -> frozenset[str]:
+    ccr_hashes: Final = body.get("ccr_hashes")
+    if not isinstance(ccr_hashes, list):
+        return frozenset()
+    return frozenset(
+        hash_value.lower()
+        for hash_value in ccr_hashes
+        if isinstance(hash_value, str) and _HASH_PATTERN.fullmatch(hash_value.lower())
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _CompressResult:
+    messages: list[dict[str, object]]
+    succeeded: bool
+    stats: dict[str, object]
+    ccr_hashes: frozenset[str] = frozenset()
 
 
 def _build_headroom_retrieve_tool() -> dict[str, object]:
@@ -310,7 +334,7 @@ def _build_headroom_retrieve_tool() -> dict[str, object]:
                 "properties": {
                     "hash": {
                         "type": "string",
-                        "description": "The 24-character hex hash from the compression marker.",
+                        "description": "The hex hash from the compression marker.",
                     },
                     "query": {
                         "type": "string",
@@ -469,6 +493,8 @@ class HeadroomGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
         unreachable_fallback: str | None = None,
+        timeout: float | None = None,
+        ccr_retrieval: bool = True,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -481,6 +507,8 @@ class HeadroomGuardrail(CustomGuardrail):
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
         )
+        self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
+        self.ccr_retrieval = ccr_retrieval
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -507,6 +535,29 @@ class HeadroomGuardrail(CustomGuardrail):
         if self.headroom_api_key:
             headers["Authorization"] = f"Bearer {self.headroom_api_key}"
         return headers
+
+    @staticmethod
+    def _resolve_timeout(timeout: float | None) -> httpx.Timeout:
+        """Budget for one call to the compression service, unset meaning the default.
+
+        Zero, negative and non-finite values are rejected instead of passed through:
+        httpx accepts them, and the transport then reads 0 and inf as no deadline at
+        all and a negative one as a deadline already past.
+        """
+        rejected: Final = timeout is not None and not (math.isfinite(timeout) and timeout > 0)
+        if rejected:
+            verbose_proxy_logger.warning(
+                "Headroom: ignoring unusable timeout %s, using %s seconds",
+                timeout,
+                _COMPRESS_TIMEOUT_SECONDS,
+            )
+        seconds: Final = _COMPRESS_TIMEOUT_SECONDS if timeout is None or rejected else timeout
+        return httpx.Timeout(timeout=seconds, connect=min(seconds, HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS))
+
+    def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
+        """Re-resolve the timeout, which the base implementation would otherwise null out."""
+        super().update_in_memory_litellm_params(litellm_params)
+        self.timeout = self._resolve_timeout(litellm_params.timeout)
 
     def _prune_expired_hashes(self) -> None:
         now: Final = time.monotonic()
@@ -535,7 +586,7 @@ class HeadroomGuardrail(CustomGuardrail):
         self,
         messages: list[dict[str, object]],
         model: str | None,
-    ) -> tuple[list[dict[str, object]], bool, dict[str, object]]:
+    ) -> _CompressResult:
         payload: Final[dict[str, object]] = {"messages": messages}
         if model:
             payload["model"] = model
@@ -545,9 +596,10 @@ class HeadroomGuardrail(CustomGuardrail):
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
                 headers=self._request_headers(),
+                timeout=self.timeout,
             )
         except httpx.HTTPStatusError as e:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned an error",
@@ -557,7 +609,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 {},
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service unreachable",
@@ -569,7 +621,7 @@ class HeadroomGuardrail(CustomGuardrail):
         response: Final[HttpxResponse] = raw_response
 
         if response.status_code != 200:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned an error",
@@ -582,7 +634,7 @@ class HeadroomGuardrail(CustomGuardrail):
         try:
             body: Final[object] = response.json()
         except ValueError:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned non-JSON response",
@@ -592,7 +644,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 {},
             )
         if not _is_str_object_dict(body):
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned unexpected response shape",
@@ -604,7 +656,7 @@ class HeadroomGuardrail(CustomGuardrail):
 
         compressed_messages: Final = body.get("messages")
         if not _is_object_list(compressed_messages):
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service response missing 'messages'",
@@ -616,7 +668,7 @@ class HeadroomGuardrail(CustomGuardrail):
 
         filtered: Final = [item for item in compressed_messages if _is_str_object_dict(item)]
         if not filtered:
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service returned empty message list",
@@ -629,7 +681,7 @@ class HeadroomGuardrail(CustomGuardrail):
         if len(filtered) != len(messages):
             # Rows are matched positionally when the never-compressed messages
             # are put back, so a reshaped conversation cannot be applied at all.
-            return (
+            return _CompressResult(
                 self._handle_compress_failure(
                     messages,
                     "Headroom compression service changed the message count",
@@ -670,7 +722,7 @@ class HeadroomGuardrail(CustomGuardrail):
             # tokens_saved, which the live compression service omits; derive it
             # so savings are counted, but let a service-sent value win.
             stats["tokens_saved"] = tokens_before - tokens_after
-        return filtered, True, stats
+        return _CompressResult(filtered, True, stats, _read_ccr_hashes(body))
 
     async def _call_retrieve(self, hash_value: str, query: str | None = None) -> str:
         params: Final[dict[str, str]] = {}
@@ -682,6 +734,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
                 params=params,
                 headers=self._request_headers(),
+                timeout=self.timeout,
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
             verbose_proxy_logger.warning("Headroom: retrieve failed for hash=%s: %s", hash_value, e)
@@ -725,6 +778,10 @@ class HeadroomGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug("Headroom: %s header set; skipping compression", BYPASS_HEADER)
             return inputs
 
+        if request_data.get("background"):
+            verbose_proxy_logger.debug("Headroom: background request; skipping compression")
+            return inputs
+
         structured_messages: Final = inputs.get("structured_messages")
         if not _is_object_list(structured_messages) or not structured_messages:
             return inputs
@@ -753,7 +810,7 @@ class HeadroomGuardrail(CustomGuardrail):
 
         model: Final = self.headroom_model or request_data.get("model")
         start_time: Final = time.time()
-        returned, compression_succeeded, stats = await self._call_compress(
+        result: Final = await self._call_compress(
             messages=_flatten_messages_for_compression(compressible),
             model=model if isinstance(model, str) else None,
         )
@@ -763,7 +820,7 @@ class HeadroomGuardrail(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        if not compression_succeeded:
+        if not result.succeeded:
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_json_response={"error": "headroom compression unavailable; request forwarded uncompressed"},
                 request_data=request_data,
@@ -782,12 +839,12 @@ class HeadroomGuardrail(CustomGuardrail):
 
         compressed: Final = _restore_protected_messages(
             messages=messages,
-            compressed=_restore_content_shapes(originals=compressible, returned=returned),
+            compressed=_restore_content_shapes(originals=compressible, returned=result.messages),
             protected_indices=protected_indices,
         )
 
         self.add_standard_logging_guardrail_information_to_request_data(
-            guardrail_json_response=stats,
+            guardrail_json_response=result.stats,
             request_data=request_data,
             guardrail_status="success",
             guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
@@ -797,7 +854,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
 
-        hashes: Final = extract_hashes_from_messages(compressed)
+        hashes: Final = result.ccr_hashes if self.ccr_retrieval else frozenset()
         if not hashes:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
@@ -826,9 +883,9 @@ class HeadroomGuardrail(CustomGuardrail):
     ) -> dict[str, Any] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
         base_result: Final = await super().async_pre_call_deployment_hook(kwargs, call_type)
         effective: Final = base_result if base_result is not None else kwargs
-        if call_type not in (CallTypes.completion, CallTypes.acompletion):
+        if call_type not in _STREAM_CONVERTIBLE_CALL_TYPES:
             return base_result
-        if not effective.get("stream"):
+        if not effective.get("stream") or effective.get("background"):
             return base_result
         if not has_headroom_retrieve_tool(effective.get("tools")):
             return base_result
@@ -878,14 +935,15 @@ class HeadroomGuardrail(CustomGuardrail):
         retrieved: Final[list[tuple[dict[str, object], str]]] = []
         for tc in tool_calls:
             arguments = tc.get("arguments", {})
-            hash_value = arguments.get("hash", "") if isinstance(arguments, dict) else ""
+            raw_hash = arguments.get("hash", "") if isinstance(arguments, dict) else ""
+            hash_value = str(raw_hash).lower()
             query = arguments.get("query") if isinstance(arguments, dict) else None
             # A hash is only honored if it was issued by *this request's own*
             # Headroom /v1/compress call, scoped by litellm_call_id. Scoping by
             # message text alone is forgeable -- an attacker can plant a
             # hash-shaped string in their own prompt, and a hash issued for one
             # request would validate for any other request that echoes it back.
-            if str(hash_value) not in valid_hashes:
+            if hash_value not in valid_hashes:
                 verbose_proxy_logger.warning(
                     "Headroom CCR: rejecting hash=%s not produced by current request compression",
                     hash_value,
@@ -893,7 +951,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 content = f"[Headroom: hash={hash_value} was not produced by the current request]"
             else:
                 content = await self._call_retrieve(
-                    hash_value=str(hash_value),
+                    hash_value=hash_value,
                     query=str(query) if query else None,
                 )
             verbose_proxy_logger.debug("Headroom CCR: retrieved hash=%s (%d chars)", hash_value, len(content))

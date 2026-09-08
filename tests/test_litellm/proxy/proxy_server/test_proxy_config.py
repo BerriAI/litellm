@@ -9,6 +9,7 @@ Pins covered:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from types import SimpleNamespace
@@ -28,6 +29,7 @@ from litellm.proxy.proxy_server import (
     resolve_routing_plugins,
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
+    validate_auto_router_capability_limits,
 )
 
 from .conftest import normalize
@@ -191,6 +193,181 @@ def test_validate_deployment_complexity_router_placement_leaves_valid_deployment
     validate_deployment_complexity_router_placement(model)
 
     assert model["litellm_params"] == litellm_params
+
+
+def _heuristic_v2_row(model_name: str, classifier_type: str = "heuristic_v2") -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {"classifier_type": classifier_type, "tiers": {"SIMPLE": "gpt-4o-mini"}},
+        },
+    }
+
+
+def _custom_tier_row(model_name: str) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "llm",
+                "tier_definitions": [
+                    {"name": "routine", "description": "routine drafting"},
+                    {"name": "hard", "description": "hard reasoning"},
+                ],
+                "tiers": {"routine": "gpt-4o-mini", "hard": "gpt-4o"},
+                "fallback_tier": "routine",
+            },
+        },
+    }
+
+
+def _operator_examples_row(model_name: str) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "gpt-4o-mini"},
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+                "classification_examples": '- "reset my password" -> SIMPLE',
+            },
+        },
+    }
+
+
+def _custom_prompt_row(model_name: str) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "llm",
+                "classifier_llm_config": {"model": "gpt-4o-mini", "system_prompt": "judge it my way"},
+                "tiers": {"SIMPLE": "gpt-4o-mini"},
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "over_limit_rows,subject",
+    [
+        ([_heuristic_v2_row("a"), _heuristic_v2_row("b"), _heuristic_v2_row("c", "heuristic")], "heuristic_v2"),
+        ([_custom_tier_row("a"), _custom_tier_row("b"), _heuristic_v2_row("c", "heuristic")], "tier_definitions"),
+        ([_custom_prompt_row("a"), _custom_prompt_row("b"), _heuristic_v2_row("c", "heuristic")], "operator-written classifier prompt"),
+        ([_custom_tier_row("a"), _custom_prompt_row("b"), _heuristic_v2_row("c", "heuristic")], "operator-written classifier prompt"),
+        ([_operator_examples_row("a"), _custom_tier_row("b"), _heuristic_v2_row("c", "heuristic")], "operator-written classifier prompt"),
+    ],
+)
+def test_validate_auto_router_capability_limits_refuses_to_start_over_the_limit(
+    over_limit_rows: list[dict[str, object]], subject: str
+) -> None:
+    """Same reason as the two validators above: the proxy router swallows registration errors, so
+    an over-limit config.yaml must fail here instead of booting with a silently missing router."""
+    with pytest.raises(ValueError, match=re.escape("At most 1 auto-router")) as exc_info:
+        validate_auto_router_capability_limits(over_limit_rows, limit=1)
+    assert subject in str(exc_info.value)
+    assert "'auto_router' feature lifts the limit" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "model_list,limit",
+    [
+        ([_heuristic_v2_row("a"), _heuristic_v2_row("b")], None),
+        ([_heuristic_v2_row("a"), _heuristic_v2_row("c", "heuristic")], 1),
+        ([{"model_name": "gpt-4o", "litellm_params": {"model": "gpt-4o"}}], 1),
+        ([_custom_tier_row("a"), _custom_tier_row("b")], None),
+        ([_custom_tier_row("a"), _heuristic_v2_row("b")], 1),
+    ],
+)
+def test_validate_auto_router_capability_limits_leaves_configs_within_the_limit_alone(
+    model_list: list[dict[str, object]], limit: int | None
+) -> None:
+    """The last case is the separate-ceiling invariant: one router of each capability fits under a limit of one."""
+    assert validate_auto_router_capability_limits(model_list, limit=limit) is None
+
+
+_TWO_HEURISTIC_V2_ROUTERS_YAML = (
+    "model_list:\n"
+    "  - model_name: gpt-4o-mini\n"
+    "    litellm_params:\n"
+    "      model: openai/gpt-4o-mini\n"
+    "      api_key: k\n"
+    "  - model_name: v2-a\n"
+    "    litellm_params:\n"
+    "      model: auto_router/complexity_router\n"
+    "      complexity_router_config:\n"
+    "        classifier_type: heuristic_v2\n"
+    "        tiers: {SIMPLE: gpt-4o-mini}\n"
+    "  - model_name: v2-b\n"
+    "    litellm_params:\n"
+    "      model: auto_router/complexity_router\n"
+    "      complexity_router_config:\n"
+    "        classifier_type: heuristic_v2\n"
+    "        tiers: {SIMPLE: gpt-4o-mini}\n"
+    "router_settings:\n"
+    "  auto_router_capability_limit: 99\n"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("license_limit", [1, None])
+async def test_ProxyConfig_load_config_takes_the_heuristic_v2_limit_from_the_license_only(
+    tmp_path, monkeypatch, license_limit: int | None
+) -> None:
+    """`router_settings.auto_router_capability_limit` is managed outside config.yaml: an operator
+    cannot grant the entitlement by editing the config, and a licensed proxy boots both routers."""
+    f = tmp_path / "c.yaml"
+    f.write_text(_TWO_HEURISTIC_V2_ROUTERS_YAML)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._license_check.auto_router_capability_limit", lambda: license_limit
+    )
+
+    if license_limit is None:
+        router, _model_list, _general_settings = await ProxyConfig().load_config(
+            router=None, config_file_path=str(f)
+        )
+        assert router.auto_router_capability_limit is not None
+        assert router.auto_router_capability_limit() is None
+        assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
+        return
+
+    with pytest.raises(ValueError, match=re.escape("config.yaml model_list: At most 1 auto-router")):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_router_refuses_a_db_heuristic_v2_router_beyond_the_license(
+    tmp_path, monkeypatch
+) -> None:
+    """config.yaml holds the one allowed heuristic_v2 router; a second one arriving later from the DB
+    is refused at registration because the router was built with the license's ceiling."""
+    from litellm.types.router import Deployment
+
+    f = tmp_path / "c.yaml"
+    f.write_text(_TWO_HEURISTIC_V2_ROUTERS_YAML.replace("  - model_name: v2-b\n", "  - model_name: v1-b\n", 1).replace(
+        "classifier_type: heuristic_v2\n        tiers: {SIMPLE: gpt-4o-mini}\nrouter_settings",
+        "classifier_type: heuristic\n        tiers: {SIMPLE: gpt-4o-mini}\nrouter_settings",
+    ))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.auto_router_capability_limit", lambda: 1)
+
+    router, _model_list, _general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert router.auto_router_capability_limit is not None
+    assert router.auto_router_capability_limit() == 1
+    assert sorted(router.complexity_routers) == ["v1-b", "v2-a"]
+    db_row = Deployment(**_heuristic_v2_row("v2-from-db"), model_info={"id": "db-id"})
+    assert router.upsert_deployment(db_row) is None
+    assert sorted(router.complexity_routers) == ["v1-b", "v2-a"]
 
 
 def test_validate_deployment_max_agentic_loops_allows_a_deployment_without_the_key():
@@ -1455,6 +1632,32 @@ async def test_ProxyConfig_load_config_minimal_yaml(tmp_path, monkeypatch):
         "config_loaded": True,
         "model_list_key_present": True,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["true", "false", "null", "'true'", None])
+async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monkeypatch, caplog, setting):
+    config_file = tmp_path / "budget.yaml"
+    flag = f"  disable_budget_reservation: {setting}\n" if setting is not None else ""
+    config_file.write_text(
+        "model_list: []\nlitellm_settings: {}\ngeneral_settings:\n"
+        "  master_key: null\n" + flag
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.constants.budget_reservation_disabled_info_emitted", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    config = ProxyConfig()
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        for _ in range(3):
+            await config.load_config(router=None, config_file_path=str(config_file))
+
+    records = [
+        record for record in caplog.records
+        if "disable_budget_reservation is enabled" in record.message
+    ]
+    assert [record.levelno for record in records] == ([logging.INFO] if setting == "true" else [])
 
 
 @pytest.mark.asyncio
@@ -2734,6 +2937,129 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
 
     fake_router.update_settings.assert_called_once_with(routing_strategy="latency-based-routing")
+
+
+def _stub_add_deployment_collaborators(
+    monkeypatch: pytest.MonkeyPatch, pc: ProxyConfig, fake_prisma: MagicMock
+) -> None:
+    from litellm.proxy import proxy_server
+
+    fake_router = MagicMock()
+    fake_router.get_model_list = MagicMock(return_value=[])
+
+    async def fake_get_config(*args: object, **kwargs: object) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    monkeypatch.setattr(pc, "get_config", fake_get_config)
+    monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", AsyncMock())
+    monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
+    monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=None))
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-master")
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "proxy_config", pc)
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+
+
+def _encrypted_credential_row(credential_name: str, api_key: str) -> dict[str, object]:
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    return {
+        "credential_name": credential_name,
+        "credential_values": {"api_key": encrypt_value_helper(api_key, new_encryption_key="sk-master")},
+        "credential_info": {"custom_llm_provider": "openai"},
+    }
+
+
+def _fake_prisma_with_encrypted_credential(credential_name: str, api_key: str) -> MagicMock:
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[_encrypted_credential_row(credential_name, api_key)]
+    )
+    return fake_prisma
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconciling_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.proxy import proxy_server
+    from litellm.utils import load_credentials_from_list
+
+    pc = ProxyConfig()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    installed = MagicMock()
+
+    async def read_models_while_a_credential_lands(prisma_client: object) -> list[MagicMock]:
+        fake_prisma.db.litellm_credentialstable.find_many.return_value = [
+            _encrypted_credential_row("openai-cred", "sk-from-db")
+        ]
+        return [MagicMock()]
+
+    async def install_models(new_models: object, proxy_logging_obj: object) -> None:
+        installed(credential=CredentialAccessor.get_credential_values("openai-cred"))
+
+    monkeypatch.setattr(pc, "_get_models_from_db", read_models_while_a_credential_lands)
+    monkeypatch.setattr(pc, "_update_llm_router", install_models)
+
+    await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
+
+    installed.assert_called_once_with(credential={"api_key": "sk-from-db"})
+    assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-db"}
+    request_kwargs = {"litellm_credential_name": "openai-cred"}
+    load_credentials_from_list(request_kwargs)
+    assert request_kwargs == {"litellm_credential_name": "openai-cred", "api_key": "sk-from-db"}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_add_deployment_loads_db_credentials_even_when_models_are_not_db_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    fake_prisma = _fake_prisma_with_encrypted_credential("openai-cred", "sk-from-db")
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["mcp"]})
+    models_fetch = AsyncMock(return_value=[])
+    monkeypatch.setattr(pc, "_get_models_from_db", models_fetch)
+
+    await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
+
+    models_fetch.assert_not_awaited()
+    assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-db"}
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_credentials_reads_from_writer_not_replica(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    pc = ProxyConfig()
+    writer_inner = MagicMock(name="writer_prisma")
+    reader_inner = MagicMock(name="reader_prisma")
+    writer_inner.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[_encrypted_credential_row("openai-cred", "sk-from-writer")]
+    )
+    reader_inner.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+    fake_prisma = MagicMock()
+    fake_prisma.db = RoutingPrismaWrapper(
+        writer=PrismaWrapper(original_prisma=writer_inner, iam_token_db_auth=False),
+        reader=PrismaWrapper(original_prisma=reader_inner, iam_token_db_auth=False),
+    )
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+
+    await pc.get_credentials(prisma_client=fake_prisma)
+
+    assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-writer"}
+    reader_inner.litellm_credentialstable.find_many.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

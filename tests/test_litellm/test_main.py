@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 
 import urllib.parse
+from importlib import import_module
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -784,6 +785,19 @@ def test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_respo
     assert model_info.get("mode") == "responses"
 
 
+def test_responses_api_bridge_check_gpt_6_astra_tools_with_default_reasoning_routes_to_responses():
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="gpt-6-astra",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+    )
+
+    assert model == "gpt-6-astra"
+    assert model_info.get("mode") == "responses"
+
+
 def test_responses_api_bridge_check_gpt_5_5_tools_plus_reasoning_routes_to_responses():
     """gpt-5.5+ with both tools and reasoning_effort should route to Responses API."""
     from litellm.main import responses_api_bridge_check
@@ -1131,6 +1145,82 @@ def test_responses_api_bridge_check_custom_api_base_via_env_with_unset_effort_st
 
     assert model == "gpt-5.6"
     assert model_info.get("mode") != "responses"
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://southcentralus.privatelink.api.openai.com/v1",
+        "https://privatelink.corp.api.openai.com/v1",
+        "https://api.openai.com:443/v1",
+        "https://api.openai.com/v1/",
+        "HTTPS://API.OPENAI.COM/v1",
+    ],
+)
+def test_responses_api_bridge_check_openai_backed_custom_api_base_with_unset_effort_routes_to_responses(api_base):
+    """
+    A custom api_base whose host is api.openai.com or a subdomain of it (a PrivateLink hostname, a
+    port-qualified or trailing-slash default) still reaches the real OpenAI backend, which rejects
+    function tools with reasoning on Chat Completions, so the unset-effort arm must bridge exactly as
+    it does for the literal default URL. Regression guard for GH #39353.
+    """
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=None,
+        api_base=api_base,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://api.openai.com.evil.example/v1",
+        "https://notapi.openai.com/v1",
+        "https://gateway.example/v1?upstream=api.openai.com",
+        "https://openai.internal.example/api.openai.com/v1",
+    ],
+)
+def test_responses_api_bridge_check_lookalike_custom_api_base_with_unset_effort_stays_chat(api_base):
+    """Only the host decides: api.openai.com appearing elsewhere in the URL is still a foreign backend."""
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=None,
+        api_base=api_base,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_privatelink_api_base_via_env_with_unset_effort_routes_to_responses(monkeypatch):
+    """A PrivateLink base set through OPENAI_BASE_URL resolves the way the chat handler's does and still bridges."""
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://southcentralus.privatelink.api.openai.com/v1")
+    model_info, model = responses_api_bridge_check(
+        model="gpt-5.6",
+        custom_llm_provider="openai",
+        tools=[{"type": "function", "function": {"name": "get_capital"}}],
+        reasoning_effort=None,
+        api_base=None,
+        )
+
+    assert model == "gpt-5.6"
+    assert model_info.get("mode") == "responses"
 
 
 def test_responses_api_bridge_check_custom_api_base_with_explicit_effort_still_routes():
@@ -2515,8 +2605,8 @@ def test_completion_forwards_store_and_prompt_cache_key_to_mcp_gateway():
     prompt_cache_key are named params, so they no longer travel via **kwargs and
     must be forwarded explicitly like safety_identifier and service_tier.
     """
-    with patch(
-        "litellm.responses.mcp.chat_completions_handler.acompletion_with_mcp"
+    with patch.object(
+        import_module("litellm.responses.mcp.chat_completions_handler"), "acompletion_with_mcp"
     ) as mock_mcp:
         result = litellm.completion(
             model="openai/gpt-4o",
@@ -3259,3 +3349,89 @@ def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeyp
     assert getattr(response.usage, "cost", None) == pytest.approx(0.42)
     assert response._hidden_params.get("response_cost") is None
     assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.63)
+
+
+def test_speech_mistral_dispatches_and_decodes_audio(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    audio_bytes: Final = b"ID3-fake-mp3-bytes"
+    mock_route: Final = respx_mock.post("https://api.mistral.ai/v1/audio/speech").mock(
+        return_value=httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+    )
+
+    response: Final = litellm.speech(
+        model="mistral/voxtral-mini-tts-2603",
+        input="hello from litellm",
+        voice="en_paul_neutral",
+        response_format="wav",
+        speed=2,
+        instructions="sound cheerful",
+    )
+
+    assert mock_route.called
+    request_body: Final = json.loads(mock_route.calls.last.request.content)
+    assert request_body == {
+        "model": "voxtral-mini-tts-2603",
+        "input": "hello from litellm",
+        "voice_id": "en_paul_neutral",
+        "response_format": "wav",
+    }
+    assert mock_route.calls.last.request.headers["authorization"] == "Bearer sk-mistral-test"
+    assert response.content == audio_bytes
+
+
+def test_speech_mistral_routes_to_configured_api_base(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    audio_bytes: Final = b"ID3-gateway-bytes"
+    gateway_route: Final = respx_mock.post("https://mistral.gateway.internal/v1/audio/speech").mock(
+        return_value=httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+    )
+
+    response: Final = litellm.speech(
+        model="mistral/voxtral-mini-tts-2603",
+        input="hello from litellm",
+        voice="en_paul_neutral",
+        api_base="https://mistral.gateway.internal",
+    )
+
+    assert gateway_route.called
+    assert response.content == audio_bytes
+
+
+FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"
+
+
+def test_azure_ai_transcription_on_a_foundry_host_uses_the_azure_openai_deployment_route(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(
+        url__regex=r"https://my-project\.services\.ai\.azure\.com/openai/deployments/whisper-1/audio/transcriptions\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, json={"text": "hello"}))
+
+    response: Final = litellm.transcription(
+        model="azure_ai/whisper-1",
+        file=("tone.wav", b"RIFF\x00\x00\x00\x00WAVE", "audio/wav"),
+        api_base=FOUNDRY_HOST,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.text == "hello"
+
+
+def test_azure_ai_speech_on_a_foundry_host_uses_the_azure_openai_deployment_route(
+    respx_mock: respx.MockRouter,
+):
+    route: Final = respx_mock.post(
+        url__regex=r"https://my-project\.services\.ai\.azure\.com/openai/deployments/tts-1/audio/speech\?api-version=.+"
+    ).mock(return_value=httpx.Response(200, content=b"mp3-bytes"))
+
+    response: Final = litellm.speech(
+        model="azure_ai/tts-1",
+        input="hello",
+        voice="alloy",
+        api_base=FOUNDRY_HOST,
+        api_key="fake-key",
+    )
+
+    assert route.called
+    assert response.content == b"mp3-bytes"

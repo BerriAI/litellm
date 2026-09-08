@@ -200,6 +200,12 @@ class PrismaDBExceptionHandler:
         return False
 
     @staticmethod
+    def is_prisma_error(e: Exception) -> bool:
+        import prisma
+
+        return isinstance(e, _exception_types(prisma.errors.PrismaError))
+
+    @staticmethod
     def is_deadlock_error(e: Exception) -> bool:
         """True iff ``e`` is a Postgres deadlock (P2034 / 40P01) surfaced through prisma."""
         import prisma
@@ -237,7 +243,7 @@ class PrismaDBExceptionHandler:
 
         if isinstance(e, _exception_types(prisma.errors.PrismaError)):
             return False
-        tb = getattr(e, "__traceback__", None)
+        tb = e.__traceback__ if hasattr(e, "__traceback__") else None
         while tb is not None:
             if tb.tb_frame.f_globals.get("__name__", "").startswith("prisma.engine"):
                 return True
@@ -389,7 +395,7 @@ _DEFAULT_RECONNECT_TIMEOUT_SECONDS: Final = 2.0
 _DEFAULT_RECONNECT_LOCK_TIMEOUT_SECONDS: Final = 0.1
 
 
-def _coerce_timeout(value: Any, fallback: float) -> float:
+def _coerce_timeout(value: object, fallback: float) -> float:
     """Return `value` if it is a real int/float, else `fallback`. Guards
     against tests that mock `prisma_client` and leave the timeout slots as
     MagicMock instances."""
