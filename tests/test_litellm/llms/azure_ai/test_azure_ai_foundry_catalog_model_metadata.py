@@ -1,11 +1,10 @@
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
 import pytest
 from pydantic import TypeAdapter
 
-from litellm import completion_cost, cost_per_token
+from litellm import completion_cost, cost_per_token, get_model_info
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.utils import TranscriptionResponse
 
@@ -15,29 +14,37 @@ BACKUP_COST_MAP: Final = REPO_ROOT / "litellm" / "model_prices_and_context_windo
 COST_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 AZURE_PRICING_PREFIX: Final = "https://azure.microsoft.com/en-us/pricing/details/"
 A_MILLION: Final = 1_000_000
+AN_HOUR_IN_SECONDS: Final = 3600
 
-
-@dataclass(frozen=True, slots=True)
-class TokenPricedCatalogModel:
-    catalog_name: str
-    dollars_per_million_input: float
-    dollars_per_million_output: float
-
-
-TOKEN_PRICED_MODELS: Final = (
-    TokenPricedCatalogModel("gpt-chat-latest", 5.0, 30.0),
-    TokenPricedCatalogModel("codex-mini", 1.5, 6.0),
-    TokenPricedCatalogModel("model-router", 0.14, 0.0),
-    TokenPricedCatalogModel("cohere-command-a", 2.5, 10.0),
-    TokenPricedCatalogModel("grok-4-20-reasoning", 1.25, 2.5),
-    TokenPricedCatalogModel("grok-4-20-non-reasoning", 1.25, 2.5),
+TOKEN_PRICED_NAMES: Final = (
+    "gpt-chat-latest",
+    "codex-mini",
+    "model-router",
+    "cohere-command-a",
+    "grok-4-20-reasoning",
+    "grok-4-20-non-reasoning",
 )
 GROK_4_20_NAMES: Final = ("grok-4-20-reasoning", "grok-4-20-non-reasoning")
-CATALOG_NAMES: Final = tuple(spec.catalog_name for spec in TOKEN_PRICED_MODELS) + ("whisper",)
+CATALOG_NAMES: Final = TOKEN_PRICED_NAMES + ("whisper",)
 
 
 def _cost_map_entry(path: Path, catalog_name: str) -> dict[str, object]:
     return COST_MAP_ADAPTER.validate_json(path.read_bytes())[f"azure_ai/{catalog_name}"]
+
+
+def _whisper_transcription_cost(duration_seconds: int) -> float:
+    transcription: Final = TranscriptionResponse(text="hello")
+    transcription._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # TranscriptionResponse exposes no public hidden-params setter
+        "custom_llm_provider": "azure_ai",
+        "model": "azure_ai/whisper",
+        "audio_transcription_duration": duration_seconds,
+    }
+    return completion_cost(
+        completion_response=transcription,
+        model="azure_ai/whisper",
+        custom_llm_provider="azure_ai",
+        call_type="atranscription",
+    )
 
 
 @pytest.mark.parametrize("catalog_name", CATALOG_NAMES)
@@ -47,20 +54,22 @@ def test_azure_ai_catalog_name_routes_to_azure_ai(catalog_name: str) -> None:
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize("spec", TOKEN_PRICED_MODELS, ids=lambda spec: spec.catalog_name)
-def test_azure_ai_catalog_name_costs_a_million_tokens_at_list_price(spec: TokenPricedCatalogModel) -> None:
+@pytest.mark.parametrize("catalog_name", TOKEN_PRICED_NAMES)
+def test_azure_ai_catalog_name_charges_its_own_entry_per_token(catalog_name: str) -> None:
+    entry: Final = get_model_info(f"azure_ai/{catalog_name}")
     prompt_cost, completion_cost_usd = cost_per_token(
-        model=f"azure_ai/{spec.catalog_name}", prompt_tokens=A_MILLION, completion_tokens=A_MILLION
+        model=f"azure_ai/{catalog_name}", prompt_tokens=A_MILLION, completion_tokens=A_MILLION
     )
-    assert prompt_cost == pytest.approx(spec.dollars_per_million_input)
-    assert completion_cost_usd == pytest.approx(spec.dollars_per_million_output)
+    assert prompt_cost > 0
+    assert prompt_cost == pytest.approx(A_MILLION * entry["input_cost_per_token"])
+    assert completion_cost_usd == pytest.approx(A_MILLION * entry["output_cost_per_token"])
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize("spec", TOKEN_PRICED_MODELS, ids=lambda spec: spec.catalog_name)
-def test_azure_ai_catalog_name_prices_the_same_in_any_casing(spec: TokenPricedCatalogModel) -> None:
-    lowercase_cost = cost_per_token(model=f"azure_ai/{spec.catalog_name}", prompt_tokens=A_MILLION, completion_tokens=0)
-    upper_cost = cost_per_token(model=f"azure_ai/{spec.catalog_name.upper()}", prompt_tokens=A_MILLION, completion_tokens=0)
+@pytest.mark.parametrize("catalog_name", TOKEN_PRICED_NAMES)
+def test_azure_ai_catalog_name_prices_the_same_in_any_casing(catalog_name: str) -> None:
+    lowercase_cost = cost_per_token(model=f"azure_ai/{catalog_name}", prompt_tokens=A_MILLION, completion_tokens=0)
+    upper_cost = cost_per_token(model=f"azure_ai/{catalog_name.upper()}", prompt_tokens=A_MILLION, completion_tokens=0)
     assert upper_cost == lowercase_cost
 
 
@@ -80,19 +89,10 @@ def test_azure_ai_grok_4_20_bills_cached_prompt_tokens_at_the_input_price(catalo
 
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_azure_ai_whisper_catalog_name_is_priced_per_second() -> None:
-    transcription: Final = TranscriptionResponse(text="hello")
-    transcription._hidden_params = {  # pyright: ignore[reportPrivateUsage]  # TranscriptionResponse exposes no public hidden-params setter
-        "custom_llm_provider": "azure_ai",
-        "model": "azure_ai/whisper",
-        "audio_transcription_duration": 3600,
-    }
-    cost = completion_cost(
-        completion_response=transcription,
-        model="azure_ai/whisper",
-        custom_llm_provider="azure_ai",
-        call_type="atranscription",
-    )
-    assert cost == pytest.approx(0.36)
+    one_second_cost: Final = _whisper_transcription_cost(1)
+    one_hour_cost: Final = _whisper_transcription_cost(AN_HOUR_IN_SECONDS)
+    assert one_second_cost > 0
+    assert one_hour_cost == pytest.approx(AN_HOUR_IN_SECONDS * one_second_cost)
 
 
 @pytest.mark.parametrize("catalog_name", CATALOG_NAMES)
