@@ -451,7 +451,7 @@ def _pipeline_step_guardrail_names(pipelines: Sequence[tuple[str, "GuardrailPipe
     return frozenset(step.guardrail for _policy_name, pipeline in pipelines for step in pipeline.steps)
 
 
-def _pipeline_managed_guardrail_names(
+def pipeline_managed_guardrail_names(
     data: Mapping[str, object], mode: Literal["pre_call", "post_call"]
 ) -> frozenset[str]:
     return _pipeline_step_guardrail_names(
@@ -514,9 +514,9 @@ def _merge_pipeline_metadata_writes(
         _merge_pipeline_metadata_bucket(data, bucket_key, modified_data.get(bucket_key))
 
 
-def _pipeline_step_supports_unified_streaming(guardrail_name: str) -> bool:
+def _pipeline_step_supports_streaming(guardrail_name: str) -> bool:
     callback: Final = PipelineExecutor.find_guardrail_callback(guardrail_name)
-    return callback is not None and PipelineExecutor.supports_unified_execution(callback)
+    return callback is not None and PipelineExecutor.supports_streaming_execution(callback)
 
 
 def _post_call_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
@@ -541,14 +541,15 @@ def _warn_background_skips_post_call_pipelines(data: Mapping[str, object]) -> No
 def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> bool:
     unsupported: Final = tuple(
         dict.fromkeys(
-            step.guardrail for step in pipeline.steps if not _pipeline_step_supports_unified_streaming(step.guardrail)
+            step.guardrail for step in pipeline.steps if not _pipeline_step_supports_streaming(step.guardrail)
         )
     )
     if not unsupported:
         return True
     verbose_proxy_logger.warning(
-        "Policy '%s' has post_call pipeline guardrails without the unified apply_guardrail interface, "
-        "which streaming pipelines need; the stream skips the pipeline and its guardrails run on their own: %s",
+        "Policy '%s' has post_call pipeline guardrails with neither the unified apply_guardrail interface nor a "
+        "post-call hook, one of which streaming pipelines need; the stream skips the pipeline and its guardrails "
+        "run on their own: %s",
         policy_name,
         ", ".join(unsupported),
     )
@@ -562,11 +563,12 @@ def _streamable_post_call_pipelines(
     The post_call pipelines a streaming response can be gated through.
 
     Streaming pipelines scan the buffered stream through the endpoint guardrail
-    translation of the request route, so every step's guardrail needs the
-    unified apply_guardrail interface and the route needs a translation. A
-    pipeline that cannot be run that way yet is left out and its guardrails
-    run on the stream on their own, the way they did before pipelines ran on
-    streams at all, with a warning naming the pipeline.
+    translation of the request route, so every step's guardrail needs either the
+    unified apply_guardrail interface or a post-call hook to run against the
+    assembled response, and the route needs a translation. A pipeline that
+    cannot be run that way yet is left out and its guardrails run on the stream
+    on their own, the way they did before pipelines ran on streams at all, with
+    a warning naming the pipeline.
     """
     post_call_pipelines: Final = _post_call_pipelines(request_data)
     if not post_call_pipelines:
@@ -1968,7 +1970,7 @@ class ProxyLogging:
             )
 
             # Get pipeline-managed guardrails to skip in normal loop
-            pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "pre_call")
+            pipeline_managed: Final = pipeline_managed_guardrail_names(data, "pre_call")
 
             caps: Final = ProxyLogging._callback_capabilities()
             # Skip the per-request callback walk entirely when nothing in
@@ -2956,7 +2958,7 @@ class ProxyLogging:
         if pipeline_response is not None:
             response = pipeline_response  # rebind-ok: adopt the pipeline's replacement response, same contract as the callback loops below
 
-        pipeline_managed: Final = _pipeline_managed_guardrail_names(data, "post_call")
+        pipeline_managed: Final = pipeline_managed_guardrail_names(data, "post_call")
         guardrail_callbacks, other_callbacks = _partition_post_call_callbacks()
         try:
             # Merge model-level guardrails before checking which guardrails to run
@@ -3272,7 +3274,7 @@ class ProxyLogging:
             _cached_guardrail_data: dict | None = None
             _guardrail_data_computed = False
             pipeline_managed: Final = (
-                _pipeline_managed_guardrail_names(data, "post_call") if caps.has_guardrail else frozenset()
+                pipeline_managed_guardrail_names(data, "post_call") if caps.has_guardrail else frozenset()
             )
 
             for callback in litellm.callbacks:

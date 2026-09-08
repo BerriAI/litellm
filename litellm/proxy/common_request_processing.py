@@ -3328,9 +3328,10 @@ class ProxyBaseLLMRequestProcessing:
         has completed.
 
         Guardrails routed through unified_guardrail are skipped, since they already ran
-        via its streaming iterator.  Guardrails that override
-        async_post_call_success_hook directly run here, including those that implement
-        apply_guardrail but keep their native lifecycle hooks.
+        via its streaming iterator, and so are guardrails a post_call policy pipeline
+        manages, since the pipeline ran them against the buffered stream.  Guardrails
+        that override async_post_call_success_hook directly run here, including those
+        that implement apply_guardrail but keep their native lifecycle hooks.
 
         This is audit-only — content has already been delivered to the client.
 
@@ -3340,11 +3341,17 @@ class ProxyBaseLLMRequestProcessing:
         _response = assembled_response
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
-            from litellm.proxy.utils import _check_and_merge_model_level_guardrails
+            from litellm.proxy.utils import (
+                _check_and_merge_model_level_guardrails,
+                pipeline_managed_guardrail_names,
+            )
 
             guardrail_data = _check_and_merge_model_level_guardrails(data=captured_data, llm_router=_global_llm_router)
+            pipeline_managed: Final = pipeline_managed_guardrail_names(captured_data, "post_call")
             for cb in litellm.callbacks:
                 if not isinstance(cb, CustomGuardrail):
+                    continue
+                if cb.guardrail_name in pipeline_managed:
                     continue
                 if not cb.should_run_guardrail(
                     data=guardrail_data,

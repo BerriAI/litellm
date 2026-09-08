@@ -60,6 +60,13 @@ class BaseTranslation(ABC):
     text rewrites on every other translation, are undeliverable: the pipeline
     executor discards them and releases the original chunks."""
 
+    def post_call_hook_response(self, response: object) -> object:
+        """The ``response`` this endpoint's non-streaming post-call hooks receive, derived from
+        the object the translation stores under ``request_data["response"]`` while scanning an
+        ended stream. Chat and Responses scan that shape already; a translation that scans a
+        different one (Messages scans an OpenAI-shaped ModelResponse) overrides this."""
+        return response
+
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
         user_api_key_dict: Any | None,
