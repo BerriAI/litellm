@@ -132,12 +132,13 @@ describe("GuardrailTable", () => {
   it("lets config guardrails be toggled even though they cannot be deleted", async () => {
     const user = userEvent.setup();
     const onToggleEnabled = vi.fn();
-    const guardrail = makeGuardrail({
+    const disabledConfigOverrides: Partial<Guardrail> = {
       guardrail_id: "cfg-2",
       guardrail_name: "Config Headroom",
       guardrail_definition_location: GuardrailDefinitionLocation.CONFIG,
       enabled: false,
-    });
+    };
+    const guardrail = makeGuardrail(disabledConfigOverrides);
     render(<GuardrailTable guardrailsList={[guardrail]} {...baseProps} onToggleEnabled={onToggleEnabled} />);
 
     const toggle = screen.getByRole("switch", { name: "Enable Config Headroom" });

@@ -37,6 +37,29 @@ vi.mock("./content_filter/ContentFilterManager", () => ({
   }),
 }));
 
+const preCallUISettings = {
+  supported_entities: [],
+  supported_actions: [],
+  pii_entity_categories: [],
+  supported_modes: ["pre_call"],
+};
+
+const disabledConfigGuardrail = {
+  guardrail_id: "cfg-1",
+  guardrail_name: "Headroom",
+  litellm_params: { guardrail: "headroom", mode: "pre_call", default_on: true },
+  guardrail_definition_location: "config",
+  enabled: false,
+};
+
+const disabledDbGuardrail = {
+  guardrail_id: "123",
+  guardrail_name: "Test Guardrail",
+  litellm_params: { guardrail: "presidio", mode: "pre_call", default_on: true },
+  guardrail_definition_location: "db",
+  enabled: false,
+};
+
 describe("Guardrail Info", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -44,26 +67,9 @@ describe("Guardrail Info", () => {
 
   it("lets an admin re-enable a disabled config guardrail from the overview and refetches it", async () => {
     vi.mocked(networking.getGuardrailInfo)
-      .mockResolvedValueOnce({
-        guardrail_id: "cfg-1",
-        guardrail_name: "Headroom",
-        litellm_params: { guardrail: "headroom", mode: "pre_call", default_on: true },
-        guardrail_definition_location: "config",
-        enabled: false,
-      })
-      .mockResolvedValueOnce({
-        guardrail_id: "cfg-1",
-        guardrail_name: "Headroom",
-        litellm_params: { guardrail: "headroom", mode: "pre_call", default_on: true },
-        guardrail_definition_location: "config",
-        enabled: true,
-      });
-    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
-      supported_entities: [],
-      supported_actions: [],
-      pii_entity_categories: [],
-      supported_modes: ["pre_call"],
-    });
+      .mockResolvedValueOnce(disabledConfigGuardrail)
+      .mockResolvedValueOnce({ ...disabledConfigGuardrail, enabled: true });
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(preCallUISettings);
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
     vi.mocked(networking.setGuardrailEnabledCall).mockResolvedValue({ guardrail_id: "cfg-1", enabled: true });
 
@@ -83,19 +89,8 @@ describe("Guardrail Info", () => {
   });
 
   it("hides the enable switch from non-admins but still shows the state", async () => {
-    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
-      guardrail_id: "123",
-      guardrail_name: "Test Guardrail",
-      litellm_params: { guardrail: "presidio", mode: "pre_call", default_on: true },
-      guardrail_definition_location: "db",
-      enabled: false,
-    });
-    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
-      supported_entities: [],
-      supported_actions: [],
-      pii_entity_categories: [],
-      supported_modes: ["pre_call"],
-    });
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(disabledDbGuardrail);
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(preCallUISettings);
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
 
     render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="tok" isAdmin={false} />);
