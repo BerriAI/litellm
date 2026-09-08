@@ -710,11 +710,6 @@ def _build_aggregated_sql_query(
     # is omitted on purpose: nothing in the response shape needs it once
     # all the rollups are present.
     #
-    # api_key appears as tk.top_api_key from the top_api_keys CTE, bounding
-    # the api_key-keyed sets to the top _MAX_API_KEYS_IN_BREAKDOWN keys by
-    # spend instead of every distinct key in the window. The same
-    # where_clause/$N params run in both the CTE and the outer query.
-    #
     # TODO: drop the successful_requests/failed_requests aggregates (and the
     # total_successful_requests metadata they feed) once the admin UI reads SGR
     # only from LiteLLM_DailyGatewayRequests. The remaining spend, token and
@@ -944,14 +939,9 @@ _GROUP_DATE_MCP_API_KEY: Final = 29  # 0b0011101
 _GROUP_DATE_ENDPOINT: Final = 62  # 0b0111110
 _GROUP_DATE_ENDPOINT_API_KEY: Final = 30  # 0b0011110
 
-# Cap on distinct api_keys carried into the api_key-keyed grouping sets of
-# _build_aggregated_sql_query. Six of the thirteen sets include api_key, so
-# result rows scale with distinct-key count; on large deployments the
-# prisma-query-engine buffers the whole result and gets OOM-killed. The UI
-# only renders up to 50 top keys (TOP_KEYS_LIMITS), so 100 is generous.
-# Keys outside the top N group into a NULL api_key bucket that the
-# dispatcher skips, and non-keyed totals are unaffected (LEFT JOIN keeps
-# every row).
+# Six of the thirteen grouping sets in _build_aggregated_sql_query are keyed on api_key, so
+# without a cap the result grows with every distinct key and the prisma query engine OOMs
+# buffering it. Keys outside the top N fall into a NULL api_key bucket the dispatcher skips.
 _MAX_API_KEYS_IN_BREAKDOWN: Final = 100
 
 

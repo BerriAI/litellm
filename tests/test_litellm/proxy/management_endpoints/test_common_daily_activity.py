@@ -1158,16 +1158,7 @@ class TestBuildAggregatedSqlQuery:
         assert "COALESCE(model_group, model)" not in normalized
 
     def test_api_key_rollups_are_bounded_to_top_keys(self):
-        """api_key-keyed grouping sets must group on the bounded top-N CTE, not the raw column.
-
-        Six of the thirteen grouping sets include api_key, so result rows used
-        to scale with the total distinct-key count in the window; the
-        prisma-query-engine buffered the whole result and got OOM-killed. The
-        top_api_keys CTE bounds the dimension to the top
-        _MAX_API_KEYS_IN_BREAKDOWN keys by spend; every api_key grouping must
-        reference tk.top_api_key, and grouping on the raw api_key column is the
-        regression this guards.
-        """
+        """Grouping on the raw api_key column makes result rows scale with every distinct key."""
         sql, params = _build_aggregated_sql_query(
             table_name="litellm_dailyuserspend",
             entity_id_field="user_id",
