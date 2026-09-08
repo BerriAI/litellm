@@ -5687,6 +5687,7 @@ def completion(
             "prompt_cache_key": prompt_cache_key,
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
+            "model_info": model_info if isinstance(model_info, dict) else None,
         }
         provider_reasoning_effort: Final = reasoning_effort_with_summary_alias(
             reasoning_effort,
