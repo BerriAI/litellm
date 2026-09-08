@@ -2304,6 +2304,13 @@ class TestVertexCredentialsSource:
         assert project_id == "from-inline"
         assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-inline"}
 
+    def test_a_path_open_rejects_outright_is_reported_not_raised_raw(self):
+        """open() rejects some paths with a bare ValueError before any filesystem call."""
+        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
+            VertexBase().load_auth(credentials="creds" + chr(0) + ".json", project_id="p")
+
+        assert "embedded null" in str(exc_info.value)
+
     def test_a_file_whose_name_starts_with_a_brace_is_still_read(self, tmp_path):
         """Shape dispatch must not strand a real file that happens to be named like JSON."""
         braced = tmp_path / "{vertex}.json"

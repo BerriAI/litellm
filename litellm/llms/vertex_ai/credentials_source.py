@@ -74,6 +74,9 @@ def _read_json_file(path: str) -> _VertexCredentialsFile:
         return VertexCredentialsFileUnreadable(path, f"{e.strerror or e} ({type(e).__name__})")
     except UnicodeDecodeError:
         return VertexCredentialsFileNotJson(path, "file is not UTF-8 text")
+    except ValueError as e:
+        # open() rejects a few paths before touching the filesystem, e.g. "embedded null byte".
+        return VertexCredentialsFileUnreadable(path, f"{e} ({type(e).__name__})")
 
     parsed: Final = _parse_json_object(contents)
     if isinstance(parsed, _NotAJsonObject):
