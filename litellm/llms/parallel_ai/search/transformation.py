@@ -90,6 +90,11 @@ class ParallelAISearchConfig(BaseSearchConfig):
     def ui_friendly_name() -> str:
         return "Parallel AI"
 
+    def supports_rich_search_input(self) -> bool:
+        # The v1 search API takes `objective` + multiple `search_queries`
+        # natively; sending both is the documented best practice.
+        return True
+
     def validate_environment(
         self,
         headers: dict,
@@ -105,7 +110,9 @@ class ParallelAISearchConfig(BaseSearchConfig):
             default_api_base=self.PARALLEL_AI_API_BASE,
         )
         if not resolved_api_key:
-            raise ValueError("PARALLEL_API_KEY is not set. Set `PARALLEL_API_KEY` environment variable.")
+            raise ValueError(
+                "PARALLEL_API_KEY is not set. Set `PARALLEL_API_KEY` environment variable."
+            )
         headers["x-api-key"] = resolved_api_key
         headers["Content-Type"] = "application/json"
         return headers
@@ -117,7 +124,11 @@ class ParallelAISearchConfig(BaseSearchConfig):
         data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
-        resolved_api_base: Final = api_base or get_secret_str("PARALLEL_AI_API_BASE") or self.PARALLEL_AI_API_BASE
+        resolved_api_base: Final = (
+            api_base
+            or get_secret_str("PARALLEL_AI_API_BASE")
+            or self.PARALLEL_AI_API_BASE
+        )
 
         trimmed: Final = resolved_api_base.rstrip("/")
         if trimmed.endswith("/v1/search"):
@@ -184,7 +195,9 @@ class ParallelAISearchConfig(BaseSearchConfig):
             advanced_settings["location"] = params.pop("location")
 
         if "max_chars_per_result" in params:
-            advanced_settings["excerpt_settings"] = {"max_chars_per_result": params.pop("max_chars_per_result")}
+            advanced_settings["excerpt_settings"] = {
+                "max_chars_per_result": params.pop("max_chars_per_result")
+            }
 
         if "fetch_policy" in params:
             advanced_settings["fetch_policy"] = params.pop("fetch_policy")
@@ -277,4 +290,6 @@ class ParallelAISearchConfig(BaseSearchConfig):
             }
         )
 
-        return SearchResponse.model_validate(MappingProxyType({"results": results, "object": "search", **extra_fields}))
+        return SearchResponse.model_validate(
+            MappingProxyType({"results": results, "object": "search", **extra_fields})
+        )
