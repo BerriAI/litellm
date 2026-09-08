@@ -1,15 +1,16 @@
 import json
+from datetime import datetime
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 import litellm
-
-
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
-from litellm.types.utils import ModelResponse
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 
 def _azure_chat_completion_body():
@@ -77,25 +78,112 @@ def test_azure_passthrough_logging_non_streaming_response_chat_completions():
     assert result.usage.total_tokens == 18
 
 
-def test_azure_passthrough_logging_non_streaming_response_unknown_endpoint_returns_none():
-    """
-    Endpoints other than chat/completions (responses, messages, images) fall
-    through to None — matches base-class behavior and Bedrock's "unknown
-    endpoint" handling. Not a regression; just scoping.
-    """
-    config = AzurePassthroughConfig()
-    logging_obj = MagicMock()
-
-    result = config.logging_non_streaming_response(
-        model="gpt-4.1-mini",
+def _relay_logging_obj(model: str) -> Logging:
+    logging_obj = Logging(
+        model=model,
+        messages=[],
+        stream=False,
+        call_type="allm_passthrough_route",
+        start_time=datetime.now(),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.update_environment_variables(
+        model=model,
+        litellm_params={"api_base": "https://my-resource.openai.azure.com", "custom_llm_provider": "azure"},
+        optional_params={},
         custom_llm_provider="azure",
-        httpx_response=_make_httpx_response(_azure_chat_completion_body()),
+    )
+    return logging_obj
+
+
+def _relay_logging_result(model: str, endpoint: str, body, status_code: int = 200):
+    logging_obj = _relay_logging_obj(model)
+    response = httpx.Response(
+        status_code=status_code,
+        headers={"content-type": "application/json"},
+        content=json.dumps(body).encode("utf-8"),
+        request=httpx.Request("POST", f"https://my-resource.openai.azure.com/{endpoint}?api-version=2025-04-01-preview"),
+    )
+    result = AzurePassthroughConfig().logging_non_streaming_response(
+        model=model,
+        custom_llm_provider="azure",
+        httpx_response=response,
         request_data={},
         logging_obj=logging_obj,
-        endpoint="openai/responses",
+        endpoint=endpoint,
+    )
+    return result, logging_obj
+
+
+EMBEDDINGS_BODY = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+    "model": "text-embedding-3-small",
+    "usage": {"prompt_tokens": 1000, "total_tokens": 1000},
+}
+
+RESPONSES_BODY = {
+    "id": "resp_1",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-4.1-mini",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100},
+}
+
+
+def test_azure_passthrough_embeddings_relay_is_costed_per_input_token():
+    result, logging_obj = _relay_logging_result(
+        "text-embedding-3-small", "openai/deployments/text-embedding-3-small/embeddings", EMBEDDINGS_BODY
+    )
+    per_token = litellm.get_model_info("azure/text-embedding-3-small")["input_cost_per_token"]
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert per_token > 0
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(1000 * per_token)
+
+
+def test_azure_passthrough_responses_relay_is_costed_per_token():
+    result, logging_obj = _relay_logging_result("gpt-4.1-mini", "openai/responses", RESPONSES_BODY)
+    info = litellm.get_model_info("azure/gpt-4.1-mini")
+
+    assert isinstance(result, ResponsesAPIResponse)
+    assert logging_obj.call_type == "aresponses"
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(
+        1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
+    )
+
+
+def test_azure_passthrough_failed_embeddings_relay_is_not_costed():
+    result, logging_obj = _relay_logging_result(
+        "text-embedding-3-small",
+        "openai/deployments/text-embedding-3-small/embeddings",
+        {"error": {"code": "429", "message": "rate limited"}},
+        status_code=429,
     )
 
     assert result is None
+    assert logging_obj.call_type == "allm_passthrough_route"
+
+
+def test_azure_passthrough_logging_non_streaming_response_unknown_endpoint_returns_none():
+    result, logging_obj = _relay_logging_result(
+        "gpt-4o-mini-tts", "openai/deployments/gpt-4o-mini-tts/audio/speech", {"audio": "..."}
+    )
+
+    assert result is None
+    assert logging_obj.call_type == "allm_passthrough_route"
 
 
 def _sse_line(payload: dict) -> str:

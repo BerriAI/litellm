@@ -3,16 +3,23 @@ from abc import abstractmethod
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, Union
 
+from pydantic import TypeAdapter, ValidationError
+
 from ..base_utils import BaseLLMModelInfo
 
 if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.rerank import RerankResponse
     from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
     from ..chat.transformation import BaseLLMException
     from ..ocr.transformation import OCRResponse
+
+
+RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
 def strip_leading_model_segment(endpoint: str, model_names: tuple[str, ...]) -> str:
@@ -30,6 +37,15 @@ def strip_leading_model_segment(endpoint: str, model_names: tuple[str, ...]) -> 
 def replace_path_segment(endpoint: str, segment: str, replacement: str) -> str:
     bounded_segment: Final = re.compile(rf"(?<![^/]){re.escape(segment)}(?![^/:])")
     return bounded_segment.sub(lambda _: replacement, endpoint)
+
+
+def relayed_json_object(httpx_response: "Response") -> Mapping[str, object] | None:
+    if httpx_response.status_code != 200:
+        return None
+    try:
+        return RELAYED_JSON_OBJECT.validate_python(httpx_response.json())
+    except (ValueError, ValidationError):
+        return None
 
 
 class BasePassthroughConfig(BaseLLMModelInfo):
@@ -123,7 +139,9 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         request_data: dict,
         logging_obj: "LiteLLMLoggingObj",
         endpoint: str,
-    ) -> Optional["CostResponseTypes | OCRResponse | StandardPassThroughResponseObject"]:
+    ) -> Optional[
+        "CostResponseTypes | OCRResponse | RerankResponse | ResponsesAPIResponse | StandardPassThroughResponseObject"
+    ]:
         pass
 
     def handle_logging_collected_chunks(

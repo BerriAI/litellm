@@ -1,4 +1,5 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
@@ -9,12 +10,14 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure.common_utils import BaseAzureLLM
 from litellm.llms.base_llm.passthrough.transformation import (
     BasePassthroughConfig,
+    relayed_json_object,
     replace_path_segment,
     strip_leading_model_segment,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import CallTypes, EmbeddingResponse, ImageResponse
 
 if TYPE_CHECKING:
     from httpx import URL
@@ -36,6 +39,40 @@ def _relayed_messages(litellm_logging_obj: Logging) -> Sequence[Mapping[str, obj
     except ValidationError:
         return None
     return details.request_data.messages if details.request_data else None
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAIRelayShape:
+    path_suffix: str
+    call_type: CallTypes
+    parse: Callable[[Mapping[str, object]], EmbeddingResponse | ImageResponse | ResponsesAPIResponse]
+
+
+OPENAI_RELAY_SHAPES: Final = (
+    OpenAIRelayShape("/embeddings", CallTypes.aembedding, EmbeddingResponse.model_validate),
+    OpenAIRelayShape("/responses", CallTypes.aresponses, ResponsesAPIResponse.model_validate),
+    OpenAIRelayShape("/images/generations", CallTypes.aimage_generation, ImageResponse.model_validate),
+)
+
+
+def logged_openai_response(
+    httpx_response: Response, logging_obj: Logging, endpoint: str
+) -> EmbeddingResponse | ImageResponse | ResponsesAPIResponse | None:
+    relayed_path: Final = f"/{endpoint.strip('/')}"
+    shape: Final = next(
+        (candidate for candidate in OPENAI_RELAY_SHAPES if relayed_path.endswith(candidate.path_suffix)), None
+    )
+    body: Final = relayed_json_object(httpx_response) if shape else None
+    if shape is None or body is None:
+        return None
+    try:
+        parsed: Final = shape.parse(body)
+    except ValidationError:
+        return None
+    logging_obj.call_type = (
+        shape.call_type.value
+    )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
+    return parsed
 
 
 class AzurePassthroughConfig(BasePassthroughConfig):
@@ -114,13 +151,13 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         request_data: dict,
         logging_obj: Logging,
         endpoint: str,
-    ) -> Optional["CostResponseTypes"]:
+    ) -> Optional["CostResponseTypes | ResponsesAPIResponse"]:
         from litellm import encoding
         from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
         from litellm.types.utils import ModelResponse
 
         if "chat/completions" not in endpoint:
-            return None
+            return logged_openai_response(httpx_response, logging_obj, endpoint)
 
         openai_chat_config: Final = OpenAIGPTConfig()
 
