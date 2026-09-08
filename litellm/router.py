@@ -1248,7 +1248,7 @@ class Router:
                 selector = LeastBusyLoggingHandler(router_cache=self.cache)
                 if register_callbacks:
                     if isinstance(litellm.input_callback, list):
-                        litellm.input_callback.append(selector)
+                        litellm.logging_callback_manager.add_litellm_input_callback(selector)
                     else:
                         litellm.input_callback = [selector]
             case RoutingStrategy.USAGE_BASED_ROUTING.value:
@@ -4214,10 +4214,12 @@ class Router:
                 }
             )
         litellm_logging_object = cast(LiteLLMLogging, litellm_logging_object)
-        prompt_management_deployment: Final = self.get_available_deployment(
+        specific_deployment: Final = kwargs.pop("specific_deployment", None)
+        prompt_management_deployment: Final = await self.async_get_available_deployment(
             model=model,
-            messages=[{"role": "user", "content": "prompt"}],
-            specific_deployment=kwargs.pop("specific_deployment", None),
+            messages=cast(list[dict[str, str]], messages),  # cast-ok: selection reads messages structurally
+            specific_deployment=specific_deployment,
+            request_kwargs=kwargs,
         )
 
         self._update_kwargs_with_deployment(deployment=prompt_management_deployment, kwargs=kwargs)
