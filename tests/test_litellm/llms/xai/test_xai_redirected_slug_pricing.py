@@ -97,6 +97,12 @@ def test_redirected_slug_keeps_its_retirement_date(cost_map: dict, slug: str):
     assert cost_map[slug]["deprecation_date"] == expected_retirement_date(slug)
 
 
+def test_a_live_xai_model_is_untouched(cost_map: dict):
+    """Guard against the repricing leaking onto models xAI still serves directly."""
+    assert cost_map["xai/grok-4.6"]["input_cost_per_token"] != cost_map[REDIRECT_TARGET]["input_cost_per_token"]
+    assert "deprecation_date" not in cost_map["xai/grok-4.6"]
+
+
 @pytest.mark.parametrize("slug", REDIRECTED_SLUGS)
 def test_redirected_slug_carries_the_target_tier_rates(cost_map: dict, slug: str):
     """The request executes as grok-4.3, so it is tiered at grok-4.3's 200k boundary."""
