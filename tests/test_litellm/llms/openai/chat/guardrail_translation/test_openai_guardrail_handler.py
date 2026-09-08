@@ -1252,6 +1252,62 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 deliver_ended_stream_rewrites=True,
             )
 
+    @staticmethod
+    def _two_choice_tool_call_stream_chunks() -> list:
+        from litellm.types.utils import (
+            ChatCompletionDeltaToolCall,
+            Delta,
+            Function,
+            ModelResponseStream,
+            StreamingChoices,
+        )
+
+        def chunk(
+            choice_index: int, tool_call: ChatCompletionDeltaToolCall | None, finish_reason: Optional[str] = None
+        ) -> ModelResponseStream:
+            return ModelResponseStream(
+                id="chatcmpl-123",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=choice_index,
+                        delta=Delta(tool_calls=[tool_call] if tool_call else None),
+                        finish_reason=finish_reason,
+                    )
+                ],
+            )
+
+        def fragment(arguments: str, name: Optional[str] = None, call_id: Optional[str] = None):
+            return ChatCompletionDeltaToolCall(
+                id=call_id, index=0, type="function", function=Function(name=name, arguments=arguments)
+            )
+
+        return [
+            chunk(0, fragment("", name="lookup_fruit", call_id="call_1")),
+            chunk(1, fragment("", name="lookup_fruit", call_id="call_2")),
+            chunk(0, fragment('{"fruit": "persimmon"}')),
+            chunk(1, fragment('{"fruit": "durian"}')),
+            chunk(0, None, finish_reason="tool_calls"),
+            chunk(1, None, finish_reason="tool_calls"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_call_rewrite_on_multi_choice_stream_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = OpenAIChatCompletionsHandler()
+        chunks = self._two_choice_tool_call_stream_chunks()
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+                litellm_logging_obj=None,
+                deliver_ended_stream_rewrites=True,
+            )
+
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_clean_multi_choice_stream_released_untouched(self):
         handler = OpenAIChatCompletionsHandler()

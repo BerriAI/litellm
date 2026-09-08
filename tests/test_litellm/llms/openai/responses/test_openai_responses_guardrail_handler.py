@@ -1314,6 +1314,96 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert completed_event.response.output[0].arguments == '{"fruit": "[MASKED]"}'
         assert completed_event.response.output[0].name == "lookup_fruit"
 
+    @staticmethod
+    def _bridged_function_call_stream_events() -> List[dict]:
+        reasoning = {"type": "reasoning", "id": "rs_1", "summary": []}
+        text = {"type": "output_text", "text": "Looking that up", "annotations": []}
+        message = {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed", "content": [text]}
+
+        def function_call(arguments: str, status: str) -> dict:
+            return {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "lookup_fruit",
+                "arguments": arguments,
+                "status": status,
+            }
+
+        return [
+            {"type": "response.output_item.added", "output_index": 0, "item": dict(reasoning)},
+            {"type": "response.output_item.done", "output_index": 0, "item": dict(reasoning)},
+            {"type": "response.output_item.added", "output_index": 0, "item": {**message, "status": "in_progress", "content": []}},
+            {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "Looking that up"},
+            {"type": "response.output_item.done", "output_index": 0, "item": {**message, "content": [dict(text)]}},
+            {"type": "response.output_item.added", "output_index": 1, "item": function_call("", "in_progress")},
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": '{"fruit":'},
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 1, "delta": ' "persimmon"}'},
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "arguments": '{"fruit": "persimmon"}',
+            },
+            {"type": "response.output_item.done", "output_index": 1, "item": function_call('{"fruit": "persimmon"}', "completed")},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "claude-haiku-4-5",
+                    "output": [
+                        dict(reasoning),
+                        {**message, "content": [dict(text)]},
+                        function_call('{"fruit": "persimmon"}', "completed"),
+                    ],
+                },
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_keys_bridged_function_call_events_by_call_id(self):
+        handler = OpenAIResponsesHandler()
+        events = self._bridged_function_call_stream_events()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert events[6]["delta"] == '{"fruit": "[MASKED]"}'
+        assert events[7]["delta"] == ""
+        assert events[8]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[5]["item"]["name"] == "lookup_fruit"
+        assert events[9]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[10]["response"]["output"][2]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[3]["delta"] == "Looking that up"
+        assert events[4]["item"]["content"][0]["text"] == "Looking that up"
+        assert events[10]["response"]["output"][1]["content"][0]["text"] == "Looking that up"
+        assert events[1]["item"] == {"type": "reasoning", "id": "rs_1", "summary": []}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mismatch", ["orphan_call_id", "duplicate_call_id"])
+    async def test_deliver_ended_stream_function_call_rewrite_without_matching_events_fails_closed(self, mismatch):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = OpenAIResponsesHandler()
+        events = self._ended_function_call_stream_events()
+        envelope_item = events[5]["response"]["output"][0]
+        if mismatch == "orphan_call_id":
+            events[5]["response"]["output"] = [{**envelope_item, "call_id": "call_999"}]
+        else:
+            events[5]["response"]["output"] = [dict(envelope_item), dict(envelope_item)]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=events,
+                guardrail_to_apply=self._argument_masking_guardrail(),
+                litellm_logging_obj=None,
+                deliver_ended_stream_rewrites=True,
+            )
+
     @pytest.mark.asyncio
     async def test_ended_stream_function_call_rewrite_leaves_events_untouched_by_default(self):
         handler = OpenAIResponsesHandler()
