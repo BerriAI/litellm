@@ -2,14 +2,10 @@
 #    This tests mock request calls to litellm
 
 import os
-import sys
 import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 import time
 

@@ -10,6 +10,7 @@ import os
 import time
 import uuid
 from pathlib import Path
+from typing import Final
 
 from dotenv import load_dotenv
 
@@ -31,6 +32,14 @@ MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "sk-1234")
 CONTROL_PLANE_BASE_URL = os.environ.get(
     "LITELLM_CONTROL_PLANE_URL", PROXY_BASE_URL
 ).rstrip("/")
+
+
+def parse_replica_urls(raw: str, fallback: str) -> tuple[str, ...]:
+    urls: Final = tuple(url.strip().rstrip("/") for url in raw.split(",") if url.strip())
+    return urls or (fallback,)
+
+
+PROXY_REPLICA_URLS: Final = parse_replica_urls(os.environ.get("LITELLM_PROXY_REPLICA_URLS", ""), PROXY_BASE_URL)
 
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
@@ -78,6 +87,7 @@ DD_SEARCH_INTERVAL = float(os.environ.get("E2E_DD_SEARCH_INTERVAL", "10"))
 POLL_TIMEOUT = float(os.environ.get("E2E_POLL_TIMEOUT", "120"))
 POLL_INTERVAL = float(os.environ.get("E2E_POLL_INTERVAL", "5"))
 REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
+SLOW_PROVIDER_TIMEOUT_SECONDS = float(os.environ.get("E2E_SLOW_PROVIDER_TIMEOUT", "180"))
 
 # How long a control-plane write (/model/new, /guardrails, /v1/agents) may take to
 # reach EVERY replica. Distinct from POLL_TIMEOUT, which is sized for spend-row
@@ -85,10 +95,11 @@ REQUEST_TIMEOUT = float(os.environ.get("E2E_REQUEST_TIMEOUT", "60"))
 # (`proxy_config_reload_interval_seconds`, 30s by default and 7s on the e2e stack)
 # plus margin.
 #
-# The barriers below wait this out instead of returning on first sight, because a
-# single successful read only proves ONE replica converged: every request opens a
-# fresh connection, so a load-balanced Service routes each one independently and
-# the next call re-rolls. See ProxyClient._await_model_servable.
+# The barriers below wait this out on top of polling /v1/models on every replica in
+# PROXY_REPLICA_URLS: that poll proves each addressed gateway converged, but not the
+# workers behind it, and behind a load balancer (PROXY_REPLICA_URLS unset) a
+# successful read only proves ONE replica converged, because every request opens a
+# fresh connection and the next call re-rolls. See ProxyClient._await_model_servable.
 PROPAGATION_TIMEOUT = float(os.environ.get("E2E_PROPAGATION_TIMEOUT", "15"))
 
 EXPECT_RUST = os.environ.get("E2E_EXPECT_RUST", "").strip().lower() in ("1", "true", "yes")
@@ -132,6 +143,7 @@ LOAD_MAX_SERIAL_LATENCY_SECONDS = float(os.environ.get("E2E_LOAD_MAX_SERIAL_LATE
 LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY_EFFICIENCY", "0.8"))
 
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
+MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
@@ -148,6 +160,15 @@ ANOMALY_MAX_KEY_SPEND_USD = float(
 ANOMALY_SPEND_SETTLE_SECONDS = float(
     os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
 )
+
+
+def ws_base_url() -> str:
+    """PROXY_BASE_URL with its scheme swapped for the websocket one, so a suite
+    opening a socket points at the same proxy every HTTP suite uses."""
+    for scheme, ws_scheme in (("https://", "wss://"), ("http://", "ws://")):
+        if PROXY_BASE_URL.startswith(scheme):
+            return ws_scheme + PROXY_BASE_URL[len(scheme) :]
+    return PROXY_BASE_URL
 
 
 def datadog_mcp_url(*, toolsets: str = "core") -> str:
@@ -179,6 +200,13 @@ def provider_edge_base(mount: str) -> str | None:
         advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
         forward_timeout=REQUEST_TIMEOUT,
     )
+
+
+STREAM_MIN_LEAD_SECONDS: Final = 1.0
+
+
+def provider_paces_stream() -> bool:
+    return parse_fixture_mode(FIXTURE_MODE_RAW) != "replay"
 
 
 def unique_marker() -> str:

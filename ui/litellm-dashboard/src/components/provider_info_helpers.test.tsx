@@ -62,6 +62,17 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.Groq]);
     });
 
+    it("should map scx-ai slug and SCX_AI enum key to the SCX.ai display name and logo", () => {
+      const fromSlug = getProviderLogoAndName("scx-ai");
+      expect(fromSlug.displayName).toBe(Providers.SCX_AI);
+      expect(fromSlug.logo).toBe(providerLogoMap[Providers.SCX_AI]);
+      expect(fromSlug.logo).toBeTruthy();
+
+      const fromEnumKey = getProviderLogoAndName("SCX_AI");
+      expect(fromEnumKey.displayName).toBe(Providers.SCX_AI);
+      expect(fromEnumKey.logo).toBe(providerLogoMap[Providers.SCX_AI]);
+    });
+
     it("should map bedrock_mantle slug to Bedrock Mantle display name and logo", () => {
       const result = getProviderLogoAndName("bedrock_mantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
@@ -76,6 +87,16 @@ describe("provider_info_helpers", () => {
       const result = getProviderLogoAndName("BedrockMantle");
       expect(result.displayName).toBe(Providers.BedrockMantle);
       expect(result.logo).toBe(providerLogoMap[Providers.BedrockMantle]);
+    });
+
+    it("should map the chatgpt slug and CHATGPT enum key to the ChatGPT Subscription name and OpenAI logo", () => {
+      const fromSlug = getProviderLogoAndName("chatgpt");
+      expect(fromSlug.displayName).toBe("ChatGPT Subscription");
+      expect(fromSlug.logo).toContain("openai_small");
+
+      const fromEnumKey = getProviderLogoAndName("CHATGPT");
+      expect(fromEnumKey.displayName).toBe("ChatGPT Subscription");
+      expect(fromEnumKey.logo).toContain("openai_small");
     });
 
     it("should handle provider values case-insensitively", () => {
@@ -180,6 +201,10 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.Vertex_AI)).toBe("gemini-pro");
     });
 
+    it("should return an scx-ai model placeholder for SCX_AI provider", () => {
+      expect(getPlaceholder(Providers.SCX_AI)).toBe("scx-ai/GLM-5.2");
+    });
+
     it("should return claude-3-opus placeholder for Anthropic provider", () => {
       expect(getPlaceholder(Providers.Anthropic)).toBe("claude-3-opus");
     });
@@ -255,6 +280,10 @@ describe("provider_info_helpers", () => {
 
     it("should return cognition/swe-1.7 placeholder for Cognition provider", () => {
       expect(getPlaceholder(Providers.Cognition)).toBe("cognition/swe-1.7");
+    });
+
+    it("should return a chatgpt/ placeholder for the CHATGPT dropdown key", () => {
+      expect(getPlaceholder("CHATGPT")).toBe("chatgpt/gpt-5.4");
     });
 
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {

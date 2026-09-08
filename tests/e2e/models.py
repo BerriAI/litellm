@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
-from typing import Literal
+from typing import Final, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, RootModel, model_serializer, model_validator
 
 # ---------- keys ----------
 
@@ -35,6 +35,8 @@ class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None
+    wandb_api_key: str | None = None
+    weave_project_id: str | None = None
 
 
 class KeyLoggingCallback(BaseModel):
@@ -47,6 +49,7 @@ class KeyMetadata(BaseModel):
     logging: list[KeyLoggingCallback] | None = None
     priority: str | None = None
     batch_enqueued_token_limit: int | None = None
+    tag: str | None = None
 
 
 class ObjectPermission(BaseModel):
@@ -79,10 +82,28 @@ class KeyGenerateBody(BaseModel):
 
 class KeyGenerateResponse(BaseModel):
     key: str
+    key_alias: str | None = None
+    models: list[str] = []
+    max_budget: float | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    budget_duration: str | None = None
+    team_id: str | None = None
+    metadata: KeyMetadata | None = None
 
 
 class KeyRegenerateBody(BaseModel):
     key: str
+    grace_period: str | None = None
+
+
+class KeyResetSpendBody(BaseModel):
+    reset_to: float
+
+
+class KeyResetSpendResponse(BaseModel):
+    spend: float
+    previous_spend: float
 
 
 class KeyDeleteBody(BaseModel):
@@ -110,10 +131,12 @@ class KeyInfo(BaseModel):
     blocked: bool | None = None
     spend: float | None = None
     max_budget: float | None = None
+    budget_duration: str | None = None
     budget_reset_at: str | None = None
     budget_id: str | None = None
     litellm_budget_table: LiteLLMBudgetTable | None = None
     budget_limits: list[BudgetWindowState] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class KeyInfoResponse(BaseModel):
@@ -170,6 +193,7 @@ class ChatMessage(BaseModel):
 
 class CacheControl(BaseModel):
     type: str = "ephemeral"
+    ttl: str | None = None
 
 
 class TextBlock(BaseModel):
@@ -217,9 +241,36 @@ class McpChatTool(BaseModel):
     allowed_tools: list[str] | None = None
 
 
+class ToolCallFunction(BaseModel):
+    name: str | None = None
+    arguments: str | None = None
+
+
+class ToolCall(BaseModel):
+    id: str | None = None
+    type: str | None = None
+    function: ToolCallFunction = ToolCallFunction()
+
+
+class ChatAssistantTurn(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: str | None = None
+    reasoning_content: str | None = None
+    tool_calls: list[ToolCall] | None = None
+
+
+class ChatToolResultTurn(BaseModel):
+    role: Literal["tool"] = "tool"
+    tool_call_id: str
+    content: str
+
+
+type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
+
+
 class ChatBody(BaseModel):
     model: str
-    messages: list[ChatMessage]
+    messages: Sequence[ChatTurn]
     stream: bool = False
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
@@ -229,10 +280,13 @@ class ChatBody(BaseModel):
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
+    prompt_cache_key: str | None = None
     tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
     response_format: dict[str, object] | None = None
+    chat_template_kwargs: dict[str, bool] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RouterSettingsOverride(BaseModel):
@@ -247,6 +301,7 @@ class RouterSettingsOverride(BaseModel):
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    model_group_retry_policy: dict[str, dict[str, int]] | None = None
     enable_tag_filtering: bool | None = None
 
 
@@ -256,15 +311,6 @@ class ReliabilityChatBody(ChatBody):
     exclude_none so an absent override never leaks into the request."""
 
     router_settings_override: RouterSettingsOverride | None = None
-
-
-class ToolCallFunction(BaseModel):
-    name: str | None = None
-    arguments: str | None = None
-
-
-class ToolCall(BaseModel):
-    function: ToolCallFunction = ToolCallFunction()
 
 
 class McpToolFunctionRef(BaseModel):
@@ -312,6 +358,7 @@ class OutMessage(BaseModel):
 
 class ChatChoice(BaseModel):
     message: OutMessage | None = None
+    finish_reason: str | None = None
 
 
 class PromptTokensDetails(BaseModel):
@@ -399,6 +446,8 @@ class AnthropicContentBlock(BaseModel):
     type: str | None = None
     text: str | None = None
     id: str | None = None
+    name: str | None = None
+    input: dict[str, object] | None = None
 
 
 class AnthropicToolResultBlock(BaseModel):
@@ -431,6 +480,7 @@ class AnthropicMessagesBody(BaseModel):
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
     guardrails: list[str] | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class CountTokensBody(BaseModel):
@@ -496,6 +546,7 @@ class McpServerInfo(BaseModel):
 class EmbedBody(BaseModel):
     model: str
     input: str
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class EmbedResponse(BaseModel):
@@ -533,6 +584,27 @@ class OcrResponse(BaseModel):
 # ---------- spend logs ----------
 
 
+class GuardrailEntityMatch(BaseModel):
+    entity_type: str
+    score: float
+    start: int
+    end: int
+
+
+class GuardrailRunRecord(BaseModel):
+    guardrail_name: str | None = None
+    guardrail_mode: str | None = None
+    guardrail_status: str | None = None
+    guardrail_provider: str | None = None
+    masked_entity_count: dict[str, int] | None = None
+    guardrail_response: object | None = None
+
+
+class SpendLogMetadata(BaseModel):
+    applied_guardrails: list[str] | None = None
+    guardrail_information: list[GuardrailRunRecord] | None = None
+
+
 class SpendLogRow(BaseModel):
     request_id: str | None = None
     api_key: str | None = None
@@ -549,6 +621,7 @@ class SpendLogRow(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     request_tags: list[str] | None = None
+    metadata: SpendLogMetadata | None = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):
@@ -686,6 +759,23 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class CostMapEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    litellm_provider: str | None = None
+    mode: str | None = None
+    deprecation_date: str | None = None
+    input_cost_per_token: float | None = None
+    output_cost_per_token: float | None = None
+    cache_read_input_token_cost: float | None = None
+    supports_function_calling: bool | None = None
+    supports_reasoning: bool | None = None
+    supports_response_schema: bool | None = None
+
+
+class CostMap(RootModel[dict[str, CostMapEntry]]):
+    pass
+
+
 class FileEntry(BaseModel):
     id: str
 
@@ -762,6 +852,7 @@ class LiteLLMParamsBody(BaseModel):
     mock_response: str | None = None
     timeout: float | None = None
     tpm: int | None = None
+    weight: int | None = None
 
 
 ModelMode = Literal["batch", "realtime", "image_generation"]
@@ -776,6 +867,7 @@ class ModelInfoBody(BaseModel):
     mode: ModelMode | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
+    allowed_fails_policy: dict[str, int] | None = None
 
 
 class ModelNewBody(BaseModel):
@@ -805,6 +897,15 @@ class ModelListEntry(BaseModel):
     id: str
 
 
+class ModelsListParams(BaseModel):
+    """Query for GET /v1/models. A wildcard route such as ``openai/gpt-5.4*`` is
+    listed only under ``return_wildcard_routes``; without it the route is dropped
+    and only its expansions remain, so a readiness poll for the pattern itself
+    never resolves."""
+
+    return_wildcard_routes: bool = True
+
+
 class ModelsListResponse(BaseModel):
     """GET /v1/models on the data plane: the deployments the gateway can actually
     serve right now. Used to confirm a freshly created model has propagated from
@@ -815,6 +916,26 @@ class ModelsListResponse(BaseModel):
 
 class ModelDeleteBody(BaseModel):
     id: str
+
+
+class ConnectionTestBody(BaseModel):
+    """POST /health/test_connection body, the API behind the Admin UI's Test
+    Connection button: the deployment params as typed into the add-model form and
+    the health-check mode picking which endpoint the probe calls. The endpoint
+    rejects `os.environ/` references, so credentials are either literal values or
+    omitted to fall through to the proxy's own environment."""
+
+    litellm_params: LiteLLMParamsBody
+    mode: Literal["chat", "completion", "embedding", "responses"]
+
+
+class ConnectionTestResult(BaseModel):
+    error: str | None = None
+
+
+class ConnectionTestResponse(BaseModel):
+    status: Literal["success", "error"]
+    result: ConnectionTestResult | None = None
 
 
 class CredentialCreateBody(BaseModel):
@@ -830,9 +951,34 @@ class CredentialCreateResponse(BaseModel):
 # ---------- key / team / user / organization management ----------
 
 
+class Cleared(BaseModel):
+    """An explicit JSON null in a merge-patch body. The transport drops `None` fields
+    before sending (`exclude_none`), so `None` means "leave the stored value alone"; a
+    field set to `CLEAR` reaches the wire as `null`, which tells the proxy to clear it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    @model_serializer
+    def _as_null(self) -> None:
+        return None
+
+
+CLEAR: Final = Cleared()
+
+
 class KeyUpdateBody(BaseModel):
+    """POST /key/update is a merge patch: a field left `None` is dropped from the body and
+    keeps its stored value, `CLEAR` sends an explicit null that clears it (`budget_duration`
+    clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
+
     key: str
-    models: list[str]
+    models: list[str] | None = None
+    key_alias: str | None = None
+    tpm_limit: int | None = None
+    rpm_limit: int | None = None
+    max_budget: float | Cleared | None = None
+    budget_duration: str | Cleared | None = None
+    metadata: KeyMetadata | None = None
 
 
 class KeyBlockBody(BaseModel):
@@ -845,6 +991,27 @@ class KeyListParams(BaseModel):
 
 class KeyListResponse(BaseModel):
     total_count: int
+
+
+# ---------- admin UI session ----------
+
+
+class UiLoginBody(BaseModel):
+    username: str
+    password: str
+
+
+class UiLoginResponse(BaseModel):
+    token: str
+    redirect_url: str
+
+
+class UiSessionClaims(BaseModel):
+    user_id: str
+    key: str
+    user_role: str
+    login_method: Literal["sso", "username_password"]
+    exp: int
 
 
 class TeamMemberEntry(BaseModel):

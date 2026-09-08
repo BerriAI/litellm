@@ -11,6 +11,7 @@ import { Label } from "./label";
 import { Separator } from "./separator";
 import { Skeleton } from "./skeleton";
 import { Table, TableBody, TableCaption, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "./table";
+import { Textarea } from "./textarea";
 import { UiLoadingSpinner } from "./ui-loading-spinner";
 
 describe("ui primitives forward refs to their DOM node", () => {
@@ -48,6 +49,12 @@ describe("ui primitives forward refs to their DOM node", () => {
     const ref = React.createRef<HTMLDivElement>();
     render(<Skeleton ref={ref} />);
     expect(ref.current).toBeInstanceOf(HTMLDivElement);
+  });
+
+  it("Textarea", () => {
+    const ref = React.createRef<HTMLTextAreaElement>();
+    render(<Textarea ref={ref} />);
+    expect(ref.current).toBeInstanceOf(HTMLTextAreaElement);
   });
 
   it("UiLoadingSpinner", () => {

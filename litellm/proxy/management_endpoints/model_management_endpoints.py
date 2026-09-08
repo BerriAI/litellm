@@ -13,13 +13,14 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from json import JSONDecodeError
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeVar, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -27,6 +28,7 @@ from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.litellm_core_utils.ptu_pricing import (
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
+    PTU_MODEL_INFO_FIELDS,
     PTU_ZEROED_PRICING_FIELDS,
     PTU_ZEROED_TABLE_FIELDS,
     SEARCH_CONTEXT_SIZES,
@@ -48,13 +50,18 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
@@ -64,6 +71,10 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 from litellm.proxy.management_endpoints.team_endpoints import (
     update_team as _legacy_update_team,
 )
+from litellm.proxy.management_helpers.access_group_model_sync import (
+    sync_access_groups_for_deleted_model,
+    sync_access_groups_for_renamed_model,
+)
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -71,6 +82,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.router import Router
@@ -79,13 +91,26 @@ from litellm.router_strategy.complexity_router import (
     ClassificationRubric,
     ComplexityRouterConfig,
     ComplexityTier,
+    TierDefinition,
+    built_in_tier_classification_prompt,
     classification_system_prompt,
+    custom_tier_classification_prompt,
+    normalize_classification_examples,
+    normalize_classification_prompt,
 )
 from litellm.router_utils.auto_router_model_naming import (
+    GATED_AUTO_ROUTER_CAPABILITIES,
     STRATEGY_ROUTER_PARAM_FIELDS,
+    capability_limit_violation,
+    carries_complexity_router_settings,
+    count_capability_routers,
+    gated_capability_of,
+    is_complexity_router_model,
+    validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
     validate_strategy_router_model_write,
 )
+from litellm.router_utils.auto_router_tuning_baseline import is_mutable_tuned_candidate, tuning_quota_violation
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AutoRouterClassifierDefaultPromptResponse,
     UpdateUsefulLinksRequest,
@@ -98,6 +123,9 @@ from litellm.types.router import (
     updateDeployment,
 )
 from litellm.utils import get_utc_datetime
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
 
 router: Final = APIRouter()
 
@@ -119,10 +147,14 @@ class UpdatePublicModelGroupsRequest(BaseModel):
 
 
 class _ProxyModelRow(Protocol):
-    model_id: str
-    model_name: str
-    litellm_params: Mapping[str, object]
-    model_info: Mapping[str, object] | None
+    @property
+    def model_id(self) -> str: ...
+
+    @property
+    def model_name(self) -> str: ...
+
+    @property
+    def model_info(self) -> object: ...
 
     def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
 
@@ -132,7 +164,11 @@ class _ProxyModelTable(Protocol):
 
     def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_ProxyModelRow]]: ...
 
-    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> Awaitable[_ProxyModelRow]: ...
+    def create(self, *, data: Mapping[str, object]) -> Awaitable[_ProxyModelRow]: ...
+
+    def update(
+        self, *, where: Mapping[str, object], data: Mapping[str, object]
+    ) -> Awaitable[_ProxyModelRow | None]: ...
 
     def delete(self, *, where: Mapping[str, object]) -> Awaitable[_ProxyModelRow | None]: ...
 
@@ -143,41 +179,38 @@ class _TxModelTables(Protocol):
     litellm_proxymodeltable: _ProxyModelTable
 
 
+_RowT = TypeVar("_RowT")
+
+
+class _ExistingModelRow(Protocol):
+    @property
+    def litellm_params(self) -> Mapping[str, object]: ...
+
+    def model_dump_json(self, *, exclude_none: bool = False) -> str: ...
+
+
 class _TeamRow(Protocol):
-    models: Sequence[str]
+    @property
+    def models(self) -> Sequence[str]: ...
 
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _TeamTable(Protocol):
+class _TeamLookupTable(Protocol):
     def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_TeamRow | None]: ...
 
+
+class _TeamTable(_TeamLookupTable, Protocol):
     def update(
         self, *, where: Mapping[str, object], data: Mapping[str, object], include: Mapping[str, bool]
     ) -> Awaitable[LiteLLM_TeamTable]: ...
-
-
-class _TeamIdRef(Protocol):
-    team_id: str
-
-
-class _ModelAliasRow(Protocol):
-    id: int
-    model_aliases: dict[str, str]
-    team: _TeamIdRef | None
-
-
-class _ModelAliasTable(Protocol):
-    def find_many(self, *, include: Mapping[str, bool]) -> Awaitable[Sequence[_ModelAliasRow]]: ...
-
-    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> Awaitable[object]: ...
 
 
 def _proxy_model_table(prisma_client: PrismaClient) -> _ProxyModelTable:
     return ModelRepository(prisma_client).table
 
 
-def _repo_team_table(prisma_client: PrismaClient) -> _TeamTable:
+def _repo_team_table(prisma_client: PrismaClient) -> _TeamLookupTable:
     return TeamRepository(prisma_client).table
 
 
@@ -185,7 +218,7 @@ def _db_team_table(prisma_client: PrismaClient) -> _TeamTable:
     return prisma_client.db.litellm_teamtable
 
 
-def _model_alias_table(prisma_client: PrismaClient) -> _ModelAliasTable:
+def _model_alias_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
     return ModelTableRepository(prisma_client).table
 
 
@@ -208,11 +241,13 @@ def _strategy_router_write_violation(
     An auto-router deployment's ``litellm_params.model`` (``auto_router/...``) is
     the discriminator the router loads it by; a write that mangles it makes the
     router drop the deployment silently under ``ignore_invalid_deployments``.
-    Only writes that supply ``litellm_params.model`` are judged on the naming
-    contract, against the merged (stored + incoming) params, so partial patches
-    and restores of an already-corrupted row stay legal. A config is judged only
-    when the write carries one, for the same reason: a rename must not be held
-    hostage by a stored config it does not touch. Returns the violation, or None.
+    A patch adding auto-router settings is judged against the effective model,
+    decrypting the stored model when the patch omits it, so a regular deployment
+    cannot claim a strategy-router configuration. Unrelated partial patches and
+    restores that do not touch strategy-router settings stay legal. A config is
+    judged only when the write carries one, for the same reason: a rename must
+    not be held hostage by a stored config it does not touch. Returns the
+    violation, or None.
     """
     if incoming_params is None:
         return None
@@ -221,15 +256,24 @@ def _strategy_router_write_violation(
     )
     if config_violation is not None:
         return config_violation
-    if incoming_params.model is None:
-        return None
     present_fields: Final = frozenset(
         field
         for field in STRATEGY_ROUTER_PARAM_FIELDS
         for source in (incoming_params, existing_params)
         if source is not None and getattr(source, field, None) is not None
     )
-    return validate_strategy_router_model_write(model=incoming_params.model, present_fields=present_fields)
+    effective_params: Final = _effective_complexity_router_params(incoming_params, existing_params)
+    effective_model: Final = effective_params.get("model")
+    if carries_complexity_router_settings(
+        effective_model if isinstance(effective_model, str) else None, present_fields
+    ):
+        placement_violation: Final = validate_complexity_router_config_placement(incoming_params.model_extra)
+        if placement_violation is not None:
+            return placement_violation
+    return validate_strategy_router_model_write(
+        model=effective_model if isinstance(effective_model, str) else "",
+        present_fields=present_fields,
+    )
 
 
 def _raise_on_strategy_router_write_violation(
@@ -247,7 +291,199 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
-_PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
+AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY: Final = 5_872_301
+_CAPABILITY_LOCK_SQL: Final = "SELECT 1 AS locked FROM pg_advisory_xact_lock($1)"
+_STORED_LITELLM_PARAMS_SQL: Final = (
+    "(CASE jsonb_typeof(litellm_params) WHEN 'string' THEN (litellm_params #>> '{}')::jsonb ELSE litellm_params END)"
+)
+_STORED_COMPLEXITY_CONFIG_SQL: Final = f"{_STORED_LITELLM_PARAMS_SQL} -> 'complexity_router_config'"
+_CAPABILITY_DB_ROWS_SQL: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        capability.key: f"""
+SELECT {_STORED_LITELLM_PARAMS_SQL} ->> 'model' AS model
+FROM "LiteLLM_ProxyModelTable"
+WHERE model_id <> $1
+  AND ({capability.sql_config_predicate.format(config=_STORED_COMPLEXITY_CONFIG_SQL)})
+"""
+        for capability in GATED_AUTO_ROUTER_CAPABILITIES
+    }
+)
+
+
+def _effective_complexity_router_config(
+    incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
+) -> object:
+    """The complexity config a write leaves on the row: the incoming one when the write carries it, else the stored one."""
+    incoming: Final = None if incoming_params is None else incoming_params.complexity_router_config
+    if incoming is not None or existing_params is None:
+        return incoming
+    return existing_params.complexity_router_config
+
+
+def _effective_model(
+    incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
+) -> str | None:
+    """The model a write leaves on the row, decrypting an existing value only when the patch omits it."""
+    incoming: Final = None if incoming_params is None else incoming_params.model
+    if incoming is not None:
+        return incoming
+    existing: Final = None if existing_params is None else existing_params.model
+    if existing is None:
+        return None
+    decrypted: Final = decrypt_value_helper(
+        value=existing,
+        key="model",
+        exception_type="debug",
+        return_original_value=True,
+    )
+    return decrypted if isinstance(decrypted, str) else None
+
+
+def _effective_complexity_router_params(
+    incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
+) -> Mapping[str, object]:
+    """The model and complexity config a write leaves, for placement and capability decisions."""
+    return MappingProxyType(
+        {
+            "model": _effective_model(incoming_params, existing_params),
+            "complexity_router_config": _effective_complexity_router_config(incoming_params, existing_params),
+        }
+    )
+
+
+def _decrypted_model(stored_model: object) -> str | None:
+    if not isinstance(stored_model, str):
+        return None
+    decrypted: Final = decrypt_value_helper(
+        value=stored_model, key="model", exception_type="debug", return_original_value=True
+    )
+    return decrypted if isinstance(decrypted, str) else None
+
+
+def _tuning_candidate(effective_params: Mapping[str, object], model_id: str | None) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            "litellm_params": effective_params,
+            "model_info": MappingProxyType({"id": model_id, "db_model": True}),
+        }
+    )
+
+
+def _raise_on_tuning_quota_violation(
+    *,
+    candidate: Mapping[str, object],
+    others: Sequence[Mapping[str, object]],
+    baselines: Mapping[str, str],
+    limit: int | None,
+) -> None:
+    violation: Final = tuning_quota_violation(candidate=candidate, others=others, baselines=baselines, limit=limit)
+    if violation is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}")
+
+
+@asynccontextmanager
+async def _auto_router_capability_slot(
+    prisma_client: PrismaClient, *, effective_params: Mapping[str, object], model_id: str | None
+) -> AsyncGenerator[_ProxyModelTable, None]:
+    """Hand out the model table to write through while the row's claim on a licensed capability is settled.
+
+    A write that leaves the row claiming a licensed capability under a limited license runs
+    inside one transaction that takes an advisory lock in its own statement before counting
+    (a statement's snapshot predates anything it locks), so pods cannot both pass the count:
+    the DB rows (any pod, either JSON shape) plus this proxy's config.yaml routers are judged
+    against the license limit and the write is refused with a 403 before it happens. The row
+    being edited keeps its own slot through ``model_id``. Every other write, and every write on
+    an unlimited license, goes through the repository table with no lock. Only the row write
+    itself may run inside: anything that needs a second connection (the team model bookkeeping)
+    must wait until the transaction has committed and the lock is released. The transaction
+    writes bypass the repository's publish-on-write, so the config change is published once
+    after commit, the way delete_team_models does.
+
+    A heuristic-v1 router whose tuning has moved off its recorded baseline is judged the same
+    way under the same lock, against the DB rows plus this proxy's config.yaml routers.
+    """
+    from litellm.proxy.proxy_server import (
+        _license_check,  # pyright: ignore[reportPrivateUsage]  # existing capability slot reads the proxy license singleton
+        heuristic_v1_tuning_baselines,
+        llm_router,
+    )
+
+    limit: Final = _license_check.auto_router_capability_limit()
+    capability: Final = gated_capability_of(effective_params)
+    baselines: Final = heuristic_v1_tuning_baselines
+    tuning_candidate: Final = _tuning_candidate(effective_params, model_id=model_id)
+    judges_tuning: Final = baselines is not None and is_mutable_tuned_candidate(tuning_candidate, baselines)
+    if limit is None or (capability is None and not judges_tuning):
+        yield _proxy_model_table(prisma_client)
+        return
+    async with prisma_client.db.tx() as tx_ctx:
+        tables: Final[_TxModelTables] = tx_ctx
+        await tx_ctx.query_raw(_CAPABILITY_LOCK_SQL, AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY)
+        config_rows: Final = () if llm_router is None else tuple(llm_router.config_deployments())
+        if capability is not None:
+            rows: Sequence[Mapping[str, object]] = await tx_ctx.query_raw(
+                _CAPABILITY_DB_ROWS_SQL[capability.key], model_id or ""
+            )
+            db_held: Final = sum(1 for row in rows if is_complexity_router_model(_decrypted_model(row.get("model"))))
+            held: Final = db_held + count_capability_routers(config_rows, capability=capability)
+            violation: Final = capability_limit_violation(capability=capability, held=held + 1, limit=limit)
+            if violation is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail=f"{violation} {AUTO_ROUTER_LICENSE_REMEDY}"
+                )
+        if judges_tuning and baselines is not None:
+            model_rows: Final = await ModelRepository(WriterPinnedClient(tx_ctx)).find_all_except(model_id or "")
+            _raise_on_tuning_quota_violation(
+                candidate=tuning_candidate,
+                others=tuple(
+                    MappingProxyType(
+                        {
+                            "litellm_params": row.litellm_params,
+                            "model_info": MappingProxyType({"id": row.model_id, "db_model": True}),
+                        }
+                    )
+                    for row in model_rows
+                )
+                + config_rows,
+                baselines=baselines,
+                limit=limit,
+            )
+        yield tables.litellm_proxymodeltable
+    await publish_config_change(redis_cache=coordination_redis_cache(), object_type="litellm_proxymodeltable")
+
+
+ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING: Final = "enforce_rpm_tpm_on_model_add"
+_REQUIRED_RATE_LIMIT_FIELDS: Final = ("rpm", "tpm")
+
+
+def _raise_if_rate_limits_required_but_missing(*, litellm_params: GenericLiteLLMParams, enforced: bool) -> None:
+    """Require both rpm and tpm (each a positive value) when the operator opts in via config.yaml.
+
+    Off by default, so deployments keep adding models without limits. When
+    ``enforce_rpm_tpm_on_model_add: true`` is set under general_settings, a model added
+    without both rpm and tpm set to a positive value is rejected rather than stored
+    unbounded (or effectively excluded from routing by a zero/negative limit).
+    """
+    if not enforced:
+        return
+    missing: Final = tuple(
+        field
+        for field in _REQUIRED_RATE_LIMIT_FIELDS
+        if (value := getattr(litellm_params, field)) is None or value <= 0
+    )
+    if not missing:
+        return
+    raise ProxyException(
+        message=(
+            f"{' and '.join(missing)} must be set to a positive value when "
+            f"'{ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING}' is enabled in general_settings"
+        ),
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param=f"litellm_params.{missing[0]}",
+    )
+
+
 _PTU_PRICED_PAIR: Final = frozenset({"ptu_count", "cost_per_ptu_per_hour"})
 
 
@@ -261,7 +497,7 @@ def _explicitly_cleared_ptu_fields(model_info: ModelInfo | None) -> frozenset[st
         return frozenset()
     return frozenset(
         field
-        for field in _PTU_MODEL_INFO_FIELDS
+        for field in PTU_MODEL_INFO_FIELDS
         if field in model_info.model_fields_set and getattr(model_info, field) is None
     )
 
@@ -294,7 +530,7 @@ def _raise_if_ptu_cost_attribution_disabled(incoming_model_info: Mapping[str, ob
     """
     if is_ptu_cost_attribution_enabled():
         return
-    supplied: Final = tuple(field for field in _PTU_MODEL_INFO_FIELDS if incoming_model_info.get(field) is not None)
+    supplied: Final = tuple(field for field in PTU_MODEL_INFO_FIELDS if incoming_model_info.get(field) is not None)
     if not supplied:
         return
     raise HTTPException(
@@ -312,15 +548,20 @@ def _validate_ptu_model_info(model_info: Mapping[str, object]) -> None:
     The rules live in litellm_core_utils.ptu_pricing so that config.yaml registration
     refuses the same deployments this endpoint does, for the same reason. Per-field bounds
     (positive count, non-negative rate) are enforced by ModelInfo itself.
+
+    Registration additionally requires an operator-declared ``model_info.id``, which this
+    endpoint does not: a stored deployment already holds a stable primary key, where a
+    config-declared one is otherwise keyed by a hash of its own parameters.
     """
     error: Final = ptu_config_error(model_info)
     if error is not None:
         raise HTTPException(status_code=400, detail=error)
 
 
-# The mirrored per-token pricing fields plus the three remaining fields
-# Router._inherit_builtin_cache_pricing back-fills from the public cost map. An unset field is
-# what that back-fill targets, so a field left out here is one a PTU deployment still bills.
+# The mirrored per-token pricing fields plus the remaining rates the public cost map or a
+# provider default would otherwise supply (the cache back-fills, the Maps grounding rate). An
+# unset field falls back to those sources, so a field left out here is one a PTU deployment
+# still bills.
 # tiered_pricing is the one mirrored field that is a table of ranges, not a rate, so it is stored
 # empty (see _PTU_EMPTIED_PRICING_FIELDS): its tiers outrank the zeros written beside them, so
 # dropping it would leave the cost map's tiers billing the traffic the reserved capacity covers.
@@ -492,7 +733,7 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
-    merged_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
+    merged_model_info: Final[dict[str, object]] = db_model.model_info.model_dump(exclude_none=True)
 
     # update litellm params
     if updated_patch.litellm_params:
@@ -650,28 +891,64 @@ async def patch_model(
                 param="blocked",
             )
 
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=patch_data.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=db_model.litellm_params,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
         )
 
+        effective_params: Final = _effective_complexity_router_params(
+            patch_data.litellm_params, db_model.litellm_params
+        )
+        requested_model_name: Final = patch_data.model_name
+        stored_model_name: str | None = None
+
+        async def write_row(update_data: PrismaCompatibleUpdateDBModel) -> _ProxyModelRow | None:
+            nonlocal stored_model_name
+            stored_model_name = update_data.get("model_name")
+            update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
+            update_data["updated_at"] = cast(str, get_utc_datetime())
+            async with _auto_router_capability_slot(
+                prisma_client,
+                effective_params=effective_params,
+                model_id=model_id,
+            ) as table:
+                return await table.update(where={"model_id": model_id}, data=update_data)
+
         # Handle team model updates with proper alias management
-        update_data: Final = await _update_team_model_in_db(
+        updated_model: Final = await _update_team_model_in_db(
             db_model=db_model,
             patch_data=patch_data,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
+            write_row=write_row,
         )
 
-        # Add metadata about update
-        update_data["updated_by"] = user_api_key_dict.user_id or litellm_proxy_admin_name
-        update_data["updated_at"] = cast(str, get_utc_datetime())
+        if updated_model is None:
+            raise ProxyException(
+                message=f"Model {model_id} not found on proxy.",
+                type=ProxyErrorTypes.not_found_error,
+                code=status.HTTP_404_NOT_FOUND,
+                param=None,
+            )
 
-        # Perform partial update
-        updated_model: Final = await _proxy_model_table(prisma_client).update(
-            where={"model_id": model_id},
-            data=update_data,
-        )
+        if (
+            stored_model_name is not None
+            and stored_model_name == requested_model_name
+            and stored_model_name != db_model.model_name
+        ):
+            await sync_access_groups_for_renamed_model(
+                prisma_client=prisma_client,
+                model_id=model_id,
+                old_name=db_model.model_name,
+                new_name=stored_model_name,
+                llm_router=llm_router,
+            )
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
         live_before_reload: Final = live_model_ids_snapshot()
@@ -807,7 +1084,7 @@ async def _set_model_blocked_status(
             live_after=reload_outcome.live_after,
         )
 
-        return updated_model
+        return updated_model  # pyright: ignore[reportReturnType]  # prisma row, coerced by this route's response_model
 
     except Exception as e:
         verbose_proxy_logger.exception("Error in model %s: %s", action, e)
@@ -893,7 +1170,8 @@ async def _add_model_to_db(
     prisma_client: PrismaClient,
     new_encryption_key: str | None = None,
     should_create_model_in_db: bool = True,
-) -> LiteLLM_ProxyModelTable | None:
+    slot: AbstractAsyncContextManager[_ProxyModelTable] | None = None,
+) -> "_ProxyModelRow | LiteLLM_ProxyModelTable":
     # encrypt litellm params #
     _litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
     _original_litellm_model_name: Final = model_params.litellm_params.model
@@ -910,18 +1188,21 @@ async def _add_model_to_db(
     }
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
-    if should_create_model_in_db:
-        model_response = await ModelRepository(prisma_client).table.create(data=_data)
-    else:
-        model_response = LiteLLM_ProxyModelTable(**_data)
-    return model_response
+    _create_data: Final = cast("Mapping[str, object]", _data)  # cast-ok: str-keyed json payload built just above
+    if not should_create_model_in_db:
+        return LiteLLM_ProxyModelTable(**_data)
+    if slot is None:
+        return await _proxy_model_table(prisma_client).create(data=_create_data)
+    async with slot as table:
+        return await table.create(data=_create_data)
 
 
 async def _add_team_model_to_db(
     model_params: Deployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-) -> LiteLLM_ProxyModelTable | None:
+    slot: AbstractAsyncContextManager[_ProxyModelTable] | None = None,
+) -> "_ProxyModelRow | LiteLLM_ProxyModelTable":
     """
     If 'team_id' is provided,
 
@@ -952,6 +1233,7 @@ async def _add_team_model_to_db(
         model_params=model_params,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
+        slot=slot,
     )
 
     if original_model_name:
@@ -972,7 +1254,8 @@ async def _update_team_model_in_db(
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-) -> PrismaCompatibleUpdateDBModel:
+    write_row: Callable[[PrismaCompatibleUpdateDBModel], Awaitable[_RowT]],
+) -> _RowT:
     """
     Handle team model updates with proper alias management.
 
@@ -980,6 +1263,9 @@ async def _update_team_model_in_db(
     - Creates unique internal model_name and team alias
     - Adds model to team object
     - Preserves team_public_model_name for external reference
+
+    The row is written through ``write_row`` before the team's model list is touched, so a
+    refused or failed write leaves the team as it was (the create path orders itself the same way).
     """
     # Validate team_id if present in patch_data
     from litellm.proxy.proxy_server import premium_user
@@ -991,9 +1277,7 @@ async def _update_team_model_in_db(
         premium_user=premium_user,
     )
 
-    # Validated before any write, beside the premium check the create path already runs
-    # here. The team ACL is updated below and autocommits, so a validator that raises
-    # further down would leave the team mutated and the deployment row never written.
+    # Validated before the row write, beside the premium check the create path already runs here.
     #
     # The merged view is what gets stored, so that is what has to satisfy the invariants.
     # Validating the patch alone rejected a partial edit of an already valid deployment:
@@ -1013,7 +1297,7 @@ async def _update_team_model_in_db(
 
     # No team_id in patch, proceed with standard update
     if patch_team_id is None:
-        return update_db_model(db_model=db_model, updated_patch=patch_data)
+        return await write_row(update_db_model(db_model=db_model, updated_patch=patch_data))
 
     # Determine public model name
     public_model_name: Final = _get_public_model_name(
@@ -1032,11 +1316,14 @@ async def _update_team_model_in_db(
     db_team_id: Final = db_model.model_info.team_id if db_model.model_info else None
     is_new_team_assignment: Final = db_team_id != patch_team_id
 
+    # Team rows keep their internal UUID-based model_name; the public name lives in model_info
+    patch_data.model_name = f"model_name_{patch_team_id}_{uuid.uuid4()}" if is_new_team_assignment else None
+    row: Final = await write_row(update_db_model(db_model=db_model, updated_patch=patch_data))
+
     if is_new_team_assignment:
         await _setup_new_team_model_assignment(
             team_id=patch_team_id,
             public_model_name=public_model_name,
-            patch_data=patch_data,
             user_api_key_dict=user_api_key_dict,
         )
     else:
@@ -1044,12 +1331,11 @@ async def _update_team_model_in_db(
             team_id=patch_team_id,
             public_model_name=public_model_name,
             db_model=db_model,
-            patch_data=patch_data,
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
         )
 
-    return update_db_model(db_model=db_model, updated_patch=patch_data)
+    return row
 
 
 def _get_public_model_name(
@@ -1101,13 +1387,9 @@ def _get_public_model_name(
 async def _setup_new_team_model_assignment(
     team_id: str,
     public_model_name: str,
-    patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    """Set up a new team model with unique name and team membership."""
-    unique_model_name: Final = f"model_name_{team_id}_{uuid.uuid4()}"
-    patch_data.model_name = unique_model_name
-
+    """Register a newly team-assigned model's public name on the team."""
     await team_model_add(
         data=TeamModelAddRequest(
             team_id=team_id,
@@ -1297,7 +1579,6 @@ async def _update_existing_team_model_assignment(
     team_id: str,
     public_model_name: str,
     db_model: Deployment,
-    patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
 ) -> None:
@@ -1321,9 +1602,6 @@ async def _update_existing_team_model_assignment(
     old_public_name: Final = db_model.model_info.team_public_model_name if db_model.model_info else None
 
     if old_public_name and public_model_name != old_public_name:
-        # Clear user-supplied public name from patch before any early return so the
-        # caller does not overwrite the internal UUID-based model_name in the DB.
-        patch_data.model_name = None
         if prisma_client is None:
             verbose_proxy_logger.warning(
                 "prisma_client not initialized; skipping public name update entirely to avoid orphaned entries"
@@ -1371,10 +1649,6 @@ async def _update_existing_team_model_assignment(
     # else: old_public_name == public_model_name (no rename needed)
     # No team_model_add/delete calls required; public name is already registered
 
-    # Always clear patch_data.model_name to prevent caller from overwriting
-    # the internal UUID-based model_name in the DB with the user-supplied public name
-    patch_data.model_name = None
-
 
 class ModelManagementAuthChecks:
     """
@@ -1403,6 +1677,32 @@ class ModelManagementAuthChecks:
                 },
             )
         return True
+
+    @staticmethod
+    def can_user_attach_credential(
+        litellm_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+        existing_litellm_params: GenericLiteLLMParams | None = None,
+    ) -> Literal[True]:
+        if litellm_params is None or litellm_params.litellm_credential_name is None:
+            return True
+        if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None:
+            existing_credential_name: Final = decrypt_value_helper(
+                value=existing_litellm_params.litellm_credential_name,
+                key="litellm_credential_name",
+                exception_type="debug",
+                return_original_value=True,
+            )
+            if litellm_params.litellm_credential_name == existing_credential_name:
+                return True
+        if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return True
+        raise ProxyException(
+            message=f"Only a proxy admin can attach a stored credential (litellm_credential_name) to a model. Your role={user_api_key_dict.user_role}.",
+            type=ProxyErrorTypes.auth_error.value,
+            code=status.HTTP_403_FORBIDDEN,
+            param="litellm_credential_name",
+        )
 
     @staticmethod
     async def allow_team_model_action(
@@ -1578,6 +1878,12 @@ async def delete_model(
                     proxy_logging_obj=proxy_logging_obj,
                     llm_router=llm_router,
                 )
+            await sync_access_groups_for_deleted_model(
+                prisma_client=prisma_client,
+                model_id=model_info.id,
+                model_name=model_params.model_name,
+                llm_router=llm_router,
+            )
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
@@ -1634,7 +1940,9 @@ async def delete_team_model_alias(
     tasks: Final = []
     removed_model_aliases: Final[list[tuple[str, str]]] = []
     for team_model_alias in team_model_aliases:
-        model_aliases = team_model_alias.model_aliases  # {"alias": "public model name"}
+        model_aliases = cast(  # cast-ok: prisma types Json columns as `str`; the driver hands back the parsed dict
+            "dict[str, str]", team_model_alias.model_aliases
+        )
         id = team_model_alias.id
 
         if public_model_name in model_aliases.values():
@@ -1724,12 +2032,22 @@ async def add_new_model(
             premium_user=premium_user,
         )
 
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=None,
         )
 
-        model_response: LiteLLM_ProxyModelTable | None = None
+        _raise_if_rate_limits_required_but_missing(
+            litellm_params=model_params.litellm_params,
+            enforced=bool(general_settings.get(ENFORCE_RPM_TPM_ON_MODEL_ADD_SETTING, False)),
+        )
+
+        model_response: prisma_models.LiteLLM_ProxyModelTable | LiteLLM_ProxyModelTable | None = None
         # update DB
         incoming_model_info: Final = model_params.model_info.model_dump(exclude_none=True)
         _raise_if_ptu_cost_attribution_disabled(incoming_model_info)
@@ -1746,18 +2064,22 @@ async def add_new_model(
             reload_outcome: ReconcileOutcome = ReconcileOutcome(still_desired=None, live_after=None)
             try:
                 _original_litellm_model_name: Final = model_params.model_name
-                if model_params.model_info.team_id is None:
-                    model_response = await _add_model_to_db(
-                        model_params=priced_model_params,
-                        user_api_key_dict=user_api_key_dict,
-                        prisma_client=prisma_client,
-                    )
-                else:
-                    model_response = await _add_team_model_to_db(
-                        model_params=priced_model_params,
-                        user_api_key_dict=user_api_key_dict,
-                        prisma_client=prisma_client,
-                    )
+                add_model: Final = (
+                    _add_model_to_db if model_params.model_info.team_id is None else _add_team_model_to_db
+                )
+                model_response = await add_model(
+                    model_params=priced_model_params,
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=prisma_client,
+                    slot=_auto_router_capability_slot(
+                        prisma_client,
+                        effective_params=_effective_complexity_router_params(
+                            priced_model_params.litellm_params,
+                            None,
+                        ),
+                        model_id=priced_model_params.model_info.id,
+                    ),
+                )
                 reload_outcome = await proxy_config.add_deployment(
                     prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
                 )
@@ -1771,6 +2093,8 @@ async def add_new_model(
                         passed_model_info=priced_model_params.model_info,
                     )
             except Exception as e:
+                if isinstance(e, HTTPException):
+                    raise
                 verbose_proxy_logger.exception("Exception in add_new_model: %s", e)
 
         else:
@@ -1891,14 +2215,26 @@ async def update_model(
             premium_user=premium_user,
         )
 
+        ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=model_params.litellm_params,
+            user_api_key_dict=user_api_key_dict,
+            existing_litellm_params=deployment.litellm_params,
+        )
+
         _raise_on_strategy_router_write_violation(
             incoming_params=model_params.litellm_params,
             existing_params=deployment.litellm_params,
         )
+        effective_params: Final = _effective_complexity_router_params(
+            model_params.litellm_params, deployment.litellm_params
+        )
 
         # update DB
         if store_model_in_db is True:
-            _existing_litellm_params_dict: Final = dict(_existing_litellm_params.litellm_params)
+            existing_model_row: Final = cast(  # cast-ok: prisma types Json columns as `str`; the driver parses them
+                "_ExistingModelRow", _existing_litellm_params
+            )
+            _existing_litellm_params_dict: Final = dict(existing_model_row.litellm_params)
 
             if model_params.litellm_params is None:
                 raise Exception("litellm_params not provided")
@@ -1911,25 +2247,41 @@ async def update_model(
                 model_params.litellm_params[k] = encrypted_value
 
             ### MERGE WITH EXISTING DATA ###
-            merged_dictionary: Final = {}
-            _mp: Final = model_params.litellm_params.dict()
+            _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
+            merged_dictionary: Final = {
+                key: _existing_litellm_params_dict[key] if value is None else value
+                for key, value in _mp.items()
+                if value is not None or _existing_litellm_params_dict.get(key) is not None
+            }
 
-            for key, value in _mp.items():
-                if value is not None:
-                    merged_dictionary[key] = value
-                elif key in _existing_litellm_params_dict and _existing_litellm_params_dict[key] is not None:
-                    merged_dictionary[key] = _existing_litellm_params_dict[key]
-                else:
-                    pass
-
+            renamed_to: Final = (
+                model_params.model_name
+                if model_params.model_name not in (None, deployment.model_name)
+                and deployment.model_info.team_id is None
+                else None
+            )
             _data: Final[dict[str, str]] = {
                 "litellm_params": json.dumps(merged_dictionary),
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+                **({} if renamed_to is None else {"model_name": renamed_to}),
             }
-            model_response: Final = await _proxy_model_table(prisma_client).update(
-                where={"model_id": _model_id},
-                data=_data,
-            )
+            async with _auto_router_capability_slot(
+                prisma_client,
+                effective_params=effective_params,
+                model_id=_model_id,
+            ) as table:
+                model_response: Final = await table.update(
+                    where={"model_id": _model_id},
+                    data=_data,
+                )
+            if renamed_to is not None:
+                await sync_access_groups_for_renamed_model(
+                    prisma_client=prisma_client,
+                    model_id=_model_id,
+                    old_name=deployment.model_name,
+                    new_name=renamed_to,
+                    llm_router=llm_router,
+                )
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
             live_before_reload: Final = live_model_ids_snapshot()
@@ -1942,8 +2294,8 @@ async def update_model(
                     user_api_key_dict=user_api_key_dict,
                     table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
                     before_value=(
-                        _existing_litellm_params.model_dump_json(exclude_none=True)
-                        if isinstance(_existing_litellm_params, BaseModel)
+                        existing_model_row.model_dump_json(exclude_none=True)
+                        if isinstance(existing_model_row, BaseModel)
                         else None
                     ),
                     after_value=(
@@ -2140,27 +2492,85 @@ async def update_useful_links(
         )
 
 
-def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[ComplexityTier, str], ...] | None:
-    """Resolve the tier_labels query param into the labeled tiers the rubric is built from.
-
-    Validated through ComplexityRouterConfig so the editor prefills what the router would send: the
-    same field validators that reject a blank, duplicated, or canonical-name-stealing label on the
-    write path reject it here, rather than this returning a rubric no router could be configured to
-    use. A malformed value is the caller's error, so it surfaces as a 400.
-
-    None when unset, letting classification_system_prompt apply its own default names.
-    """
-    if not tier_labels:
-        return None
+def _validated_labeled_tiers(
+    tier_labels: dict[ComplexityTier, str],  # mutable-ok: Pydantic materializes JSON object fields as dicts
+) -> tuple[tuple[ComplexityTier, str], ...]:
+    """Validate tier labels once for both prompt-preview transports."""
     try:
-        return ComplexityRouterConfig(tier_labels=json.loads(tier_labels)).labeled_tiers()
-    except (JSONDecodeError, ValidationError) as e:
+        return ComplexityRouterConfig(tier_labels=tier_labels).labeled_tiers()
+    except (TypeError, ValidationError) as e:
         raise ProxyException(
             message=f"tier_labels must be a JSON object of tier name to display name: {e}",
             type=ProxyErrorTypes.bad_request_error,
             code=status.HTTP_400_BAD_REQUEST,
             param="tier_labels",
         ) from e
+
+
+def _labeled_tiers_from_query(tier_labels: str | None) -> tuple[tuple[ComplexityTier, str], ...] | None:
+    """Resolve the tier_labels query param into the labeled tiers the rubric is built from."""
+    if not tier_labels:
+        return None
+    try:
+        parsed: Final = json.loads(tier_labels)
+    except JSONDecodeError as e:
+        raise ProxyException(
+            message=f"tier_labels must be a JSON object of tier name to display name: {e}",
+            type=ProxyErrorTypes.bad_request_error,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="tier_labels",
+        ) from e
+    return _validated_labeled_tiers(parsed)
+
+
+class AutoRouterClassifierPromptPreviewRequest(BaseModel):
+    """A POST rather than query params: the classification sections are the operator's own text,
+    which must not reach access logs through a URL."""
+
+    tier_definitions: tuple[TierDefinition, ...] | None = None
+    tier_labels: dict[ComplexityTier, str] | None = None  # mutable-ok: FastAPI parses JSON object fields into dicts
+    classification_rubric: ClassificationRubric | None = None
+    context_window_size: Annotated[int, Field(ge=0)] = DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
+    classification_prompt: str | None = None
+    classification_examples: str | None = None
+
+    _normalize_prompt = field_validator("classification_prompt")(normalize_classification_prompt)
+    _normalize_examples = field_validator("classification_examples")(normalize_classification_examples)
+
+
+@router.post(
+    "/auto_router/classifier/default_prompt",
+    description="Get the system prompt an auto-router's LLM classifier sends for an edited tier set",
+    tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: fastapi's decorator signature types dependencies as a list
+)
+async def preview_auto_router_classifier_prompt(
+    request: AutoRouterClassifierPromptPreviewRequest,
+) -> AutoRouterClassifierDefaultPromptResponse:
+    """
+    Get the classifier system prompt an edited tier set sends, so the dashboard can show it.
+
+    Built by the same function the live classifier uses, so the preview cannot drift from what the
+    router sends. Payload validity beyond a renderable definition stays the dry-run's job.
+    """
+    labeled_tiers: Final = _validated_labeled_tiers(request.tier_labels or {})  # mutable-ok: Pydantic field default
+    system_prompt: Final = (
+        custom_tier_classification_prompt(
+            request.tier_definitions,
+            request.classification_prompt,
+            request.context_window_size,
+            classification_examples=request.classification_examples,
+        )
+        if request.tier_definitions is not None
+        else built_in_tier_classification_prompt(
+            request.classification_prompt,
+            request.context_window_size,
+            labeled_tiers=labeled_tiers,
+            classification_rubric=request.classification_rubric,
+            classification_examples=request.classification_examples,
+        )
+    )
+    return AutoRouterClassifierDefaultPromptResponse(system_prompt=system_prompt)
 
 
 @router.get(
@@ -2175,12 +2585,15 @@ async def get_auto_router_classifier_default_prompt(
     classification_rubric: ClassificationRubric | None = None,
 ) -> AutoRouterClassifierDefaultPromptResponse:
     """
-    Get the default classifier system prompt, so the dashboard's prompt editor can prefill it.
+    Get the classifier system prompt a router would send, so the dashboard can show it.
 
     The prompt's closing line depends on whether prior conversation turns are quoted to the
     classifier, its tier bullets are named by the router's tier_labels, and its calibration examples
     come from the router's classification rubric, so the caller passes all three to get the text that router
     would actually send rather than a rubric it does not use.
+
+    An edited tier set replaces the whole rubric; POST to this path for that prompt, which carries
+    the operator's own instructions and so must not ride in a query string.
 
     Parameters:
     - context_window_size: int - The router's classifier_context_window_size. Defaults to the

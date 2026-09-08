@@ -29,16 +29,15 @@ added to this layer raises instead of silently passing - the inventory of seams
 cannot drift without a test failure.
 """
 
-import os
-import sys
+import base64
+import json
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.abspath("../../../.."))
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
 import litellm
 import litellm.proxy.batches_endpoints.endpoints as endpoints
@@ -53,7 +52,7 @@ from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
 from litellm.types.utils import CredentialItem, LiteLLMBatch
 
-from fastapi import Response
+from fastapi import Request, Response
 
 # --------------------------------------------------------------------------- #
 # Fixtures: distinguishable credentials per model so a wrong/hardcoded model_id
@@ -854,6 +853,48 @@ async def test_create__missing_required_param_is_400(harness, body, missing_para
     harness.router_acreate.assert_not_called()
 
 
+def _raw_batches_request(body: Dict[str, Any]) -> MagicMock:
+    """A request that reaches the real pre-call logic, which the `harness` fixture
+    mocks out. Metadata validation lives there, so it cannot be seen through the seam."""
+    request = MagicMock(spec=Request)
+    request.url = MagicMock()
+    request.url.__str__.return_value = "http://localhost/v1/batches"
+    request.url.path = "/v1/batches"
+    request.method = "POST"
+    request.query_params = {}
+    request.headers = {"Content-Type": "application/json"}
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+    request.body = AsyncMock(return_value=json.dumps(body).encode())
+    return request
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["metadata", "litellm_metadata"])
+async def test_create__non_object_metadata_is_400(field):
+    """A non-object metadata field is rejected with a 400 naming it (#37147), rather
+    than being coerced to None and silently dropped, or crashing behind a 500 with
+    "'str' object has no attribute 'update'"."""
+    body = {
+        "input_file_id": "file-abc",
+        "endpoint": "/v1/chat/completions",
+        "completion_window": "24h",
+        field: "abc",
+    }
+
+    with pytest.raises(ProxyException) as exc_info:
+        await endpoints.create_batch(
+            request=_raw_batches_request(body),
+            fastapi_response=Response(),
+            provider=None,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == field
+    assert "has no attribute 'update'" not in exc_info.value.message
+
+
 # =========================================================================== #
 # Team-level batch expiry enforcement (independent of routing).
 # =========================================================================== #
@@ -947,6 +988,67 @@ async def test_create__uses_acreate_batch_route_type(harness, openai_env_creds):
     await call_create(harness)
 
     assert harness.pre_call.call_args.kwargs["route_type"] == "acreate_batch"
+
+
+def install_managed_files_hook(harness: Harness) -> AsyncMock:
+    prisma_client = AsyncMock()
+    managed_files = _PROXY_LiteLLMManagedFiles(MagicMock(async_set_cache=AsyncMock()), prisma_client=prisma_client)
+    harness.logging.post_call_success_hook = AsyncMock(side_effect=managed_files.async_post_call_success_hook)
+    harness.router.model_list = []
+    return prisma_client
+
+
+TEAM_A_KEY = UserAPIKeyAuth(api_key="sk-team-a", user_id="user_a", team_id="team_a")
+
+
+def assert_ownership_registered_for_team_a(prisma_client: AsyncMock, batch_id: str) -> None:
+    upsert = prisma_client.db.litellm_managedobjecttable.upsert
+    upsert.assert_awaited_once()
+    assert upsert.await_args.kwargs["where"] == {"unified_object_id": batch_id}
+    created = upsert.await_args.kwargs["data"]["create"]
+    assert created["created_by"] == "user_a"
+    assert created["team_id"] == "team_a"
+    prisma_client.db.litellm_managedobjecttable.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"input_file_id": AZURE_FILE_ID},
+        {"input_file_id": "file-plain", "model": "vertex-model"},
+        {"input_file_id": "file-plain"},
+    ],
+    ids=["model_encoded_file_id", "model_param", "provider_fallback"],
+)
+async def test_create__registers_ownership_for_creator(harness, openai_env_creds, body):
+    set_body(harness, {**body, "endpoint": "/v1/chat/completions", "completion_window": "24h"})
+    prisma_client = install_managed_files_hook(harness)
+
+    resp = await call_create(harness, user=TEAM_A_KEY)
+
+    assert_ownership_registered_for_team_a(prisma_client, resp.id)
+
+
+@pytest.mark.asyncio
+async def test_create__unified_file_id_registers_ownership_for_creator(harness):
+    unified_input_file_id = base64.urlsafe_b64encode(
+        b"litellm_proxy:application/octet-stream;unified_id,input-uuid;target_model_names,gpt-4o-mini"
+    ).decode()
+    set_body(
+        harness,
+        {
+            "input_file_id": unified_input_file_id,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+    prisma_client = install_managed_files_hook(harness)
+
+    resp = await call_create(harness, user=TEAM_A_KEY)
+
+    assert harness.router_acreate.call_count == 1
+    assert_ownership_registered_for_team_a(prisma_client, resp.id)
 
 
 @pytest.mark.asyncio

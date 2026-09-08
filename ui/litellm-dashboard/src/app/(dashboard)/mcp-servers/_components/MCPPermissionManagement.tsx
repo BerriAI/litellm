@@ -16,7 +16,7 @@ import {
   type MountedFormValues,
 } from "@/components/common_components/MountedFormField";
 import { requiredRule } from "@/components/common_components/formRules";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { invertedSwitchControl, switchControl, tagsControl, textControl } from "./mcpFieldRules";
 import { listControl } from "./mcpFormStore";
 

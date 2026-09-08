@@ -5652,7 +5652,7 @@ class TestPanwAirsTimeoutCoercion:
         assert isinstance(params.timeout, float)
 
     def test_litellm_params_rejects_garbage_timeout(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match='validation error for LitellmParams'):
             LitellmParams(
                 guardrail="panw_prisma_airs",
                 mode="pre_call",

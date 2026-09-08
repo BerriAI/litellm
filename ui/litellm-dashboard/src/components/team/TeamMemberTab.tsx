@@ -71,8 +71,8 @@ export default function TeamMemberTab({
     const rpmLimit = membership?.litellm_budget_table?.rpm_limit;
     const tpmLimit = membership?.litellm_budget_table?.tpm_limit;
 
-    const rpmText = rpmLimit ? `${formatNumber(rpmLimit)} RPM` : null;
-    const tpmText = tpmLimit ? `${formatNumber(tpmLimit)} TPM` : null;
+    const rpmText = rpmLimit != null ? `${formatNumber(rpmLimit)} RPM` : null;
+    const tpmText = tpmLimit != null ? `${formatNumber(tpmLimit)} TPM` : null;
 
     const limits = [rpmText, tpmText].filter(Boolean);
     return limits.length > 0 ? limits.join(" / ") : "No Limits";
@@ -191,9 +191,9 @@ export default function TeamMemberTab({
         const membership = teamData.team_memberships.find((tm) => tm.user_id === record.user_id);
         const enhancedMember = {
           ...record,
-          max_budget_in_team: membership?.litellm_budget_table?.max_budget || null,
-          tpm_limit: membership?.litellm_budget_table?.tpm_limit || null,
-          rpm_limit: membership?.litellm_budget_table?.rpm_limit || null,
+          max_budget_in_team: membership?.litellm_budget_table?.max_budget ?? null,
+          tpm_limit: membership?.litellm_budget_table?.tpm_limit ?? null,
+          rpm_limit: membership?.litellm_budget_table?.rpm_limit ?? null,
           budget_duration: membership?.litellm_budget_table?.budget_duration || null,
           allowed_models: membership?.litellm_budget_table?.allowed_models || [],
         };

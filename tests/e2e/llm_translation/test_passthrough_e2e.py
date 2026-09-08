@@ -2,7 +2,8 @@
 
 Each test sends a NATIVE provider request through the proxy's passthrough route
 and verifies the proxy still logged a costed SpendLogs row
-(call_type="pass_through_endpoint"), correlated by the x-litellm-call-id header.
+(call_type="pass_through_endpoint"), correlated by the id the caller was served:
+the x-litellm-call-id header on gemini, the `msg_...` message id on anthropic.
 
 Covered: gemini ("gemini-2.5-flash") + anthropic ("claude-haiku-4-5"), streaming +
 non-streaming, plus native tool calls. See LLM_TRANSLATION_COVERAGE_MATRIX.md.
@@ -14,9 +15,9 @@ A passthrough call returning non-2xx fails hard (never a skip); once it returns
 import pytest
 
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
-from e2e_http import StreamingResponse, require_successful_call, unwrap
+from e2e_http import require_successful_call, unwrap
 from lifecycle import ResourceManager
-from models import KeyGenerateBody, SpendLogRow
+from models import ChatResponse, KeyGenerateBody, SpendLogRow
 from passthrough_client import (
     AnthropicTool,
     GeminiFunctionDeclaration,
@@ -24,26 +25,28 @@ from passthrough_client import (
     JsonSchema,
     JsonSchemaProperty,
     PassthroughClient,
+    anthropic_message_id,
     completed_responses_object,
 )
 
 EMBEDDING_MODEL = "text-embedding-3-small"
+REALTIME_MODEL = "gpt-realtime-2"
 
 pytestmark = pytest.mark.e2e
 
 
-def _fetch_cost_breakdown(client: PassthroughClient, result: StreamingResponse) -> SpendLogRow:
+def _fetch_cost_breakdown(client: PassthroughClient, request_id: str | None) -> SpendLogRow:
     """The passthrough call's logged row, polled until it carries a cost.
 
     Asserts (not skips) that a 2xx passthrough call produced a costed row - the
     whole point of passthrough spend tracking.
     """
-    assert result.call_id, "passthrough response had no x-litellm-call-id header"
+    assert request_id, "passthrough response carried no id to correlate its spend row by"
     rows = client.proxy.poll_logs_for_request_id(
-        result.call_id,
+        request_id,
         predicate=lambda rs: (rs[0].spend or 0) > 0,
     )
-    assert rows, f"no SpendLogs row for passthrough call_id {result.call_id}"
+    assert rows, f"no SpendLogs row for passthrough request_id {request_id}"
     row = rows[0]
     assert row.call_type == "pass_through_endpoint"
     assert (row.spend or 0) > 0, f"passthrough call was not costed: {row}"
@@ -63,7 +66,7 @@ def test_gemini_passthrough_nonstreaming_logs_cost(
     )
     require_successful_call(result)
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, result.call_id)
     assert row.custom_llm_provider == "gemini"
     assert "gemini" in (row.model or "")
     assert tag in (row.request_tags or []), f"tags not logged: {row.request_tags}"
@@ -106,7 +109,7 @@ def test_gemini_passthrough_streaming_logs_cost(
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, result.call_id)
     assert row.custom_llm_provider == "gemini"
 
 
@@ -136,7 +139,7 @@ def test_gemini_passthrough_tool_call_logs_cost(
     require_successful_call(result)
     assert "functionCall" in result.body, "gemini did not emit a tool call"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, result.call_id)
     assert row.custom_llm_provider == "gemini"
 
 
@@ -149,7 +152,7 @@ def test_anthropic_passthrough_nonstreaming_logs_cost(
     result = client.anthropic_message(scoped_key, "claude-haiku-4-5", "Say hello")
     require_successful_call(result)
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, anthropic_message_id(result))
     assert row.custom_llm_provider == "anthropic"
     assert "claude" in (row.model or "")
 
@@ -163,7 +166,7 @@ def test_anthropic_passthrough_streaming_logs_cost(
     require_successful_call(result)
     assert result.chunks > 0, "streaming passthrough produced no events"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, anthropic_message_id(result))
     assert row.custom_llm_provider == "anthropic"
 
 
@@ -189,7 +192,7 @@ def test_anthropic_passthrough_tool_call_logs_cost(
     require_successful_call(result)
     assert "tool_use" in result.body, "anthropic did not emit a tool call"
 
-    row = _fetch_cost_breakdown(client, result)
+    row = _fetch_cost_breakdown(client, anthropic_message_id(result))
     assert row.custom_llm_provider == "anthropic"
 
 
@@ -338,4 +341,91 @@ class TestOpenAIPassthroughSpend:
         assert (row.prompt_tokens or 0) > 0, (
             f"the embeddings row logged no prompt tokens, so whatever cost it carries "
             f"was not computed from the real usage: {row}"
+        )
+
+
+class TestOpenAIProviderPrefixChat:
+    """OpenAI-format chat through the raw `/openai/{endpoint}` passthrough (LIT-4752).
+
+    The body goes to OpenAI untranslated with the proxy's own OPENAI_API_KEY swapped
+    in, so the customer gets OpenAI's real completion back, and the gateway must
+    still write a costed pass_through_endpoint row for it.
+    """
+
+    @pytest.mark.covers("llm.chat_completions.openai.passthrough.nonstream.cost_logged")
+    def test_openai_prefix_chat_returns_completion_and_logs_its_cost(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        result = client.openai_chat(scoped_key, CHEAP_OPENAI_MODEL, f"Say hi in one word. {unique_marker()}")
+        require_successful_call(result)
+
+        completion = ChatResponse.model_validate_json(result.body)
+        assert completion.id, f"/openai/v1/chat/completions relayed no completion id: {result.body[:300]}"
+        content = (
+            completion.choices[0].message.content
+            if completion.choices and completion.choices[0].message
+            else None
+        )
+        assert content and content.strip(), (
+            f"/openai/v1/chat/completions relayed an empty completion: {result.body[:300]}"
+        )
+        assert completion.usage is not None, f"the completion carried no usage to price from: {completion}"
+
+        row = _fetch_cost_breakdown(client, completion.id)
+        assert row.prompt_tokens == completion.usage.prompt_tokens, (
+            f"logged {row.prompt_tokens} prompt tokens, the completion the customer read "
+            f"reported {completion.usage.prompt_tokens}"
+        )
+        assert row.completion_tokens == completion.usage.completion_tokens, (
+            f"logged {row.completion_tokens} completion tokens, the completion the customer read "
+            f"reported {completion.usage.completion_tokens}"
+        )
+
+
+class TestOpenAIPassthroughWebsocket:
+    """The OpenAI passthrough prefixes must answer a websocket upgrade, not only a POST.
+
+    The customer points realtime and responses.connect clients at the same prefixes
+    their HTTP traffic already uses. Only HTTP routes were registered under those
+    prefixes, so every upgrade was refused before a socket existed and those clients
+    could not reach the gateway at all. A refused upgrade is an HTTP response, not a
+    close frame, which is why these assert on the handshake rather than a close code.
+    """
+
+    @pytest.mark.covers("llm.realtime.openai.passthrough.stream.works")
+    def test_realtime_upgrade_reaches_openai_through_the_passthrough_prefix(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        """Pins GitHub issue #36088: /openai_passthrough/v1/realtime accepts the
+        upgrade and relays OpenAI's own session, instead of rejecting it with a 403."""
+        handshake = client.openai_passthrough_websocket(
+            scoped_key, "/openai_passthrough/v1/realtime", model=REALTIME_MODEL
+        )
+
+        assert handshake.rejected_status is None, (
+            f"/openai_passthrough/v1/realtime refused the websocket upgrade with HTTP "
+            f"{handshake.rejected_status}, so a realtime client cannot connect through "
+            "the gateway at all"
+        )
+        assert handshake.first_event_type == "session.created", (
+            "the accepted socket never carried OpenAI's opening session event, so the "
+            f"upgrade was not relayed upstream; the first frame was "
+            f"{handshake.first_event_type}"
+        )
+
+    @pytest.mark.covers("llm.responses.openai.passthrough_websocket.stream.works")
+    def test_responses_upgrade_is_accepted_on_the_openai_prefix(
+        self, client: PassthroughClient, scoped_key: str
+    ) -> None:
+        """Pins GitHub issue #36088 on the second prefix: /openai/v1/responses upgrades
+        as well. A responses.connect socket waits for the client to speak first, so the
+        accepted handshake is the whole signal here."""
+        handshake = client.openai_passthrough_websocket(
+            scoped_key, "/openai/v1/responses", first_event_timeout=2.0
+        )
+
+        assert handshake.rejected_status is None, (
+            f"/openai/v1/responses refused the websocket upgrade with HTTP "
+            f"{handshake.rejected_status}; the prefix relays this route over HTTP but "
+            "drops a responses.connect client before the socket opens"
         )

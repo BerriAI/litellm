@@ -381,6 +381,44 @@ describe("MCPServerEdit (true passthrough warning)", () => {
   });
 });
 
+describe("MCPServerEdit (OAuth authorize temp payload)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards issuer/authorization_url/token_url/registration_url to the temp OAuth session payload", async () => {
+    // Without these fields the ephemeral server the temp OAuth session endpoint builds has no
+    // admin-configured OAuth endpoints on it, discovery falls back to (and fails against) the
+    // plain server url, and Authorize & Fetch Token 400s with "authorization url is not
+    // configured" even though the saved server (and the visible form) has all four fields filled in.
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          issuer: "https://github.com/login/oauth",
+          authorization_url: "https://github.com/login/oauth/authorize",
+          token_url: "https://github.com/login/oauth/access_token",
+          registration_url: "https://github.com/login/oauth/register",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockOauth.getTemporaryPayload).toBeTruthy();
+    });
+    const payload = mockOauth.getTemporaryPayload!();
+    expect(payload).toBeTruthy();
+    expect(payload?.issuer).toBe("https://github.com/login/oauth");
+    expect(payload?.authorization_url).toBe("https://github.com/login/oauth/authorize");
+    expect(payload?.token_url).toBe("https://github.com/login/oauth/access_token");
+    expect(payload?.registration_url).toBe("https://github.com/login/oauth/register");
+  });
+});
+
 describe("MCPServerEdit (auth type switch)", () => {
   beforeEach(() => {
     vi.clearAllMocks();

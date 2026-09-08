@@ -2,7 +2,7 @@ import React from "react";
 import { CircleHelp } from "lucide-react";
 import { Providers, provider_map } from "@/components/provider_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { Field, FieldLabel, FieldTitle } from "@/components/shared/form/field";
+import { Field, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,

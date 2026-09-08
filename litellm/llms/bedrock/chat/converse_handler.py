@@ -1,4 +1,6 @@
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
@@ -19,9 +21,25 @@ from litellm.rust_bridge.chat_completions import rust_chat_completions_accepts
 from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
-from ..base_aws_llm import BaseAWSLLM, Credentials
-from ..common_utils import BedrockError, _get_all_bedrock_regions
+from ..base_aws_llm import BaseAWSLLM, Credentials, bedrock_bearer_token
+from ..common_utils import BedrockError, _get_all_bedrock_regions, error_response_text
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
+
+
+def _sigv4_principal(credentials: Credentials | None) -> Mapping[str, str]:
+    if credentials is None:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (
+                ("aws_access_key_id", credentials.access_key),
+                ("aws_secret_access_key", credentials.secret_key),
+                ("aws_session_token", credentials.token),
+            )
+            if value is not None
+        }
+    )
 
 
 def make_sync_call(
@@ -35,7 +53,7 @@ def make_sync_call(
     json_mode: bool | None = False,
     fake_stream: bool = False,
     stream_chunk_size: int | None = None,
-):
+) -> tuple[Any, httpx.Headers]:
     if client is None:
         client = _get_httpx_client()  # Create a new client if none provided
 
@@ -48,7 +66,12 @@ def make_sync_call(
     )
 
     if response.status_code != 200:
-        raise BedrockError(status_code=response.status_code, message=str(response.read()))
+        raise BedrockError(
+            status_code=response.status_code,
+            message=str(response.read()),
+            headers=response.headers,
+            response=response,
+        )
 
     if fake_stream:
         model_response: Final[ModelResponse] = litellm.AmazonConverseConfig()._transform_response(
@@ -76,7 +99,7 @@ def make_sync_call(
         additional_args={"complete_input_dict": data},
     )
 
-    return completion_stream
+    return completion_stream, response.headers
 
 
 class BedrockConverseLLM(BaseAWSLLM):
@@ -95,7 +118,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         stream,
         optional_params: dict,
         litellm_params: dict,
-        credentials: Credentials,
+        credentials: Credentials | None,
         logger_fn=None,
         headers={},
         client: AsyncHTTPHandler | None = None,
@@ -134,7 +157,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             },
         )
 
-        completion_stream: Final = await make_call(
+        completion_stream, response_headers = await make_call(
             client=client,
             api_base=api_base,
             headers=dict(prepped.headers),
@@ -151,6 +174,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
+            _response_headers=response_headers,
         )
         return streaming_response
 
@@ -166,7 +190,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         stream,
         optional_params: dict,
         litellm_params: dict,
-        credentials: Credentials,
+        credentials: Credentials | None,
         logger_fn=None,
         headers: dict = {},
         client: AsyncHTTPHandler | None = None,
@@ -228,11 +252,16 @@ class BedrockConverseLLM(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=error_response_text(err.response),
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return litellm.AmazonConverseConfig()._transform_response(
+        transformed_response: Final = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -244,6 +273,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             optional_params=optional_params,
             encoding=encoding,
         )
+        transformed_response.set_provider_response_headers(response.headers)
+        return transformed_response
 
     def completion(
         self,
@@ -328,17 +359,21 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         litellm_params["aws_region_name"] = aws_region_name  # [DO NOT DELETE] important for async calls
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
+        credentials: Final[Credentials | None] = (
+            None
+            if bedrock_bearer_token(api_key) is not None
+            else self.get_credentials(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_region_name=aws_region_name,
+                aws_session_name=aws_session_name,
+                aws_profile_name=aws_profile_name,
+                aws_role_name=aws_role_name,
+                aws_web_identity_token=aws_web_identity_token,
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_external_id=aws_external_id,
+            )
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -365,19 +400,13 @@ class BedrockConverseLLM(BaseAWSLLM):
         # The Rust core owns the whole call for the subset it accepts. Ask
         # before transforming so whichever path runs emits pre_call once, and
         # hand down the credentials, region and endpoint this handler already
-        # resolved so both paths sign as the same principal.
+        # resolved so both paths sign as the same principal. Bearer-token auth
+        # resolves no SigV4 principal at all, and each path reads that token
+        # itself.
         rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
             **optional_params,
-            **{  # mutable-ok: merged into its mutable parent above
-                key: value
-                for key, value in (
-                    ("aws_access_key_id", credentials.access_key),
-                    ("aws_secret_access_key", credentials.secret_key),
-                    ("aws_session_token", credentials.token),
-                    ("aws_region_name", aws_region_name),
-                )
-                if value is not None
-            },
+            **_sigv4_principal(credentials),
+            "aws_region_name": aws_region_name,
         }
         serves_via_rust: Final = rust_chat_completions_accepts(
             model=model,
@@ -541,7 +570,7 @@ class BedrockConverseLLM(BaseAWSLLM):
             client = client
 
         if stream is not None and stream is True:
-            completion_stream: Final = make_sync_call(
+            completion_stream, response_headers = make_sync_call(
                 client=(client if client is not None and isinstance(client, HTTPHandler) else None),
                 api_base=proxy_endpoint_url,
                 headers=prepped.headers,
@@ -558,6 +587,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 model=model,
                 custom_llm_provider="bedrock",
                 logging_obj=logging_obj,
+                _response_headers=response_headers,
             )
 
             return streaming_response
@@ -574,11 +604,16 @@ class BedrockConverseLLM(BaseAWSLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code: Final = err.response.status_code
-            raise BedrockError(status_code=error_code, message=err.response.text)
+            raise BedrockError(
+                status_code=error_code,
+                message=error_response_text(err.response),
+                headers=err.response.headers,
+                response=err.response,
+            )
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return litellm.AmazonConverseConfig()._transform_response(
+        sync_transformed_response: Final = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -590,3 +625,5 @@ class BedrockConverseLLM(BaseAWSLLM):
             optional_params=optional_params,
             encoding=encoding,
         )
+        sync_transformed_response.set_provider_response_headers(response.headers)
+        return sync_transformed_response

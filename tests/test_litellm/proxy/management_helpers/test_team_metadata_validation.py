@@ -1,12 +1,9 @@
 import asyncio
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_helpers.team_metadata_validation import (
@@ -671,7 +668,7 @@ async def test_non_callable_validator_is_rejected_with_clean_500():
 
 
 def test_parse_schema_duplicate_error_lists_offending_keys():
-    with pytest.raises(ValueError) as exc_info:
+    with pytest.raises(ValueError, match='team_metadata_schema contains duplicate keys: app_name') as exc_info:
         parse_team_metadata_schema(
             [{"key": "cost_center"}, {"key": "app_name"}, {"key": "cost_center"}, {"key": "app_name"}]
         )

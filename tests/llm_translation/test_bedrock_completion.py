@@ -4,7 +4,6 @@ Tests Bedrock Completion + Rerank endpoints
 
 # @pytest.mark.skip(reason="AWS Suspended Account")
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
@@ -13,12 +12,8 @@ import litellm.types
 
 load_dotenv()
 import io
-import os
 import json
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -1890,7 +1885,7 @@ def test_bedrock_completion_test_4(modify_params):
         ]
         assert transformed_messages == expected_messages
     else:
-        with pytest.raises(Exception) as e:
+        with pytest.raises(Exception, match=r"litellm\.modify_params") as e:
             litellm.completion(**data)
         assert "litellm.modify_params" in str(e.value)
 

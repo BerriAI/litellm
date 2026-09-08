@@ -6,15 +6,10 @@ Vertex AI Anthropic models don't support URL sources for images.
 LiteLLM should convert image URLs to base64 when using Vertex AI Anthropic.
 """
 
-import os
-import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,

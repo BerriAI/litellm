@@ -1,11 +1,6 @@
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
@@ -525,3 +520,354 @@ def test_merge_bedrock_aws_request_params_keeps_caller_credentials_without_stati
     assert merged["aws_secret_access_key"] == "caller-secret"
     assert merged["aws_session_token"] == "caller-token"
     assert merged["aws_region_name"] == "us-west-2"
+
+
+def test_strip_unsupported_output_config_keeps_format_drops_effort(local_model_cost_map):
+    """On a model with neither effort flag, only the ``format`` key survives."""
+    from litellm.llms.bedrock.common_utils import (
+        strip_unsupported_bedrock_invoke_output_config_keys,
+    )
+
+    schema_format = {"type": "json_schema", "schema": {"type": "object"}}
+    body = {"output_config": {"effort": "high", "format": schema_format}}
+
+    strip_unsupported_bedrock_invoke_output_config_keys(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        request_body=body,
+    )
+
+    assert body["output_config"] == {"format": schema_format}
+
+
+def test_apply_structured_output_prefers_legacy_output_format(local_model_cost_map):
+    """The legacy ``output_format`` wins over ``output_config.format`` when a
+    request carries both, matching the pre-existing precedence."""
+    from litellm.llms.bedrock.common_utils import (
+        apply_bedrock_invoke_structured_output,
+    )
+
+    legacy = {"type": "json_schema", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}
+    newer = {"type": "json_schema", "schema": {"type": "object", "properties": {"b": {"type": "string"}}}}
+    body = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "output_format": legacy,
+        "output_config": {"format": newer},
+    }
+
+    apply_bedrock_invoke_structured_output(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        request_body=body,
+    )
+
+    assert body["output_config"] == {"format": legacy}
+    assert "output_format" not in body
+
+
+def test_sign_aws_request_assumes_role_with_external_id(monkeypatch):
+    """A trust policy requiring sts:ExternalId must be satisfied when signing batch API requests."""
+    import datetime
+    from unittest.mock import patch
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    from litellm.llms.bedrock.common_utils import CommonBatchFilesUtils
+
+    monkeypatch.delenv("AWS_EXTERNAL_ID", raising=False)
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if params.get("ExternalId") != "external-id-batch-sign":
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:AssumeRole"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIABATCHSIGNROLE",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    optional_params = {
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "AKIABATCHSIGNCALLER",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-batch-sign-role",
+        "aws_session_name": "litellm-batch-sign-session",
+        "aws_external_id": "external-id-batch-sign",
+    }
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        signed_headers, signed_data = CommonBatchFilesUtils().sign_aws_request(
+            service_name="bedrock",
+            data={"jobName": "litellm-batch-job"},
+            endpoint_url="https://bedrock.us-east-1.amazonaws.com/model-invocation-job",
+            optional_params=optional_params,
+        )
+
+    authorization = {key.lower(): value for key, value in signed_headers.items()}["authorization"]
+    assert "ASIABATCHSIGNROLE" in authorization
+    assert signed_data == b'{"jobName": "litellm-batch-job"}'
+
+
+# --------------------------------------------------------------------------- #
+# Provider error headers (LIT-5428)                                            #
+# --------------------------------------------------------------------------- #
+
+
+def _bedrock_chat_error_configs():
+    from litellm.llms.bedrock.chat.agentcore.transformation import AmazonAgentCoreConfig
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.llms.bedrock.chat.invoke_agent.transformation import AmazonInvokeAgentConfig
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_moonshot_transformation import (
+        AmazonMoonshotConfig,
+    )
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+        AmazonInvokeConfig,
+    )
+
+    return [
+        AmazonInvokeConfig,
+        AmazonConverseConfig,
+        AmazonMoonshotConfig,
+        AmazonBedrockOpenAIConfig,
+        AmazonAgentCoreConfig,
+        AmazonInvokeAgentConfig,
+    ]
+
+
+@pytest.mark.parametrize("config", _bedrock_chat_error_configs())
+def test_bedrock_chat_get_error_class_keeps_provider_headers(config):
+    """Every Bedrock chat route must carry x-amzn-RequestId out to the caller (LIT-5428).
+
+    A config that drops the headers it is handed shadows the fix for its own models.
+    """
+    error = config().get_error_class(
+        error_message="Amazon Bedrock is unable to process your request.",
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-chat-500"},
+    )
+
+    assert error.response.headers["x-amzn-requestid"] == "req-chat-500"
+
+
+def test_error_response_text_reads_a_read_response():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import error_response_text
+
+    response = httpx.Response(status_code=500, text="Amazon Bedrock is unable to process your request.")
+
+    assert error_response_text(response) == "Amazon Bedrock is unable to process your request."
+
+
+def test_error_response_text_falls_back_when_a_streamed_response_was_never_read():
+    """A retried streamed request raises HTTPStatusError over an unread body; reading it
+    throws ResponseNotRead and would lose the status and headers this fix preserves."""
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import error_response_text
+
+    request = httpx.Request(method="POST", url="https://bedrock-runtime.amazonaws.com")
+    response = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-unread-500"},
+        stream=httpx.ByteStream(b"never read"),
+        request=request,
+    )
+
+    with pytest.raises(httpx.ResponseNotRead):
+        _ = response.text
+
+    assert error_response_text(response) == "Internal Server Error"
+
+
+def test_bedrock_error_skips_header_values_httpx_cannot_carry():
+    """The shared HTTP handler copies an arbitrary exception's header values in verbatim,
+    so a non-str value must not take down the whole error (LIT-5428)."""
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    error = BedrockError(
+        status_code=500,
+        message="boom",
+        headers={"x-amzn-RequestId": "req-mixed-500", "x-retry-count": 3, "x-nothing": None},
+    )
+
+    assert error.response.headers["x-amzn-requestid"] == "req-mixed-500"
+    assert "x-retry-count" not in error.response.headers
+    assert isinstance(error.response, httpx.Response)
+
+
+def test_bedrock_error_keeps_duplicate_httpx_header_values():
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    error = BedrockError(
+        status_code=500,
+        message="boom",
+        headers=httpx.Headers([("x-amzn-RequestId", "req-dup-500"), ("set-cookie", "a=1"), ("set-cookie", "b=2")]),
+    )
+
+    assert error.response.headers.get_list("set-cookie") == ["a=1", "b=2"]
+
+
+def _bedrock_httpx_status_error_sites():
+    """Every `except httpx.HTTPStatusError as err` that raises a BedrockError, across bedrock."""
+    import ast
+    import pathlib
+
+    sites = []
+    for path in sorted(pathlib.Path("litellm/llms/bedrock").rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)):
+            caught = ast.unparse(handler.type) if handler.type is not None else ""
+            if "HTTPStatusError" not in caught or handler.name is None:
+                continue
+            for call in (
+                n
+                for n in ast.walk(handler)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "BedrockError"
+            ):
+                sites.append((str(path), call.lineno, handler.name, {k.arg for k in call.keywords}))
+    return sites
+
+
+def test_every_bedrock_httpx_status_error_site_keeps_provider_headers():
+    """A raise site holding the provider's failed response must hand its headers on (LIT-5428).
+
+    These sites are the only place x-amzn-RequestId still exists; a site that drops it
+    silently shadows the fix for that whole surface.
+    """
+    sites = _bedrock_httpx_status_error_sites()
+
+    assert len(sites) >= 12
+    dropped = [f"{path}:{lineno}" for path, lineno, _, kwargs in sites if "headers" not in kwargs]
+    assert dropped == []
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_bedrock_embedding_call_keeps_provider_headers(is_async):
+    """The embeddings surface raises from the same shape as chat and lost the same header."""
+    import httpx
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+    from litellm.llms.bedrock.embed.embedding import BedrockEmbedding
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    failure = httpx.Response(
+        status_code=500,
+        headers={"x-amzn-RequestId": "req-embed-500"},
+        text='{"message":"Amazon Bedrock is unable to process your request."}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+
+    class _SyncUpstream(HTTPHandler):
+        def post(self, *args, **kwargs):
+            return failure
+
+    class _AsyncUpstream(AsyncHTTPHandler):
+        async def post(self, *args, **kwargs):
+            return failure
+
+    async def _drive():
+        embedding = BedrockEmbedding()
+        kwargs = dict(
+            timeout=None,
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/",
+            headers={},
+            data={},
+        )
+        if is_async:
+            return await embedding._make_async_call(client=_AsyncUpstream(), **kwargs)
+        return embedding._make_sync_call(client=_SyncUpstream(), **kwargs)
+
+    with pytest.raises(BedrockError) as exc_info:
+        await _drive()
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-embed-500"
+
+
+def _bedrock_mantle_error_configs():
+    from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
+    from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
+
+    return [BedrockMantleChatConfig, BedrockMantleResponsesAPIConfig]
+
+
+@pytest.mark.parametrize("config", _bedrock_mantle_error_configs())
+def test_bedrock_mantle_get_error_class_keeps_provider_headers(config):
+    """bedrock_mantle rides the OpenAI-compatible surfaces, whose errors drop the headers.
+
+    A chat request for a responses-API model is bridged onto the responses config, so
+    fixing only the chat one leaves the model the customer actually calls uncovered.
+    """
+    error = config().get_error_class(
+        error_message="prompt tokens exceed model maximum",
+        status_code=400,
+        headers={"x-amzn-RequestId": "req-mantle-400"},
+    )
+
+    assert error.response.headers["x-amzn-requestid"] == "req-mantle-400"
+
+
+def _bedrock_configs_with_get_error_class():
+    import importlib
+    import inspect
+    import pathlib
+
+    import litellm
+
+    llms_root = pathlib.Path(inspect.getfile(litellm)).parent / "llms"
+    configs = []
+    for package in ("bedrock", "bedrock_mantle"):
+        for path in sorted((llms_root / package).rglob("*.py")):
+            module_name = "litellm.llms." + ".".join(path.relative_to(llms_root).with_suffix("").parts)
+            module = importlib.import_module(module_name)
+            for name, obj in vars(module).items():
+                if not inspect.isclass(obj) or obj.__module__ != module_name:
+                    continue
+                if getattr(obj, "get_error_class", None) is None:
+                    continue
+                configs.append(pytest.param(obj, id=f"{module_name}.{name}"))
+    return configs
+
+
+@pytest.mark.parametrize("config", _bedrock_configs_with_get_error_class())
+def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
+    """Every bedrock surface must classify errors through BedrockError, not a header-dropping base.
+
+    A config that inherits get_error_class from a provider-agnostic base builds a blank
+    response, so the request id is gone before the proxy ever reads it.
+    """
+    try:
+        instance = config()
+    except Exception:
+        instance = config.__new__(config)
+
+    try:
+        error = instance.get_error_class(
+            error_message="boom",
+            status_code=500,
+            headers={"x-amzn-RequestId": "req-audit-500"},
+        )
+    except Exception as raised:  # some bases raise the exception instead of returning it
+        error = raised
+
+    assert error.response.headers["x-amzn-requestid"] == "req-audit-500"
+
+
+def test_bedrock_get_error_class_audit_covers_every_surface():
+    assert len(_bedrock_configs_with_get_error_class()) >= 30
