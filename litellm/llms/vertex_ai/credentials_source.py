@@ -15,6 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,17 +121,18 @@ def raise_vertex_credentials_failure(failure: VertexCredentialsFailure) -> NoRet
 
     The caller is told which of the three faults it was; the path goes to the proxy log
     instead, because the message reaches whoever sent the request and the operator who can
-    act on the path is reading the log anyway.
+    act on the path is reading the log anyway. The path is redacted on the way there too, so
+    a credential misconfigured into this field does not become a log entry.
     """
     match failure:
         case VertexCredentialsFileUnreadable(path=path, reason=reason):
-            verbose_logger.error("Vertex: cannot read the credentials file at %s: %s", path, reason)
+            verbose_logger.error("Vertex: cannot read the credentials file at %s: %s", redact_string(path), reason)
             raise ValueError(
                 f"Unable to read the vertex credentials file: {reason}. The proxy log names the path. "
                 "Set `vertex_credentials` to a readable file path, or to the credentials JSON itself."
             )
         case VertexCredentialsFileNotJson(path=path, detail=detail):
-            verbose_logger.error("Vertex: credentials file at %s is not valid JSON: %s", path, detail)
+            verbose_logger.error("Vertex: credentials file at %s is not valid JSON: %s", redact_string(path), detail)
             raise ValueError(
                 f"The vertex credentials file is not valid JSON: {detail}. The proxy log names the path. "
                 "Check for unescaped newlines in private_key."

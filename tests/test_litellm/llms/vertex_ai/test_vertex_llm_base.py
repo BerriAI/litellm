@@ -2304,6 +2304,17 @@ class TestVertexCredentialsSource:
         assert project_id == "from-inline"
         assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-inline"}
 
+    def test_a_credential_misconfigured_as_a_path_is_not_logged_either(self, caplog):
+        """The path reaches the log, so a credential put in that field must be scrubbed first."""
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
+
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match="Unable to read the vertex credentials file"):
+                VertexBase().load_auth(credentials=pem, project_id="p")
+
+        assert "MIIEvQIBADA" not in caplog.text
+        assert "REDACTED" in caplog.text
+
     def test_a_path_open_rejects_outright_is_reported_not_raised_raw(self):
         """open() rejects some paths with a bare ValueError before any filesystem call."""
         with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
