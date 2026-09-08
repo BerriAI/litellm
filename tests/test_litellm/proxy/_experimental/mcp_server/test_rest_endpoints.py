@@ -25,7 +25,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.types.mcp import MCPAuth
+from litellm.types.mcp import MCPAuth, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
 def _rendered_log_message(call):
@@ -175,6 +176,36 @@ class TestExecuteWithMcpClient:
         message = rest_endpoints._connection_error_message(TimeoutError(), "https://api.example.com/mcp/", 30.0)
         assert "https://api.example.com/mcp/" in message
         assert "30s" in message
+
+    def test_connection_error_message_hides_arbitrary_http_exception_detail(self):
+        message = rest_endpoints._connection_error_message(
+            HTTPException(status_code=500, detail="secret upstream detail"),
+            "https://api.example.com/mcp/",
+            30.0,
+        )
+
+        assert "secret upstream detail" not in message
+
+    @pytest.mark.asyncio
+    async def test_none_mode_url_credentials_returns_actionable_redacted_error(self):
+        async def unreached_operation(client):
+            raise AssertionError("operation must not run for an invalid server configuration")
+
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://lit-user:s3cr3t@upstream.example.com/mcp",
+            auth_type=MCPAuth.none,
+        )
+
+        result = await rest_endpoints._execute_with_mcp_client(payload, unreached_operation)
+
+        message = str(result["message"])
+        assert result["error"] is True
+        assert "Basic Auth" in message
+        assert "auth_type: basic" in message
+        assert "auth_value: username:password" in message
+        assert "lit-user" not in message
+        assert "s3cr3t" not in message
 
     @pytest.mark.asyncio
     async def test_forwards_static_headers(self, monkeypatch):
@@ -570,6 +601,140 @@ class TestTestConnection:
     def test_requires_auth_dependency(self):
         route = _get_route("/mcp-rest/test/connection", "POST")
         assert _route_has_dependency(route, user_api_key_auth)
+
+    @staticmethod
+    def _capture_execute(monkeypatch) -> dict:
+        captured: dict = {}
+
+        async def fake_execute(
+            request,
+            operation,
+            mcp_auth_header=None,
+            oauth2_headers=None,
+            raw_headers=None,
+        ):
+            captured["request"] = request
+            captured["mcp_auth_header"] = mcp_auth_header
+            captured["oauth2_headers"] = oauth2_headers
+            return {"status": "ok"}
+
+        monkeypatch.setattr(rest_endpoints, "_execute_with_mcp_client", fake_execute, raising=False)
+        return captured
+
+    @staticmethod
+    def _oauth2_authorization_code_payload(**overrides) -> NewMCPServerRequest:
+        return NewMCPServerRequest(
+            server_name="github_mcp",
+            url="https://api.githubcopilot.com/mcp/",
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="authorization_code",
+            authorization_url="https://github.com/login/oauth/authorize",
+            token_url="https://github.com/login/oauth/access_token",
+            **overrides,
+        )
+
+    @pytest.mark.asyncio
+    async def test_forwards_staged_oauth2_bearer(self, monkeypatch):
+        """The just-authorized upstream token rides the request's Authorization header, exactly
+        as /test/tools/list receives it; dropping it makes every authorization_code server fail
+        the connection test that its tools preview passes."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request(
+            {"x-litellm-api-key": "sk-admin-session", "authorization": "Bearer upstream-oauth-token"},
+            path="/mcp-rest/test/connection",
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            self._oauth2_authorization_code_payload(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["oauth2_headers"] == {"Authorization": "Bearer upstream-oauth-token"}
+        assert captured["mcp_auth_header"] is None
+
+    @pytest.mark.asyncio
+    async def test_forwards_staged_auth_value(self, monkeypatch):
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request({"x-litellm-api-key": "sk-admin-session"}, path="/mcp-rest/test/connection")
+        payload = NewMCPServerRequest(
+            server_name="example",
+            url="https://example.com/mcp",
+            auth_type=MCPAuth.bearer_token,
+            credentials={"auth_value": "upstream-static-token"},
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["mcp_auth_header"] == "upstream-static-token"
+        assert captured["oauth2_headers"] is None
+
+    @pytest.mark.asyncio
+    async def test_inherits_stored_credentials_of_saved_server(self, monkeypatch):
+        """The edit form resends a saved server without its masked credential; the stored one
+        must be used, as /test/tools/list already does."""
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        captured = self._capture_execute(monkeypatch)
+        saved = MCPServer(
+            server_id="saved-server-id",
+            name="example",
+            url="https://example.com/mcp",
+            transport="http",
+            auth_type=MCPAuth.bearer_token,
+            authentication_token="stored-upstream-token",
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: saved if server_id == "saved-server-id" else None,
+        )
+        request = _build_request({"x-litellm-api-key": "sk-admin-session"}, path="/mcp-rest/test/connection")
+        payload = NewMCPServerRequest(
+            server_id="saved-server-id",
+            server_name="example",
+            url="https://example.com/mcp",
+            auth_type=MCPAuth.bearer_token,
+        )
+
+        result = await rest_endpoints.test_connection(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["mcp_auth_header"] == "stored-upstream-token"
+        assert captured["request"].credentials == {"auth_value": "stored-upstream-token"}
+
+    @pytest.mark.asyncio
+    async def test_does_not_forward_authorization_that_satisfied_admission(self, monkeypatch):
+        """With no x-litellm-api-key, the Authorization value is the caller's LiteLLM key and
+        must never reach the upstream."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        captured = self._capture_execute(monkeypatch)
+        request = _build_request({"authorization": "Bearer sk-litellm-admission-key"}, path="/mcp-rest/test/connection")
+
+        result = await rest_endpoints.test_connection(
+            request,
+            self._oauth2_authorization_code_payload(),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result == {"status": "ok"}
+        assert captured["oauth2_headers"] is None
 
 
 class TestTestToolsList:
@@ -3266,6 +3431,40 @@ class TestConnectionErrorMessage:
         message = rest_endpoints._connection_error_message(RuntimeError("weird"), "https://example.com", 30.0)
         assert "weird" not in message
         assert "proxy logs" in message.lower()
+
+
+class TestGetServerAuthHeaderGroupDefault:
+    """``x-mcp-<access_group>-authorization`` is the default for group members, the per-server
+    header still wins, and servers outside the group never see the group credential."""
+
+    @staticmethod
+    def _server(alias: str, group: str) -> MCPServer:
+        return MCPServer(
+            server_id=f"server-{alias}",
+            name=alias,
+            server_name=alias,
+            alias=alias,
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            access_groups=[group],
+        )
+
+    def test_group_header_applies_to_members_and_per_server_header_overrides(self):
+        headers = {
+            "shared": {"Authorization": "Bearer group-token"},
+            "beta": {"Authorization": "Bearer beta-token"},
+        }
+        assert rest_endpoints._get_server_auth_header(self._server("alpha", "shared"), headers, None) == {
+            "Authorization": "Bearer group-token"
+        }
+        assert rest_endpoints._get_server_auth_header(self._server("beta", "shared"), headers, None) == {
+            "Authorization": "Bearer beta-token"
+        }
+
+    def test_group_header_falls_back_to_legacy_header_outside_group(self):
+        headers = {"shared": {"Authorization": "Bearer group-token"}}
+        assert rest_endpoints._get_server_auth_header(self._server("gamma", "other"), headers, None) is None
+        assert rest_endpoints._get_server_auth_header(self._server("gamma", "other"), headers, "legacy") == "legacy"
 
 
 class TestToolResponseMcpInfoEnrichment:

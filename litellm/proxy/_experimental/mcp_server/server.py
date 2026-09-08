@@ -23,6 +23,7 @@ from pydantic import AnyUrl, ConfigDict
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
 from starlette.types import Message, Receive, Scope, Send
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -816,6 +817,11 @@ if MCP_AVAILABLE:
                 }
             }
             return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
+        except HTTPException as e:
+            from mcp.shared.exceptions import McpError
+            from mcp.types import INVALID_REQUEST, ErrorData
+
+            raise McpError(ErrorData(code=INVALID_REQUEST, message=_http_detail_message(e.detail))) from e
         except Exception as e:
             verbose_logger.exception("Error in list_tools endpoint: %s", e)
             # Return empty list instead of failing completely
@@ -911,15 +917,18 @@ if MCP_AVAILABLE:
         Returns a CallToolResult when ``name`` is a virtual tool, else ``None`` so
         the caller falls through to normal tool routing.
         """
+        from litellm.llms.litellm_proxy.skills.skill_search import DEFAULT_SKILL_SEARCH_TOP_K
         from litellm.proxy._experimental.mcp_server.tool_search import (
             AGENT_SEARCH_TOOL_NAME,
             DEFAULT_AGENT_SEARCH_TOP_K,
             MCP_TOOL_SEARCH_TOOL_NAME,
+            SKILL_SEARCH_TOOL_NAME,
             VIRTUAL_TOOL_NAMES,
             coerce_top_k,
             handle_agent_search,
             handle_mcp_tool_call,
             handle_mcp_tool_search,
+            handle_skill_search,
         )
 
         if name not in VIRTUAL_TOOL_NAMES:
@@ -959,6 +968,12 @@ if MCP_AVAILABLE:
             return await handle_agent_search(
                 query=str(args.get("query", "")),
                 top_k=coerce_top_k(args.get("top_k", DEFAULT_AGENT_SEARCH_TOP_K), default=DEFAULT_AGENT_SEARCH_TOP_K),
+                user_api_key_dict=user_api_key_auth,
+            )
+        if name == SKILL_SEARCH_TOOL_NAME:
+            return await handle_skill_search(
+                query=str(args.get("query", "")),
+                top_k=coerce_top_k(args.get("top_k", DEFAULT_SKILL_SEARCH_TOP_K), default=DEFAULT_SKILL_SEARCH_TOP_K),
                 user_api_key_dict=user_api_key_auth,
             )
         virtual_logging_obj: Final = await _build_virtual_call_logging_obj(
@@ -1086,6 +1101,7 @@ if MCP_AVAILABLE:
                     mcp_server_auth_headers=mcp_server_auth_headers,
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
+                    client_ip=_client_ip,
                     host_progress_callback=host_progress_callback,
                     **data,  # for logging
                 )
@@ -1119,7 +1135,7 @@ if MCP_AVAILABLE:
             except HTTPException as e:
                 verbose_logger.error("HTTPException in MCP tool call: %s", e)
                 return CallToolResult(
-                    content=[TextContent(text=f"Error: {e.detail}", type="text")],
+                    content=[TextContent(text=f"Error: {_http_detail_message(e.detail)}", type="text")],
                     isError=True,
                 )
             except MCPUpstreamAuthError as e:
@@ -1383,7 +1399,7 @@ if MCP_AVAILABLE:
     ########################################################
 
     async def _get_allowed_mcp_servers_from_mcp_server_names(
-        mcp_servers: list[str] | None,
+        mcp_servers: Sequence[str] | None,
         allowed_mcp_servers: list[MCPServer],
     ) -> list[MCPServer]:
         """
@@ -1404,13 +1420,10 @@ if MCP_AVAILABLE:
                 server_name_matched = False
 
                 for server in allowed_mcp_servers:
-                    if server:
-                        match_list = [s.lower() for s in iter_known_server_prefixes(server) if s]
-
-                        if server_or_group.lower() in match_list:
-                            filtered_server[server.server_id] = server
-                            server_name_matched = True
-                            break
+                    if server and _server_answers_to(server, server_or_group):
+                        filtered_server[server.server_id] = server
+                        server_name_matched = True
+                        break
 
                 if not server_name_matched:
                     try:
@@ -1439,6 +1452,72 @@ if MCP_AVAILABLE:
             return []
 
         return allowed_mcp_servers
+
+    def _http_detail_message(detail: object) -> str:
+        return str(detail.get("error")) if isinstance(detail, dict) and detail.get("error") else str(detail)
+
+    def _server_answers_to(server: MCPServer, name: str) -> bool:
+        requested: Final = name.lower()
+        return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
+
+    class _McpDeniedDetail(TypedDict):
+        error: ReadOnly[str]
+
+    async def raise_denied_scoped_mcp_access(
+        requested_names: Sequence[str],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        client_ip: str | None = None,
+    ) -> None:
+        """A scoped request (``/mcp/<name>`` path or ``x-mcp-servers`` header) resolved to zero
+        allowed servers, so the denial must be loud: a silent 200 with no tools reads as a healthy
+        server with no tools. Unknown, unauthorized, and access-group names all share one generic
+        error so scoping cannot probe which servers exist; the agent variant fires only when the
+        same request resolves once the agent binding is stripped, proving the binding caused the veto."""
+        agent_id: Final = user_api_key_auth.agent_id if user_api_key_auth else None
+        if user_api_key_auth is not None and agent_id:
+            resolved_without_agent: Final = await _get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth.model_copy(update=types.MappingProxyType({"agent_id": None})),
+                mcp_servers=requested_names,
+                client_ip=client_ip,
+            )
+
+            def _resolved_to_server(name: str) -> bool:
+                return any(_server_answers_to(server, name) for server in resolved_without_agent)
+
+            vetoed_server: Final = next((name for name in requested_names if _resolved_to_server(name)), None)
+            if vetoed_server is not None:
+                agent_denial: Final[_McpDeniedDetail] = {
+                    "error": (
+                        f"MCP server '{vetoed_server}' is not available to this key: the key is bound to "
+                        f"agent '{agent_id}', whose MCP grants do not include this server. Add the server "
+                        f"to the agent's object_permission.mcp_servers (edit the agent in the Admin UI or "
+                        f"PATCH /v1/agents/{agent_id}), or use a key that is not bound to the agent."
+                    )
+                }
+                raise HTTPException(status_code=403, detail=agent_denial)
+            vetoed_group: Final = next(
+                (
+                    name
+                    for name in requested_names
+                    if not _resolved_to_server(name)
+                    and any(name in (server.access_groups or ()) for server in resolved_without_agent)
+                ),
+                None,
+            )
+            if vetoed_group is not None:
+                group_denial: Final[_McpDeniedDetail] = {
+                    "error": (
+                        f"MCP access group '{vetoed_group}' is not available to this key: the key is bound to "
+                        f"agent '{agent_id}', whose MCP grants do not include it. Add the group to the "
+                        f"agent's object_permission.mcp_access_groups (edit the agent in the Admin UI or "
+                        f"PATCH /v1/agents/{agent_id}), or use a key that is not bound to the agent."
+                    )
+                }
+                raise HTTPException(status_code=403, detail=group_denial)
+        generic_denial: Final[_McpDeniedDetail] = {
+            "error": f"The key is not allowed to access the requested MCP servers: {', '.join(requested_names)}"
+        }
+        raise HTTPException(status_code=403, detail=generic_denial)
 
     def _tool_name_matches(tool_name: str, filter_list: list[str], mcp_server: MCPServer) -> bool:
         """
@@ -1532,7 +1611,7 @@ if MCP_AVAILABLE:
 
     async def _get_allowed_mcp_servers(
         user_api_key_auth: UserAPIKeyAuth | None,
-        mcp_servers: list[str] | None,
+        mcp_servers: Sequence[str] | None,
         client_ip: str | None = None,
     ) -> list[MCPServer]:
         """Return allowed MCP servers for a request after applying filters.
@@ -1612,7 +1691,10 @@ if MCP_AVAILABLE:
         )
 
         server_headers: Final = lookup_mcp_server_auth_in_headers(
-            mcp_server_auth_headers, alias=server.alias, server_name=server.server_name
+            mcp_server_auth_headers,
+            alias=server.alias,
+            server_name=server.server_name,
+            access_groups=server.access_groups,
         )
         if isinstance(server_headers, str):
             return bool(server_headers.strip())
@@ -1712,6 +1794,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers,
                 alias=server.alias,
                 server_name=server.server_name,
+                access_groups=server.access_groups,
             )
 
         extra_headers: dict[str, str] | None = None
@@ -1964,6 +2047,12 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 client_ip=client_ip,
             )
+            if mcp_servers and not allowed_mcp_servers:
+                await raise_denied_scoped_mcp_access(
+                    requested_names=mcp_servers,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=client_ip,
+                )
 
             # Pre-fetch OAuth credentials only when at least one server uses OAuth2,
             # to avoid an unnecessary DB round-trip on requests with no OAuth2 MCP servers.
@@ -2391,6 +2480,8 @@ if MCP_AVAILABLE:
             )
             verbose_logger.debug("Successfully fetched %s tools from managed MCP servers", len(listing.tools))
             return listing
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_logger.exception("Error getting tools from managed MCP servers: %s", e)
             # Continue with an empty listing instead of failing completely
@@ -3073,6 +3164,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
         **kwargs: Any,
     ) -> CallToolResult:
         """
@@ -3103,6 +3195,12 @@ if MCP_AVAILABLE:
                 mcp_servers=mcp_servers,
                 allowed_mcp_servers=allowed_mcp_servers,
             )
+            if mcp_servers and not allowed_mcp_servers:
+                await raise_denied_scoped_mcp_access(
+                    requested_names=mcp_servers,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=client_ip,
+                )
             if not allowed_mcp_servers:
                 raise HTTPException(
                     status_code=403,
@@ -3482,7 +3580,7 @@ if MCP_AVAILABLE:
         is best-effort in that mode.
         """
 
-        def _bytes_for_hash(value: Any) -> bytes | None:
+        def _bytes_for_hash(value: object) -> bytes | None:
             """Only hash str/bytes secrets; skip mocks and other unexpected types."""
             if value is None:
                 return None
@@ -3844,22 +3942,24 @@ if MCP_AVAILABLE:
             # then exchanges. A tool-call-time 401 would be wrapped into a JSON-RPC error and the
             # header lost, so the discovery flow needs this pre-emptive challenge.
             if server and server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers:
-                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415
+                from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
                     raise_token_exchange_challenge,
                 )
-                from litellm.proxy.utils import get_server_root_path  # noqa: PLC0415
+                from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports proxy utils
+                    get_request_root_path,
+                )
 
-                raise_token_exchange_challenge(server, root_path=get_server_root_path())
+                raise_token_exchange_challenge(server, root_path=get_request_root_path())
 
-            # token_exchange (OBO) with a subject present: run the exchange here at the transport
-            # edge, so a rejected subject raises the RFC 9728 challenge (and a gateway fault its
-            # public status) instead of the session opening and list_tools masking the failure as
-            # an empty tool list. Gated to single-server routes; the multi-server aggregate keeps
-            # absorbing per-server auth failures so one bad server cannot 401 the whole connect.
+            # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run
+            # the exchange here at the transport edge, so a rejected subject raises the RFC 9728
+            # challenge and any other failure its public status, instead of the session opening and
+            # list_tools masking it as an empty tool list. The manager owns which modes pre-flight
+            # and what each mints from. Gated to single-server routes the key may reach; the
+            # multi-server aggregate keeps absorbing per-server auth failures so one bad server
+            # cannot 401 the whole connect.
             if (
                 server
-                and server.auth_type == MCPAuth.oauth2_token_exchange
-                and oauth2_headers
                 and len(mcp_servers or []) == 1
                 and server.server_id
                 in frozenset(

@@ -104,6 +104,7 @@ const job = (overrides: Partial<ShadowEvalJob> = {}): ShadowEvalJob => ({
   status: "running",
   router_name: "claude-auto",
   router_names: ["claude-auto"],
+  models: [],
   direction: "forward",
   baseline_model: null,
   judge_model: "anthropic/claude-sonnet-5",
@@ -450,6 +451,7 @@ describe("ShadowEvalSection", () => {
       api_key_ids: ["hash-alpha", "hash-beta"],
       team_ids: [],
       user_ids: [],
+      models: [],
       router_names: ["gpt-auto"],
       direction: "forward",
       shadow_percentage: 10,
@@ -479,6 +481,7 @@ describe("ShadowEvalSection", () => {
       api_key_ids: [],
       team_ids: ["team-eng"],
       user_ids: [],
+      models: [],
       router_names: ["gpt-auto"],
       direction: "forward",
       shadow_percentage: 10,
@@ -489,15 +492,41 @@ describe("ShadowEvalSection", () => {
     expect(start.mutate).toHaveBeenCalledWith(expectedBody);
   });
 
+  it("narrows a job to the picked model groups and shows the scope on the job headline", async () => {
+    const user = userEvent.setup();
+    const { start } = mockHooks({});
+    render(<ShadowEvalSection />);
+
+    await user.click(screen.getByPlaceholderText("Search teams by alias"));
+    const teamList = await screen.findByTestId("paginated-multi-select-list");
+    await user.click(within(teamList).getByText("engineering"));
+    await chooseSelectOption(user, screen.getByPlaceholderText("Every model the targets use"), "prod-claude");
+    await chooseSelectOption(user, screen.getByPlaceholderText("Select up to 4 auto-routers"), "gpt-auto");
+    await user.click(screen.getByPlaceholderText("Select a judge model"));
+    await user.click(await screen.findByRole("option", { name: /anthropic\/claude-sonnet-5/ }));
+    await user.click(screen.getByText("Start shadow eval"));
+
+    expect(start.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ team_ids: ["team-eng"], models: ["prod-claude"] }),
+    );
+
+    const scoped = job({ models: ["prod-claude", "prod-haiku"] });
+    mockHooks({ jobs: [scoped], detailsById: { "job-1": scoped } });
+    render(<ShadowEvalSection />);
+    expect(screen.getByText("prod-claude, prod-haiku")).toBeInTheDocument();
+  });
+
   it("requires a baseline model in reverse mode and submits it, while forward mode never shows the picker", async () => {
     const user = userEvent.setup();
     const { start } = mockHooks({});
     render(<ShadowEvalSection />);
 
     expect(screen.queryByPlaceholderText("Select a baseline model")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Every model the targets use")).toBeInTheDocument();
 
     await user.click(screen.getByText("Adoption check: key's traffic vs the router"));
     await user.click(await screen.findByText("Regression check: router's picks vs a baseline"));
+    expect(screen.queryByPlaceholderText("Every model the targets use")).not.toBeInTheDocument();
     await user.click(screen.getByPlaceholderText("Search keys by alias"));
     const keyList = await screen.findByTestId("paginated-multi-select-list");
     await user.click(within(keyList).getByText("prod-alpha"));
@@ -516,6 +545,7 @@ describe("ShadowEvalSection", () => {
       api_key_ids: ["hash-alpha"],
       team_ids: [],
       user_ids: [],
+      models: [],
       router_names: ["gpt-auto"],
       direction: "reverse",
       baseline_model: "prod-claude",
@@ -551,6 +581,7 @@ describe("ShadowEvalSection", () => {
       api_key_ids: ["hash-alpha"],
       team_ids: [],
       user_ids: [],
+      models: [],
       router_names: ["gpt-auto", "claude-auto"],
       direction: "forward",
       shadow_percentage: 10,
