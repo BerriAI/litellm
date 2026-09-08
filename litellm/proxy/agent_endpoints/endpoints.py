@@ -249,7 +249,7 @@ def _agent_search_error(status_code: int, error: str, message: str) -> HTTPExcep
 async def _rank_agents_by_query(
     query: str, agents: Sequence[AgentResponse], top_k: int, user_api_key_dict: UserAPIKeyAuth
 ) -> tuple[AgentResponse, ...]:
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
 
     outcome: Final = await search_agents(
         query=query,
@@ -259,6 +259,7 @@ async def _rank_agents_by_query(
         embedding_model=litellm.agent_search_embedding_model,
         index=global_agent_search_index,
         user_api_key_dict=user_api_key_dict,
+        proxy_logging_obj=proxy_logging_obj,
     )
     match outcome:
         case AgentSearchHits(hits):

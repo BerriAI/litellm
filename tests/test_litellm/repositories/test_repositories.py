@@ -4,10 +4,13 @@ Tests for gateway repository layer.
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
+from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from prisma import models as prisma_models
+from prisma.builder import QueryBuilder
 
 from litellm.models.base import DomainModel
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -306,6 +309,23 @@ class TestModelRepository:
     def repo(self):
         client = MockPrismaClient()
         return ModelRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_find_all_except_serializes_exclusion_for_prisma(self) -> None:
+        find_many: Final = AsyncMock(return_value=[])
+        client: Final = SimpleNamespace(
+            db=SimpleNamespace(litellm_proxymodeltable=SimpleNamespace(find_many=find_many))
+        )
+
+        await ModelRepository(client).find_all_except("current-model")
+
+        find_many.assert_awaited_once()
+        query: Final = QueryBuilder(
+            method="find_many",
+            model=prisma_models.LiteLLM_ProxyModelTable,
+            arguments=find_many.call_args.kwargs,
+        ).build_query()
+        assert 'where: { model_id: { not: "current-model" } }' in " ".join(query.split())
 
     def test_table_is_wrapped_for_config_sync(self, repo):
         from litellm.proxy.common_utils.config_sync_pubsub import (

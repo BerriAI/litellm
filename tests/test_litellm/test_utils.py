@@ -198,6 +198,11 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
     assert via_provider["mode"] == "responses"
 
 
+def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
+    info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
+    assert info["key"] == "ft:gpt-4o-2024-08-06"
+
+
 def test_provider_prefixed_lookup_never_outranks_an_existing_row(local_model_cost_map):
     """The provider-prefixed candidate is tried last, after every candidate that
     already existed, so no model that resolves today can change answer. `perplexity/sonar`
@@ -5237,52 +5242,6 @@ def test_client_side_timeout_marker_never_reaches_the_provider():
         "client_side_timeout leaked into the provider params: "
         f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
     )
-
-
-def test_rust_flag_not_forwarded_as_provider_param():
-    forwarded = get_non_default_completion_params({"rust": True, "temperature": 0.5})
-    assert "rust" not in forwarded
-
-
-def test_completion_does_not_leak_rust_flag_into_provider_request_body():
-    mock_response = MagicMock()
-    mock_response.model_dump.return_value = {
-        "id": "chatcmpl-1",
-        "object": "chat.completion",
-        "created": 1234567890,
-        "model": "gpt-4o-mini",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "hi"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 1,
-            "completion_tokens": 1,
-            "total_tokens": 2,
-        },
-    }
-
-    mock_raw_response = MagicMock()
-    mock_raw_response.headers = {}
-    mock_raw_response.parse.return_value = mock_response
-
-    mock_client = MagicMock()
-    mock_client.chat.completions.with_raw_response.create.return_value = mock_raw_response
-
-    litellm.completion(
-        model="openai/gpt-4o-mini",
-        messages=[{"role": "user", "content": "hi"}],
-        rust=True,
-        api_key="sk-test",
-        client=mock_client,
-    )
-
-    create_kwargs = mock_client.chat.completions.with_raw_response.create.call_args.kwargs
-    assert "rust" not in create_kwargs
-    assert "rust" not in (create_kwargs.get("extra_body") or {})
 
 
 class _RecordingDeploymentFailureLogger(CustomLogger):

@@ -54,11 +54,13 @@ class GetModelCostMap:
     _backup_model_count: int = -1  # -1 = not yet loaded
 
     @staticmethod
+    def read_local_model_cost_map_text() -> str:
+        return files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
+
+    @staticmethod
     def load_local_model_cost_map() -> dict:
         """Load the local backup model cost map bundled with the package."""
-        content: Final = json.loads(
-            files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text(encoding="utf-8")
-        )
+        content: Final = json.loads(GetModelCostMap.read_local_model_cost_map_text())
         return content
 
     @classmethod

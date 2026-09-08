@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
 import {
   applyToolPermissionWrite,
+  emptyMcpAccessGroups,
   mcpAllowedToolsFor,
   mcpServersForIdentifier,
   mcpToolPermissionKeyFor,
@@ -98,6 +99,29 @@ describe("mcpToolPermissionKeyFor", () => {
     expect(mcpToolPermissionKeyFor(byName, { collide: ["list_issues"] }, catalog)).toBe("uuid-9");
     expect(mcpAllowedToolsFor(byName, { collide: ["list_issues"] }, catalog)).toBeUndefined();
     expect(mcpAllowedToolsFor(byId, { collide: ["list_issues"] }, catalog)).toEqual(["list_issues"]);
+  });
+});
+
+describe("emptyMcpAccessGroups", () => {
+  const grouped = server({ server_id: "srv-group", server_name: "Grouped", mcp_access_groups: ["prod"] });
+  const objectGrouped = {
+    ...grouped,
+    server_id: "srv-obj",
+    mcp_access_groups: [{ name: "legacy" }],
+  } as unknown as MCPServer;
+
+  it("names only the selected groups no loaded server belongs to", () => {
+    expect(emptyMcpAccessGroups([grouped, objectGrouped], [], ["prod", "legacy", "ops_readonly"])).toEqual([
+      "ops_readonly",
+    ]);
+  });
+
+  it("names every selected group when no server is loaded and the registry is empty", () => {
+    expect(emptyMcpAccessGroups([], [], ["prod"])).toEqual(["prod"]);
+  });
+
+  it("trusts the group registry when the caller's catalog hides the member servers", () => {
+    expect(emptyMcpAccessGroups([], ["prod"], ["prod", "ops_readonly"])).toEqual(["ops_readonly"]);
   });
 });
 
