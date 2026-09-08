@@ -9736,9 +9736,7 @@ class Router:
         """
         idx: Final = len(self.model_list)
         self.model_list.append(model)
-        # A router built without a model_list joins the registry here instead, so a price
-        # reload rebuilds what it serves and delete_deployment can see it still holds an id.
-        _live_routers.add(self)
+        _live_routers.add(self)  # mutable-ok: track dynamic routers without extending their lifetimes
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
 
@@ -9930,9 +9928,9 @@ class Router:
 
         if model_id is not None:
             if model_id in _DEPLOYMENT_COST_MAP_KEYS:
-                litellm.model_cost.pop(model_id, None)
+                litellm.model_cost.pop(model_id, None)  # mutable-ok: remove cleared prices from the shared entry
             elif model_id not in litellm.model_cost:
-                _DEPLOYMENT_COST_MAP_KEYS.add(model_id)
+                _DEPLOYMENT_COST_MAP_KEYS.add(model_id)  # mutable-ok: retain shared ownership across reloads
             litellm.register_model(
                 model_cost={model_id: model_info},
                 persist_across_reloads=False,
@@ -10033,7 +10031,7 @@ class Router:
                     router is not self and id in router.model_id_to_deployment_index_map
                     for router in tuple(_live_routers)
                 ):
-                    _DEPLOYMENT_COST_MAP_KEYS.discard(id)
+                    _DEPLOYMENT_COST_MAP_KEYS.discard(id)  # mutable-ok: the last owning router released this key
                 try:
                     self._unregister_pre_routing_strategy_for_deployment(
                         deployment=item if isinstance(item, Deployment) else Deployment(**item)

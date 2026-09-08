@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import time
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from functools import reduce
 from types import MappingProxyType
 from typing import Final
 
@@ -173,13 +174,21 @@ def await_body_converged[R: BaseModel](
     between reads to the time left, so the last read before the deadline is never
     skipped. Clock and sleep are injected."""
     deadline: Final = now() + timeout
-    last_result: Result[R] | None = None
-    while (remaining := deadline - now()) > 0:
-        last_result = read(min(request_timeout, remaining))
-        if isinstance(last_result, Success) and predicate(last_result.data):
-            return last_result
-        sleep(min(interval, max(deadline - now(), 0.0)))
-    return BodyNotConverged(last_result=last_result)
+
+    def reads() -> Iterator[Result[R]]:
+        while (remaining := deadline - now()) > 0:
+            yield read(min(request_timeout, remaining))
+            sleep(min(interval, max(deadline - now(), 0.0)))
+
+    def attempts() -> Iterator[Success[R] | BodyNotConverged[R]]:
+        for result in reads():
+            if isinstance(result, Success) and predicate(result.data):
+                yield result
+                return
+            yield BodyNotConverged(last_result=result)
+
+    initial: Final[Success[R] | BodyNotConverged[R]] = BodyNotConverged(last_result=None)
+    return reduce(lambda _previous, result: result, attempts(), initial)
 
 
 def await_body_converged_everywhere[R: BaseModel](
@@ -194,8 +203,13 @@ def await_body_converged_everywhere[R: BaseModel](
 ) -> BodyConverged[R] | NeverConvergedOn[R]:
     """`await_body_converged` against every replica in turn, each with the full budget, so a
     write counts as landed only once every replica serves it."""
-    bodies: dict[str, R] = {}
-    for replica, read in readers.items():
+    def read_replica(
+        outcome: BodyConverged[R] | NeverConvergedOn[R],
+        item: tuple[str, BodyReader[R]],
+    ) -> BodyConverged[R] | NeverConvergedOn[R]:
+        if isinstance(outcome, NeverConvergedOn):
+            return outcome
+        replica, read = item
         match await_body_converged(
             read,
             predicate=predicate,
@@ -206,10 +220,11 @@ def await_body_converged_everywhere[R: BaseModel](
             sleep=sleep,
         ):
             case Success(data=data):
-                bodies[replica] = data
+                return BodyConverged(bodies=MappingProxyType({**outcome.bodies, replica: data}))
             case BodyNotConverged(last_result=last_result):
                 return NeverConvergedOn(replica=replica, last_result=last_result)
-    return BodyConverged(bodies=MappingProxyType(bodies))
+    initial: Final[BodyConverged[R] | NeverConvergedOn[R]] = BodyConverged(bodies=MappingProxyType({}))
+    return reduce(read_replica, readers.items(), initial)
 
 
 def await_servable(
