@@ -101,13 +101,20 @@ errors are language-neutral.
 
 ```
 core must not depend on PyO3, Axum or gateway integration types
+litellm-auth owns shared credential values, capability contracts and future static helpers
 cloud-auth crates own reusable native credential and signing mechanisms
 core owns provider precedence, header policy and authorization timing
 Tower/Axum types stop at the gateway adapter boundary
-provider transformation, auth and I/O remain in core
+provider transformation, auth policy and I/O remain in core
 request-scoped host state belongs to a call session
 service construction dependencies do not leak into service interfaces
 ```
+
+`litellm-auth` has only standard-library production dependencies and does not
+depend on core or cloud crates. Add it as a dependency only where consumed.
+Cloud crates retain their own credential types and errors. `AuthorizationFuture`
+lives in `core::providers` because its result uses the core error type. The former
+`core::auth` module is removed without compatibility re-exports
 
 ## Not the target
 

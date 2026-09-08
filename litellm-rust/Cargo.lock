@@ -1421,6 +1421,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-auth"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "litellm-auth-aws"
 version = "0.1.0"
 dependencies = [

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/core",
+    "crates/auth",
     "crates/config",
     "crates/ai-gateway",
     "crates/python-interop",
