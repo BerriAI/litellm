@@ -18,6 +18,7 @@ from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.proxy.policy_engine import PolicyMatchContext
 from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
 
@@ -46,7 +47,27 @@ def _model_group_for_response_id(response_id: object, llm_router: "Router | None
     deployment: Final = llm_router.get_deployment(model_id)
     if deployment is None:
         return UngovernedRetrieval("deployment no longer in the router")
+    hidden_by: Final = _submit_model_hidden_by(deployment.model_name, llm_router.model_group_alias)
+    if hidden_by is not None:
+        verbose_proxy_logger.warning(
+            "Policy engine: background response %s re-matches policies on retrieval as model group %s (%s), "
+            "so a policy attached to the model name it was submitted as does not run on it",
+            response_id,
+            deployment.model_name,
+            hidden_by,
+        )
     return deployment.model_name
+
+
+def _submit_model_hidden_by(model_group: str, model_group_alias: Mapping[str, object]) -> str | None:
+    if "*" in model_group:
+        return "a wildcard deployment"
+    aliases: Final = tuple(
+        alias for alias in model_group_alias if resolve_model_group_alias(model_group_alias, alias) == model_group
+    )
+    if not aliases:
+        return None
+    return f"the target of model_group_alias {', '.join(aliases)}"
 
 
 def _retrieval_context(

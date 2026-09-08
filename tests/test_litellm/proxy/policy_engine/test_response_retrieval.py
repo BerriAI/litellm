@@ -14,11 +14,14 @@ GOVERNED_MODEL_GROUP = "gpt-5.4-mini"
 GOVERNED_MODEL_ID = "deployment-governed"
 UNGOVERNED_MODEL_GROUP = "gpt-4.1-mini"
 UNGOVERNED_MODEL_ID = "deployment-ungoverned"
+WILDCARD_MODEL_GROUP = "openai/*"
+WILDCARD_MODEL_ID = "deployment-wildcard"
 
 
 class FakeRouter:
-    def __init__(self, deployments: dict[str, Deployment]):
+    def __init__(self, deployments: dict[str, Deployment], model_group_alias: dict[str, object] | None = None):
         self._deployments = deployments
+        self.model_group_alias = model_group_alias or {}
 
     def get_deployment(self, model_id: str) -> Deployment | None:
         return self._deployments.get(model_id)
@@ -32,12 +35,14 @@ def _deployment(model_group: str, model_id: str) -> Deployment:
     )
 
 
-def _router() -> FakeRouter:
+def _router(model_group_alias: dict[str, object] | None = None) -> FakeRouter:
     return FakeRouter(
         {
             GOVERNED_MODEL_ID: _deployment(GOVERNED_MODEL_GROUP, GOVERNED_MODEL_ID),
             UNGOVERNED_MODEL_ID: _deployment(UNGOVERNED_MODEL_GROUP, UNGOVERNED_MODEL_ID),
-        }
+            WILDCARD_MODEL_ID: _deployment(WILDCARD_MODEL_GROUP, WILDCARD_MODEL_ID),
+        },
+        model_group_alias,
     )
 
 
@@ -131,6 +136,51 @@ def test_already_attached_policy_is_not_attached_twice(policy_engine):
 
     assert _attached_pipelines(data) == (("response-governance", "output-word-filter"),)
     assert data["litellm_metadata"]["applied_policies"] == ["response-governance"]
+
+
+def _hidden_submit_model_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "the model name it was submitted as" in record.getMessage()
+    ]
+
+
+def test_wildcard_deployment_attaches_nothing_for_the_submitted_model_and_warns(policy_engine, caplog):
+    data = _retrieval_data(WILDCARD_MODEL_ID)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=_router())
+
+    assert data == _retrieval_data(WILDCARD_MODEL_ID)
+    assert [
+        "as model group openai/* (a wildcard deployment)" in message for message in _hidden_submit_model_warnings(caplog)
+    ] == [True]
+
+
+def test_aliased_model_group_still_attaches_its_own_policies_and_warns(policy_engine, caplog):
+    data = _retrieval_data(GOVERNED_MODEL_ID)
+    router = _router({"gpt-mini": GOVERNED_MODEL_GROUP, "gpt-hidden": {"model": GOVERNED_MODEL_GROUP, "hidden": True}})
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        attach_post_call_pipelines_to_retrieval(data=data, user_api_key_dict=UserAPIKeyAuth(), llm_router=router)
+
+    assert _attached_pipelines(data) == (("response-governance", "output-word-filter"),)
+    assert [
+        "(the target of model_group_alias gpt-mini, gpt-hidden)" in message
+        for message in _hidden_submit_model_warnings(caplog)
+    ] == [True]
+
+
+def test_plain_model_group_retrieval_does_not_warn_about_the_submitted_model(policy_engine, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        attach_post_call_pipelines_to_retrieval(
+            data=_retrieval_data(GOVERNED_MODEL_ID),
+            user_api_key_dict=UserAPIKeyAuth(),
+            llm_router=_router({"other-alias": UNGOVERNED_MODEL_GROUP}),
+        )
+
+    assert _hidden_submit_model_warnings(caplog) == []
 
 
 def _ungoverned_retrieval_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:

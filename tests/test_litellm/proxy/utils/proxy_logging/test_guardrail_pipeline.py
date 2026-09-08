@@ -1562,6 +1562,30 @@ async def test_pending_background_response_keeps_the_claim_of_a_policy_that_runs
 
 
 @pytest.mark.asyncio
+async def test_pending_background_response_keeps_the_claim_of_a_default_on_guardrail_that_ran_pre_call(
+    proxy_logging, make_user_api_key_auth, monkeypatch, clear_policy_registry
+):
+    class DualStageGuardrail(CustomGuardrail):
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            return response
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [DualStageGuardrail(guardrail_name="gr-post", event_hook=["pre_call", "post_call"], default_on=True)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _claimed_post_call_pipeline_data("response-governance")
+
+    await proxy_logging.post_call_success_hook(
+        data=data, response=_background_response("queued"), user_api_key_dict=make_user_api_key_auth()
+    )
+
+    assert "applied_policies" not in data["metadata"]
+    assert data["metadata"]["applied_guardrails"] == ["gr-post"]
+
+
+@pytest.mark.asyncio
 async def test_retrieved_background_response_keeps_the_policy_claim_once_its_pipeline_ran(
     proxy_logging, make_user_api_key_auth, monkeypatch, clear_policy_registry
 ):
