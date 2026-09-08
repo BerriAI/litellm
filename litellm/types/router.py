@@ -170,6 +170,12 @@ class TagRateLimitScope(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     @model_validator(mode="after")
+    def _validate_tag_id(self) -> "TagRateLimitScope":
+        if not self.tag_id:
+            raise ValueError("tag_id must be a non-empty string")
+        return self
+
+    @model_validator(mode="after")
     def _validate_values(self) -> "TagRateLimitScope":
         if not self.values:
             raise ValueError("values must be a non-empty list of strings")
@@ -199,6 +205,12 @@ class TagRateLimitEntry(BaseModel):
     apply_to_models: tuple[str, ...] | None = None
 
     model_config = ConfigDict(protected_namespaces=())
+
+    @model_validator(mode="after")
+    def _validate_tag_id(self) -> "TagRateLimitEntry":
+        if not self.tag_id:
+            raise ValueError("tag_id must be a non-empty string")
+        return self
 
     @model_validator(mode="after")
     def _validate_limit(self) -> "TagRateLimitEntry":

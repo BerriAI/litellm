@@ -238,6 +238,13 @@ def test_apply_to_models_sorted_and_deduped():
     assert entry.apply_to_models == ("claude", "gpt-4o")
 
 
+def test_scope_tag_id_empty_string_rejected():
+    """An empty tag_id makes identity lookup search for a bare `:` prefix, silently
+    never matching instead of erroring at config load time (Greptile P1 on #39902)."""
+    with pytest.raises(ValueError, match="tag_id must be a non-empty string"):
+        TagRateLimitScope(tag_id="", values=("1032",))
+
+
 def test_scope_values_empty_list_rejected():
     with pytest.raises(ValueError, match="values must be a non-empty list"):
         TagRateLimitScope(tag_id="company_id", values=())
@@ -252,6 +259,13 @@ def test_scope_is_frozen():
     scope = TagRateLimitScope(tag_id="company_id", values=("1032",))
     with pytest.raises(ValidationError):
         scope.tag_id = "other_tag"
+
+
+def test_entry_tag_id_empty_string_rejected():
+    """Same silent-no-match failure mode as TagRateLimitScope.tag_id (Greptile P1 on
+    #39902); the default is non-empty, but an explicit override could still be empty."""
+    with pytest.raises(ValueError, match="tag_id must be a non-empty string"):
+        TagRateLimitEntry(name="daily", tag_id="", limit=10, period_seconds=60)
 
 
 def test_entry_accepts_enabled_for_and_disabled_for_scopes():
