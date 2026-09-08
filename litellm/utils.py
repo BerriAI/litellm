@@ -6033,7 +6033,7 @@ def get_model_info(
             input_cost_per_character_above_128k_tokens: Optional[
                 float
             ]  # only for vertex ai models
-            input_cost_per_query: Optional[float] # only for rerank models
+            input_cost_per_query: Optional[float] # per-request pricing: rerank, search, and Bedrock Marengo embeddings
             input_cost_per_image: Optional[float]  # only for vertex ai models
             input_cost_per_audio_token: Optional[float]
             input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models

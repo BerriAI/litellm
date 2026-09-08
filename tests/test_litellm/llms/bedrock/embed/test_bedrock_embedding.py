@@ -5,6 +5,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import litellm
+from litellm.llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 # Mock responses for different embedding models
@@ -1066,17 +1067,19 @@ MARENGO_3_DUCK = "data:image/png;base64,ZHVjaw=="
 
 
 @pytest.mark.parametrize(
-    "model,kwargs,expected_body",
+    "model,kwargs,expected_body,expected_usage_details",
     [
         (
             "bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
             {"input_type": "text"},
             {"inputType": "text", "text": {"inputText": "a duck on water"}},
+            {"query_count": 1},
         ),
         (
             "bedrock/twelvelabs.marengo-embed-3-0-v1:0",
             {"input_type": "text"},
             {"inputType": "text", "text": {"inputText": "a duck on water"}},
+            {"query_count": 1},
         ),
         (
             "bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
@@ -1085,6 +1088,7 @@ MARENGO_3_DUCK = "data:image/png;base64,ZHVjaw=="
                 "inputType": "text_image",
                 "text_image": {"inputText": "a duck on water", "mediaSource": {"base64String": "ZHVjaw=="}},
             },
+            {"query_count": 1, "image_count": 1},
         ),
         (
             "bedrock/us.twelvelabs.marengo-embed-3-0-v1:0",
@@ -1096,10 +1100,13 @@ MARENGO_3_DUCK = "data:image/png;base64,ZHVjaw=="
                     "mediaSources": [{"name": "bird", "mediaType": "image", "base64String": "ZHVjaw=="}],
                 },
             },
+            {"query_count": 1, "image_count": 1},
         ),
     ],
 )
-def test_marengo_3_embedding_sends_the_nested_payload_and_parses_512_dims(model, kwargs, expected_body):
+def test_marengo_3_embedding_sends_the_nested_payload_and_parses_512_dims(
+    model, kwargs, expected_body, expected_usage_details
+):
     client = HTTPHandler()
 
     with patch.object(client, "post") as mock_post:
@@ -1122,7 +1129,9 @@ def test_marengo_3_embedding_sends_the_nested_payload_and_parses_512_dims(model,
     assert mock_post.call_args.kwargs["url"].endswith(f"/model/{model.removeprefix('bedrock/').replace(':', '%3A')}/invoke")
     assert len(response.data[0]["embedding"]) == 512
     assert response.data[0]["embedding"][:2] == [0.0, 0.01]
-    assert response.usage.prompt_tokens == 128
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.total_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == expected_usage_details
 
 
 def test_marengo_3_image_embedding_sends_the_media_under_the_image_key():
@@ -1150,6 +1159,8 @@ def test_marengo_3_image_embedding_sends_the_media_under_the_image_key():
     }
     assert len(response.data[0]["embedding"]) == 512
     assert response.data[0]["embedding"][:2] == [0.0, 0.01]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == {"image_count": 1}
 
 
 def test_marengo_2_7_embedding_keeps_the_flat_payload():
@@ -1177,6 +1188,36 @@ def test_marengo_2_7_embedding_keeps_the_flat_payload():
         "textTruncate": "end",
     }
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == {"query_count": 1}
+
+
+def test_marengo_usage_counts_text_requests_and_images_across_a_batch():
+    duck = {"mediaType": "image", "base64String": "ZHVjaw=="}
+    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+        response_list=[marengo_3_embedding_response, marengo_3_embedding_response, marengo_3_embedding_response],
+        model="us.twelvelabs.marengo-embed-3-0-v1:0",
+        batch_data=[
+            {"inputType": "text", "text": {"inputText": "a duck"}},
+            {"inputType": "image", "image": {"mediaSource": {"base64String": "ZHVjaw=="}}},
+            {"inputType": "multi_input", "multi_input": {"mediaSources": [{"name": "a", **duck}, {"name": "b", **duck}]}},
+        ],
+    )
+
+    assert [item["index"] for item in response.data] == [0, 1, 2]
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.total_tokens == 0
+    assert response.usage.prompt_tokens_details.model_dump(exclude_none=True) == {"query_count": 1, "image_count": 3}
+
+
+def test_marengo_usage_without_request_data_bills_nothing():
+    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+        response_list=[marengo_3_embedding_response], model="us.twelvelabs.marengo-embed-3-0-v1:0"
+    )
+
+    assert len(response.data[0]["embedding"]) == 512
+    assert response.usage.prompt_tokens == 0
+    assert response.usage.prompt_tokens_details is None
 
 
 def test_marengo_3_text_image_without_media_source_is_a_bad_request():

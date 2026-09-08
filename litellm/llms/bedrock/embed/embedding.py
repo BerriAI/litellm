@@ -229,7 +229,7 @@ class BedrockEmbedding(BaseAWSLLM):
                 returned_response = AmazonTitanG1Config()._transform_response(response_list=response_list, model=model)
             elif provider == "twelvelabs":
                 returned_response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
-                    response_list=response_list, model=model
+                    response_list=response_list, model=model, batch_data=batch_data
                 )
             elif provider == "nova":
                 returned_response = AmazonNovaEmbeddingConfig()._transform_response(

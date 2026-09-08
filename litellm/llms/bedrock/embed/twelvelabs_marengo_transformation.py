@@ -7,7 +7,11 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mar
 Marengo 3.0 docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-marengo-3.html
 """
 
+from collections.abc import Mapping
 from typing import Final, cast
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter
+from typing_extensions import assert_never
 
 from litellm.llms.bedrock.embed.twelvelabs_marengo_3_transformation import (
     build_marengo_3_request,
@@ -15,6 +19,7 @@ from litellm.llms.bedrock.embed.twelvelabs_marengo_3_transformation import (
 )
 from litellm.types.llms.bedrock import (
     TWELVELABS_EMBEDDING_INPUT_TYPES,
+    TWELVELABS_MARENGO_3_INPUT_TYPES,
     TwelveLabsAsyncInvokeRequest,
     TwelveLabsMarengo3EmbeddingRequest,
     TwelveLabsMarengoEmbeddingRequest,
@@ -22,7 +27,76 @@ from litellm.types.llms.bedrock import (
     TwelveLabsS3Location,
     TwelveLabsS3OutputDataConfig,
 )
-from litellm.types.utils import Embedding, EmbeddingResponse, Usage
+from litellm.types.utils import Embedding, EmbeddingResponse, PromptTokensDetailsWrapper, Usage
+
+
+class MarengoEmbeddingItem(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    embedding: tuple[float, ...]
+
+
+class MarengoInvokeResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    data: tuple[MarengoEmbeddingItem, ...] = ()
+    embedding: tuple[float, ...] | None = None
+    embeddings: tuple[MarengoEmbeddingItem, ...] = ()
+
+    def vectors(self) -> tuple[tuple[float, ...], ...]:
+        if self.data:
+            return tuple(item.embedding for item in self.data)
+        if self.embedding is not None:
+            return (self.embedding,)
+        return tuple(item.embedding for item in self.embeddings)
+
+
+class MarengoBilledMultiInput(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    inputText: str | None = None
+    mediaSources: tuple[Mapping[str, object], ...] = ()
+
+
+class MarengoBilledRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    inputType: TWELVELABS_MARENGO_3_INPUT_TYPES | None = None
+    multi_input: MarengoBilledMultiInput | None = None
+
+
+INVOKE_RESPONSES: Final = TypeAdapter(tuple[MarengoInvokeResponse, ...])
+BILLED_REQUESTS: Final = TypeAdapter(tuple[MarengoBilledRequest, ...])
+
+
+def _billed_units(request: MarengoBilledRequest) -> tuple[int, int]:
+    input_type: Final = request.inputType
+    match input_type:
+        case "text":
+            return (1, 0)
+        case "image":
+            return (0, 1)
+        case "text_image":
+            return (1, 1)
+        case "multi_input":
+            multi_input: Final = request.multi_input or MarengoBilledMultiInput()
+            return (1 if multi_input.inputText else 0, len(multi_input.mediaSources))
+        case "video" | "audio" | None:
+            return (0, 0)
+        case _:
+            assert_never(input_type)
+
+
+def _billed_usage(batch_data: list[dict] | None) -> Usage:
+    units: Final = tuple(_billed_units(request) for request in BILLED_REQUESTS.validate_python(batch_data or ()))
+    query_count: Final = sum(text_requests for text_requests, _ in units)
+    image_count: Final = sum(images for _, images in units)
+    details: Final = (
+        PromptTokensDetailsWrapper(query_count=query_count or None, image_count=image_count or None)
+        if query_count or image_count
+        else None
+    )
+    return Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0, prompt_tokens_details=details)
 
 
 class TwelveLabsMarengoEmbeddingConfig:
@@ -223,62 +297,16 @@ class TwelveLabsMarengoEmbeddingConfig:
             ),
         )
 
-    def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
-        """
-        Transform TwelveLabs response to OpenAI format.
-        Handles the actual TwelveLabs response format: {"data": [{"embedding": [...]}]}
-        """
-        embeddings: Final[list[Embedding]] = []
-        total_tokens = 0
-
-        for response in response_list:
-            # TwelveLabs response format has a "data" field containing the embeddings
-            if "data" in response and isinstance(response["data"], list):
-                for item in response["data"]:
-                    if "embedding" in item:
-                        # Single embedding response
-                        embedding = Embedding(
-                            embedding=item["embedding"],
-                            index=len(embeddings),
-                            object="embedding",
-                        )
-                        embeddings.append(embedding)
-
-                        # Estimate token count (rough approximation)
-                        if "inputTextTokenCount" in item:
-                            total_tokens += item["inputTextTokenCount"]
-                        else:
-                            # Rough estimate: 1 token per 4 characters for text, or use embedding size
-                            total_tokens += len(item["embedding"]) // 4
-            elif "embedding" in response:
-                # Direct embedding response (fallback for other formats)
-                embedding = Embedding(
-                    embedding=response["embedding"],
-                    index=len(embeddings),
-                    object="embedding",
-                )
-                embeddings.append(embedding)
-
-                # Estimate token count (rough approximation)
-                if "inputTextTokenCount" in response:
-                    total_tokens += response["inputTextTokenCount"]
-                else:
-                    # Rough estimate: 1 token per 4 characters for text
-                    total_tokens += len(response.get("inputText", "")) // 4
-            elif "embeddings" in response:
-                # Multiple embeddings response (from video/audio)
-                for i, emb in enumerate(response["embeddings"]):
-                    embedding = Embedding(
-                        embedding=emb["embedding"],
-                        index=len(embeddings),
-                        object="embedding",
-                    )
-                    embeddings.append(embedding)
-                    total_tokens += len(emb["embedding"]) // 4  # Rough estimate
-
-        usage: Final = Usage(prompt_tokens=total_tokens, total_tokens=total_tokens)
-
-        return EmbeddingResponse(data=embeddings, model=model, usage=usage)
+    def _transform_response(
+        self, response_list: list[dict], model: str, batch_data: list[dict] | None = None
+    ) -> EmbeddingResponse:
+        vectors: Final = tuple(
+            vector for response in INVOKE_RESPONSES.validate_python(response_list) for vector in response.vectors()
+        )
+        embeddings: Final = [
+            Embedding(embedding=list(vector), index=index, object="embedding") for index, vector in enumerate(vectors)
+        ]
+        return EmbeddingResponse(data=embeddings, model=model, usage=_billed_usage(batch_data))
 
     def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
         """

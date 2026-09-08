@@ -6,7 +6,7 @@ import pytest
 import litellm
 from litellm.constants import bedrock_embedding_models
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.types.utils import Usage
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 REPO_ROOT = Path(__file__).parents[2]
 MAIN_PATH = REPO_ROOT / "model_prices_and_context_window.json"
@@ -15,6 +15,12 @@ BACKUP_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.js
 BASE_MODEL = "twelvelabs.marengo-embed-3-0-v1:0"
 PROFILE_MODELS = ("us.twelvelabs.marengo-embed-3-0-v1:0", "eu.twelvelabs.marengo-embed-3-0-v1:0")
 ALL_MODELS = (BASE_MODEL, *PROFILE_MODELS)
+MARENGO_2_7_MODELS = (
+    "twelvelabs.marengo-embed-2-7-v1:0",
+    "us.twelvelabs.marengo-embed-2-7-v1:0",
+    "eu.twelvelabs.marengo-embed-2-7-v1:0",
+)
+PER_REQUEST_MODELS = (*ALL_MODELS, *MARENGO_2_7_MODELS)
 
 TEXT_REQUEST_COST = 7e-05
 IMAGE_REQUEST_COST = 0.0001
@@ -34,7 +40,7 @@ def test_marengo_embed_3_specs(model):
 
     assert info["litellm_provider"] == "bedrock"
     assert info["mode"] == "embedding"
-    assert info["input_cost_per_token"] == TEXT_REQUEST_COST
+    assert info["input_cost_per_query"] == TEXT_REQUEST_COST
     assert info["output_cost_per_token"] == 0.0
     assert info["max_input_tokens"] == 500
     assert info["max_tokens"] == 500
@@ -48,9 +54,11 @@ def test_marengo_embed_3_specs(model):
     assert provider == "bedrock"
 
 
-@pytest.mark.parametrize("model", PROFILE_MODELS)
-def test_marengo_embed_3_inference_profiles_price_image_video_and_audio(model):
+@pytest.mark.parametrize("model", PER_REQUEST_MODELS)
+def test_marengo_prices_are_per_request_not_per_token(model):
     info = _load(MAIN_PATH)[model]
+    assert "input_cost_per_token" not in info
+    assert info["input_cost_per_query"] == TEXT_REQUEST_COST
     assert info["input_cost_per_image"] == IMAGE_REQUEST_COST
     assert info["input_cost_per_video_per_second"] == VIDEO_COST_PER_SECOND
     assert info["input_cost_per_audio_per_second"] == AUDIO_COST_PER_SECOND
@@ -64,13 +72,34 @@ def test_marengo_embed_3_is_visible_to_callers(model, local_model_cost_map):
     assert info["max_input_tokens"] == 500
 
 
-@pytest.mark.parametrize("model", ALL_MODELS)
-def test_marengo_embed_3_text_request_is_billed(model, local_model_cost_map):
+@pytest.mark.parametrize("model", PER_REQUEST_MODELS)
+@pytest.mark.parametrize(
+    "details,expected_cost",
+    [
+        (PromptTokensDetailsWrapper(query_count=1), TEXT_REQUEST_COST),
+        (PromptTokensDetailsWrapper(image_count=1), IMAGE_REQUEST_COST),
+        (PromptTokensDetailsWrapper(query_count=1, image_count=1), TEXT_REQUEST_COST + IMAGE_REQUEST_COST),
+        (PromptTokensDetailsWrapper(query_count=1, image_count=2), TEXT_REQUEST_COST + 2 * IMAGE_REQUEST_COST),
+        (PromptTokensDetailsWrapper(video_length_seconds=10), 10 * VIDEO_COST_PER_SECOND),
+        (PromptTokensDetailsWrapper(audio_length_seconds=10), 10 * AUDIO_COST_PER_SECOND),
+    ],
+)
+def test_marengo_requests_are_billed_per_request(model, details, expected_cost, local_model_cost_map):
+    usage = Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0, prompt_tokens_details=details)
+    prompt_cost, completion_cost = litellm.cost_per_token(
+        model=model, usage_object=usage, custom_llm_provider="bedrock"
+    )
+    assert prompt_cost == pytest.approx(expected_cost)
+    assert completion_cost == 0.0
+
+
+@pytest.mark.parametrize("model", PER_REQUEST_MODELS)
+def test_marengo_token_counts_bill_nothing(model, local_model_cost_map):
     usage = Usage(prompt_tokens=128, completion_tokens=0, total_tokens=128)
     prompt_cost, completion_cost = litellm.cost_per_token(
         model=model, usage_object=usage, custom_llm_provider="bedrock"
     )
-    assert prompt_cost == pytest.approx(128 * TEXT_REQUEST_COST)
+    assert prompt_cost == 0.0
     assert completion_cost == 0.0
 
 
@@ -78,7 +107,7 @@ def test_marengo_embed_3_is_a_known_bedrock_embedding_model():
     assert BASE_MODEL in bedrock_embedding_models
 
 
-@pytest.mark.parametrize("model", ALL_MODELS)
+@pytest.mark.parametrize("model", PER_REQUEST_MODELS)
 def test_backup_matches_main(model):
     main_cost = _load(MAIN_PATH)
     backup_cost = _load(BACKUP_PATH)
