@@ -69,6 +69,7 @@ PLAIN_MODEL = "anthropic/claude-sonnet-5"
 CHEAP_MODEL = "anthropic/claude-haiku-4-5"
 STRONG_MODEL = "openai/gpt-5.6"
 MAX_TOKENS = 16
+TAG_DENIAL_MESSAGE = "Not allowed to access model due to tags configuration"
 PLAIN_SERVED = frozenset({PLAIN_MODEL, "claude-sonnet-5"})
 CHEAP_SERVED = frozenset({CHEAP_MODEL, "claude-haiku-4-5"})
 EMBEDDING_MODEL = "openai/text-embedding-3-small"
@@ -442,6 +443,9 @@ class TestUntaggedTierDeployments:
         assert isinstance(result, UnauthorizedError), (
             f"expected the tagged direct call to an untagged deployment to be denied with 401, got {result}"
         )
+        assert TAG_DENIAL_MESSAGE in result.body, (
+            f"expected the denial to come from tag routing, got a 401 reading {result.body[:300]}"
+        )
 
 
 class TestResponsesApiTagRouting:
@@ -593,9 +597,20 @@ class TestSemanticAutoRouterResponses:
             )
         )
         assert answer.id, "/v1/responses through the semantic auto-router returned no response id"
-        rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
+        rows: Final = proxy.poll_logs_for_key(
+            key,
+            min_rows=2,
+            predicate=lambda logged: any(row.model == EMBEDDING_MODEL for row in logged),
+        )
+        embedding_rows: Final = tuple(row for row in rows if row.model == EMBEDDING_MODEL)
+        assert embedding_rows, (
+            "the routing embedding was not billed to the caller's key; "
+            f"spend logs show {tuple(row.model for row in rows)}"
+        )
         _assert_served_only_by(
-            rows, CHEAP_SERVED | {semantic_auto_router.target}, "semantic auto-router /v1/responses string input"
+            [row for row in rows if row.model != EMBEDDING_MODEL],
+            CHEAP_SERVED | {semantic_auto_router.target},
+            "semantic auto-router /v1/responses string input",
         )
 
 

@@ -131,7 +131,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
         />
         {/* Footer with Cancel and Save buttons */}
         {groups.length > 0 && (
-          <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-gray-100">
+          <div className="flex items-center justify-end space-x-3 pt-6 mt-6 border-t border-border">
             <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
               Cancel
             </Button>

@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState } from "react";
-import { Modal } from "antd";
 
 import { toast } from "@/lib/toast";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -18,6 +17,7 @@ import {
   MODELS_TAB,
   type AccessGroupFormValues,
 } from "./AccessGroupBaseForm";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AccessGroupEditModalProps {
   visible: boolean;
@@ -87,13 +87,18 @@ function AccessGroupEditForm({ accessGroup, onCancel, onSuccess }: Omit<AccessGr
 
 export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess }: AccessGroupEditModalProps) {
   return (
-    <Modal title="Edit Access Group" open={visible} onCancel={onCancel} width={700} footer={null} destroyOnHidden>
-      <AccessGroupEditForm
-        key={accessGroup.access_group_id}
-        accessGroup={accessGroup}
-        onCancel={onCancel}
-        onSuccess={onSuccess}
-      />
-    </Modal>
+    <Dialog open={visible} onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[700px]">
+        <DialogHeader>
+          <DialogTitle>Edit Access Group</DialogTitle>
+        </DialogHeader>
+        <AccessGroupEditForm
+          key={accessGroup.access_group_id}
+          accessGroup={accessGroup}
+          onCancel={onCancel}
+          onSuccess={onSuccess}
+        />
+      </DialogContent>
+    </Dialog>
   );
 }

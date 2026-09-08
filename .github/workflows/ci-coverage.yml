@@ -40,3 +40,12 @@ jobs:
         run: |
           python -m pip install "pyyaml==6.0.3"
           python .github/scripts/assert_ci_coverage.py
+
+      # The census asks whether a job names a file; this asks whether that job's -k
+      # then throws it back out. A file both globbed and deselected everywhere runs
+      # nowhere while counting as covered, which is how the caching suite went unrun.
+      - name: Assert no -k expression deselects a file from every job that globs it
+        run: python .github/scripts/assert_ci_coverage.py --slices
+
+      - name: Assert .github/workflows/ holds only workflows, correctly named
+        run: python .github/scripts/assert_workflow_dir_hygiene.py

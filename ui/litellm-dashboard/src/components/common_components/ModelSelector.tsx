@@ -80,7 +80,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   return (
     <div>
       {showLabel && (
-        <p className="font-medium block mb-2 text-gray-700 flex items-center">
+        <p className="font-medium block mb-2 text-foreground flex items-center">
           <Bot className="mr-2 size-3.5" /> {labelText}
         </p>
       )}

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Controller, FormProvider, useForm, useFormContext } from "react-hook-form";
 
-import { Field, FieldError, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import EmailSettings from "./email_settings";
+import MSTeamsSettings from "./MSTeamsSettings";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { toast } from "@/lib/toast";
 
@@ -66,7 +67,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
   }
 
   return (
-    <div className="space-y-4 mt-6 p-4 bg-gray-50 rounded-lg border">
+    <div className="space-y-4 mt-6 p-4 bg-muted rounded-lg border">
       {params.map((param) => {
         const callbackConfig = callbackConfigs.find((config) => config.id === selectedCallback);
         const paramConfig = callbackConfig?.dynamic_params?.[param] || {};
@@ -82,7 +83,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
         return (
           <Field key={param} className="mb-4">
             <FieldLabel htmlFor={fieldId}>
-              <span className="text-sm font-medium text-gray-700">{fieldLabel} </span>
+              <span className="text-sm font-medium text-foreground">{fieldLabel} </span>
             </FieldLabel>
             {paramType === "password" ? (
               <Input
@@ -179,7 +180,7 @@ export const CallbackSelector: React.FC<CallbackSelectorProps> = ({
                           className="w-6 h-6 rounded-sm object-contain"
                         />
                       </div>
-                      <span className="font-medium text-gray-900">{callbackConfig.displayName}</span>
+                      <span className="font-medium text-foreground">{callbackConfig.displayName}</span>
                     </div>
                   </ComboboxItem>
                 )}
@@ -292,6 +293,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     llm_too_slow: "LLM Responses Too Slow",
     llm_requests_hanging: "LLM Requests Hanging",
     budget_alerts: "Budget Alerts (API Keys, Users)",
+    user_spend_thresholds: "User Spend Thresholds (Daily/Monthly)",
+    user_spend_anomalies: "User Spend Anomaly Detection",
     db_exceptions: "Database Exceptions (Read/Write)",
     daily_reports: "Weekly/Monthly Spend Reports",
     outage_alerts: "Outage Alerts",
@@ -490,8 +493,9 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <TabsTrigger value="alerting-types">Alerting Types</TabsTrigger>
             <TabsTrigger value="alerting-settings">Alerting Settings</TabsTrigger>
             <TabsTrigger value="email-alerts">Email Alerts</TabsTrigger>
+            <TabsTrigger value="ms-teams-alerts">MS Teams Alerts</TabsTrigger>
           </TabsList>
-          <TabsContent value="logging-callbacks">
+          <TabsContent value="logging-callbacks" keepMounted>
             <LoggingCallbacksTable
               callbacks={callbacks}
               availableCallbacks={allCallbacks}
@@ -512,15 +516,16 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               }}
             />
           </TabsContent>
-          <TabsContent value="cloudzero-cost-tracking">
+          <TabsContent value="cloudzero-cost-tracking" keepMounted>
             <div className="p-8">
               <CloudZeroCostTracking />
             </div>
           </TabsContent>
-          <TabsContent value="alerting-types">
+          <TabsContent value="alerting-types" keepMounted>
             <Card className="p-6">
               <p className="my-2">
-                Alerts are only supported for Slack Webhook URLs. Get your webhook urls from{" "}
+                Alerts are sent to any Slack-compatible incoming webhook URL (Slack, Rocket.Chat, Mattermost, etc.). Get
+                Slack webhook urls from{" "}
                 <a href="https://api.slack.com/messaging/webhooks" target="_blank" style={{ color: "blue" }}>
                   here
                 </a>
@@ -530,7 +535,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                   <TableRow>
                     <TableHead></TableHead>
                     <TableHead></TableHead>
-                    <TableHead>Slack Webhook URL</TableHead>
+                    <TableHead>Webhook URL (Slack-compatible)</TableHead>
                   </TableRow>
                 </TableHeader>
 
@@ -601,11 +606,14 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               </Button>
             </Card>
           </TabsContent>
-          <TabsContent value="alerting-settings">
+          <TabsContent value="alerting-settings" keepMounted>
             <AlertingSettings accessToken={accessToken} premiumUser={premiumUser} />
           </TabsContent>
-          <TabsContent value="email-alerts">
+          <TabsContent value="email-alerts" keepMounted>
             <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
+          </TabsContent>
+          <TabsContent value="ms-teams-alerts" keepMounted>
+            <MSTeamsSettings accessToken={accessToken} userID={userID} userRole={userRole} alerts={alerts} />
           </TabsContent>
         </Tabs>
       </div>
@@ -639,7 +647,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 selectedCallback={selectedCallback}
               />
 
-              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-border">
                 <Button type="button" variant="outline" onClick={cancelAddCallback} disabled={isAddingCallback}>
                   Cancel
                 </Button>
@@ -680,7 +688,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
                 </>
               )}
 
-              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-gray-200">
+              <div className="flex justify-end space-x-3 pt-6 mt-6 border-t border-border">
                 <Button type="button" variant="outline" onClick={closeEditCallbackModal} disabled={isUpdatingCallback}>
                   Cancel
                 </Button>

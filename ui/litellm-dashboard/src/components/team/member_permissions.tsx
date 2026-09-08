@@ -77,9 +77,9 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
   const hasPermissions = permissions.length > 0;
 
   return (
-    <Card className="block bg-white shadow-md rounded-md p-6">
+    <Card className="block bg-card shadow-md rounded-md p-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b pb-4 mb-6">
-        <h3 className="text-lg font-medium text-gray-900 mb-2 sm:mb-0">Member Permissions</h3>
+        <h3 className="text-lg font-medium text-foreground mb-2 sm:mb-0">Member Permissions</h3>
         {canEditTeam && hasChanges && (
           <div className="flex gap-3">
             <Button variant="outline" onClick={handleReset}>
@@ -94,7 +94,9 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
         )}
       </div>
 
-      <p className="mb-6 text-sm text-gray-600">Control what team members can do when they are not team admins.</p>
+      <p className="mb-6 text-sm text-muted-foreground">
+        Control what team members can do when they are not team admins.
+      </p>
 
       {hasPermissions ? (
         <div className="overflow-x-auto">
@@ -104,7 +106,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
                 <TableHead>Method</TableHead>
                 <TableHead>Endpoint</TableHead>
                 <TableHead>Description</TableHead>
-                <TableHead className="sticky right-0 bg-white shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
+                <TableHead className="sticky right-0 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
                   Allow Access
                 </TableHead>
               </TableRow>
@@ -113,21 +115,21 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
               {permissions.map((permission) => {
                 const permInfo = getPermissionInfo(permission);
                 return (
-                  <TableRow key={permission} className="hover:bg-gray-50 transition-colors">
+                  <TableRow key={permission} className="hover:bg-accent transition-colors">
                     <TableCell>
                       <span
                         className={`px-2 py-1 rounded text-xs font-medium ${
-                          permInfo.method === "GET" ? "bg-blue-100 text-blue-800" : "bg-green-100 text-green-800"
+                          permInfo.method === "GET" ? "bg-info/15 text-info" : "bg-success/15 text-success"
                         }`}
                       >
                         {permInfo.method}
                       </span>
                     </TableCell>
                     <TableCell>
-                      <span className="font-mono text-sm text-gray-800">{permInfo.endpoint}</span>
+                      <span className="font-mono text-sm text-foreground">{permInfo.endpoint}</span>
                     </TableCell>
-                    <TableCell className="text-gray-700">{permInfo.description}</TableCell>
-                    <TableCell className="sticky right-0 bg-white shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
+                    <TableCell className="text-foreground">{permInfo.description}</TableCell>
+                    <TableCell className="sticky right-0 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.1)] text-center">
                       <Checkbox
                         className="mx-auto"
                         checked={selectedPermissions.includes(permission)}
@@ -143,7 +145,7 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
         </div>
       ) : (
         <div className="py-12">
-          <p className="text-center text-sm text-gray-500">No permissions available</p>
+          <p className="text-center text-sm text-muted-foreground">No permissions available</p>
         </div>
       )}
     </Card>

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Modal } from "antd";
 import { Save } from "lucide-react";
 
 import { toast } from "@/lib/toast";
@@ -12,7 +11,8 @@ import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUpdateProject, ProjectUpdateParams } from "@/app/(dashboard)/hooks/projects/useUpdateProject";
 import { ProjectBaseForm } from "./ProjectBaseForm";
 import { projectFormSchema, type ProjectFormValues } from "./projectFormSchema";
-import { buildProjectApiParams } from "./projectFormUtils";
+import { buildProjectUpdateParams } from "./projectFormUtils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface EditProjectModalProps {
   isOpen: boolean;
@@ -21,18 +21,35 @@ interface EditProjectModalProps {
   onSuccess?: () => void;
 }
 
-const INTERNAL_METADATA_KEYS = new Set(["model_rpm_limit", "model_tpm_limit", "guardrails"]);
+const INTERNAL_METADATA_KEYS = new Set([
+  "model_rpm_limit",
+  "model_tpm_limit",
+  "model_itpm_limit",
+  "model_otpm_limit",
+  "guardrails",
+]);
 
-const toFormValues = (project: ProjectResponse): ProjectFormValues => {
+export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
   const metadataObj = (project.metadata ?? {}) as Record<string, unknown>;
   const rpmLimits = (metadataObj.model_rpm_limit ?? {}) as Record<string, number>;
   const tpmLimits = (metadataObj.model_tpm_limit ?? {}) as Record<string, number>;
+  const itpmLimits = (metadataObj.model_itpm_limit ?? {}) as Record<string, number>;
+  const otpmLimits = (metadataObj.model_otpm_limit ?? {}) as Record<string, number>;
   const guardrails = (Array.isArray(metadataObj.guardrails) ? metadataObj.guardrails : []) as string[];
 
-  const modelLimits = Array.from(new Set([...Object.keys(rpmLimits), ...Object.keys(tpmLimits)])).map((model) => ({
+  const modelLimits = Array.from(
+    new Set([
+      ...Object.keys(rpmLimits),
+      ...Object.keys(tpmLimits),
+      ...Object.keys(itpmLimits),
+      ...Object.keys(otpmLimits),
+    ]),
+  ).map((model) => ({
     model,
     rpm: rpmLimits[model],
     tpm: tpmLimits[model],
+    itpm: itpmLimits[model],
+    otpm: otpmLimits[model],
   }));
 
   const metadata = Object.entries(metadataObj)
@@ -69,7 +86,7 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
       : { ...values, guardrails: undefined, modelLimits: undefined, metadata: undefined };
 
     const params: ProjectUpdateParams = {
-      ...buildProjectApiParams(submitted),
+      ...buildProjectUpdateParams(submitted),
       team_id: submitted.team_id,
     };
 
@@ -107,15 +124,13 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
 
 export function EditProjectModal({ isOpen, project, onClose, onSuccess }: EditProjectModalProps) {
   return (
-    <Modal
-      title={<span className="text-lg font-semibold text-foreground">Edit Project</span>}
-      open={isOpen}
-      onCancel={onClose}
-      width={720}
-      destroyOnHidden
-      footer={null}
-    >
-      <EditProjectForm key={project.project_id} project={project} onClose={onClose} onSuccess={onSuccess} />
-    </Modal>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[720px]">
+        <DialogHeader>
+          <DialogTitle className="text-lg">Edit Project</DialogTitle>
+        </DialogHeader>
+        <EditProjectForm key={project.project_id} project={project} onClose={onClose} onSuccess={onSuccess} />
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -4,6 +4,7 @@ Fireworks AI Rerank API transformation
 Reference: https://docs.fireworks.ai/inference-api-reference/rerank
 """
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 import httpx
@@ -66,11 +67,11 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Map Cohere rerank params to Fireworks AI rerank params
         """
-        params: Final[dict[str, Any]] = {
+        params: Final[dict[str, object]] = {
             "query": query,
             "documents": documents,
         }
@@ -102,6 +103,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
         model: str,
         api_key: str | None = None,
         optional_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         api_key = self._get_api_key(api_key)
         if api_key is None:

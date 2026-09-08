@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -52,11 +52,11 @@ describe("TagInfoView save payload", () => {
     const { user, nameInput } = await renderEditor();
 
     await user.clear(nameInput);
-    await user.type(nameInput, "renamed-tag");
+    fireEvent.change(nameInput, { target: { value: "renamed-tag" } });
 
     const descriptionInput = screen.getByLabelText("Description");
     await user.clear(descriptionInput);
-    await user.type(descriptionInput, "updated description");
+    fireEvent.change(descriptionInput, { target: { value: "updated description" } });
 
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
@@ -81,7 +81,7 @@ describe("TagInfoView save payload", () => {
 
     const maxBudgetInput = await screen.findByLabelText("Max Budget (USD)");
     await user.clear(maxBudgetInput);
-    await user.type(maxBudgetInput, "150.75");
+    fireEvent.change(maxBudgetInput, { target: { value: "150.75" } });
 
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
@@ -115,7 +115,7 @@ describe("TagInfoView save payload", () => {
     await user.click(toggle());
     const maxBudgetInput = await screen.findByLabelText("Max Budget (USD)");
     await user.clear(maxBudgetInput);
-    await user.type(maxBudgetInput, "150.75");
+    fireEvent.change(maxBudgetInput, { target: { value: "150.75" } });
 
     await user.click(toggle());
     await user.click(toggle());
@@ -142,7 +142,7 @@ describe("TagInfoView save payload", () => {
 
     const descriptionInput = screen.getByLabelText("Description");
     await user.clear(descriptionInput);
-    await user.type(descriptionInput, "abandoned description");
+    fireEvent.change(descriptionInput, { target: { value: "abandoned description" } });
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 

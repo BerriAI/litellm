@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from "react";
-import { Modal } from "antd";
 import { CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
 import { Policy } from "@/components/policies/types";
 import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { FieldGroup, FieldLabel, FieldTitle } from "@/components/shared/form/field";
+import { FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -18,6 +17,7 @@ import { buildAttachmentData } from "./build_attachment_data";
 import { getInvalidTeamEntries } from "./scope_validation";
 import ImpactPreviewAlert from "./impact_preview_alert";
 import { TokenSelect } from "./TokenSelect";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddAttachmentFormProps {
   visible: boolean;
@@ -231,216 +231,228 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const policyOptions = policies.map((p) => p.policy_name);
 
   return (
-    <Modal title="Create Policy Attachment" open={visible} onCancel={handleClose} footer={null} width={600}>
-      <TooltipProvider>
-        <form onSubmit={(event) => event.preventDefault()} noValidate>
-          <FieldGroup>
-            <FormField control={form.control} name="policy_names" label="Policies">
-              {({ id, value, onChange, onBlur, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                <TokenSelect
-                  id={id}
-                  value={value}
-                  onValueChange={onChange}
-                  onBlur={onBlur}
-                  placeholder="Select policies to attach"
-                  options={policyOptions}
-                  emptyText="No matching policies"
-                  ariaInvalid={ariaInvalid}
-                  ariaDescribedBy={ariaDescribedBy}
-                />
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>Create Policy Attachment</DialogTitle>
+        </DialogHeader>
+        <TooltipProvider>
+          <form onSubmit={(event) => event.preventDefault()} noValidate>
+            <FieldGroup>
+              <FormField control={form.control} name="policy_names" label="Policies">
+                {({
+                  id,
+                  value,
+                  onChange,
+                  onBlur,
+                  "aria-invalid": ariaInvalid,
+                  "aria-describedby": ariaDescribedBy,
+                }) => (
+                  <TokenSelect
+                    id={id}
+                    value={value}
+                    onValueChange={onChange}
+                    onBlur={onBlur}
+                    placeholder="Select policies to attach"
+                    options={policyOptions}
+                    emptyText="No matching policies"
+                    ariaInvalid={ariaInvalid}
+                    ariaDescribedBy={ariaDescribedBy}
+                  />
+                )}
+              </FormField>
+
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold">Scope</span>
+                <Separator className="flex-1" />
+              </div>
+
+              <div>
+                <FieldTitle className="mb-2">Scope Type</FieldTitle>
+                <RadioGroup value={scopeType} onValueChange={(value: unknown) => setScopeType(value as ScopeType)}>
+                  <FieldLabel className="font-normal">
+                    <RadioGroupItem value="specific" />
+                    Specific (teams, keys, models, or tags)
+                  </FieldLabel>
+                  <FieldLabel className="font-normal">
+                    <RadioGroupItem value="global" />
+                    Global (applies to all requests)
+                  </FieldLabel>
+                </RadioGroup>
+              </div>
+
+              {scopeType === "specific" && (
+                <>
+                  <FormField
+                    control={form.control}
+                    name="teams"
+                    label={labelWithHint(
+                      "Teams",
+                      "Select team aliases or enter custom patterns. Supports wildcards (e.g., healthcare-*)",
+                    )}
+                  >
+                    {({
+                      id,
+                      value,
+                      onChange,
+                      onBlur,
+                      "aria-invalid": ariaInvalid,
+                      "aria-describedby": ariaDescribedBy,
+                    }) => (
+                      <TokenSelect
+                        id={id}
+                        value={value}
+                        onValueChange={onChange}
+                        onBlur={onBlur}
+                        placeholder={isLoadingTeams ? "Loading teams..." : "Select or enter team aliases"}
+                        options={availableTeams}
+                        allowCustomValues
+                        tokenSeparators={[","]}
+                        emptyText="No matching teams"
+                        ariaInvalid={ariaInvalid}
+                        ariaDescribedBy={ariaDescribedBy}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="keys"
+                    label={labelWithHint(
+                      "Keys",
+                      "Select key aliases or enter custom patterns. Supports wildcards (e.g., dev-*)",
+                    )}
+                  >
+                    {({
+                      id,
+                      value,
+                      onChange,
+                      onBlur,
+                      "aria-invalid": ariaInvalid,
+                      "aria-describedby": ariaDescribedBy,
+                    }) => (
+                      <TokenSelect
+                        id={id}
+                        value={value}
+                        onValueChange={onChange}
+                        onBlur={onBlur}
+                        placeholder={isLoadingKeys ? "Loading keys..." : "Select or enter key aliases"}
+                        options={availableKeys}
+                        allowCustomValues
+                        tokenSeparators={[","]}
+                        emptyText="No matching keys"
+                        ariaInvalid={ariaInvalid}
+                        ariaDescribedBy={ariaDescribedBy}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="models"
+                    label={labelWithHint(
+                      "Models",
+                      "Model names this attachment applies to. Supports wildcards (e.g., gpt-4*). Leave empty to apply to all models.",
+                    )}
+                  >
+                    {({
+                      id,
+                      value,
+                      onChange,
+                      onBlur,
+                      "aria-invalid": ariaInvalid,
+                      "aria-describedby": ariaDescribedBy,
+                    }) => (
+                      <TokenSelect
+                        id={id}
+                        value={value}
+                        onValueChange={onChange}
+                        onBlur={onBlur}
+                        placeholder={
+                          isLoadingModels ? "Loading models..." : "Select or enter model names (e.g., gpt-4, bedrock/*)"
+                        }
+                        options={availableModels}
+                        allowCustomValues
+                        tokenSeparators={[","]}
+                        emptyText="No matching models"
+                        ariaInvalid={ariaInvalid}
+                        ariaDescribedBy={ariaDescribedBy}
+                      />
+                    )}
+                  </FormField>
+
+                  <FormField
+                    control={form.control}
+                    name="tags"
+                    label={labelWithHint(
+                      "Tags",
+                      "Match against tags set in key or team metadata. Use exact values (e.g., healthcare) or wildcard patterns (e.g., health-*) where * matches any suffix.",
+                    )}
+                    description={
+                      <span className="text-xs">
+                        Matches tags from key/team <code>metadata.tags</code> or tags passed dynamically in the request
+                        body. Use <code>*</code> as a suffix wildcard (e.g., <code>prod-*</code> matches{" "}
+                        <code>prod-us</code>, <code>prod-eu</code>).
+                      </span>
+                    }
+                  >
+                    {({
+                      id,
+                      value,
+                      onChange,
+                      onBlur,
+                      "aria-invalid": ariaInvalid,
+                      "aria-describedby": ariaDescribedBy,
+                    }) => (
+                      <TokenSelect
+                        id={id}
+                        value={value}
+                        onValueChange={onChange}
+                        onBlur={onBlur}
+                        placeholder="Type a tag and press Enter (e.g. healthcare, prod-*)"
+                        allowCustomValues
+                        tokenSeparators={[",", " "]}
+                        ariaInvalid={ariaInvalid}
+                        ariaDescribedBy={ariaDescribedBy}
+                      />
+                    )}
+                  </FormField>
+                </>
               )}
-            </FormField>
+            </FieldGroup>
 
-            <div className="flex items-center gap-3">
-              <span className="text-sm font-semibold">Scope</span>
-              <Separator className="flex-1" />
-            </div>
+            {impactResult && <ImpactPreviewAlert impactResult={impactResult} />}
 
-            <div>
-              <FieldTitle className="mb-2">Scope Type</FieldTitle>
-              <RadioGroup value={scopeType} onValueChange={(value: unknown) => setScopeType(value as ScopeType)}>
-                <FieldLabel className="font-normal">
-                  <RadioGroupItem value="specific" />
-                  Specific (teams, keys, models, or tags)
-                </FieldLabel>
-                <FieldLabel className="font-normal">
-                  <RadioGroupItem value="global" />
-                  Global (applies to all requests)
-                </FieldLabel>
-              </RadioGroup>
-            </div>
-
-            {scopeType === "specific" && (
-              <>
-                <FormField
-                  control={form.control}
-                  name="teams"
-                  label={labelWithHint(
-                    "Teams",
-                    "Select team aliases or enter custom patterns. Supports wildcards (e.g., healthcare-*)",
-                  )}
+            <div className="flex justify-end space-x-2 mt-4">
+              <Button type="button" variant="secondary" onClick={handleClose}>
+                Cancel
+              </Button>
+              {scopeType === "specific" && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={handlePreviewImpact}
+                  disabled={isEstimating}
+                  aria-busy={isEstimating}
                 >
-                  {({
-                    id,
-                    value,
-                    onChange,
-                    onBlur,
-                    "aria-invalid": ariaInvalid,
-                    "aria-describedby": ariaDescribedBy,
-                  }) => (
-                    <TokenSelect
-                      id={id}
-                      value={value}
-                      onValueChange={onChange}
-                      onBlur={onBlur}
-                      placeholder={isLoadingTeams ? "Loading teams..." : "Select or enter team aliases"}
-                      options={availableTeams}
-                      allowCustomValues
-                      tokenSeparators={[","]}
-                      emptyText="No matching teams"
-                      ariaInvalid={ariaInvalid}
-                      ariaDescribedBy={ariaDescribedBy}
-                    />
-                  )}
-                </FormField>
-
-                <FormField
-                  control={form.control}
-                  name="keys"
-                  label={labelWithHint(
-                    "Keys",
-                    "Select key aliases or enter custom patterns. Supports wildcards (e.g., dev-*)",
-                  )}
-                >
-                  {({
-                    id,
-                    value,
-                    onChange,
-                    onBlur,
-                    "aria-invalid": ariaInvalid,
-                    "aria-describedby": ariaDescribedBy,
-                  }) => (
-                    <TokenSelect
-                      id={id}
-                      value={value}
-                      onValueChange={onChange}
-                      onBlur={onBlur}
-                      placeholder={isLoadingKeys ? "Loading keys..." : "Select or enter key aliases"}
-                      options={availableKeys}
-                      allowCustomValues
-                      tokenSeparators={[","]}
-                      emptyText="No matching keys"
-                      ariaInvalid={ariaInvalid}
-                      ariaDescribedBy={ariaDescribedBy}
-                    />
-                  )}
-                </FormField>
-
-                <FormField
-                  control={form.control}
-                  name="models"
-                  label={labelWithHint(
-                    "Models",
-                    "Model names this attachment applies to. Supports wildcards (e.g., gpt-4*). Leave empty to apply to all models.",
-                  )}
-                >
-                  {({
-                    id,
-                    value,
-                    onChange,
-                    onBlur,
-                    "aria-invalid": ariaInvalid,
-                    "aria-describedby": ariaDescribedBy,
-                  }) => (
-                    <TokenSelect
-                      id={id}
-                      value={value}
-                      onValueChange={onChange}
-                      onBlur={onBlur}
-                      placeholder={
-                        isLoadingModels ? "Loading models..." : "Select or enter model names (e.g., gpt-4, bedrock/*)"
-                      }
-                      options={availableModels}
-                      allowCustomValues
-                      tokenSeparators={[","]}
-                      emptyText="No matching models"
-                      ariaInvalid={ariaInvalid}
-                      ariaDescribedBy={ariaDescribedBy}
-                    />
-                  )}
-                </FormField>
-
-                <FormField
-                  control={form.control}
-                  name="tags"
-                  label={labelWithHint(
-                    "Tags",
-                    "Match against tags set in key or team metadata. Use exact values (e.g., healthcare) or wildcard patterns (e.g., health-*) where * matches any suffix.",
-                  )}
-                  description={
-                    <span className="text-xs">
-                      Matches tags from key/team <code>metadata.tags</code> or tags passed dynamically in the request
-                      body. Use <code>*</code> as a suffix wildcard (e.g., <code>prod-*</code> matches{" "}
-                      <code>prod-us</code>, <code>prod-eu</code>).
-                    </span>
-                  }
-                >
-                  {({
-                    id,
-                    value,
-                    onChange,
-                    onBlur,
-                    "aria-invalid": ariaInvalid,
-                    "aria-describedby": ariaDescribedBy,
-                  }) => (
-                    <TokenSelect
-                      id={id}
-                      value={value}
-                      onValueChange={onChange}
-                      onBlur={onBlur}
-                      placeholder="Type a tag and press Enter (e.g. healthcare, prod-*)"
-                      allowCustomValues
-                      tokenSeparators={[",", " "]}
-                      ariaInvalid={ariaInvalid}
-                      ariaDescribedBy={ariaDescribedBy}
-                    />
-                  )}
-                </FormField>
-              </>
-            )}
-          </FieldGroup>
-
-          {impactResult && <ImpactPreviewAlert impactResult={impactResult} />}
-
-          <div className="flex justify-end space-x-2 mt-4">
-            <Button type="button" variant="secondary" onClick={handleClose}>
-              Cancel
-            </Button>
-            {scopeType === "specific" && (
+                  {isEstimating && <UiLoadingSpinner className="size-4" />}
+                  Estimate Impact
+                </Button>
+              )}
               <Button
                 type="button"
-                variant="secondary"
-                onClick={handlePreviewImpact}
-                disabled={isEstimating}
-                aria-busy={isEstimating}
+                onClick={form.handleSubmit(handleSubmit)}
+                disabled={isSubmitting}
+                aria-busy={isSubmitting}
               >
-                {isEstimating && <UiLoadingSpinner className="size-4" />}
-                Estimate Impact
+                {isSubmitting && <UiLoadingSpinner className="size-4" />}
+                Create Attachment
               </Button>
-            )}
-            <Button
-              type="button"
-              onClick={form.handleSubmit(handleSubmit)}
-              disabled={isSubmitting}
-              aria-busy={isSubmitting}
-            >
-              {isSubmitting && <UiLoadingSpinner className="size-4" />}
-              Create Attachment
-            </Button>
-          </div>
-        </form>
-      </TooltipProvider>
-    </Modal>
+            </div>
+          </form>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

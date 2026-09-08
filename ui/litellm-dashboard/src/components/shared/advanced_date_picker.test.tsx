@@ -49,10 +49,8 @@ describe("AdvancedDatePicker", () => {
   });
 
   it("should display formatted date range", () => {
-    render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
-    // The component displays date range in the format "D MMM, HH:mm - D MMM, HH:mm"
-    // Just check that the clock icon is present
-    expect(screen.getByLabelText("clock-circle")).toBeInTheDocument();
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+    expect(getTrigger(container)).toHaveTextContent(/\d{1,2} \w{3}, \d{2}:\d{2} - \d{1,2} \w{3}, \d{2}:\d{2}/);
   });
 
   it("should open dropdown when clicked", () => {
@@ -176,8 +174,8 @@ describe("AdvancedDatePicker", () => {
     const todayOption = screen.getByText("Today");
     fireEvent.click(todayOption);
 
-    // The option should be highlighted (bg-blue-50)
-    expect(todayOption.closest("button")).toHaveClass("bg-blue-50");
+    // The option should be highlighted (bg-info/10)
+    expect(todayOption.closest("button")).toHaveClass("bg-info/10");
   });
 
   it("selects a relative range from the keyboard alone", async () => {
@@ -199,7 +197,7 @@ describe("AdvancedDatePicker", () => {
 
     await user.keyboard("{Enter}");
     expect(presets[1]).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("Last 7 days").closest("button")).toHaveClass("bg-blue-50");
+    expect(screen.getByText("Last 7 days").closest("button")).toHaveClass("bg-info/10");
   });
 
   it("should show validation error for invalid date range", async () => {

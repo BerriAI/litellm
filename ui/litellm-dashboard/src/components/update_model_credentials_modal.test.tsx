@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import UpdateModelCredentialsModal from "./update_model_credentials_modal";
@@ -55,7 +55,7 @@ describe("UpdateModelCredentialsModal", () => {
     const onCancel = vi.fn();
     renderModal({ onUpdated, onCancel });
 
-    await user.type(screen.getByLabelText(/new api key/i), "sk-rotated-9988");
+    fireEvent.change(screen.getByLabelText(/new api key/i), { target: { value: "sk-rotated-9988" } });
     await user.click(screen.getByRole("button", { name: /update api key/i }));
 
     await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledTimes(1));
@@ -92,7 +92,7 @@ describe("UpdateModelCredentialsModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText(/new api key/i), "   ");
+    fireEvent.change(screen.getByLabelText(/new api key/i), { target: { value: "   " } });
     await user.click(screen.getByRole("button", { name: /update api key/i }));
 
     await waitFor(() => expect(mockToast.fromError).toHaveBeenCalledWith("Enter a new API key"));
@@ -103,7 +103,7 @@ describe("UpdateModelCredentialsModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText(/new api key/i), "  sk-pad-77  ");
+    fireEvent.change(screen.getByLabelText(/new api key/i), { target: { value: "  sk-pad-77  " } });
     await user.click(screen.getByRole("button", { name: /update api key/i }));
 
     await waitFor(() => expect(mockModelPatchUpdateCall).toHaveBeenCalledTimes(1));
@@ -131,7 +131,7 @@ describe("UpdateModelCredentialsModal", () => {
     renderModal();
 
     const field = screen.getByLabelText(/new api key/i);
-    await user.type(field, "sk-peek-42");
+    fireEvent.change(field, { target: { value: "sk-peek-42" } });
     expect(field).toHaveAttribute("type", "password");
 
     await user.click(screen.getByRole("button", { name: /show password/i }));

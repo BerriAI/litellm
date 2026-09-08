@@ -14,7 +14,6 @@ from parameterized import parameterized
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
 from opentelemetry import trace
 from opentelemetry.sdk._logs import LoggerProvider as OTLoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
@@ -6213,6 +6212,32 @@ class TestDynamicTracerProviderCache(unittest.TestCase):
 
         self.assertTrue(entry.owns_exporter)
         self.assertIsNotNone(entry.provider._atexit_handler)
+
+    def test_dynamic_providers_share_one_resource(self):
+        """Building the Resource scans every installed distribution's entry points, and the
+        dynamic providers reach it from the async logging path, so one logger builds it once."""
+        logger = self._logger(cap=8)
+
+        for i in range(4):
+            logger._get_tracer_with_dynamic_headers({"authorization": f"Basic tenant-{i}"})
+
+        entries = list(logger._tracer_provider_cache.values())
+        self.assertEqual(len(entries), 4)
+        self.assertEqual(len({id(entry.provider.resource) for entry in entries}), 1)
+        self.assertIs(entries[0].provider.resource, logger._litellm_resource())
+
+    def test_resource_is_memoized_per_logger_not_shared(self):
+        """Two loggers must not share a Resource; the second's service.name would be wrong."""
+        first = self._logger()
+        second = OpenTelemetry(
+            config=OpenTelemetryConfig(exporter="console", skip_set_global=True, service_name="svc-second")
+        )
+        self.addCleanup(second._tracer_provider.shutdown)
+
+        self.assertIsNot(first._litellm_resource(), second._litellm_resource())
+        self.assertEqual(second._litellm_resource().attributes.get("service.name"), "svc-second")
+
+
 class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
     """A Postgres service span must name the PostgreSQL server it reached.
 
@@ -6320,3 +6345,95 @@ class TestOpenTelemetryDatabaseSemconvAttributes(unittest.TestCase):
         span = self._service_span(ServiceTypes.DB, "get_data", None)
         self.assertEqual(span.attributes["db.system.name"], "postgresql")
         self.assertNotIn("server.address", span.attributes)
+
+
+class TestOpenTelemetryNonInferenceUsage(unittest.TestCase):
+    """Reading a stored response replays the usage of the call that created it, so emitting those
+    token counts again on the read's span reports the same tokens a second time. Regression tests
+    for LIT-5602, covering the legacy emitter that runs by default."""
+
+    USAGE = {"prompt_tokens": 4000, "completion_tokens": 2000, "total_tokens": 6000}
+    TOKEN_KEYS = frozenset({"gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens", "gen_ai.usage.total_tokens"})
+    BACKGROUND_POLL = {"internal_call_origin": "background_response_cost_poll"}
+    RESPONSE_OBJ = {"id": "resp_lit5602", "model": "gpt-4o", "usage": USAGE}
+    BACKGROUND_RESPONSE_OBJ = {**RESPONSE_OBJ, "background": True}
+
+    def _kwargs(self, call_type, litellm_metadata=None):
+        return {
+            "model": "gpt-4o",
+            "call_type": call_type,
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "openai",
+                "litellm_metadata": litellm_metadata or {},
+            },
+            "standard_logging_object": {"id": "lit5602", "call_type": call_type, "metadata": {}},
+        }
+
+    def _token_attributes_on_span(self, call_type, litellm_metadata=None, response_obj=None):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        otel.set_attributes(
+            span=mock_span,
+            kwargs=self._kwargs(call_type, litellm_metadata),
+            response_obj=response_obj or dict(self.RESPONSE_OBJ),
+        )
+        return {call[0][0] for call in mock_span.set_attribute.call_args_list if call[0][0] in self.TOKEN_KEYS}
+
+    def _token_histogram_calls(self, call_type, litellm_metadata=None, response_obj=None):
+        otel = OpenTelemetry()
+        otel._operation_duration_histogram = MagicMock()
+        otel._token_usage_histogram = MagicMock()
+        otel._cost_histogram = None
+        now = datetime.now()
+        otel._record_metrics(
+            self._kwargs(call_type, litellm_metadata), response_obj or dict(self.RESPONSE_OBJ), now, now
+        )
+        return otel._token_usage_histogram.record.call_count
+
+    def _time_per_output_token_calls(self, call_type, litellm_metadata=None, response_obj=None):
+        otel = OpenTelemetry()
+        otel._time_per_output_token_histogram = MagicMock()
+        now = datetime.now()
+        otel._record_time_per_output_token_metric(
+            self._kwargs(call_type, litellm_metadata), response_obj or dict(self.RESPONSE_OBJ), now, 1.0, {}
+        )
+        return otel._time_per_output_token_histogram.record.call_count
+
+    def test_inference_call_still_reports_its_tokens_on_the_span(self):
+        self.assertEqual(self._token_attributes_on_span("acompletion"), set(self.TOKEN_KEYS))
+
+    def test_response_read_does_not_report_the_retrieved_tokens_on_the_span(self):
+        self.assertEqual(self._token_attributes_on_span("aget_responses"), set())
+
+    def test_background_cost_poll_read_still_reports_its_tokens_on_the_span(self):
+        self.assertEqual(self._token_attributes_on_span("aget_responses", self.BACKGROUND_POLL), set(self.TOKEN_KEYS))
+
+    def test_inference_call_still_records_the_token_usage_histogram(self):
+        self.assertEqual(self._token_histogram_calls("acompletion"), 2)
+
+    def test_response_read_does_not_record_the_token_usage_histogram(self):
+        self.assertEqual(self._token_histogram_calls("aget_responses"), 0)
+
+    def test_background_cost_poll_read_still_records_the_token_usage_histogram(self):
+        self.assertEqual(self._token_histogram_calls("aget_responses", self.BACKGROUND_POLL), 2)
+
+    def test_background_response_read_still_reports_its_tokens_on_the_span(self):
+        self.assertEqual(
+            self._token_attributes_on_span("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ),
+            set(self.TOKEN_KEYS),
+        )
+
+    def test_background_response_read_still_records_the_token_usage_histogram(self):
+        self.assertEqual(self._token_histogram_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 2)
+
+    def test_inference_call_still_records_time_per_output_token(self):
+        self.assertEqual(self._time_per_output_token_calls("acompletion"), 1)
+
+    def test_response_read_does_not_divide_its_latency_by_the_retrieved_token_count(self):
+        self.assertEqual(self._time_per_output_token_calls("aget_responses"), 0)
+
+    def test_background_response_read_still_records_time_per_output_token(self):
+        self.assertEqual(
+            self._time_per_output_token_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 1
+        )

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -27,8 +27,10 @@ describe("PromptCompressionTab submit payload", () => {
     const user = userEvent.setup();
     render(<PromptCompressionTab accessToken="test-token" />);
 
-    await user.type(screen.getByLabelText("Name"), "  headroom-compression  ");
-    await user.type(screen.getByLabelText("Headroom API base"), "  https://headroom.example.com  ");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "  headroom-compression  " } });
+    fireEvent.change(screen.getByLabelText("Headroom API base"), {
+      target: { value: "  https://headroom.example.com  " },
+    });
     await user.click(screen.getByRole("button", { name: "Add guardrail" }));
 
     await vi.waitFor(() =>
@@ -49,8 +51,8 @@ describe("PromptCompressionTab submit payload", () => {
     const user = userEvent.setup();
     render(<PromptCompressionTab accessToken="test-token" />);
 
-    await user.type(screen.getByLabelText("Name"), "headroom-optin");
-    await user.type(screen.getByLabelText("Headroom API base"), "https://headroom.example.com");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "headroom-optin" } });
+    fireEvent.change(screen.getByLabelText("Headroom API base"), { target: { value: "https://headroom.example.com" } });
     await user.click(screen.getByLabelText("Apply to all requests"));
     await user.click(screen.getByRole("button", { name: "Add guardrail" }));
 
@@ -82,7 +84,7 @@ describe("PromptCompressionTab submit payload", () => {
     const user = userEvent.setup();
     render(<PromptCompressionTab accessToken="test-token" />);
 
-    await user.type(screen.getByLabelText("Name"), "headroom-compression");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "headroom-compression" } });
     await user.type(screen.getByLabelText("Headroom API base"), "https://headroom.example.com{Enter}");
 
     await vi.waitFor(() => expect(createGuardrailCall).toHaveBeenCalledTimes(1));
@@ -92,8 +94,8 @@ describe("PromptCompressionTab submit payload", () => {
     const user = userEvent.setup();
     render(<PromptCompressionTab accessToken="test-token" />);
 
-    await user.type(screen.getByLabelText("Name"), "headroom-compression");
-    await user.type(screen.getByLabelText("Headroom API base"), "https://headroom.example.com");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "headroom-compression" } });
+    fireEvent.change(screen.getByLabelText("Headroom API base"), { target: { value: "https://headroom.example.com" } });
     await user.click(screen.getByLabelText("Apply to all requests"));
     await user.click(screen.getByRole("button", { name: "Add guardrail" }));
 

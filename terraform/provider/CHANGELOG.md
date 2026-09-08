@@ -2,10 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+Up to `0.4.0` the provider had its own version line, cut from the headings in
+this file. It now ships at the **LiteLLM version**, on every LiteLLM release
+channel, built from the same commit as the proxy (see `RELEASING.md`). The
+headings below no longer drive a release; they record what changed and which
+LiteLLM line first carried it. A change that breaks existing configurations
+or state must be called out loudly here, because the version number can no
+longer signal it.
 
 ## [Unreleased]
+
+### Added
+
+- **jwt_key_mapping**: New `litellm_jwt_key_mapping` resource for the proxy's JWT to virtual key mappings, so JWT clients identified by a claim (`client_id`, `azp`, `sub`) map to virtual keys and inherit their models, budgets and rate limits. Supports `description` and `is_active`, rotating the mapped key in place, and forces replacement when the claim name or value changes
+- **team**: `soft_budget`, `tags`, and `soft_budget_alerting_emails` attributes on `litellm_team`, matching what `/team/new` and `/team/update` already accept; `soft_budget_alerting_emails` is sent under `metadata`, where the proxy reads it
+- **user**: New `litellm_user` resource and `litellm_user` / `litellm_users` data sources for managing internal users
+- **budget**: New `litellm_budget` resource and `litellm_budget` / `litellm_budgets` data sources for reusable budget objects
+- **tag**: New `litellm_tag` resource and `litellm_tag` / `litellm_tags` data sources for spend and routing tags
+- **project**: New `litellm_project` resource and `litellm_project` / `litellm_projects` data sources
+- **guardrail**: New `litellm_guardrail` resource and `litellm_guardrail` / `litellm_guardrails` data sources; `litellm_params` is sensitive and never read back into state
+- **prompt**: New `litellm_prompt` resource and `litellm_prompt` / `litellm_prompts` data sources for prompt templates
+- **agent**: New `litellm_agent` resource and `litellm_agent` / `litellm_agents` data sources for A2A agents
+- **search_tool**: New `litellm_search_tool` resource and `litellm_search_tool` / `litellm_search_tools` data sources
+- **access groups**: New `litellm_access_group` and `litellm_unified_access_group` resources with matching singular and plural data sources
+- **fallback**: New `litellm_fallback` resource and data source for per-model fallbacks (general, context window and content policy)
+- **block resources**: New `litellm_key_block` and `litellm_team_block` resources to manage the blocked state of existing keys and teams
+- **data sources for existing resources**: New `litellm_key` / `litellm_keys`, `litellm_team` / `litellm_teams`, `litellm_model` / `litellm_models`, `litellm_organization` / `litellm_organizations` and `litellm_mcp_server` / `litellm_mcp_servers` data sources
+- **key**: New arguments `budget_id`, `enforced_params`, `allowed_routes`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type`, `prompts`, `organization_id` and `project_id`
+- **team**: New arguments `model_aliases`, `guardrails`, `prompts`, `team_member_budget`, `team_member_budget_duration`, `team_member_rpm_limit`, `team_member_tpm_limit`, `team_member_key_duration`, `model_rpm_limit`, `model_tpm_limit`, `allowed_passthrough_routes`, `rpm_limit_type` and `tpm_limit_type`
+- **import**: `terraform import` support for `litellm_team`, `litellm_model`, `litellm_organization`, `litellm_mcp_server`, `litellm_vector_store` and every new resource
+
+### Fixed
+
+- **team**: Read now decodes the `team_info` envelope `/team/info` actually returns, so team attributes refresh from the proxy instead of always falling back to the prior state
+- **key**: Read now unwraps the `info` envelope `/key/info` actually returns; previously reads mapped nothing back into state, so drift on a key was never detected
+- **key**: Updates no longer send an empty `budget_duration`, which the proxy rejects with a 400; any update to a key without a configured `budget_duration` previously failed outright
+- **key**: A config-supplied `key` value (write-only) is now forwarded to `/key/generate`; previously it was silently dropped and the proxy generated a random key instead
+- **security**: The `litellm_key` data source and `litellm_key_block` resource normalize raw `sk-` keys to their SHA-256 token hash before building request URLs and resource IDs, so plaintext keys no longer land in reverse-proxy access logs, Terraform plan output, or state IDs
+
+### Changed
+
+- **Versioning**: the provider is now published at the LiteLLM version, from the same commit as the proxy, on every LiteLLM release (dev, rc, stable). The `0.x` line ends at `0.4.0`; a `~> 0.4` constraint will not receive further releases, so re-pin to the LiteLLM version your proxy runs (for example `~> 1.99.0`). Existing `0.x` versions remain in the registry and keep verifying
 
 ## [0.4.0] - 2026-08-06
 

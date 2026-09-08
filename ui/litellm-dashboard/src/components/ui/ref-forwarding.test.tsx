@@ -11,6 +11,7 @@ import { Label } from "./label";
 import { Separator } from "./separator";
 import { Skeleton } from "./skeleton";
 import { Table, TableBody, TableCaption, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "./table";
+import { Textarea } from "./textarea";
 import { UiLoadingSpinner } from "./ui-loading-spinner";
 
 describe("ui primitives forward refs to their DOM node", () => {
@@ -48,6 +49,12 @@ describe("ui primitives forward refs to their DOM node", () => {
     const ref = React.createRef<HTMLDivElement>();
     render(<Skeleton ref={ref} />);
     expect(ref.current).toBeInstanceOf(HTMLDivElement);
+  });
+
+  it("Textarea", () => {
+    const ref = React.createRef<HTMLTextAreaElement>();
+    render(<Textarea ref={ref} />);
+    expect(ref.current).toBeInstanceOf(HTMLTextAreaElement);
   });
 
   it("UiLoadingSpinner", () => {
@@ -138,15 +145,13 @@ describe("ui primitives forward refs to their DOM node", () => {
   });
 });
 
-describe("setupTests ref tripwire", () => {
-  it("records a violation when a ref is passed to a plain function component", () => {
-    const Plain = (props: React.ComponentPropsWithoutRef<"span">) => <span {...props} />;
+describe("plain function components", () => {
+  it("receives a ref as a prop instead of dropping it", () => {
+    const Plain = (props: React.ComponentPropsWithoutRef<"span"> & { ref?: React.Ref<HTMLSpanElement> }) => (
+      <span {...props} />
+    );
     const ref = React.createRef<HTMLSpanElement>();
-    render(React.createElement(Plain as never, { ref }));
-    const consume = (globalThis as { __consumePendingRefWarnings?: () => string[] }).__consumePendingRefWarnings;
-    expect(consume).toBeDefined();
-    const violations = consume!();
-    expect(violations).toHaveLength(1);
-    expect(violations[0]).toContain("Function components cannot be given refs");
+    render(<Plain ref={ref}>ok</Plain>);
+    expect(ref.current).toBeInstanceOf(HTMLSpanElement);
   });
 });

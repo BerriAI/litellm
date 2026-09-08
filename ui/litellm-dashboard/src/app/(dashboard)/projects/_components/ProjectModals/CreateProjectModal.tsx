@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { Modal } from "antd";
 import { FolderPlus } from "lucide-react";
 
 import { toast } from "@/lib/toast";
@@ -11,7 +10,8 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useCreateProject, ProjectCreateParams } from "@/app/(dashboard)/hooks/projects/useCreateProject";
 import { ProjectBaseForm } from "./ProjectBaseForm";
 import { emptyProjectFormValues, projectFormSchema } from "./projectFormSchema";
-import { buildProjectApiParams } from "./projectFormUtils";
+import { buildProjectCreateParams } from "./projectFormUtils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface CreateProjectModalProps {
   isOpen: boolean;
@@ -25,7 +25,7 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
 
   const handleSubmit = form.handleSubmit((values) => {
     const params: ProjectCreateParams = {
-      ...buildProjectApiParams(values),
+      ...buildProjectCreateParams(values),
       team_id: values.team_id,
     };
 
@@ -65,15 +65,13 @@ function CreateProjectForm({ onClose }: { onClose: () => void }) {
 
 export function CreateProjectModal({ isOpen, onClose }: CreateProjectModalProps) {
   return (
-    <Modal
-      title={<span className="text-lg font-semibold text-foreground">Create New Project</span>}
-      open={isOpen}
-      onCancel={onClose}
-      width={720}
-      destroyOnHidden
-      footer={null}
-    >
-      <CreateProjectForm onClose={onClose} />
-    </Modal>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[720px]">
+        <DialogHeader>
+          <DialogTitle className="text-lg">Create New Project</DialogTitle>
+        </DialogHeader>
+        <CreateProjectForm onClose={onClose} />
+      </DialogContent>
+    </Dialog>
   );
 }

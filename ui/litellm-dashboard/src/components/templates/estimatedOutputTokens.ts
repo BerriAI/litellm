@@ -57,13 +57,13 @@ export const estimateChecks = {
   },
 };
 
-const asAntdRule = ({ isValid, message }: { isValid: (value: unknown) => boolean; message: string }) => ({
+const asValidatorRule = ({ isValid, message }: { isValid: (value: unknown) => boolean; message: string }) => ({
   validator: (_: unknown, value: unknown) => (isValid(value) ? Promise.resolve() : Promise.reject(new Error(message))),
 });
 
 export const estimateRules = {
-  perModel: asAntdRule(estimateChecks.perModel),
-  positive: asAntdRule(estimateChecks.positive),
+  perModel: asValidatorRule(estimateChecks.perModel),
+  positive: asValidatorRule(estimateChecks.positive),
 };
 
 export const withNormalizedEstimates = <T extends FormValues>(values: T): FormValues => {

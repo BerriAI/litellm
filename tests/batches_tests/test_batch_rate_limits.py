@@ -5,14 +5,10 @@ Integration Tests for Batch Rate Limits
 import asyncio
 import json
 import os
-import sys
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import DualCache
@@ -1031,7 +1027,7 @@ async def test_batch_logging_azure_credentials_regression():
     with patch(
         "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
     ):
-        cost, usage, models = await _handle_completed_batch(
+        result = await _handle_completed_batch(
             batch=mock_batch,
             custom_llm_provider="azure",
             litellm_params=azure_credentials,
@@ -1043,13 +1039,13 @@ async def test_batch_logging_azure_credentials_regression():
         ], "REGRESSION: Credentials not passed through _handle_completed_batch"
 
         # Verify cost and usage were calculated
-        assert cost > 0, "Cost should be calculated"
-        assert usage.total_tokens == 40, "Usage should be calculated correctly"
+        assert result.cost > 0, "Cost should be calculated"
+        assert result.usage.total_tokens == 40, "Usage should be calculated correctly"
 
         print("   ✓ Credentials passed through full flow")
-        print(f"   ✓ Cost: {cost}")
-        print(f"   ✓ Usage: {usage.total_tokens} tokens")
-        print(f"   ✓ Models: {models}")
+        print(f"   ✓ Cost: {result.cost}")
+        print(f"   ✓ Usage: {result.usage.total_tokens} tokens")
+        print(f"   ✓ Models: {result.models}")
 
     # Test 4: Verify error prevention
     print("\n4. Testing 'Missing credentials' error prevention...")
@@ -1068,7 +1064,7 @@ async def test_batch_logging_azure_credentials_regression():
             "litellm.files.main.afile_content", side_effect=mock_afile_content_tracker
         ):
             try:
-                cost, usage, models = await _handle_completed_batch(
+                result = await _handle_completed_batch(
                     batch=mock_batch,
                     custom_llm_provider="azure",
                     litellm_params=azure_credentials,

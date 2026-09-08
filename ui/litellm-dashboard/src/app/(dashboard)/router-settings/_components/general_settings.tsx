@@ -148,7 +148,7 @@ export const PromptCachingPanel: React.FC<{
         <div className="mt-6 flex items-start justify-between gap-8">
           <div className="min-w-0 max-w-2xl">
             <p className="font-medium">Automatic Anthropic prompt caching</p>
-            <p className="mt-1 break-words text-xs text-gray-500">{enableSetting.field_description}</p>
+            <p className="mt-1 break-words text-xs text-muted-foreground">{enableSetting.field_description}</p>
           </div>
           <Switch checked={enabled} onCheckedChange={(checked) => persist(ENABLE_ANTHROPIC_PROMPT_CACHING, checked)} />
         </div>
@@ -156,8 +156,8 @@ export const PromptCachingPanel: React.FC<{
         {ttlSetting && (
           <div className="mt-6 flex items-start justify-between gap-8">
             <div className="min-w-0 max-w-2xl">
-              <p className={`font-medium ${enabled ? "" : "text-gray-400"}`}>Cache lifetime (TTL)</p>
-              <p className="mt-1 break-words text-xs text-gray-500">{ttlSetting.field_description}</p>
+              <p className={`font-medium ${enabled ? "" : "text-muted-foreground"}`}>Cache lifetime (TTL)</p>
+              <p className="mt-1 break-words text-xs text-muted-foreground">{ttlSetting.field_description}</p>
             </div>
             <Select
               disabled={!enabled}
@@ -261,19 +261,19 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
           <TabsTrigger value="prompt-caching">Prompt Caching</TabsTrigger>
           <TabsTrigger value="general">General</TabsTrigger>
         </TabsList>
-        <TabsContent value="loadbalancing" className="px-8 py-6">
+        <TabsContent value="loadbalancing" className="px-8 py-6" keepMounted>
           <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="routing-groups" className="px-8 py-6">
+        <TabsContent value="routing-groups" className="px-8 py-6" keepMounted>
           <RoutingGroups />
         </TabsContent>
-        <TabsContent value="fallbacks" className="px-8 py-6">
+        <TabsContent value="fallbacks" className="px-8 py-6" keepMounted>
           <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabsContent>
-        <TabsContent value="prompt-caching" className="px-8 py-6">
+        <TabsContent value="prompt-caching" className="px-8 py-6" keepMounted>
           <PromptCachingPanel accessToken={accessToken} settings={generalSettings} onChange={handleInputChange} />
         </TabsContent>
-        <TabsContent value="general" className="px-8 py-6">
+        <TabsContent value="general" className="px-8 py-6" keepMounted>
           <Card>
             <CardContent>
               <Table>
@@ -319,7 +319,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                           <Button onClick={() => handleUpdateField(value.field_name)}>Update</Button>
                           <span
                             onClick={() => handleResetField(value.field_name)}
-                            className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-red-500"
+                            className="inline-flex shrink-0 cursor-pointer items-center justify-center px-1.5 py-1.5 text-destructive"
                           >
                             <Trash2 className="h-5 w-5 shrink-0" />
                           </span>

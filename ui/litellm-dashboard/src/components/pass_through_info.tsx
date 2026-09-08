@@ -115,16 +115,20 @@ const PasswordField: React.FC<{ value: Record<string, any> }> = ({ value }) => {
 
   return (
     <div className="flex items-center space-x-2">
-      <pre className="font-mono text-xs bg-gray-50 p-2 rounded-sm max-w-md overflow-auto">
+      <pre className="font-mono text-xs bg-muted p-2 rounded-sm max-w-md overflow-auto">
         {showPassword ? headerString : "••••••••"}
       </pre>
       <button
         onClick={() => setShowPassword(!showPassword)}
-        className="p-1 hover:bg-gray-100 rounded-sm"
+        className="p-1 hover:bg-accent rounded-sm"
         type="button"
         aria-label={showPassword ? "Hide headers" : "Show headers"}
       >
-        {showPassword ? <EyeOff className="w-4 h-4 text-gray-500" /> : <Eye className="w-4 h-4 text-gray-500" />}
+        {showPassword ? (
+          <EyeOff className="w-4 h-4 text-muted-foreground" />
+        ) : (
+          <Eye className="w-4 h-4 text-muted-foreground" />
+        )}
       </button>
     </div>
   );
@@ -239,7 +243,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
             ← Back
           </Button>
           <h2 className="text-xl font-semibold">Pass Through Endpoint: {endpointData.path}</h2>
-          <p className="text-sm text-gray-500 font-mono">{endpointData.id}</p>
+          <p className="text-sm text-muted-foreground font-mono">{endpointData.id}</p>
         </div>
       </div>
 
@@ -288,7 +292,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                   </div>
                   {endpointData.methods && endpointData.methods.length > 0 && (
                     <div>
-                      <p className="text-xs text-gray-500">HTTP Methods:</p>
+                      <p className="text-xs text-muted-foreground">HTTP Methods:</p>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {endpointData.methods.map((method) => (
                           <Badge key={method} variant="secondary">
@@ -300,7 +304,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                   )}
                   {(!endpointData.methods || endpointData.methods.length === 0) && (
                     <div>
-                      <p className="text-xs text-gray-500">All HTTP methods supported</p>
+                      <p className="text-xs text-muted-foreground">All HTTP methods supported</p>
                     </div>
                   )}
                   {endpointData.cost_per_request !== undefined && (
@@ -341,17 +345,17 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                 </div>
                 <div className="mt-4 space-y-2">
                   {Object.entries(endpointData.guardrails).map(([name, settings]) => (
-                    <div key={name} className="p-3 bg-gray-50 rounded-sm">
+                    <div key={name} className="p-3 bg-muted rounded-sm">
                       <div className="font-medium text-sm">{name}</div>
                       {settings && (settings.request_fields || settings.response_fields) && (
-                        <div className="mt-2 text-xs text-gray-600 space-y-1">
+                        <div className="mt-2 text-xs text-muted-foreground space-y-1">
                           {settings.request_fields && <div>Request fields: {settings.request_fields.join(", ")}</div>}
                           {settings.response_fields && (
                             <div>Response fields: {settings.response_fields.join(", ")}</div>
                           )}
                         </div>
                       )}
-                      {!settings && <div className="text-xs text-gray-600 mt-1">Uses entire payload</div>}
+                      {!settings && <div className="text-xs text-muted-foreground mt-1">Uses entire payload</div>}
                     </div>
                   ))}
                 </div>
@@ -532,7 +536,7 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                           <PasswordField value={endpointData.headers} />
                         </div>
                       ) : (
-                        <div className="text-gray-500">No headers configured</div>
+                        <div className="text-muted-foreground">No headers configured</div>
                       )}
                     </div>
                   </div>

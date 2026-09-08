@@ -177,7 +177,7 @@ describe("CreateVectorStore submit payload characterization", () => {
     expect((await screen.findAllByText("text-embedding-3-small")).at(-1)).toBeInTheDocument();
     expect(screen.queryByText("gpt-5")).not.toBeInTheDocument();
 
-    await user.type(modelInput, "large");
+    fireEvent.change(modelInput, { target: { value: "large" } });
     await user.click((await screen.findAllByText("text-embedding-3-large")).at(-1) as HTMLElement);
     await clickCreate();
 

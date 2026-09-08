@@ -3,7 +3,7 @@
 import { Plus, X } from "lucide-react";
 import React from "react";
 import { useController } from "react-hook-form";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -86,7 +86,7 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
 
   return (
     <FieldGroup>
-      <div className="rounded-md border border-green-200 bg-green-50 px-3.5 py-2.5 text-[13px] text-green-700 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300">
+      <div className="rounded-md border border-success/20 bg-success/10 px-3.5 py-2.5 text-[13px] text-success">
         After each LLM response, the <strong>Judge Model</strong> scores it 0–100 against your criteria. If the weighted
         average falls below the threshold, the response is blocked (or logged).
       </div>
@@ -204,7 +204,7 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
                 variant="ghost"
                 size="sm"
                 aria-label="Remove criterion"
-                className="mb-1 text-destructive hover:text-destructive"
+                className="mb-1 text-destructive hover:text-destructive/80"
                 onClick={() => setCriteria(criteria.filter((_, position) => position !== index))}
               >
                 <X className="size-4" />
@@ -238,9 +238,7 @@ const LLMJudgeFields: React.FC<LLMJudgeFieldsProps> = ({ availableModels, contro
         </Button>
 
         {criteria.length > 0 && (
-          <div
-            className={`mt-1.5 text-xs ${weightOk ? "text-green-600 dark:text-green-400" : "text-amber-600 dark:text-amber-400"}`}
-          >
+          <div className={`mt-1.5 text-xs ${weightOk ? "text-success" : "text-warning"}`}>
             Weights total: {weightTotal}%{weightOk ? " ✓" : " — must add up to 100%"}
           </div>
         )}

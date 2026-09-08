@@ -5,13 +5,10 @@ Tests verify that CustomLogger callbacks can inject custom HTTP response headers
 into success (streaming and non-streaming) and failure responses.
 """
 
-import os
-import sys
 import pytest
 from typing import Any, Dict, Optional
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth

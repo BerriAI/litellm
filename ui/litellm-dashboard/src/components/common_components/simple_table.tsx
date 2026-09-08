@@ -44,7 +44,7 @@ export function SimpleTable<T>({
         {isLoading ? (
           <TableRow>
             <TableCell colSpan={columns.length} className="text-center">
-              <span className="text-gray-500">{loadingMessage}</span>
+              <span className="text-muted-foreground">{loadingMessage}</span>
             </TableCell>
           </TableRow>
         ) : data.length > 0 ? (
@@ -60,7 +60,7 @@ export function SimpleTable<T>({
         ) : (
           <TableRow>
             <TableCell colSpan={columns.length} className="text-center">
-              <span className="text-gray-500">{emptyMessage}</span>
+              <span className="text-muted-foreground">{emptyMessage}</span>
             </TableCell>
           </TableRow>
         )}

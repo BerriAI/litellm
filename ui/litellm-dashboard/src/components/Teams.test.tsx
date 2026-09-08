@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
@@ -15,6 +15,23 @@ import {
   teamCreateCall,
 } from "./networking";
 import Teams from "./Teams";
+import { chooseSelectOption } from "../../tests/test-utils";
+
+vi.mock("./mcp_server_management/MCPServerSelector", () => ({
+  default: ({
+    onChange,
+  }: {
+    onChange: (selection: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
+  }) => (
+    <button
+      type="button"
+      data-testid="select-mcp-toolset"
+      onClick={() => onChange({ servers: [], accessGroups: [], toolsets: ["ts-1"] })}
+    >
+      Select MCP toolset
+    </button>
+  ),
+}));
 
 const can = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
@@ -504,6 +521,15 @@ describe("Teams - team detail deep link (?team=)", () => {
     expect(onUrlUpdate.mock.calls.at(-1)![0].searchParams.has("team")).toBe(false);
     await waitFor(() => expect(screen.queryByTestId("team-info-view")).not.toBeInTheDocument());
   });
+
+  it("should preserve the legacy inset for the team detail view", async () => {
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />, {
+      searchParams: "?team=team-from-url",
+    });
+
+    await waitFor(() => expect(mockTeamInfoView).toHaveBeenCalled());
+    expect(screen.getByRole("main")).toHaveClass("px-12", "py-6");
+  });
 });
 
 describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
@@ -512,21 +538,19 @@ describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
 
-  it("renders the Create Team button inside the tab bar, ahead of the tabs", () => {
+  it("should render the Create Team button inside the tab bar, ahead of the tabs", () => {
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
-    const createButton = screen.getByTestId("create-team-button");
-    const tabBar = screen.getByRole("tablist").parentElement!;
+    const tabNav = screen.getByRole("tablist");
+    const createButton = within(tabNav).getByTestId("create-team-button");
+    const firstTab = within(tabNav).getByRole("tab", { name: "Your Teams" });
 
-    // The CTA lives in the tab bar's left slot, not the standalone page header.
-    expect(tabBar.contains(createButton)).toBe(true);
-
-    // It reads as the left end of the cluster: it precedes the first tab in DOM order.
-    const firstTab = screen.getByRole("tab", { name: "Your Teams" });
+    expect(screen.getByRole("main")).toHaveClass("p-8");
+    expect(within(tabNav).getByRole("separator")).toBeInTheDocument();
     expect(createButton.compareDocumentPosition(firstTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("omits the Create Team CTA for a role that cannot manage teams", () => {
+  it("should omit the Create Team CTA for a role that cannot manage teams", () => {
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin Viewer" />);
     expect(screen.queryByTestId("create-team-button")).not.toBeInTheDocument();
   });
@@ -1335,6 +1359,16 @@ describe("Teams - the exact bytes the create call sends", () => {
     });
   });
 
+  it("includes selected MCP toolsets in the create object permission", async () => {
+    await openCreateModal();
+    await openSection("MCP Settings", /Allowed MCP Servers/);
+    fireEvent.click(screen.getByTestId("select-mcp-toolset"));
+
+    const payload = await submit();
+
+    expect(payload.object_permission).toStrictEqual({ mcp_toolsets: ["ts-1"] });
+  });
+
   it.each([
     ["MCP Settings", /Allowed MCP Servers/, ["allowed_mcp_servers_and_groups", "mcp_tool_permissions"]],
     ["Agent Settings", /Allowed Agents/, ["allowed_agents_and_groups"]],
@@ -1479,5 +1513,206 @@ describe("Teams - the exact bytes the create call sends", () => {
 
     expect(await screen.findByText("Please input a team name")).toBeInTheDocument();
     expect(teamCreateCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("Teams - the create form keeps the organization and models picks while it is open", () => {
+  const ORGS = [
+    { organization_id: "org-1", organization_alias: "Org 1", models: [], members: [] },
+    { organization_id: "org-2", organization_alias: "Org 2", models: [], members: [] },
+  ];
+
+  const orgField = () => screen.getByRole("combobox", { name: /organization/i });
+  const modelsField = () => screen.getByTestId("create-team-models-select");
+
+  const openCreateModal = async () => {
+    act(() => {
+      fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    });
+    await screen.findByLabelText(/team name/i);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTeamInfoView.mockClear();
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockResolvedValue(["gpt-4", "gpt-3.5-turbo"]);
+    vi.mocked(fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(getDefaultTeamSettings).mockResolvedValue({ values: {} });
+    mockUseOrganizations.mockReturnValue({ data: ORGS });
+  });
+
+  it("keeps both picks when the organizations list comes back changed from a refetch", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    await chooseSelectOption(user, orgField(), /Org 1/);
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+
+    mockUseOrganizations.mockReturnValue({ data: ORGS.map((org) => ({ ...org, spend: 1 })) });
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(orgField()).toHaveValue("Org 1");
+    expect(modelsField()).toHaveValue("gpt-4");
+  });
+
+  it("keeps models picked before the available models finish loading", async () => {
+    let resolveModels: (models: string[]) => void = () => {};
+    vi.mocked(fetchAvailableModelsForTeamOrKey).mockReturnValue(
+      new Promise<string[]>((resolve) => {
+        resolveModels = resolve;
+      }),
+    );
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+    await act(async () => {
+      resolveModels(["gpt-4", "gpt-3.5-turbo"]);
+    });
+
+    expect(modelsField()).toHaveValue("gpt-4");
+  });
+
+  it("clears the models pick when the organization is changed, since models are org scoped", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    await chooseSelectOption(user, orgField(), /Org 1/);
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+    await chooseSelectOption(user, orgField(), /Org 2/);
+
+    await waitFor(() => expect(orgField()).toHaveValue("Org 2"));
+    expect(modelsField()).toHaveValue("");
+  });
+
+  it("keeps the models pick when the same organization is chosen again", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    await chooseSelectOption(user, orgField(), /Org 1/);
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+    await chooseSelectOption(user, orgField(), /Org 1/);
+
+    expect(orgField()).toHaveValue("Org 1");
+    expect(modelsField()).toHaveValue("gpt-4");
+  });
+
+  it("still preselects the only organization an org admin can create teams in", async () => {
+    mockUseOrganizations.mockReturnValue({
+      data: [
+        {
+          organization_id: "org-1",
+          organization_alias: "Org 1",
+          models: [],
+          members: [{ user_id: "user-123", user_role: "org_admin" }],
+        },
+      ],
+    });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+
+    expect(orgField()).toHaveValue("Org 1");
+    expect(orgField()).toBeDisabled();
+  });
+
+  it("leaves an org admin able to pick when their admin orgs narrow to one while the form is open", async () => {
+    const orgAdminOrgs = [
+      {
+        organization_id: "org-1",
+        organization_alias: "Org 1",
+        models: [],
+        members: [{ user_id: "user-123", user_role: "org_admin" }],
+      },
+      {
+        organization_id: "org-2",
+        organization_alias: "Org 2",
+        models: [],
+        members: [{ user_id: "user-123", user_role: "org_admin" }],
+      },
+    ];
+    mockUseOrganizations.mockReturnValue({ data: orgAdminOrgs });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+    expect(orgField()).toHaveValue("");
+
+    mockUseOrganizations.mockReturnValue({ data: [orgAdminOrgs[0]] });
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(orgField()).toBeEnabled();
+  });
+
+  it("refuses to create the team in an organization the admin has lost access to", async () => {
+    const user = userEvent.setup();
+    const orgAdminOrgs = ORGS.map((org) => ({ ...org, members: [{ user_id: "user-123", user_role: "org_admin" }] }));
+    mockUseOrganizations.mockReturnValue({ data: orgAdminOrgs });
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+
+    fireEvent.change(screen.getByTestId("team-name-input"), { target: { value: "Revoked Team" } });
+    await chooseSelectOption(user, orgField(), /Org 1/);
+
+    mockUseOrganizations.mockReturnValue({ data: [orgAdminOrgs[1]] });
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    const submitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(submitButtons[submitButtons.length - 1]);
+
+    await screen.findByText(/no longer create teams in this organization/i);
+    expect(teamCreateCall).not.toHaveBeenCalled();
+  });
+
+  it("lets the admin switch to the one organization left after losing access to their pick", async () => {
+    const user = userEvent.setup();
+    const orgAdminOrgs = ORGS.map((org) => ({ ...org, members: [{ user_id: "user-123", user_role: "org_admin" }] }));
+    mockUseOrganizations.mockReturnValue({ data: orgAdminOrgs });
+    const createdTeam = {
+      team_id: "new-team-1",
+      team_alias: "Recovered Team",
+      models: [],
+      organization_id: "org-2",
+      keys: [],
+      members_with_roles: [],
+      spend: 0,
+    };
+    vi.mocked(teamCreateCall).mockResolvedValue(createdTeam);
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Internal User" />);
+    await openCreateModal();
+
+    fireEvent.change(screen.getByTestId("team-name-input"), { target: { value: "Recovered Team" } });
+    await chooseSelectOption(user, orgField(), /Org 1/);
+
+    mockUseOrganizations.mockReturnValue({ data: [orgAdminOrgs[1]] });
+    fireEvent.click(screen.getByText("Additional Settings"));
+
+    expect(orgField()).toBeEnabled();
+    await chooseSelectOption(user, orgField(), /Org 2/);
+    const submitButtons = screen.getAllByRole("button", { name: /create team/i });
+    fireEvent.click(submitButtons[submitButtons.length - 1]);
+
+    await waitFor(() =>
+      expect(teamCreateCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({ team_alias: "Recovered Team", organization_id: "org-2" }),
+      ),
+    );
+  });
+
+  it("starts the form clean again when the modal is closed and reopened", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
+    await openCreateModal();
+
+    await chooseSelectOption(user, orgField(), /Org 1/);
+    fireEvent.change(modelsField(), { target: { value: "gpt-4" } });
+    fireEvent.click(screen.getByRole("button", { name: /^close$/i }));
+    await waitFor(() => expect(screen.queryByLabelText(/team name/i)).not.toBeInTheDocument());
+
+    await openCreateModal();
+    expect(orgField()).toHaveValue("");
+    expect(modelsField()).toHaveValue("");
   });
 });

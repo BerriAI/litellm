@@ -1,6 +1,8 @@
 """
 Polls LiteLLM_ManagedObjectTable to check if the response is complete.
-Cost tracking is handled automatically by the get-responses call.
+Cost tracking is handled by the get-responses call, which prices normally only because the
+poll stamps itself with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN; user-facing reads of the
+same route are non-inference and free.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -9,12 +11,14 @@ from typing import TYPE_CHECKING, Dict, Optional, cast
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
     STALE_OBJECT_CLEANUP_BATCH_SIZE,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -113,7 +117,8 @@ class CheckResponsesCost:
         Check if background responses are complete and track their cost.
         - Get all status="queued" or "in_progress" and file_purpose="response" jobs
         - Query the provider to check if response is complete
-        - Cost is automatically tracked by the get-responses call
+        - Cost is tracked by the get-responses call, billed because the poll is stamped
+          with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
         - Mark responses in a terminal state as complete in the database
         """
         try:
@@ -153,6 +158,7 @@ class CheckResponsesCost:
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
+                    INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                 }
                 
                 # Add model information if available

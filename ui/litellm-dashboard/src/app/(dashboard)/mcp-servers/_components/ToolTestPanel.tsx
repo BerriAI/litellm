@@ -251,15 +251,10 @@ export function ToolTestPanel({
               <div className="space-y-3">
                 {/* Result Control Bar */}
                 {result && !isLoading && !error && (
-                  <div className="p-2 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg">
+                  <div className="p-2 bg-success/10 border border-success/20 rounded-lg">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
-                        <svg
-                          className="h-4 w-4 text-green-500 dark:text-green-400"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                        >
+                        <svg className="h-4 w-4 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                           <path
                             strokeLinecap="round"
                             strokeLinejoin="round"
@@ -267,24 +262,20 @@ export function ToolTestPanel({
                             d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
                           />
                         </svg>
-                        <h4 className="text-xs font-medium text-green-900 dark:text-green-100">
-                          Tool executed successfully
-                        </h4>
+                        <h4 className="text-xs font-medium text-success">Tool executed successfully</h4>
                         {duration !== null && (
-                          <span className="text-xs text-green-600 dark:text-green-400 ml-1">
-                            • {(duration / 1000).toFixed(2)}s
-                          </span>
+                          <span className="text-xs text-success ml-1">• {(duration / 1000).toFixed(2)}s</span>
                         )}
                       </div>
 
                       <div className="flex items-center space-x-1">
-                        <div className="flex bg-card rounded-sm border border-green-300 dark:border-green-700 p-0.5">
+                        <div className="flex bg-card rounded-sm border border-success/30 p-0.5">
                           <button
                             onClick={() => setViewMode("formatted")}
                             className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
                               viewMode === "formatted"
-                                ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
-                                : "text-green-600 dark:text-green-400 hover:text-green-800 dark:text-green-200"
+                                ? "bg-success/15 text-success"
+                                : "text-success hover:text-success/80"
                             }`}
                           >
                             Formatted
@@ -292,9 +283,7 @@ export function ToolTestPanel({
                           <button
                             onClick={() => setViewMode("json")}
                             className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
-                              viewMode === "json"
-                                ? "bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200"
-                                : "text-green-600 dark:text-green-400 hover:text-green-800 dark:text-green-200"
+                              viewMode === "json" ? "bg-success/15 text-success" : "text-success hover:text-success/80"
                             }`}
                           >
                             JSON
@@ -303,7 +292,7 @@ export function ToolTestPanel({
 
                         <button
                           onClick={handleCopyResult}
-                          className="p-1 hover:bg-green-100 dark:bg-green-900 rounded-sm text-green-700 dark:text-green-300"
+                          className="p-1 hover:bg-success/15 rounded-sm text-success"
                           title="Copy response"
                         >
                           <svg
@@ -331,7 +320,7 @@ export function ToolTestPanel({
                     <div className="flex flex-col justify-center items-center h-48 text-muted-foreground">
                       <div className="relative">
                         <div className="animate-spin rounded-full h-8 w-8 border-2 border-border"></div>
-                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-600 dark:border-blue-400 border-t-transparent absolute top-0"></div>
+                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-info border-t-transparent absolute top-0"></div>
                       </div>
                       <p className="text-sm font-medium mt-3">Calling tool...</p>
                       <p className="text-xs text-muted-foreground mt-1">Please wait while we process your request</p>
@@ -339,11 +328,11 @@ export function ToolTestPanel({
                   )}
 
                   {error && (
-                    <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                    <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3">
                       <div className="flex items-start space-x-2">
                         <div className="shrink-0">
                           <svg
-                            className="h-4 w-4 text-red-400 dark:text-red-500"
+                            className="h-4 w-4 text-destructive"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
@@ -358,15 +347,13 @@ export function ToolTestPanel({
                         </div>
                         <div className="flex-1">
                           <div className="flex items-center space-x-2 mb-1">
-                            <h4 className="text-xs font-medium text-red-900 dark:text-red-100">Tool Call Failed</h4>
+                            <h4 className="text-xs font-medium text-destructive">Tool Call Failed</h4>
                             {duration !== null && (
-                              <span className="text-xs text-red-600 dark:text-red-400">
-                                • {(duration / 1000).toFixed(2)}s
-                              </span>
+                              <span className="text-xs text-destructive">• {(duration / 1000).toFixed(2)}s</span>
                             )}
                           </div>
-                          <div className="bg-card border border-red-200 dark:border-red-800 rounded-sm p-2 max-h-48 overflow-y-auto">
-                            <pre className="text-xs whitespace-pre-wrap text-red-700 dark:text-red-300 font-mono">
+                          <div className="bg-card border border-destructive/20 rounded-sm p-2 max-h-48 overflow-y-auto">
+                            <pre className="text-xs whitespace-pre-wrap text-destructive font-mono">
                               {(() => {
                                 return error.message;
                               })()}
@@ -415,7 +402,7 @@ export function ToolTestPanel({
                                             return (
                                               <div
                                                 key={sectionIndex}
-                                                className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-sm p-2"
+                                                className="bg-info/10 border border-info/20 rounded-sm p-2"
                                               >
                                                 <div className="text-xs text-foreground leading-relaxed whitespace-pre-wrap">
                                                   {parts.map((part, partIndex) => {
@@ -426,7 +413,7 @@ export function ToolTestPanel({
                                                           href={part}
                                                           target="_blank"
                                                           rel="noopener noreferrer"
-                                                          className="text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:text-blue-200 underline break-all"
+                                                          className="text-info hover:text-info/80 underline break-all"
                                                         >
                                                           {part}
                                                         </a>
@@ -444,9 +431,9 @@ export function ToolTestPanel({
                                             return (
                                               <div
                                                 key={sectionIndex}
-                                                className="bg-green-50 dark:bg-green-950 border-l-4 border-green-400 dark:border-green-600 p-2 rounded-r"
+                                                className="bg-success/10 border-l-4 border-success p-2 rounded-r"
                                               >
-                                                <p className="text-xs text-green-800 dark:text-green-200 font-medium whitespace-pre-wrap">
+                                                <p className="text-xs text-success font-medium whitespace-pre-wrap">
                                                   {section}
                                                 </p>
                                               </div>
@@ -500,10 +487,10 @@ export function ToolTestPanel({
                                   </span>
                                 </div>
                                 <div className="p-3">
-                                  <div className="flex items-center space-x-2 p-3 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-sm">
+                                  <div className="flex items-center space-x-2 p-3 bg-info/10 border border-info/20 rounded-sm">
                                     <div className="shrink-0">
                                       <svg
-                                        className="h-5 w-5 text-blue-500 dark:text-blue-400"
+                                        className="h-5 w-5 text-info"
                                         fill="none"
                                         viewBox="0 0 24 24"
                                         stroke="currentColor"
@@ -517,7 +504,7 @@ export function ToolTestPanel({
                                       </svg>
                                     </div>
                                     <div className="flex-1">
-                                      <p className="text-xs font-medium text-blue-900 dark:text-blue-100">
+                                      <p className="text-xs font-medium text-info">
                                         Resource Type: {content.resource_type}
                                       </p>
                                       {content.url && (
@@ -525,7 +512,7 @@ export function ToolTestPanel({
                                           href={content.url}
                                           target="_blank"
                                           rel="noopener noreferrer"
-                                          className="inline-flex items-center text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:text-blue-200 hover:underline mt-1 transition-colors"
+                                          className="inline-flex items-center text-xs text-info hover:underline mt-1"
                                         >
                                           View Resource
                                           <svg className="ml-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">

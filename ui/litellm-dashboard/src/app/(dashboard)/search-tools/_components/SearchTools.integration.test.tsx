@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "@/components/networking";
@@ -95,9 +95,6 @@ describe("SearchTools edit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-test-key",
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
       },
       search_tool_info: { description: "Test description" },
     });
@@ -112,7 +109,7 @@ describe("SearchTools edit payload", () => {
     await openEditModal(user);
 
     await user.clear(screen.getByLabelText("Description"));
-    await user.type(screen.getByLabelText("Description"), "updated copy");
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "updated copy" } });
     await user.click(screen.getByRole("button", { name: "OK" }));
 
     await waitFor(() => expect(networking.updateSearchTool).toHaveBeenCalledTimes(1));
@@ -136,9 +133,6 @@ describe("SearchTools edit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: "sk-test-key",
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
       },
       search_tool_info: undefined,
     });
@@ -181,9 +175,6 @@ describe("SearchTools edit payload", () => {
       litellm_params: {
         search_provider: "perplexity",
         api_key: null,
-        api_base: undefined,
-        timeout: undefined,
-        max_retries: undefined,
       },
       search_tool_info: undefined,
     });

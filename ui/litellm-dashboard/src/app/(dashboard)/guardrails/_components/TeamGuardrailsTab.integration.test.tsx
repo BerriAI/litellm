@@ -136,7 +136,7 @@ describe("TeamGuardrailsTab submit payload", () => {
     await openSubmitModal(user);
 
     await fillRequiredFields(user, "https://guard.example.com/v1/check");
-    await user.click(screen.getAllByRole("combobox")[1]);
+    await user.click(screen.getByRole("combobox", { name: "Mode" }));
     const options = await screen.findAllByText("During Call");
     await user.click(options[options.length - 1]);
     await submit(user);
@@ -149,13 +149,13 @@ describe("TeamGuardrailsTab submit payload", () => {
     const user = userEvent.setup();
     await openSubmitModal(user);
 
-    const mode = screen.getAllByRole("combobox")[1];
+    const mode = screen.getByRole("combobox", { name: "Mode" });
     expect(mode).toHaveTextContent("Pre Call");
 
     await user.click(mode);
     await user.click(await screen.findByRole("option", { name: "During Call" }));
 
-    expect(screen.getAllByRole("combobox")[1]).toHaveTextContent("During Call");
+    expect(screen.getByRole("combobox", { name: "Mode" })).toHaveTextContent("During Call");
   });
 
   it("blocks an empty submit and reports every required field", async () => {

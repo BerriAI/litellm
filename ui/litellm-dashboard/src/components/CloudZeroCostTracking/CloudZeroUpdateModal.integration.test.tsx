@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -72,7 +72,7 @@ describe("CloudZeroUpdateModal submit payload", () => {
     const user = userEvent.setup();
     renderModal();
 
-    await user.type(screen.getByLabelText("CloudZero API Key"), "cz-rotated-key");
+    fireEvent.change(screen.getByLabelText("CloudZero API Key"), { target: { value: "cz-rotated-key" } });
     await user.click(screen.getByRole("button", { name: "Update" }));
 
     await vi.waitFor(() =>
