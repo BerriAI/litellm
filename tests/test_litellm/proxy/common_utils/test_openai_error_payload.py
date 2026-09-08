@@ -18,7 +18,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
         (401, "authentication_error"),
         (403, "permission_error"),
         (404, "invalid_request_error"),
-        (408, "timeout_error"),
+        (408, "invalid_request_error"),
         (422, "invalid_request_error"),
         (429, "rate_limit_error"),
         (499, "invalid_request_error"),

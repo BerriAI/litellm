@@ -12,7 +12,6 @@ _OPENAI_ERROR_TYPE_BY_STATUS: Final[Mapping[int, str]] = MappingProxyType(
     {
         status.HTTP_401_UNAUTHORIZED: "authentication_error",
         status.HTTP_403_FORBIDDEN: "permission_error",
-        status.HTTP_408_REQUEST_TIMEOUT: "timeout_error",
         status.HTTP_429_TOO_MANY_REQUESTS: "rate_limit_error",
     }
 )

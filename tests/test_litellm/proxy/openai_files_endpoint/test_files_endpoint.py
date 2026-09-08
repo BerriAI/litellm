@@ -4773,3 +4773,49 @@ def test_get_file_content_reports_a_missing_managed_file_as_a_404(
 
     assert response.status_code == 404, response.text
     assert response.json() == _missing_managed_file_error(file_id)
+
+
+def _setup_managed_file_stored_in_an_unknown_storage_backend(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+) -> None:
+    """Wire the content route to a managed file whose row names a storage backend the
+    factory does not know, which is the one in-route ProxyException on these routes."""
+    from types import SimpleNamespace
+
+    import litellm.proxy.proxy_server as ps
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.proxy._types import LitellmUserRoles
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    managed_files = mocker.MagicMock(spec=BaseFileEndpoints)
+    managed_files.prisma_client = mocker.MagicMock()
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = managed_files
+    repository = mocker.MagicMock()
+    repository.table.find_first = mocker.AsyncMock(
+        return_value=SimpleNamespace(storage_backend="ftp", storage_url="ftp://bucket/file")
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.openai_files_endpoints.files_endpoints.ManagedFileRepository", lambda _prisma: repository
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+    )
+
+
+def test_get_file_content_keeps_the_status_of_a_rejection_raised_inside_the_route(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, llm_router: Router
+):
+    """A ProxyException raised inside the route carries its status as the string ``code``,
+    and the tail used to rebuild it as a 500 because it only read ``status_code``."""
+    _setup_managed_file_stored_in_an_unknown_storage_backend(mocker, monkeypatch, llm_router)
+
+    response = _call_managed_file_route("GET", f"/v1/files/{_unified_managed_file_id()}/content")
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["message"].startswith("Storage backend error")
+    assert (error["type"], error["param"], error["code"]) == ("invalid_request_error", "file_id", "400")

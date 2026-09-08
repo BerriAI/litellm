@@ -1241,3 +1241,38 @@ def test_realtime_calls_upstream_rejection_answers_an_openai_typed_error(
 
     assert response.status_code == 404
     assert (response.json()["error"]["type"], response.json()["error"]["param"]) == ("invalid_request_error", None)
+
+
+def test_transcription_sessions_rejection_answers_an_openai_typed_error(
+    proxy_app: FastAPI,
+    mock_add_litellm_data: Callable[..., Awaitable[object]],
+    mock_pre_call_hook: Callable[..., Awaitable[object]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A model the router cannot serve surfaces as a bare HTTPException, which this tail
+    used to relabel with the literal string "None" for both type and param."""
+
+    async def failing_route_request(*args: object, **kwargs: object) -> None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "realtime: Invalid model name passed in model=no-such-transcribe"},
+        )
+
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.route_request", failing_route_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", mock_add_litellm_data)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user")
+    try:
+        response = TestClient(proxy_app, raise_server_exceptions=False).post(
+            "/v1/realtime/transcription_sessions",
+            headers={"Authorization": "Bearer sk-test-master-key"},
+            json={"input_audio_transcription": {"model": "no-such-transcribe"}},
+        )
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 400
+    assert (response.json()["error"]["type"], response.json()["error"]["param"]) == ("invalid_request_error", None)
