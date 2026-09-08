@@ -9,6 +9,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_E
 
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    _MAX_API_KEYS_IN_BREAKDOWN,
     _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
     _build_entity_rollup_sql_query,
@@ -1149,12 +1150,56 @@ class TestBuildAggregatedSqlQuery:
         fallback = "COALESCE(NULLIF(model_group, ''), model)"
         assert f"{fallback} AS model_group" in normalized
         assert (
-            f"GROUPING(date, api_key, model, {fallback}, "
+            f"GROUPING(date, tk.top_api_key, model, {fallback}, "
             "custom_llm_provider, mcp_namespaced_tool_name, endpoint) AS group_level" in normalized
         )
-        assert f"(date, {fallback}), (date, {fallback}, api_key)," in normalized
+        assert f"(date, {fallback}), (date, {fallback}, tk.top_api_key)," in normalized
         assert "(date, model_group)" not in normalized
         assert "COALESCE(model_group, model)" not in normalized
+
+    def test_api_key_rollups_are_bounded_to_top_keys(self):
+        """api_key-keyed grouping sets must group on the bounded top-N CTE, not the raw column.
+
+        Six of the thirteen grouping sets include api_key, so result rows used
+        to scale with the total distinct-key count in the window; the
+        prisma-query-engine buffered the whole result and got OOM-killed. The
+        top_api_keys CTE bounds the dimension to the top
+        _MAX_API_KEYS_IN_BREAKDOWN keys by spend; every api_key grouping must
+        reference tk.top_api_key, and grouping on the raw api_key column is the
+        regression this guards.
+        """
+        sql, params = _build_aggregated_sql_query(
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            start_date="2026-05-29",
+            end_date="2026-06-02",
+            model="bedrock/global.anthropic.claude-opus-4-8",
+            api_key="sk-test",
+            timezone_offset_minutes=-330,
+        )
+
+        normalized = " ".join(sql.split())
+        assert "WITH top_api_keys AS ( SELECT api_key AS top_api_key" in normalized
+        assert f"ORDER BY SUM(spend) DESC LIMIT {_MAX_API_KEYS_IN_BREAKDOWN}" in normalized
+
+        grouping_block = normalized.split("GROUP BY GROUPING SETS (", 1)[1]
+        grouping_sets = {part.strip() for part in grouping_block.split("),")}
+        for grouping_set in grouping_sets:
+            assert "api_key" not in grouping_set.replace("tk.top_api_key", ""), (
+                f"grouping set uses the unbounded raw api_key column: {grouping_set}"
+            )
+        assert grouping_block.count("tk.top_api_key") == 6
+
+        # The CTE and the outer WHERE reuse the same $N placeholders, so the
+        # params list is unchanged: date bounds, entity, model, api_key filter.
+        assert params == [
+            "2026-05-29",
+            "2026-06-02",
+            "user-1",
+            "bedrock/global.anthropic.claude-opus-4-8",
+            "sk-test",
+        ]
 
 
 class TestAggregatedEmptyEntityFilter:
