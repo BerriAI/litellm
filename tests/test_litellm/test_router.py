@@ -14424,3 +14424,36 @@ async def test_router_deployment_drop_params_string_true_is_honored(monkeypatch)
         temperature=0.1,
     )
     assert response.choices[0].message.content == "Hello, world!"
+
+
+@pytest.mark.parametrize("value", ["ture", "enabled"])
+def test_router_warns_when_a_deployment_drop_params_string_is_not_a_flag(value, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5-nano",
+                    "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-fake", "drop_params": value},
+                }
+            ]
+        )
+
+    deployment = router.get_deployment_by_model_group_name(model_group_name="gpt-5-nano")
+    assert deployment is not None
+    assert deployment.litellm_params.drop_params == value
+    assert f"model=gpt-5-nano drop_params={value!r} is not a flag value, treating it as unset" in caplog.text
+
+
+@pytest.mark.parametrize("value", [True, "true", "off", None])
+def test_router_stays_quiet_when_a_deployment_drop_params_is_a_flag(value, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        Router(
+            model_list=[
+                {
+                    "model_name": "gpt-5-nano",
+                    "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-fake", "drop_params": value},
+                }
+            ]
+        )
+
+    assert "is not a flag value" not in caplog.text

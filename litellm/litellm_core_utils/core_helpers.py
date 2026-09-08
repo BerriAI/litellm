@@ -1,6 +1,7 @@
 # What is this?
 ## Helper utilities
 import copy
+import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -48,6 +49,13 @@ def normalize_drop_params(value: object) -> bool | None:
         return _DROP_PARAMS_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
     except ValidationError:
         return None
+
+
+def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool:
+    normalized: Final = normalize_drop_params(value)
+    if normalized is None and value is not None:
+        logger.warning("%s=%r is not a flag value, treating it as off", source, value)
+    return bool(normalized)
 
 
 def safe_divide(

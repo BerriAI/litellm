@@ -9366,6 +9366,12 @@ class Router:
         #### VALIDATE MODEL ########
         # Check if this is a prompt management model before validating as LLM provider
         litellm_model: Final = deployment.litellm_params.model
+        if isinstance(deployment.litellm_params.drop_params, str):
+            verbose_router_logger.warning(
+                "model=%s drop_params=%r is not a flag value, treating it as unset",
+                deployment.model_name,
+                deployment.litellm_params.drop_params,
+            )
         is_prompt_management_model = False
 
         if "/" in litellm_model:
