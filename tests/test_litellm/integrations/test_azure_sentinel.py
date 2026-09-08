@@ -879,15 +879,26 @@ async def test_azure_sentinel_batch_size_bounds_every_request_under_concurrent_e
     records = build_payloads(40)
 
     attempts = []
+    first_send_started = asyncio.Event()
+    release_first_send = asyncio.Event()
 
     async def _on_ingest(data):
         attempts.append([record["id"] for record in json.loads(data.decode("utf-8"))])
-        await asyncio.sleep(0.01)
+        if len(attempts) == 1:
+            first_send_started.set()
+            await release_first_send.wait()
         return _accepted()
 
     _install_ingestion(logger, _on_ingest)
 
-    await asyncio.wait_for(asyncio.gather(*(_log(logger, queue_attr, record) for record in records)), timeout=10)
+    sends = [asyncio.create_task(_log(logger, queue_attr, record)) for record in records]
+    await asyncio.wait_for(first_send_started.wait(), timeout=10)
+
+    assert attempts == [[record["id"] for record in records[:5]]]
+    assert getattr(logger, queue_attr) == records[5:]
+
+    release_first_send.set()
+    await asyncio.wait_for(asyncio.gather(*sends), timeout=10)
     await logger.flush_queue()
 
     assert max(len(attempt) for attempt in attempts) <= 5
