@@ -448,6 +448,13 @@ def _provider_response_id(source: object) -> str | None:
     return candidate if isinstance(candidate, str) and candidate else None
 
 
+def mask_api_base_credentials(api_base: str) -> str:
+    if "key=" not in api_base:
+        return api_base
+    key_end: Final = api_base.find("key=") + 4
+    return api_base[:key_end] + "*" * 5 + api_base[-4:]
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global \
         supabaseClient, \
@@ -1190,14 +1197,7 @@ class Logging(LiteLLMLoggingBaseClass):
         return data
 
     def _get_masked_api_base(self, api_base: str) -> str:
-        if "key=" in api_base:
-            # Find the position of "key=" in the string
-            key_index: Final = api_base.find("key=") + 4
-            # Mask the last 5 characters after "key="
-            masked_api_base = api_base[:key_index] + "*" * 5 + api_base[-4:]
-        else:
-            masked_api_base = api_base
-        return str(masked_api_base)
+        return str(mask_api_base_credentials(api_base))
 
     def _pre_call(self, input, api_key, model=None, additional_args={}):
         """
@@ -2950,6 +2950,19 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_successful_requests"] = batch_successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same result._hidden_params pattern as response_cost/batch_models above
                 result._hidden_params["batch_failed_requests"] = batch_failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_usage
+                batch_prompt_cost: Final = kwargs.get("batch_prompt_cost", None)
+                batch_completion_cost: Final = kwargs.get("batch_completion_cost", None)
+                if (
+                    isinstance(batch_prompt_cost, float)
+                    and isinstance(batch_completion_cost, float)
+                    and isinstance(batch_cost, float)
+                ):
+                    self.set_cost_breakdown(
+                        input_cost=batch_prompt_cost,
+                        output_cost=batch_completion_cost,
+                        total_cost=batch_cost,
+                        cost_for_built_in_tools_cost_usd_dollar=0.0,
+                    )
 
             elif should_compute_batch_data:
                 batch_result: Final = await _handle_completed_batch(
@@ -2965,6 +2978,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 result._hidden_params["batch_successful_requests"] = batch_result.successful_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result._hidden_params["batch_failed_requests"] = batch_result.failed_requests  # pyright: ignore[reportPrivateUsage]  # rebind-ok: same pattern as above
                 result.usage = batch_result.usage
+                self.set_cost_breakdown(
+                    input_cost=batch_result.prompt_cost,
+                    output_cost=batch_result.completion_cost,
+                    total_cost=batch_result.cost,
+                    cost_for_built_in_tools_cost_usd_dollar=0.0,
+                )
 
         self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
             StandardLoggingPayloadSetup.append_system_prompt_messages(
