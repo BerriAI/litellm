@@ -1,10 +1,12 @@
 """Per-request multi-tenant credential routing (V1 parity)."""
 
 import base64
+import queue
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Final
 
 import pytest
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.trace import NoOpTracer
 
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
@@ -777,25 +779,40 @@ def test_langfuse_provider_cached_per_key_pair_and_host():
     cache: Final = _cache("langfuse_otel")
     default: Final = NoOpTracer()
     team_a: Final = {**LANGFUSE_CREDS, "langfuse_host": "http://team-a-langfuse:3100"}
-    cache.route_for(default, team_a)
-    cache.route_for(default, team_a)
-    assert len(cache._providers) == 1
-    cache.route_for(default, {**LANGFUSE_CREDS, "langfuse_host": "http://team-b-langfuse:3100"})
-    assert len(cache._providers) == 2
-    cache.route_for(default, LANGFUSE_CREDS)
-    assert len(cache._providers) == 3
+    first: Final = cache.route_for(default, team_a)
+    again: Final = cache.route_for(default, team_a)
+    team_b: Final = cache.route_for(default, {**LANGFUSE_CREDS, "langfuse_host": "http://team-b-langfuse:3100"})
+    env_host: Final = cache.route_for(default, LANGFUSE_CREDS)
+    assert first.provider is not None
+    assert again.provider is first.provider
+    assert team_b.provider is not first.provider
+    assert env_host.provider not in (first.provider, team_b.provider)
 
 
-def test_langfuse_routed_provider_exports_to_the_key_host():
-    cache: Final = _cache("langfuse_otel")
-    team_b: Final = {**LANGFUSE_CREDS, "langfuse_host": "http://team-b-langfuse:3100"}
-    route: Final = cache.route_for(NoOpTracer(), team_b)
-    assert route.provider is not None
-    otlp: Final = next(
-        processor.span_exporter
-        for processor in route.provider._active_span_processor._span_processors
-        if isinstance(getattr(processor, "span_exporter", None), OTLPSpanExporter)
+def test_langfuse_routed_span_is_posted_to_the_key_host_with_its_credentials():
+    received: Final[queue.SimpleQueue[tuple[str, str | None]]] = queue.SimpleQueue()
+
+    class _KeyHostLangfuse(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            received.put((self.path, self.headers.get("Authorization")))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), _KeyHostLangfuse) as key_host:
+        threading.Thread(target=key_host.serve_forever, daemon=True).start()
+        cache: Final = _cache("langfuse_otel")
+        team_b: Final = {**LANGFUSE_CREDS, "langfuse_host": f"http://127.0.0.1:{key_host.server_address[1]}"}
+        route: Final = cache.route_for(NoOpTracer(), team_b)
+        with route.tracer.start_as_current_span("chat gemini-flash"):
+            pass
+        cache.release(route.provider)
+        key_host.shutdown()
+
+    assert received.get(timeout=5) == (
+        "/api/public/otel/v1/traces",
+        "Basic " + base64.b64encode(b"pk:sk").decode(),
     )
-    assert otlp._endpoint == "http://team-b-langfuse:3100/api/public/otel/v1/traces"
-    assert otlp._headers["authorization"] == "Basic " + base64.b64encode(b"pk:sk").decode()
-    route.provider.shutdown()
