@@ -2694,13 +2694,11 @@ async def ui_view_users(
         if org_filter_ids is not None:
             where_conditions["organization_memberships"] = {"some": {"organization_id": {"in": org_filter_ids}}}
 
-        where: Final[Mapping[str, object]] = MappingProxyType(
-            {
-                key: value
-                for key, value in (*where_conditions.items(), *_user_search_where(search).items())
-                if value is not None
-            }
-        )
+        where: Final[Mapping[str, object]] = {  # mutable-ok: prisma serializes `where`, keep it a plain dict
+            key: value
+            for key, value in (*where_conditions.items(), *_user_search_where(search).items())
+            if value is not None
+        }
 
         # Query users with pagination and filters
         users: Final = await _user_table(prisma_client).find_many(
