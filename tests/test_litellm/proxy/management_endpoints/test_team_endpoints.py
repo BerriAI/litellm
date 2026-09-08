@@ -14122,9 +14122,11 @@ async def test_team_info_returns_parent_organization_models(organization, expect
     mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
     mock_prisma.get_data = AsyncMock(return_value=[])
 
+    memberships = AsyncMock(return_value=[])
+
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch.object(team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: no seam on team_info
+        patch.object(team_endpoints, "get_all_team_memberships", memberships),  # test-quality-ok: no seam on team_info
     ):
         response = await team_endpoints.team_info(
             http_request=MagicMock(spec=Request),
