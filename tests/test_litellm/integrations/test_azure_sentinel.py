@@ -869,6 +869,34 @@ async def test_azure_sentinel_concurrent_threshold_sends_collapse_into_one_attem
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
+async def test_azure_sentinel_batch_size_bounds_every_request_under_concurrent_events(
+    queue_attr, send_method, build_payloads
+):
+    """Lowering batch_size is the documented way to stay under the ingestion cap, so no request may
+    carry more than batch_size records even when events keep landing while a send is on the wire,
+    and every one of those records still has to arrive exactly once."""
+    logger = _build_logger(batch_size=5)
+    records = build_payloads(40)
+
+    attempts = []
+
+    async def _on_ingest(data):
+        attempts.append([record["id"] for record in json.loads(data.decode("utf-8"))])
+        await asyncio.sleep(0.01)
+        return _accepted()
+
+    _install_ingestion(logger, _on_ingest)
+
+    await asyncio.wait_for(asyncio.gather(*(_log(logger, queue_attr, record) for record in records)), timeout=10)
+    await logger.flush_queue()
+
+    assert max(len(attempt) for attempt in attempts) <= 5
+    assert [record_id for attempt in attempts for record_id in attempt] == [record["id"] for record in records]
+    assert getattr(logger, queue_attr) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
 async def test_azure_sentinel_requeues_a_cancelled_send(
     queue_attr, send_method, build_payloads
 ):
