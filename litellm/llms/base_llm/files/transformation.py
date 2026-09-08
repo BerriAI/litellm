@@ -267,7 +267,7 @@ class BaseFileEndpoints(ABC):
         litellm_parent_otel_span: Span | None,
         llm_router: Router,
         **data: dict,
-    ) -> OpenAIFileObject:
+    ) -> FileDeleted:
         pass
 
     @abstractmethod
