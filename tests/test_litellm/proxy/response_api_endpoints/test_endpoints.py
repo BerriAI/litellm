@@ -61,7 +61,9 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
                   "model": model, "choices": [{"index": 0, "delta": {"content": "partial"},
                                                 "finish_reason": None}]}
     is_chat: Final = path == "/v1/chat/completions"
-    upstream_events: Final = (chat, {"error": error}) if is_chat else (created, tool_added, tool_delta, failed)
+    partial: Final = path != "/v1/responses" or error_kind in ("numeric_rate_limit", "response_failed")
+    response_events: Final = (created, tool_added, tool_delta, failed) if partial else (failed,)
+    upstream_events: Final = (chat, {"error": error}) if is_chat else response_events
     wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in upstream_events)
     upstream_url: Final = "https://streaming.example/v1"
     router: Final = litellm.Router(
@@ -78,8 +80,10 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         )
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
             result: Final = await client.post(
-                path, json={"model": model, "stream": True,
-                            **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"})},
+                path, json={
+                    "model": model, "stream": True,
+                    **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"}),
+                },
             )
     frames: Final = tuple(frame for frame in result.text.split("\n\n") if "data: " in frame)
     events: Final = tuple(
@@ -91,12 +95,18 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     assert message in result.text
     if path == "/v1/responses":
         assert frames[-1].startswith("event: response.failed\n"), result.text
-        assert [event["type"] for event in events] == [
-            "response.created", "response.output_item.added", "response.function_call_arguments.delta", "response.failed"
-        ]
-        assert events[2]["delta"] == tool_delta["delta"]
-        assert events[-1]["sequence_number"] == events[-2]["sequence_number"] + 1
-        assert events[-1]["response"]["id"] == events[0]["response"]["id"]
+        if partial:
+            assert [event["type"] for event in events] == [
+                "response.created", "response.output_item.added",
+                "response.function_call_arguments.delta", "response.failed",
+            ]
+            assert events[2]["delta"] == tool_delta["delta"]
+            assert events[-1]["sequence_number"] == events[-2]["sequence_number"] + 1
+            assert events[-1]["response"]["id"] == events[0]["response"]["id"]
+        else:
+            assert [event["type"] for event in events] == ["response.failed"]
+            assert events[0]["sequence_number"] == 0
+            assert events[0]["response"]["id"].startswith("resp_")
         assert events[-1]["response"]["status"] == "failed"
         assert events[-1]["response"]["error"]["code"] == (
             "rate_limit_exceeded" if error_kind in ("rate_limit", "numeric_rate_limit") else "server_error"
