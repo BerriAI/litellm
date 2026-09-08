@@ -93,6 +93,9 @@ class CooldownCache:
             )
 
             # Set the cache with a TTL equal to the cooldown time
+            self.cache.in_memory_cache.delete_cache(  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache is untyped
+                cooldown_key
+            )
             self.cache.set_cache(
                 value=cooldown_data,
                 key=cooldown_key,

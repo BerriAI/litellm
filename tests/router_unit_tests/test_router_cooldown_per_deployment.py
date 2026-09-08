@@ -231,6 +231,19 @@ class TestCooldownCacheTTLCorrection:
         dual_cache = DualCache(in_memory_cache=in_memory)
         return CooldownCache(cache=dual_cache, default_cooldown_time=60.0)
 
+    def test_repeated_cooldown_refreshes_in_memory_expiry(self):
+        cc = self._make_cooldown_cache()
+        model_id = "repeated-cooldown-deployment"
+
+        with patch("time.time", return_value=100.0):
+            cc.add_deployment_to_cooldown(model_id, Exception("429"), 429, cooldown_time=1.0)
+        with patch("time.time", return_value=100.2):
+            cc.add_deployment_to_cooldown(model_id, Exception("429"), 429, cooldown_time=60.0)
+        with patch("time.time", return_value=101.5):
+            active = cc.get_active_cooldowns(model_ids=[model_id], parent_otel_span=None)
+
+        assert [deployment_id for deployment_id, _ in active] == [model_id]
+
     def test_expired_entry_evicted_and_not_returned(self):
         """
         An entry with timestamp+cooldown_time in the past must be evicted from
