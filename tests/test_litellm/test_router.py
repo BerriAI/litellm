@@ -5053,8 +5053,8 @@ def test_get_deployment_model_info_base_model_merge_priority():
         (
             "gpt",
             {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://my-resource.services.ai.azure.com", "api_key": "key"},
-            "gpt/openai/deployments/gpt-4o/chat/completions",
-            "gpt-5.4-mini/openai/deployments/gpt-4o/chat/completions",
+            "gpt/openai/deployments/gpt-5.4-mini/chat/completions",
+            "gpt-5.4-mini/openai/deployments/gpt-5.4-mini/chat/completions",
         ),
         (
             "aws/anthropic/bedrock-claude",

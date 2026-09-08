@@ -1985,7 +1985,17 @@ def get_model_from_request(
         bedrock_model: Final = _model_from_bedrock_route(route)
         return model if bedrock_model is None else bedrock_model
 
+    if route.lower().startswith(("/azure/", "/azure_ai/")):
+        azure_model: Final = _router_model_from_azure_route(route, llm_router)
+        return model if azure_model is None else azure_model
+
     return model
+
+
+def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str | None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import azure_router_model_in_endpoint
+
+    return azure_router_model_in_endpoint(re.sub(r"^/azure(?:_ai)?/", "", route, flags=re.IGNORECASE), llm_router)
 
 
 def _model_from_bedrock_route(route: str) -> str | None:
