@@ -21,29 +21,28 @@ def test_repeated_pydantic_model_with_serialization_error(json_succeeds: bool) -
             raise ValueError("serialization failed")
 
     model: Final = FailingModel()
-    expected: Final = {"value": 42} if json_succeeds else str(model)
+    expected: Final = {"value": 42} if json_succeeds else "Unserializable Pydantic Model"
     assert json.loads(safe_dumps([model, model])) == [expected, expected]
 
 
-def test_pydantic_string_fallback_preserves_value_transform() -> None:
+def test_pydantic_fallback_excludes_fields_and_preserves_value_transform() -> None:
     from typing import Final
 
-    from pydantic import BaseModel, model_serializer
+    from pydantic import BaseModel, Field, model_serializer
 
     class FailingModel(BaseModel):
+        password: str = Field(default="do-not-log\x00", exclude=True)
+
         @model_serializer
         def serialize_model(self) -> dict[str, object]:
             raise ValueError("serialization failed")
-
-        def __str__(self) -> str:
-            return "secret\x00"
 
     model: Final = FailingModel()
     assert json.loads(
         safe_dumps(
             {"token": model, "other": model}, value_transform=lambda key, value: "redacted" if key == "token" else value
         )
-    ) == {"token": "redacted", "other": "secret"}
+    ) == {"token": "redacted", "other": "Unserializable Pydantic Model"}
 
 
 def test_primitive_types():

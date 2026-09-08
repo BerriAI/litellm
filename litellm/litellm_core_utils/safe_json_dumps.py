@@ -20,7 +20,7 @@ def _dump_model(model: BaseModel) -> dict[str, object] | str:
         try:
             return model.model_dump(mode="json")
         except (PydanticSerializationError, TypeError):
-            return str(model)
+            return "Unserializable Pydantic Model"
 
 
 def safe_dumps(
