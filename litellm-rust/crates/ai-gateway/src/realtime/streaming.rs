@@ -106,16 +106,16 @@ impl RealTimeStreaming {
     /// `litellm_call_id`, replacing the gateway-generated fallback.
     fn on_session(&mut self, event: &RealtimeEvent) {
         let session = event.data.get("session").and_then(Value::as_object);
-        if let Some(id) = session.and_then(|s| s.get("id")).and_then(Value::as_str) {
-            if !id.is_empty() {
-                self.id = id.to_string();
-                self.litellm_call_id = id.to_string();
-            }
+        if let Some(id) = session.and_then(|s| s.get("id")).and_then(Value::as_str)
+            && !id.is_empty()
+        {
+            self.id = id.to_string();
+            self.litellm_call_id = id.to_string();
         }
-        if let Some(model) = session.and_then(|s| s.get("model")).and_then(Value::as_str) {
-            if !model.is_empty() {
-                self.model = model.to_string();
-            }
+        if let Some(model) = session.and_then(|s| s.get("model")).and_then(Value::as_str)
+            && !model.is_empty()
+        {
+            self.model = model.to_string();
         }
     }
 
@@ -321,6 +321,32 @@ mod tests {
         );
         assert_eq!(logger.last_total_tokens.load(Ordering::SeqCst), 20);
         assert_eq!(streaming.dropped(), 0);
+    }
+
+    #[test]
+    fn blank_session_id_and_model_keep_the_gateway_fallbacks() {
+        let mut streaming = RealTimeStreaming::new(
+            Vec::new(),
+            "call_fallback".to_string(),
+            "gpt-realtime".to_string(),
+            RequestMetadata::default(),
+        );
+
+        streaming.observe(&event(
+            r#"{"type":"session.created","session":{"id":"","model":""}}"#,
+        ));
+        let payload = streaming.build_payload();
+        assert_eq!(payload.id, "call_fallback");
+        assert_eq!(payload.litellm_call_id, "call_fallback");
+        assert_eq!(payload.model, "gpt-realtime");
+
+        streaming.observe(&event(
+            r#"{"type":"session.updated","session":{"id":"sess_002","model":""}}"#,
+        ));
+        let payload = streaming.build_payload();
+        assert_eq!(payload.id, "sess_002");
+        assert_eq!(payload.litellm_call_id, "sess_002");
+        assert_eq!(payload.model, "gpt-realtime");
     }
 
     #[test]

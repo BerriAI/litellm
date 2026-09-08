@@ -43,9 +43,9 @@ export const buildMemberFormValues = (
     const seeded: MemberFormValues = {
       ...initialData,
       role: (initialData.role as string) || config.defaultRole,
-      max_budget_in_team: initialData.max_budget_in_team || null,
-      tpm_limit: initialData.tpm_limit || null,
-      rpm_limit: initialData.rpm_limit || null,
+      max_budget_in_team: initialData.max_budget_in_team ?? null,
+      tpm_limit: initialData.tpm_limit ?? null,
+      rpm_limit: initialData.rpm_limit ?? null,
       budget_duration: initialData.budget_duration || null,
       allowed_models: initialData.allowed_models || [],
     };

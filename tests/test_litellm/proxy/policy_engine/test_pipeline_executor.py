@@ -4,20 +4,26 @@ Tests for the pipeline executor.
 Uses mock guardrails to validate pipeline execution without external services.
 """
 
+import copy
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
 )
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
     PipelineStep,
 )
+from litellm.types.utils import CallTypesLiteral
 
 try:
     from fastapi.exceptions import HTTPException
@@ -158,9 +164,144 @@ class ContentCheckGuardrail(CustomGuardrail):
         return None
 
 
+class RecordingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str, scan_raw_request: bool = False, block: bool = True):
+        super().__init__(
+            guardrail_name=guardrail_name,
+            event_hook="pre_call",
+            default_on=True,
+            scan_raw_request=scan_raw_request,
+        )
+        self.block = block
+
+    def should_run_guardrail(self, data: dict[str, object], event_type: GuardrailEventHooks) -> bool:
+        return True
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
+        self.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"detected": ["aws_access_key"]},
+            request_data=data,
+            guardrail_status="guardrail_intervened" if self.block else "success",
+        )
+        if self.block:
+            raise HTTPException(status_code=400, detail="Content policy violation")
+        return copy.deepcopy(data)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan_raw_request", [False, True])
+@pytest.mark.parametrize("on_fail", ["block", "modify_response"])
+async def test_terminal_block_carries_guardrail_information_to_request(
+    monkeypatch: pytest.MonkeyPatch, scan_raw_request: bool, on_fail: Literal["block", "modify_response"]
+):
+    """
+    Spend logging and the Guardrails Monitor read standard_logging_guardrail_information
+    off the caller's request dict. A blocking step records it on the executor's
+    working copy (or the raw-request snapshot), so the terminal result must carry it
+    back onto the request or the block is never counted.
+    """
+    guard = RecordingGuardrail(guardrail_name="credentials-api-keys", scan_raw_request=scan_raw_request)
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+    data = {
+        "messages": [{"role": "user", "content": "key AKIAIOSFODNN7EXAMPLE"}],
+        "metadata": {"user_api_key_hash": "abc"},
+    }
+
+    result = await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="credentials-api-keys", on_fail=on_fail, on_pass="next")],
+        mode="pre_call",
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="baseline-pii-protection",
+        raw_request_snapshot={"messages": data["messages"], "metadata": {"user_api_key_hash": "abc"}},
+    )
+
+    assert result.terminal_action == on_fail
+    recorded = data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_name"] for entry in recorded] == ["credentials-api-keys"]
+    assert recorded[0]["guardrail_status"] == "guardrail_intervened"
+    assert data["metadata"]["user_api_key_hash"] == "abc"
+    assert "guardrails" not in data["metadata"]
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_terminal_block_merges_guardrail_information_without_duplicates(monkeypatch: pytest.MonkeyPatch):
+    """A pass_data step that returns a rewritten copy of the request, and a scan_raw_request step
+    that evaluates a deep copy taken before the pipeline ran, both leave earlier entries in two
+    dicts at once. Those must be carried back once while every step's own entry is kept."""
+    first = RecordingGuardrail(guardrail_name="pii-scan", block=False)
+    second = RecordingGuardrail(guardrail_name="credentials-api-keys", scan_raw_request=True)
+    monkeypatch.setattr(litellm, "callbacks", [first, second])
+    earlier = {"guardrail_name": "earlier-guard", "guardrail_status": "success"}
+    data = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    data["metadata"]["standard_logging_guardrail_information"] = [earlier]
+
+    result = await PipelineExecutor.execute_steps(
+        steps=[
+            PipelineStep(guardrail="pii-scan", on_fail="block", on_pass="next", pass_data=True),
+            PipelineStep(guardrail="credentials-api-keys", on_fail="block", on_pass="next"),
+        ],
+        mode="pre_call",
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="baseline-pii-protection",
+        raw_request_snapshot={
+            "messages": data["messages"],
+            "metadata": {"standard_logging_guardrail_information": [dict(earlier)]},
+        },
+    )
+
+    assert result.terminal_action == "block"
+    recorded = data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_name"] for entry in recorded] == ["earlier-guard", "pii-scan", "credentials-api-keys"]
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_repeated_scan_raw_request_step_is_counted_once_per_evaluation(monkeypatch: pytest.MonkeyPatch):
+    """Running the same raw-scan guardrail twice yields two identical entries; both must reach the caller,
+    while the entries the raw snapshot already held before the pipeline ran are not copied again."""
+    guard = RecordingGuardrail(guardrail_name="credentials-raw", scan_raw_request=True, block=False)
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+    earlier = {"guardrail_name": "earlier-guard", "guardrail_status": "success"}
+    data = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    data["metadata"]["standard_logging_guardrail_information"] = [earlier]
+
+    result = await PipelineExecutor.execute_steps(
+        steps=[
+            PipelineStep(guardrail="credentials-raw", on_fail="block", on_pass="next"),
+            PipelineStep(guardrail="credentials-raw", on_fail="block", on_pass="next"),
+        ],
+        mode="pre_call",
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="raw-scan-policy",
+        raw_request_snapshot={
+            "messages": data["messages"],
+            "metadata": {"standard_logging_guardrail_information": [dict(earlier)]},
+        },
+    )
+
+    assert result.terminal_action == "allow"
+    assert result.modified_data is not None
+    recorded = result.modified_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_name"] for entry in recorded] == ["earlier-guard", "credentials-raw", "credentials-raw"]
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
@@ -469,6 +610,55 @@ async def test_data_forwarding_pii_masking(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scan_raw_request_step_sees_pre_pipeline_content(monkeypatch):
+    """
+    veria-ai finding on BerriAI/litellm#34940: a scan_raw_request=True guardrail
+    that is itself a pipeline step never saw raw_request_snapshot at all --
+    execute_steps had no way to receive it, so it evaluated whatever an earlier
+    pass_data step in the same pipeline had already rewritten, defeating the
+    whole point of the flag for pipeline-managed guardrails.
+
+    Pipeline: pii-masker (pass_data: true, on_pass: next) -> content-check
+    (scan_raw_request=True, on_pass: allow). Input: "Hello John Smith".
+    content-check must still see the original, unmasked content.
+    """
+    pii_guard = PiiMaskingGuardrail(guardrail_name="pii-masker")
+    content_guard = ContentCheckGuardrail(guardrail_name="content-check")
+    content_guard.scan_raw_request = True
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="pii-masker",
+                on_fail="block",
+                on_pass="next",
+                pass_data=True,
+            ),
+            PipelineStep(guardrail="content-check", on_fail="block", on_pass="allow"),
+        ],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pii_guard, content_guard])
+    original_data = {"messages": [{"role": "user", "content": "Hello John Smith"}]}
+
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=original_data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="pii-then-safety",
+        raw_request_snapshot=original_data,
+    )
+
+    assert pii_guard.calls == 1
+    assert content_guard.calls == 1
+    assert content_guard.received_messages[0]["content"] == "Hello John Smith"
+    assert result.terminal_action == "allow"
+
+
+@pytest.mark.asyncio
 async def test_guardrail_not_found_uses_on_fail(monkeypatch):
     """
     If a guardrail is not found, treat as error and use on_fail action.
@@ -698,6 +888,106 @@ async def test_single_step_pipeline_allow(monkeypatch):
 
     assert result.terminal_action == "allow"
     assert guard.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_allow_restores_independent_guardrails_list(monkeypatch):
+    """
+    Request activates an independent guardrail; an unrelated pipeline runs and allows.
+    Expected: no modified_data escapes, so the request's guardrails list survives
+    and the independent guardrail still runs at later lifecycle stages (post_call).
+    Regression: LIT-6587 (pipeline clobbered the list with its last step's guardrail).
+    """
+    pipeline_guard = AlwaysPassGuardrail(guardrail_name="input-scan")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="input-scan", on_fail="block", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_guard])
+
+    data = {
+        "messages": [{"role": "user", "content": "clean content"}],
+        "metadata": {"guardrails": ["independent-output-guard"]},
+    }
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="input-pipeline-policy",
+    )
+
+    assert pipeline_guard.calls == 1
+    assert result.terminal_action == "allow"
+    propagated = result.modified_data or data
+    assert propagated["metadata"]["guardrails"] == ["independent-output-guard"]
+    assert data["metadata"]["guardrails"] == ["independent-output-guard"]
+
+
+@pytest.mark.asyncio
+async def test_allow_does_not_leak_guardrails_into_bare_request(monkeypatch):
+    """A request without metadata must not gain a metadata.guardrails list from the pipeline."""
+    pipeline_guard = AlwaysPassGuardrail(guardrail_name="input-scan")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="input-scan", on_fail="block", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_guard])
+
+    data = {"messages": [{"role": "user", "content": "clean content"}]}
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="input-pipeline-policy",
+    )
+
+    assert result.terminal_action == "allow"
+    propagated = result.modified_data or data
+    assert "guardrails" not in propagated.get("metadata", {})
+    assert "metadata" not in data
+
+
+@pytest.mark.asyncio
+async def test_data_forwarding_keeps_changes_and_restores_guardrails_list(monkeypatch):
+    """A pass_data pipeline's modifications propagate while the request's guardrails list is restored."""
+    pii_guard = PiiMaskingGuardrail(guardrail_name="pii-masker")
+    content_guard = ContentCheckGuardrail(guardrail_name="content-check")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(guardrail="pii-masker", on_fail="block", on_pass="next", pass_data=True),
+            PipelineStep(guardrail="content-check", on_fail="block", on_pass="allow"),
+        ],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pii_guard, content_guard])
+
+    data = {
+        "messages": [{"role": "user", "content": "Hello John Smith"}],
+        "metadata": {"guardrails": ["independent-output-guard"]},
+    }
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="pii-then-safety",
+    )
+
+    assert result.terminal_action == "allow"
+    assert result.modified_data is not None
+    assert result.modified_data["messages"][0]["content"] == "Hello [REDACTED]"
+    assert result.modified_data["metadata"]["guardrails"] == ["independent-output-guard"]
 
 
 @pytest.mark.asyncio

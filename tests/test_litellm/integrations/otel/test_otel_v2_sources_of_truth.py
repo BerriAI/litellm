@@ -107,32 +107,29 @@ def test_registry_parent_integrity_no_orphans():
 
 
 def test_registry_hierarchy_shape():
-    # MCP roles have no in-process parent: per the MCP semconv they root (or adopt
-    # the client's propagated _meta context), so they sit alongside PROXY_REQUEST.
-    assert set(root_roles()) == {
-        SpanRole.PROXY_REQUEST,
-        SpanRole.MCP_TOOL_CALL,
-        SpanRole.MCP_LIST_TOOLS,
-    }
+    assert set(root_roles()) == {SpanRole.PROXY_REQUEST}
     # Guardrails parent to the request span, not the LLM call: a pre-call
-    # guardrail runs before the LLM call exists, so it's a sibling of it.
+    # guardrail runs before the LLM call exists, so it's a sibling of it. MCP
+    # spans nest under the transport span of the request carrying that message.
     assert set(child_roles(SpanRole.PROXY_REQUEST)) == {
         SpanRole.LLM_CALL,
         SpanRole.GUARDRAIL,
         SpanRole.DB_CALL,
         SpanRole.SERVICE,
+        SpanRole.MCP_TOOL_CALL,
+        SpanRole.MCP_LIST_TOOLS,
     }
     assert SPAN_REGISTRY[SpanRole.LLM_CALL].kind is LiteLLMSpanKind.CLIENT
     # The proxy is an MCP client to the upstream tool server: CLIENT span. Listing
     # tools is the same client relationship, so it's a CLIENT span too.
     assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].kind is LiteLLMSpanKind.CLIENT
     assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].kind is LiteLLMSpanKind.CLIENT
-    # MCP spans don't nest under the transport: they link the PROXY_REQUEST span
-    # instead of parenting to it (OTel GenAI MCP semconv).
-    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].parent is None
-    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].parent is None
-    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].links is SpanRole.PROXY_REQUEST
-    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].links is SpanRole.PROXY_REQUEST
+    # MCP spans nest under the transport span of the request carrying that
+    # message (resolved per message at emit time); a client-propagated context
+    # becomes a span link to that remote context, which is not a registry role
+    # (SpanSpec declares no link field at all).
+    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].parent is SpanRole.PROXY_REQUEST
+    assert SPAN_REGISTRY[SpanRole.MCP_LIST_TOOLS].parent is SpanRole.PROXY_REQUEST
     assert SPAN_REGISTRY[SpanRole.PROXY_REQUEST].kind is LiteLLMSpanKind.SERVER
     assert SPAN_REGISTRY[SpanRole.GUARDRAIL].parent is SpanRole.PROXY_REQUEST
     # An outbound datastore call is a CLIENT span; an internal service is INTERNAL.
@@ -266,6 +263,27 @@ def test_vector_store_file_management_is_not_chat(call_type):
     they get their own vendor value instead of sharing one bucket."""
     assert resolve_operation(call_type) is GenAIOperation.LITELLM_VECTOR_STORE_FILE_MANAGEMENT
     assert resolve_operation(call_type).value == "litellm.vector_store_file_management"
+
+
+@pytest.mark.parametrize(
+    "call_type",
+    [
+        f"{prefix}{operation}"
+        for operation in ("get_responses", "delete_responses", "cancel_responses", "list_input_items")
+        for prefix in ("", "a")
+    ],
+)
+def test_responses_management_is_not_chat(call_type):
+    """Fetching, deleting or cancelling a stored response runs no inference, so it must not
+    read as a chat completion: the retrieved object replays the original call's tokens and
+    would inflate the chat series on every read. Regression test for LIT-5602."""
+    assert resolve_operation(call_type) is GenAIOperation.LITELLM_RESPONSES_MANAGEMENT
+    assert resolve_operation(call_type).value == "litellm.responses_management"
+
+
+def test_creating_a_response_is_still_chat():
+    """Guards the test above: ``/v1/responses`` itself is a chat completion."""
+    assert resolve_operation("aresponses") is GenAIOperation.CHAT
 
 
 _NON_CHAT_ROUTES: Final = (
@@ -507,6 +525,96 @@ def test_llm_call_adapter_extracts_all_fields():
     assert data.identity.key_hash == "hsh"
 
 
+def test_llm_call_adapter_extracts_cache_tokens_from_usage_object():
+    payload = _sample_payload()
+    payload["metadata"] = {
+        **payload["metadata"],
+        "usage_object": {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "cache_creation_input_tokens": 7,
+            "cache_read_input_tokens": 3,
+        },
+    }
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_creation_input_tokens == 7
+    assert data.usage.cache_read_input_tokens == 3
+
+
+def test_llm_call_adapter_normalizes_nested_cache_tokens():
+    cases: Final = (
+        ({"prompt_tokens_details": {"cached_tokens": 3}}, 3, None),
+        ({"prompt_cache_hit_tokens": 11}, 11, None),
+        ({"prompt_tokens_details": {"cache_write_tokens": 7}}, None, 7),
+        ({"prompt_tokens_details": {"cache_creation_tokens": 13}}, None, 13),
+        ({"prompt_tokens_details": {"cache_creation_input_tokens": 17}}, None, 17),
+    )
+    for usage_object, expected_read, expected_creation in cases:
+        case_payload = _sample_payload(metadata={"usage_object": usage_object})
+        data = LLMCallSpanData.from_standard_logging_payload(case_payload)
+        assert data.usage.cache_read_input_tokens == expected_read
+        assert data.usage.cache_creation_input_tokens == expected_creation
+
+
+def test_llm_call_adapter_prefers_nested_count_over_zero_top_level():
+    payload = _sample_payload(
+        metadata={
+            "usage_object": {
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "prompt_tokens_details": {"cached_tokens": 5, "cache_write_tokens": 7},
+            }
+        }
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_read_input_tokens == 5
+    assert data.usage.cache_creation_input_tokens == 7
+
+
+def test_llm_call_adapter_ignores_invalid_cache_values_before_valid_fallbacks():
+    payload = _sample_payload(
+        metadata={
+            "usage_object": {
+                "cache_read_input_tokens": -1,
+                "cache_creation_input_tokens": "5.0",
+                "prompt_tokens_details": {"cached_tokens": 5, "cache_write_tokens": 7},
+            }
+        }
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_read_input_tokens == 5
+    assert data.usage.cache_creation_input_tokens == 7
+
+
+def test_llm_call_adapter_ignores_non_finite_cache_values():
+    payload = _sample_payload(
+        metadata={
+            "usage_object": {
+                "prompt_tokens_details": {"cached_tokens": float("nan")},
+            }
+        }
+    )
+    data = LLMCallSpanData.from_standard_logging_payload(payload)
+    assert data.usage.cache_read_input_tokens is None
+
+
+def test_llm_call_adapter_preserves_explicit_zero_and_omits_missing_cache_tokens():
+    for usage_object, expected_read, expected_creation in (
+        ({"prompt_tokens_details": {"cached_tokens": 0}}, 0, None),
+        ({}, None, None),
+    ):
+        case_payload = _sample_payload(metadata={"usage_object": usage_object})
+        data = LLMCallSpanData.from_standard_logging_payload(case_payload)
+        assert data.usage.cache_read_input_tokens == expected_read
+        assert data.usage.cache_creation_input_tokens == expected_creation
+
+
+def test_llm_call_adapter_cache_tokens_none_without_usage_object():
+    data = LLMCallSpanData.from_standard_logging_payload(_sample_payload())
+    assert data.usage.cache_creation_input_tokens is None
+    assert data.usage.cache_read_input_tokens is None
+
+
 def test_llm_call_adapter_failure_path():
     payload = _sample_payload(
         status="failure",
@@ -612,6 +720,39 @@ def test_request_identity_falls_back_to_legacy_team_keys():
     ident = RequestIdentity.from_payload(payload)
     assert ident.team_id == "legacy-team"
     assert ident.team_alias == "legacy"
+
+
+def test_llm_span_carries_proxy_request_route():
+    """The LLM span records the proxy route the request arrived on, so it can be
+    filtered by endpoint (``/v1/responses`` vs ``/v1/chat/completions``) without
+    joining back to the root SERVER span's ``http.route``. The value is that
+    span's ``http.route`` verbatim, so a parameterized route reports the template
+    the SERVER span reports and not the path the caller happened to send."""
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(metadata={"user_api_key_request_route": "/v1/responses/resp_abc123"}),
+        request_route="/v1/responses/{response_id}",
+    )
+    attrs: Final = GenAIMapper().map(data)
+
+    assert attrs[LiteLLM.REQUEST_ROUTE] == "/v1/responses/{response_id}"
+
+
+def test_llm_span_falls_back_to_the_logged_route_without_a_server_span():
+    """The route the proxy recorded at auth is the backstop for a deployment whose
+    FastAPI instrumentation never mounted: there is no server span to disagree with
+    there, and an endpoint name is worth more than an absent attribute."""
+    data: Final = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(metadata={"user_api_key_request_route": "/v1/responses"})
+    )
+
+    assert GenAIMapper().map(data)[LiteLLM.REQUEST_ROUTE] == "/v1/responses"
+
+
+def test_llm_span_omits_request_route_off_the_proxy():
+    """An SDK call has no inbound route, so the key is absent rather than empty."""
+    attrs: Final = GenAIMapper().map(LLMCallSpanData.from_standard_logging_payload(_sample_payload(metadata={})))
+
+    assert LiteLLM.REQUEST_ROUTE not in attrs
 
 
 def test_guardrail_span_data_block_carries_verdict_and_error():

@@ -310,6 +310,25 @@ class TestGDCGeminiConfig:
                     api_base=TEST_API_BASE,
                 )
 
+    def test_validate_environment_credentials_missing_audience_binding_are_named(self):
+        config = GDCGeminiConfig()
+        creds_without_audience_binding = MagicMock(spec=[])
+
+        with patch(
+            "google.auth.load_credentials_from_dict",
+            return_value=(creds_without_audience_binding, None),
+        ):
+            with pytest.raises(AttributeError, match="must expose with_gdch_audience"):
+                config.validate_environment(
+                    headers={},
+                    model=TEST_MODEL,
+                    messages=[],
+                    optional_params={},
+                    litellm_params={"vertex_project": TEST_PROJECT},
+                    api_key=TEST_API_KEY,
+                    api_base=TEST_API_BASE,
+                )
+
     def test_validate_environment_string_false_disables_token_caching(self):
         config = GDCGeminiConfig()
         mock_creds = MagicMock()

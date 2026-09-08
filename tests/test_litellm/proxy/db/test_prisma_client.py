@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 
 
-from litellm.proxy.db.prisma_client import PrismaWrapper, should_update_prisma_schema
+from litellm.proxy.db.prisma_client import PrismaManager, PrismaWrapper, should_update_prisma_schema
 
 
 @pytest.fixture(autouse=True)
@@ -193,7 +193,10 @@ async def test_recreate_prisma_client_recovers_from_disconnected_client(
     mock_new_prisma.connect.assert_awaited_once()
 
 
-def test_db_push_applies_replica_identity_full_when_requested(monkeypatch):
+DB_PUSH_ARGV = ["db", "push", "--accept-data-loss", "--skip-generate"]
+
+
+def test_db_push_applies_replica_identity_full_when_requested(monkeypatch, fake_prisma_cli, unset_database_url):
     """`prisma db push` bypasses litellm-proxy-extras, so it needs its own call
     into the opt-in REPLICA IDENTITY FULL step."""
     from litellm.proxy.db.prisma_client import PrismaManager
@@ -208,11 +211,42 @@ def test_db_push_applies_replica_identity_full_when_requested(monkeypatch):
         staticmethod(lambda: applied.append(True)),
     )
 
-    with patch("litellm.proxy.db.prisma_client.subprocess.run") as mock_run:
-        assert PrismaManager.setup_database(use_migrate=False) is True
+    assert PrismaManager.setup_database(use_migrate=False) is True
 
-    assert mock_run.call_args[0][0][:3] == ["prisma", "db", "push"]
+    assert fake_prisma_cli.calls == [DB_PUSH_ARGV]
     assert applied == [True]
+
+
+def test_db_push_is_rejected_when_spend_logs_is_partitioned(monkeypatch, fake_prisma_cli, unset_database_url):
+    """A doc-partitioned LiteLLM_SpendLogs makes `prisma db push` rewrite the
+    primary key back to ("request_id"), which Postgres rejects; the guard must
+    fail fast with guidance instead of running the push."""
+    from litellm.proxy.db.prisma_client import PrismaManager
+    from litellm_proxy_extras.utils import (
+        PARTITIONED_SPEND_LOGS_PUSH_ERROR,
+        ProxyExtrasDBManager,
+    )
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: True)
+    )
+    with pytest.raises(RuntimeError) as err:
+        PrismaManager.setup_database(use_migrate=False)
+
+    assert str(err.value) == PARTITIONED_SPEND_LOGS_PUSH_ERROR
+    assert fake_prisma_cli.calls == []
+
+
+def test_db_push_proceeds_when_spend_logs_is_not_partitioned(monkeypatch, fake_prisma_cli, unset_database_url):
+    from litellm.proxy.db.prisma_client import PrismaManager
+    from litellm_proxy_extras.utils import ProxyExtrasDBManager
+
+    monkeypatch.setattr(
+        ProxyExtrasDBManager, "spend_logs_is_partitioned", staticmethod(lambda: False)
+    )
+    assert PrismaManager.setup_database(use_migrate=False) is True
+
+    assert fake_prisma_cli.calls == [DB_PUSH_ARGV]
 
 
 def _entra_jwt(expires_in_seconds: int) -> str:
@@ -339,3 +373,30 @@ def test_minting_without_the_database_env_vars_names_them(azure_env, monkeypatch
 
     with pytest.raises(RuntimeError, match="DATABASE_HOST"):
         wrapper.get_rds_iam_token()
+
+
+@pytest.mark.timeout(45)
+def test_db_push_timeout_takes_its_process_tree_with_it(fake_prisma_cli, unset_database_url, monkeypatch):
+    """
+    A timed-out `db push` used to leave Node and the schema engine writing the schema,
+    so the next attempt pushed into a database the abandoned one was still mutating.
+    """
+    monkeypatch.delenv("LITELLM_SET_REPLICA_IDENTITY_FULL", raising=False)
+    monkeypatch.setenv("FAKE_PRISMA_HANG_FIRST", "1")
+
+    assert PrismaManager.setup_database(use_migrate=False) is True
+    assert fake_prisma_cli.calls == [DB_PUSH_ARGV, DB_PUSH_ARGV]
+    assert fake_prisma_cli.grandchild_is_gone(within_seconds=5)
+
+
+def test_db_push_without_the_prisma_runner_fails_the_migration_instead_of_crashing_boot(
+    fake_prisma_cli, unset_database_url, monkeypatch
+):
+    """
+    An ImportError out of setup_database escapes the caller's RuntimeError handler and
+    kills boot, bypassing the operator's enforce_prisma_migration_check choice.
+    """
+    monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
+
+    assert PrismaManager.setup_database(use_migrate=False) is False
+    assert fake_prisma_cli.calls == []

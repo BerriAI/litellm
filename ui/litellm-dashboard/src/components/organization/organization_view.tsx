@@ -206,8 +206,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               <CardContent>
                 <p className="text-sm text-muted-foreground">Rate Limits</p>
                 <div className="mt-2 text-sm text-foreground">
-                  <p>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</p>
-                  <p>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</p>
+                  <p>TPM: {orgData.litellm_budget_table.tpm_limit ?? "Unlimited"}</p>
+                  <p>RPM: {orgData.litellm_budget_table.rpm_limit ?? "Unlimited"}</p>
                   {orgData.litellm_budget_table.max_parallel_requests && (
                     <p>Max Parallel Requests: {orgData.litellm_budget_table.max_parallel_requests}</p>
                   )}
@@ -311,8 +311,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Rate Limits</p>
-                    <div>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</div>
-                    <div>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</div>
+                    <div>TPM: {orgData.litellm_budget_table.tpm_limit ?? "Unlimited"}</div>
+                    <div>RPM: {orgData.litellm_budget_table.rpm_limit ?? "Unlimited"}</div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Budget</p>

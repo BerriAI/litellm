@@ -33,6 +33,13 @@ EXCLUDED_ROLLOUT_FLAGS = {
     "LITELLM_RUST",
 }
 
+# Internal infrastructure tuning parameters for streaming/queue management
+# These are advanced settings with sensible defaults that most users should not modify
+EXCLUDED_INTERNAL_TUNING_VARS = {
+    "ANTHROPIC_MESSAGES_MAX_DETACHED_STREAM_DRAINS",
+    "ANTHROPIC_MESSAGES_STREAM_RELAY_QUEUE_MAXSIZE",
+}
+
 EXCLUDED_TERMINAL_VARS = {
     "TERM",
     "TERM_PROGRAM",
@@ -50,7 +57,9 @@ EXCLUDED_TERMINAL_VARS = {
     "ALACRITTY_SOCKET",
 }
 
-EXCLUDED_KEYS = frozenset(EXCLUDED_TERMINAL_VARS | EXCLUDED_GUARD_ONLY_VARS | EXCLUDED_ROLLOUT_FLAGS)
+EXCLUDED_KEYS = frozenset(
+    EXCLUDED_TERMINAL_VARS | EXCLUDED_GUARD_ONLY_VARS | EXCLUDED_ROLLOUT_FLAGS | EXCLUDED_INTERNAL_TUNING_VARS
+)
 
 # Directories to skip (dependencies, venvs, caches) - only scan litellm source
 SKIP_DIRS = {

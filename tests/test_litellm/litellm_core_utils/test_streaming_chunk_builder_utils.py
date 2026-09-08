@@ -592,6 +592,59 @@ def test_stream_chunk_builder_litellm_usage_chunks():
     assert usage.total_tokens == 77
 
 
+def test_calculate_usage_honors_openai_sdk_completion_usage_chunks():
+    from openai.types.completion_usage import CompletionUsage
+
+    content_chunk = ModelResponseStream(
+        id="chatcmpl-sdk-usage-1",
+        created=1745513206,
+        model="mantle-claude",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    provider_specific_fields=None,
+                    content="ok",
+                    role=None,
+                    function_call=None,
+                    tool_calls=None,
+                    audio=None,
+                ),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+    )
+    usage_chunk = ModelResponseStream(
+        id="chatcmpl-sdk-usage-1",
+        created=1745513207,
+        model="mantle-claude",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+    )
+    usage_chunk.usage = CompletionUsage(
+        prompt_tokens=20, completion_tokens=60, total_tokens=80, cost=0.000704
+    )
+    assert type(usage_chunk.usage) is CompletionUsage
+
+    chunks = [content_chunk, usage_chunk]
+    usage = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks, model="mantle-claude", completion_output=""
+    )
+
+    assert usage.prompt_tokens == 20
+    assert usage.completion_tokens == 60
+    assert usage.total_tokens == 80
+    assert getattr(usage, "cost", None) == pytest.approx(0.000704)
+
+
 def test_get_model_from_chunks_azure_model_router():
     """
     Test that _get_model_from_chunks finds the actual model from Azure Model Router chunks.
@@ -709,6 +762,66 @@ def test_stream_chunk_builder_anthropic_web_search():
     # (which uses attribute access) works. See issue #26153.
     assert isinstance(usage.server_tool_use, ServerToolUse)
     assert usage.server_tool_use.web_search_requests == 2
+
+
+def test_calculate_usage_carries_google_maps_grounding_requests():
+    """
+    The Maps grounding counter set on a streamed usage chunk must survive the stream rebuild even
+    when a later chunk carries its own prompt_tokens_details, or Maps grounding on streaming
+    requests silently bills $0.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Here"),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=0,
+            prompt_tokens=15,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(google_maps_grounding_requests=1),
+        ),
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-maps-usage-0",
+        created=1745513207,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=None),
+                logprobs=None,
+            )
+        ],
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=27,
+            prompt_tokens=0,
+            total_tokens=27,
+            prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=0),
+        ),
+    )
+
+    chunks = [chunk1, chunk2]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(chunks=chunks, model="gemini-2.5-flash", completion_output="")
+
+    assert usage.prompt_tokens_details.google_maps_grounding_requests == 1
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():
@@ -987,6 +1100,32 @@ def test_cost_field_in_usage_chunks():
     assert usage.cost == 0.00025
     assert usage.prompt_tokens == 10
     assert usage.completion_tokens == 5
+
+
+def test_stream_chunk_builder_tolerates_trailing_chunk_without_choices():
+    """Regression for https://github.com/BerriAI/litellm/issues/32051
+
+    The Responses-API bridge yields ModelResponseStream chunks with choices
+    followed by a trailing event object that has no ``choices`` key. Building
+    those chunks used to raise ``KeyError('choices')`` (surfaced as a 500
+    APIError); it must now skip the choices-less chunk and assemble content.
+    """
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+
+    content_chunks = [
+        ModelResponseStream(
+            model="gpt-4o",
+            choices=[StreamingChoices(index=0, delta=Delta(content=part))],
+        )
+        for part in ("Hello", " world")
+    ]
+    trailing_chunk = BaseLiteLLMOpenAIResponseObject()
+    assert "choices" not in trailing_chunk
+
+    response = stream_chunk_builder(chunks=content_chunks + [trailing_chunk])
+
+    assert response is not None
+    assert response.choices[0].message.content == "Hello world"
 
 
 def test_anthropic_speed_and_geo_survive_stream_assembly():

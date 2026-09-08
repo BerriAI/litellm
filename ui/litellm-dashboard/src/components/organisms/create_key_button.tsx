@@ -11,27 +11,18 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Badge } from "@/components/ui/badge";
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
-import { SearchSelect } from "@/components/shared/SearchSelect";
+import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
+import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { ChevronDown, Info } from "lucide-react";
-import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
-import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { type Control, useForm, useWatch, type UseFormSetValue } from "react-hook-form";
 import { rolesWithWriteAccess } from "../../utils/roles";
@@ -70,7 +61,6 @@ import {
 } from "../key_team_helpers/fetch_available_models_team_key";
 import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import { toast } from "@/lib/toast";
 import {
@@ -128,14 +118,18 @@ interface McpToolPermissionsFieldProps {
 }
 
 const McpToolPermissionsField: React.FC<McpToolPermissionsFieldProps> = ({ accessToken, control, setValue }) => {
-  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as { servers?: string[] } | undefined;
+  const selection = useWatch({ control, name: "allowed_mcp_servers_and_groups" }) as
+    | { servers?: string[]; accessGroups?: string[]; toolsets?: string[] }
+    | undefined;
   const toolPermissions = useWatch({ control, name: "mcp_tool_permissions" }) as Record<string, string[]> | undefined;
 
   return (
     <div className="mt-6">
       <MCPToolPermissions
         accessToken={accessToken}
-        selectedServers={(selection?.servers || []).filter((s: string) => s !== NO_MCP_SERVERS_SENTINEL)}
+        selectedServers={selection?.servers || []}
+        selectedAccessGroups={selection?.accessGroups || []}
+        selectedToolsets={selection?.toolsets || []}
         toolPermissions={toolPermissions || {}}
         onChange={(toolPerms) => setValue("mcp_tool_permissions", toolPerms)}
       />
@@ -167,12 +161,6 @@ interface User {
   user_id: string;
   user_email: string;
   role?: string;
-}
-
-interface UserOption {
-  label: string;
-  value: string;
-  user: User;
 }
 
 export const fetchTeamModels = async (
@@ -270,7 +258,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
-  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [userOptions, setUserOptions] = useState<SearchSelectOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const latestUserSearchRef = useRef(0);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
@@ -349,7 +337,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     const fetchPrompts = async () => {
       try {
         const response = await getPromptsList(accessToken);
-        setPromptsList(response.prompts.map((prompt) => prompt.prompt_id));
+        setPromptsList(Array.from(new Set(response.prompts.map((prompt) => prompt.prompt_id))));
       } catch (error) {
         console.error("Failed to fetch prompts:", error);
       }
@@ -588,10 +576,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       if (!isLatestSearch()) return;
 
       const data: User[] = response;
-      const options: UserOption[] = data.map((user) => ({
+      const options: SearchSelectOption[] = data.map((user) => ({
         label: `${user.user_email} (${user.user_id})`,
         value: user.user_id,
-        user,
       }));
 
       setUserOptions(options);
@@ -603,11 +590,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
-  const handleUserSearch = useDebouncedCallback((text: string) => fetchUsers(text), { wait: DEBOUNCE_WAIT_MS });
-
-  const changeOrganization = (write: FieldWrite) => (orgId: string) => {
-    write(orgId);
-    setSelectedOrganizationId(orgId || null);
+  const changeOrganization = (write: FieldWrite) => (orgId: string | null) => {
+    write(orgId ?? undefined);
+    setSelectedOrganizationId(orgId);
     // Clear team and project when org changes
     setSelectedCreateKeyTeam(null);
     setSelectedProjectId(null);
@@ -736,36 +721,20 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     {(control) => (
                       <div>
                         <div className="mb-2 flex">
-                          <Combobox
-                            items={userOptions}
-                            value={userOptions.find((option) => option.value === control.value) ?? null}
-                            filter={null}
-                            onValueChange={(option: UserOption | null) => control.onChange(option?.value)}
-                            onInputValueChange={handleUserSearch}
-                            isItemEqualToValue={(a: UserOption, b: UserOption) => a.value === b.value}
-                            itemToStringLabel={(option: UserOption) => option.label}
-                          >
-                            <ComboboxInput
-                              id={control.id}
-                              className="w-full"
-                              placeholder="Type email to search for users"
-                              aria-required={control["aria-required"]}
-                              aria-invalid={control["aria-invalid"]}
-                              aria-describedby={control["aria-describedby"]}
-                              showClear={control.value != null && control.value !== ""}
-                              onBlur={control.onBlur}
-                            />
-                            <ComboboxContent>
-                              <ComboboxEmpty>{userSearchLoading ? "Searching..." : "No users found"}</ComboboxEmpty>
-                              <ComboboxList>
-                                {(option: UserOption) => (
-                                  <ComboboxItem key={option.value} value={option} title={option.label}>
-                                    {option.label}
-                                  </ComboboxItem>
-                                )}
-                              </ComboboxList>
-                            </ComboboxContent>
-                          </Combobox>
+                          <PaginatedSearchSelect
+                            options={userOptions}
+                            value={typeof control.value === "string" ? control.value : undefined}
+                            onValueChange={control.onChange}
+                            onSearchChange={fetchUsers}
+                            isLoading={userSearchLoading}
+                            placeholder="Type email to search for users"
+                            emptyText="No users found"
+                            loadingText="Searching..."
+                            inputId={control.id}
+                            aria-required={control["aria-required"] === "true" ? true : undefined}
+                            aria-invalid={control["aria-invalid"] === "true" ? true : undefined}
+                            aria-describedby={control["aria-describedby"]}
+                          />
                           <Button variant="outline" className="ml-2" onClick={() => setIsCreateUserModalVisible(true)}>
                             Create User
                           </Button>

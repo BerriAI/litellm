@@ -4,6 +4,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from opentelemetry.context import Context, attach, get_current
@@ -48,6 +49,7 @@ from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
     mcp_message_transport_span,
+    request_root_http_route,
     request_root_span,
     resolve_mcp_span_context,
     resolve_parent_context,
@@ -390,10 +392,10 @@ class OpenTelemetryV2(CustomLogger):
 
         MCP tool calls reach the success/failure callbacks like any other request
         (with ``call_type`` ``call_mcp_tool``), but they are not LLM calls and have
-        no ``pre_call`` carrier — so they get their own CLIENT span here. Per the MCP
-        semconv it parents to the trace context the client propagated in
-        ``params._meta`` (or starts a new root) and links the transport span, rather
-        than nesting under the HTTP/session span. Returns whether it handled the
+        no ``pre_call`` carrier — so they get their own CLIENT span here. It nests
+        under the transport span of the request carrying this message, and trace
+        context the client propagated in ``params._meta`` is recorded as a span
+        link (see ``resolve_mcp_span_context``). Returns whether it handled the
         event, so the caller skips the LLM-call path. The whole span is emitted at
         once (there is no boundary to open it at), deduped on the call id.
         """
@@ -436,9 +438,9 @@ class OpenTelemetryV2(CustomLogger):
 
         Like a tool call, listing reaches the success/failure callbacks (here with
         ``call_type`` ``list_mcp_tools``) with no ``pre_call`` carrier, so it gets its
-        own CLIENT span. Per the MCP semconv it parents to the ``params._meta`` trace
-        context (or starts a new root) and links the transport span, rather than
-        nesting under the HTTP/session span. Returns whether it handled the event so
+        own CLIENT span, nested under the transport span of the request carrying
+        this message with any ``params._meta`` trace context recorded as a span
+        link (see ``resolve_mcp_span_context``). Returns whether it handled the event so
         the caller skips the LLM-call path.
         """
         raw_payload: Final = kwargs.get("standard_logging_object")
@@ -540,6 +542,7 @@ class OpenTelemetryV2(CustomLogger):
             payload,
             capture_content=self.config.capture_span_content,
             time_to_first_chunk_seconds=call.time_to_first_chunk_seconds,
+            request_route=request_root_http_route(),
         )
         end_time_ns: Final = to_ns(end_time)
         if carrier is not None and carrier.span is not None:
@@ -909,3 +912,29 @@ def phase_span(name: str) -> "Iterator[Span | None]":
         return
     with logger.start_phase_span(name) as span:
         yield span
+
+
+def build_otel_v2_logger(
+    config: OpenTelemetryV2Config,
+    callback_name: str | None = None,
+    tracer_provider: TracerProvider | None = None,
+    logger_provider: LoggerProvider | None = None,
+    meter_provider: "MeterProvider | None" = None,
+    settings: Mapping[str, object] = MappingProxyType({}),
+) -> OpenTelemetryV2:
+    return _logger_class(config)(
+        config=config,
+        callback_name=callback_name,
+        tracer_provider=tracer_provider,
+        logger_provider=logger_provider,
+        meter_provider=meter_provider,
+        **settings,
+    )
+
+
+def _logger_class(config: OpenTelemetryV2Config) -> type[OpenTelemetryV2]:
+    if "langfuse" not in config.mapper_names or not config.capture_span_content:
+        return OpenTelemetryV2
+    from litellm.integrations.otel.langfuse_logger import LangfuseOpenTelemetryV2
+
+    return LangfuseOpenTelemetryV2

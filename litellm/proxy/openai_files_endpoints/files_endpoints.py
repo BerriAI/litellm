@@ -8,7 +8,7 @@
 import asyncio
 import traceback
 from collections.abc import Mapping
-from typing import Any, BinaryIO, Final, cast, get_args
+from typing import Any, BinaryIO, Final, TypedDict, cast, get_args
 
 import httpx
 from fastapi import (
@@ -23,6 +23,7 @@ from fastapi import (
     status,
 )
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import CreateFileRequest, get_secret_str
@@ -69,6 +70,15 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     validate_managed_files_requirement,
     validate_managed_id_requirement,
 )
+from litellm.proxy.openai_files_endpoints.general_upload_validation import (
+    MB,
+    check_blocked_extension,
+    check_unsafe_filename,
+    check_upload_file_size,
+    coerce_optional_int_setting,
+    coerce_optional_str_list_setting,
+    raise_upload_validation_failure,
+)
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
@@ -82,6 +92,13 @@ from litellm.types.llms.openai import (
 router: Final = APIRouter()
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
+
+
+class UploadedFileInfo(TypedDict):
+    filename: ReadOnly[str | None]
+    content_type: ReadOnly[str | None]
+    size: ReadOnly[int | None]
+
 
 files_config = None
 
@@ -389,13 +406,23 @@ async def create_file(
     # descriptor and its disk blocks until the collector runs.
     spools: Final[list[BinaryIO]] = []  # mutable-ok: filled as the scan opens handles
     try:
+        unsafe_filename_failure: Final = check_unsafe_filename(file.filename)
+        if unsafe_filename_failure is not None:
+            raise_upload_validation_failure(unsafe_filename_failure)
+
+        max_file_size_mb: Final = coerce_optional_int_setting(general_settings.get("max_file_size_mb"))
+
         # Batch uploads can be gigabytes. Starlette has already spooled the upload
         # to disk, so stream from that handle instead of reading it into memory.
-        # Other uploads are small and stay in-memory bytes.
+        # Other uploads stay in-memory bytes, bounded to max_file_size_mb (plus one
+        # byte, to still tell "exactly at the limit" from "over it") when it is set,
+        # so an oversized upload cannot be read to completion before it is rejected.
         file_source: bytes | BinaryIO
         if purpose == "batch":
             await file.seek(0)
             file_source = file.file
+        elif max_file_size_mb is not None and max_file_size_mb > 0:
+            file_source = await file.read(max_file_size_mb * MB + 1)
         else:
             file_source = await file.read()
         custom_llm_provider = (
@@ -433,6 +460,15 @@ async def create_file(
             )
         # Cast purpose to OpenAIFilesPurpose type
         purpose = cast(OpenAIFilesPurpose, purpose)
+
+        general_size_failure: Final = check_upload_file_size(file_source, max_file_size_mb)
+        if general_size_failure is not None:
+            raise_upload_validation_failure(general_size_failure)
+
+        blocked_extensions: Final = coerce_optional_str_list_setting(general_settings.get("blocked_file_extensions"))
+        blocked_extension_failure: Final = check_blocked_extension(file.filename, blocked_extensions)
+        if blocked_extension_failure is not None:
+            raise_upload_validation_failure(blocked_extension_failure)
 
         if purpose == "batch":
             batch_file_failure: Final = await asyncio.to_thread(
@@ -525,6 +561,22 @@ async def create_file(
             version=version,
             proxy_config=proxy_config,
         )
+
+        uploaded_file_info: Final[UploadedFileInfo] = {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size": file.size,
+        }
+        data["purpose"] = purpose
+        data["file"] = uploaded_file_info
+        hooked_data: Final = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="acreate_file",
+        )
+        data = hooked_data if hooked_data is not None else data
+        data.pop("purpose", None)
+        data.pop("file", None)
 
         # /v1/files stores its proxy metadata under litellm_metadata, not metadata
         request_metadata: Final = data.get("metadata") or data.get("litellm_metadata") or EMPTY_MAPPING

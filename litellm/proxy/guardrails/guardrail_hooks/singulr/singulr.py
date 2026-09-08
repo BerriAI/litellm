@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 import pydantic
+from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -47,6 +48,10 @@ _DEFAULT_TIMEOUT: Final = 30.0
 _EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
 class SingulrGuardrail(CustomGuardrail):
     def __init__(
         self,
@@ -56,7 +61,7 @@ class SingulrGuardrail(CustomGuardrail):
         singulr_guardrail_id: str | None = None,
         block_on_error: bool | None = None,
         timeout: float | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         self.singulr_api_key = singulr_api_key or os.environ.get("SINGULR_API_KEY")
         self.singulr_api_base = (
@@ -179,7 +184,7 @@ class SingulrGuardrail(CustomGuardrail):
         )
         return MappingProxyType({header: value for header, value in all_headers.items() if value})
 
-    async def _call_api(self, payload: Mapping[str, Any]) -> SingulrGuardrailResponse | None:
+    async def _call_api(self, payload: dict[str, object]) -> SingulrGuardrailResponse | None:
         endpoint: Final = f"{self.singulr_api_base}{_GUARD_ENDPOINT}"
         verbose_proxy_logger.debug("Singulr: %s", endpoint)
 

@@ -34,6 +34,14 @@ def _drain_async(events: list) -> list:
     return asyncio.run(_run())
 
 
+def _drain_sync_upstream(events: list) -> list:
+    async def _run() -> list:
+        wrapper = AnthropicResponsesStreamWrapper(responses_stream=iter(events), model="m")
+        return [chunk async for chunk in wrapper]
+
+    return asyncio.run(_run())
+
+
 class TestMessageStartEmittedExactlyOnce:
     """The ``__anext__`` fallback emits ``message_start`` before consuming the
     stream, so ``_process_event`` must not emit a second one when
@@ -54,6 +62,15 @@ class TestMessageStartEmittedExactlyOnce:
     def test_message_start_is_first_event(self):
         chunks = _drain_async([{"type": "response.created"}])
         assert chunks[0]["type"] == "message_start"
+
+    def test_sync_upstream_iterator_is_consumed(self):
+        chunks = _drain_sync_upstream(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_text.delta", "item_id": "m1", "delta": "hi"},
+            ]
+        )
+        assert any(chunk.get("delta", {}).get("text") == "hi" for chunk in chunks)
 
 
 class TestProcessEventResponseCreatedGuard:
@@ -144,8 +161,14 @@ class TestReasoningItemWithoutSummaryText:
             ("content_block_delta", 1),
             ("content_block_stop", 1),
         ]
-        assert chunks[1]["content_block"] == {"type": "thinking", "thinking": ""}
+        assert chunks[1]["content_block"] == {"type": "thinking", "thinking": "", "signature": ""}
         assert "".join(c["delta"]["thinking"] for c in chunks[2:4]) == "Weighing options"
+
+    def test_the_reasoning_item_id_is_never_streamed_as_a_signature(self):
+        """A stand-in signature would be replayed as a real one, so none is ever sent."""
+        chunks = _drain_async(self._gpt_turn(reasoning_summary_deltas=["Weighing options"]))
+
+        assert not [c for c in chunks if c.get("delta", {}).get("type") == "signature_delta"]
 
 
 class TestToolUseBlockClosedExactlyOnce:
@@ -302,3 +325,60 @@ class TestResponseCompletedUsage:
             "cache_creation_input_tokens": 10,
             "cache_read_input_tokens": 4004,
         }
+
+
+class TestRefusalStreamEvents:
+    def test_refusal_event_sequence_emits_refusal_text_and_stop_details(self):
+        response = SimpleNamespace(
+            status="completed",
+            output=[{"type": "message", "content": [{"type": "refusal", "refusal": "I cannot fulfill this."}]}],
+            usage=None,
+        )
+        chunks = _process_all(
+            [
+                {"type": "response.created"},
+                {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.refusal.delta", "item_id": "msg_1", "delta": "I cannot fulfill this."},
+                {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_1"}},
+                {"type": "response.completed", "response": response},
+            ]
+        )
+        assert [chunk["type"] for chunk in chunks] == [
+            "message_start",
+            "content_block_start",
+            "content_block_delta",
+            "content_block_stop",
+            "message_delta",
+            "message_stop",
+        ]
+        assert chunks[2]["delta"] == {"type": "text_delta", "text": "I cannot fulfill this."}
+        assert chunks[4]["delta"] == {
+            "stop_reason": "refusal",
+            "stop_sequence": None,
+            "stop_details": {
+                "type": "refusal",
+                "category": None,
+                "explanation": "I cannot fulfill this.",
+            },
+        }
+
+    def test_response_completed_with_refusal_sets_stop_reason_refusal(self):
+        response = SimpleNamespace(
+            status="completed",
+            output=[{"type": "message", "content": [{"type": "refusal", "refusal": "Policy violation"}]}],
+            usage=None,
+        )
+        chunks = _process_all([{"type": "response.completed", "response": response}])
+        message_delta = next(c for c in chunks if c["type"] == "message_delta")
+        assert message_delta["delta"]["stop_reason"] == "refusal"
+
+    def test_incomplete_status_takes_precedence_over_refusal(self):
+        response = SimpleNamespace(
+            status="incomplete",
+            output=[{"type": "message", "content": [{"type": "refusal", "refusal": "Partial refusal"}]}],
+            usage=None,
+        )
+        chunks = _process_all([{"type": "response.incomplete", "response": response}])
+        message_delta = next(c for c in chunks if c["type"] == "message_delta")
+        assert message_delta["delta"]["stop_reason"] == "max_tokens"
+        assert "stop_details" not in message_delta["delta"]

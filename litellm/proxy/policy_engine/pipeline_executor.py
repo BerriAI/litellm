@@ -6,6 +6,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
 import time
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal
 
 import litellm
@@ -15,6 +16,11 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+    independent_snapshot,
+)
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -23,6 +29,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
     PipelineStep,
     PipelineStepResult,
 )
+from litellm.types.utils import StandardLoggingGuardrailInformation
 
 try:
     from fastapi.exceptions import HTTPException
@@ -41,6 +48,7 @@ class PipelineExecutor:
         user_api_key_dict: Any,
         call_type: str,
         policy_name: str,
+        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
     ) -> PipelineExecutionResult:
         """
         Execute pipeline steps sequentially with conditional actions.
@@ -52,6 +60,11 @@ class PipelineExecutor:
             user_api_key_dict: User API key auth
             call_type: Type of call (completion, etc.)
             policy_name: Name of the owning policy (for logging)
+            raw_request_snapshot: pristine pre-pipeline, pre-guardrail request
+                (taken by the caller before any guardrail or pipeline ran), so a
+                step whose guardrail opted into ``scan_raw_request`` evaluates
+                the original request instead of whatever an earlier
+                ``pass_data`` step in this same pipeline already rewrote.
 
         Returns:
             PipelineExecutionResult with terminal action and step results
@@ -75,6 +88,7 @@ class PipelineExecutor:
                 data=working_data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
+                raw_request_snapshot=raw_request_snapshot,
             )
 
             duration = time.perf_counter() - start_time
@@ -106,13 +120,10 @@ class PipelineExecutor:
 
             # Handle terminal actions
             if action == "allow":
-                return PipelineExecutionResult(
-                    terminal_action="allow",
-                    step_results=step_results,
-                    modified_data=working_data if working_data != data else None,
-                )
+                return _allow_result(step_results=step_results, working_data=working_data, request_data=data)
 
             if action == "block":
+                _carry_working_guardrail_information(working_data=working_data, request_data=data)
                 return PipelineExecutionResult(
                     terminal_action="block",
                     step_results=step_results,
@@ -121,6 +132,7 @@ class PipelineExecutor:
                 )
 
             if action == "modify_response":
+                _carry_working_guardrail_information(working_data=working_data, request_data=data)
                 return PipelineExecutionResult(
                     terminal_action="modify_response",
                     step_results=step_results,
@@ -130,11 +142,7 @@ class PipelineExecutor:
             # action == "next" → continue to next step
 
         # Ran out of steps without a terminal action → default allow
-        return PipelineExecutionResult(
-            terminal_action="allow",
-            step_results=step_results,
-            modified_data=working_data if working_data != data else None,
-        )
+        return _allow_result(step_results=step_results, working_data=working_data, request_data=data)
 
     @staticmethod
     async def _run_step(
@@ -143,6 +151,7 @@ class PipelineExecutor:
         data: dict,
         user_api_key_dict: Any,
         call_type: str,
+        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
     ) -> tuple[
         Literal["pass", "fail", "error"],
         dict | None,
@@ -166,26 +175,38 @@ class PipelineExecutor:
             verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
+        # Inject guardrail name into metadata so should_run_guardrail() allows it
+        if "metadata" not in data:
+            data["metadata"] = {}
+        data["metadata"]["guardrails"] = [step.guardrail]
+
+        # A scan_raw_request step evaluates the pristine pre-pipeline
+        # snapshot instead of `data` (which earlier pass_data steps in
+        # this same pipeline may have already rewritten), same reason
+        # the normal sequential/parallel guardrail loops do this.
+        scans_raw_request: Final = callback.scan_raw_request
+        hook_input: Final[dict] = (  # mutable-ok: same request-payload shape as data
+            independent_snapshot(raw_request_snapshot)
+            if scans_raw_request and raw_request_snapshot is not None
+            else data
+        )
+        if hook_input is not data:
+            hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
+        snapshot_entries_before: Final = len(_recorded_guardrail_information(hook_input))
+
+        # Use unified_guardrail path if callback implements apply_guardrail
+        target: CustomLogger = callback
+        use_unified: Final = "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
+        if use_unified:
+            hook_input["guardrail_to_apply"] = callback
+            target = UnifiedLLMGuardrails()
+
         try:
-            # Inject guardrail name into metadata so should_run_guardrail() allows it
-            if "metadata" not in data:
-                data["metadata"] = {}
-            data["metadata"]["guardrails"] = [step.guardrail]
-
-            # Use unified_guardrail path if callback implements apply_guardrail
-            target: CustomLogger = callback
-            use_unified: Final = (
-                "apply_guardrail" in type(callback).__dict__ and not callback.use_native_lifecycle_hooks
-            )
-            if use_unified:
-                data["guardrail_to_apply"] = callback
-                target = UnifiedLLMGuardrails()
-
             if mode == "pre_call":
                 response = await target.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
                     cache=None,
-                    data=data,
+                    data=hook_input,
                     call_type=call_type,
                 )
                 if isinstance(callback, CustomGuardrail):
@@ -201,9 +222,13 @@ class PipelineExecutor:
             else:
                 return ("error", None, f"Unsupported pipeline mode: {mode}", None)
 
-            # Normal return means pass
+            # Normal return means pass. A scan_raw_request step is block-only,
+            # same contract as run_in_parallel/scan_raw_request elsewhere: any
+            # data it returned is discarded, since applying it on top of the
+            # raw snapshot would silently undo whatever an earlier step in
+            # this pipeline already did.
             modified_data = None
-            if response is not None and isinstance(response, dict):
+            if response is not None and isinstance(response, dict) and not scans_raw_request:
                 modified_data = response
             return ("pass", modified_data, None, None)
 
@@ -214,6 +239,12 @@ class PipelineExecutor:
             else:
                 verbose_proxy_logger.error("Pipeline: unexpected error from guardrail '%s': %s", step.guardrail, e)
                 return ("error", None, str(e), e)
+        finally:
+            if hook_input is not data:
+                _append_guardrail_information(
+                    request_data=data,
+                    entries=_recorded_guardrail_information(hook_input)[snapshot_entries_before:],
+                )
 
     @staticmethod
     def find_guardrail_callback(guardrail_name: str) -> CustomGuardrail | None:
@@ -223,6 +254,79 @@ class PipelineExecutor:
                 if callback.guardrail_name == guardrail_name:
                     return callback
         return None
+
+
+def _allow_result(
+    step_results: Sequence[PipelineStepResult],
+    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+) -> PipelineExecutionResult:
+    """Build the terminal-allow result, propagating pipeline modifications without the per-step guardrail override."""
+    restored: Final = _restore_request_guardrails(working_data, request_data)
+    return PipelineExecutionResult(
+        terminal_action="allow",
+        step_results=list(step_results),  # mutable-ok: PipelineExecutionResult field is a list
+        modified_data=restored if restored != request_data else None,
+    )
+
+
+def _restore_request_guardrails(
+    working_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+) -> dict:  # mutable-ok: merged back into the request dict, which downstream code mutates
+    """
+    Restore the request's own metadata["guardrails"] activation list.
+
+    _run_step overrides it to [step.guardrail] so should_run_guardrail() allows each
+    step; letting that override escape via modified_data permanently drops every
+    independently activated guardrail from later lifecycle stages (post_call, etc.).
+    """
+    working_metadata: Final = working_data.get("metadata")
+    if not isinstance(working_metadata, dict):
+        return working_data
+    request_metadata: Final = request_data.get("metadata")
+    original_guardrails: Final = request_metadata.get("guardrails") if isinstance(request_metadata, dict) else None
+    stripped: Final = {k: v for k, v in working_metadata.items() if k != "guardrails"}  # mutable-ok: request dict
+    if original_guardrails is not None:
+        restored: Final = {**stripped, "guardrails": original_guardrails}  # mutable-ok: request dict
+        return {**working_data, "metadata": restored}  # mutable-ok: request dict
+    if not stripped and not isinstance(request_metadata, dict):
+        return {k: v for k, v in working_data.items() if k != "metadata"}  # mutable-ok: request dict
+    return {**working_data, "metadata": stripped}  # mutable-ok: request dict
+
+
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+
+
+def _recorded_guardrail_information(source: Mapping[str, object]) -> list[StandardLoggingGuardrailInformation]:
+    bucket: Final = source.get(get_metadata_variable_name_from_kwargs(source))
+    recorded: Final = bucket.get(_GUARDRAIL_INFORMATION_KEY) if isinstance(bucket, dict) else None
+    return recorded if isinstance(recorded, list) else []
+
+
+def _append_guardrail_information(
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    entries: Sequence[StandardLoggingGuardrailInformation],
+) -> None:
+    if not entries:
+        return
+    _, request_bucket = get_or_create_metadata_bucket(request_data)
+    existing: Final = request_bucket.get(_GUARDRAIL_INFORMATION_KEY)
+    if isinstance(existing, list):
+        existing.extend(entries)
+        return
+    request_bucket[_GUARDRAIL_INFORMATION_KEY] = list(entries)
+
+
+def _carry_working_guardrail_information(
+    working_data: Mapping[str, object],
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+) -> None:
+    recorded: Final = _recorded_guardrail_information(working_data)
+    existing: Final = _recorded_guardrail_information(request_data)
+    if recorded is existing:
+        return
+    _append_guardrail_information(request_data=request_data, entries=[e for e in recorded if e not in existing])
 
 
 def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:

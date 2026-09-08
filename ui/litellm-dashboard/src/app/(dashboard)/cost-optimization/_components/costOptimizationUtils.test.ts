@@ -7,10 +7,12 @@ import {
   SAVINGS_DRIVERS,
   SAVINGS_SERIES,
   buildDailyToolSeries,
+  classificationRatePer1kTurns,
   computeCacheLeakage,
   formatRangeLabel,
   isAnthropicModel,
   localIsoDay,
+  savingsSeriesOf,
   toCumulative,
   topToolsBySpend,
   usd,
@@ -64,6 +66,28 @@ const modelDay = (date: string, models: Record<string, Partial<SpendMetrics>>): 
     entities: {},
     api_keys: {},
   },
+});
+
+describe("savingsSeriesOf", () => {
+  it("plots the LiteLLM-injected caching share, sorted oldest first", () => {
+    // Total and injected caching deliberately differ: every chart derives from
+    // SAVINGS_DRIVERS, so the caching series must follow the injected figure.
+    const sharedSavings: Partial<SpendMetrics> = {
+      compression_savings_spend: 0.1,
+      prompt_caching_savings_spend: 0.5,
+      autorouter_savings_spend: 0.05,
+    };
+    const newestFirst = [day("2026-07-02", {}), day("2026-07-01", {})].map((d, i) => ({
+      ...d,
+      metrics: metrics({ ...sharedSavings, gateway_injected_caching_savings_spend: i === 0 ? 0.2 : 0.3 }),
+    }));
+
+    const series = savingsSeriesOf(newestFirst);
+
+    expect(series.map((p) => p.date)).toEqual(["Jul 1", "Jul 2"]);
+    expect(series[0]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.3, "Auto-router": 0.05 });
+    expect(series[1]).toMatchObject({ Compression: 0.1, "Prompt caching": 0.2, "Auto-router": 0.05 });
+  });
 });
 
 describe("computeCacheLeakage", () => {
@@ -375,6 +399,23 @@ describe("usd", () => {
     expect(usd(-0.05)).toBe("-$0.0500");
     expect(usd(-0.0004)).toBe("-$0.0004");
     expect(usd(-12.4)).toBe("-$12.40");
+  });
+});
+
+describe("classificationRatePer1kTurns", () => {
+  it("normalizes total classification cost to one thousand turns", () => {
+    expect(classificationRatePer1kTurns(342.18, 140815)).toBe("($2.43 / 1K turns)");
+    expect(classificationRatePer1kTurns(0.0004, 100)).toBe("($0.0040 / 1K turns)");
+  });
+
+  it("shows a floor instead of rounding a real cost down to zero", () => {
+    expect(classificationRatePer1kTurns(0.00001, 1000)).toBe("(<$0.0001 / 1K turns)");
+    expect(classificationRatePer1kTurns(0.0001, 1000)).toBe("($0.0001 / 1K turns)");
+  });
+
+  it("reports zero when there are no turns or no classification cost", () => {
+    expect(classificationRatePer1kTurns(0, 0)).toBe("($0.00 / 1K turns)");
+    expect(classificationRatePer1kTurns(0, 100)).toBe("($0.00 / 1K turns)");
   });
 });
 
