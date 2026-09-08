@@ -15,6 +15,7 @@ import pytest
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.utils import LlmProviders
@@ -325,7 +326,7 @@ class TestPerplexityResponsesTransformation:
             model="preset/pro-search",
             input="What is AI?",
             response_api_optional_request_params={"temperature": 0.7},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -345,7 +346,7 @@ class TestPerplexityResponsesTransformation:
             model="preset/pro-search",
             input=list_input,
             response_api_optional_request_params={"temperature": 0.7},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -366,7 +367,7 @@ class TestPerplexityResponsesTransformation:
             model="openai/gpt-5.2",
             input=list_input,
             response_api_optional_request_params={},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -386,7 +387,7 @@ class TestPerplexityResponsesTransformation:
             model="openai/gpt-5.2",
             input=list_input,
             response_api_optional_request_params={},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -406,7 +407,7 @@ class TestPerplexityResponsesTransformation:
             model="openai/gpt-5.2",
             input=list_input,
             response_api_optional_request_params={},
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
             headers={},
         )
 
@@ -416,18 +417,18 @@ class TestPerplexityResponsesTransformation:
         """Correct endpoint URL"""
         config = PerplexityResponsesConfig()
 
-        url = config.get_complete_url(api_base=None, litellm_params={})
+        url = config.get_complete_url(api_base=None, litellm_params=GenericLiteLLMParams())
         assert url == "https://api.perplexity.ai/v1/responses"
 
         custom_url = config.get_complete_url(
             api_base="https://custom.perplexity.ai",
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
         )
         assert custom_url == "https://custom.perplexity.ai/v1/responses"
 
         url_with_slash = config.get_complete_url(
             api_base="https://api.perplexity.ai/",
-            litellm_params={},
+            litellm_params=GenericLiteLLMParams(),
         )
         assert url_with_slash == "https://api.perplexity.ai/v1/responses"
 

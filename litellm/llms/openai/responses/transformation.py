@@ -26,7 +26,7 @@ from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, should_preserve_cache_control_for_endpoint
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 OPENAI_RESPONSES_API_MIN_MAX_OUTPUT_TOKENS: Final = 16
@@ -289,9 +289,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
     ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
         validated_input: Final = self._validate_input_param(input)
-        stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
-            model=model, input=validated_input, tools=tools
-        )
+        # An OpenAI-compatible endpoint behind the generic `openai` provider can understand
+        # cache_control, and the chat path already keeps it there. Stripping it here anyway
+        # is what makes the same deployment lose prompt caching on the responses route.
+        if should_preserve_cache_control_for_endpoint(litellm_params.custom_llm_provider, litellm_params.api_base):
+            stripped_input, stripped_tools = validated_input, tools
+        else:
+            stripped_input, stripped_tools = self.remove_cache_control_flag_from_input_and_tools(
+                model=model, input=validated_input, tools=tools
+            )
         object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
         sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(
             model=model, tools=object_schema_tools, litellm_params=litellm_params

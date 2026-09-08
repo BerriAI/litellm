@@ -35,6 +35,32 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 
 
+def should_preserve_cache_control_for_endpoint(
+    custom_llm_provider: str | None,
+    api_base: str | None,
+) -> bool:
+    """
+    The generic `openai` provider also reaches OpenAI-compatible endpoints
+    (a LiteLLM proxy, vLLM, an Anthropic-compatible gateway) via a custom
+    api_base. Those can understand cache_control, so it must survive there.
+    Real OpenAI cannot, so it is still stripped for an openai.com host.
+
+    Shared by the chat completions and responses transformers so the two
+    paths make the same call for the same deployment.
+    """
+    if custom_llm_provider != "openai":
+        return False
+    resolved_api_base: Final = (
+        api_base or litellm.api_base or os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE")
+    )
+    if not resolved_api_base:
+        return False
+    hostname: Final = urlsplit(resolved_api_base).hostname
+    if hostname is None:
+        return False
+    return hostname != "openai.com" and not hostname.endswith(".openai.com")
+
+
 def _get_client_init_params(cls: type) -> tuple[str, ...]:
     """Extract __init__ parameter names (excluding 'self') from a class."""
     return tuple(p for p in inspect.signature(cls.__init__).parameters if p != "self")
