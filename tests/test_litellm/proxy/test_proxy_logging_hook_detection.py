@@ -672,6 +672,32 @@ async def test_deferred_stream_guardrails_run_native_hook_when_opted_out(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_deferred_stream_guardrails_skip_pipeline_managed_native_hook(monkeypatch):
+    """A post_call pipeline step already ran the opted-out guardrail's own hook against
+    the buffered stream, so the deferred audit must not run it a second time."""
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+    from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    pipeline_managed = _KeepsNativeHooks(event_hook=GuardrailEventHooks.post_call, default_on=True)
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_managed])
+    pipeline = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="keeps_native", on_fail="block")])
+
+    await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+        captured_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"_guardrail_pipelines": [("response-governance", pipeline)]},
+        },
+        captured_user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+        captured_logging_obj=_streaming_logging_obj(),
+        assembled_response=ModelResponse(choices=[Choices(message=Message(role="assistant", content="hello"))]),
+        cache_hit=False,
+    )
+
+    assert pipeline_managed.native_hooks_ran == []
+
+
+@pytest.mark.asyncio
 async def test_realtime_guardrails_skip_opted_out_guardrail(monkeypatch):
     """The realtime path calls apply_guardrail directly, so the opt-out has to be
     honored there too or a request-traffic guardrail starts blocking live sessions."""

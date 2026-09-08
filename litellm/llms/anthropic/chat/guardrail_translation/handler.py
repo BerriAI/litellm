@@ -176,6 +176,11 @@ class AnthropicMessagesHandler(BaseTranslation):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
 
+    def post_call_hook_response(self, response: object) -> object:
+        if not isinstance(response, ModelResponse):
+            return response
+        return self.adapter.translate_openai_response_to_anthropic(response)
+
     @staticmethod
     def _build_streaming_usage_response(
         responses_so_far: Sequence[object],

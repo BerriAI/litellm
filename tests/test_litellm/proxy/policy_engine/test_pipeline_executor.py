@@ -534,7 +534,6 @@ async def test_guardrail_not_found_uses_on_fail(monkeypatch):
         ],
     )
 
-    monkeypatch.setattr(litellm, "callbacks", [])
 
     result = await PipelineExecutor.execute_steps(
         steps=pipeline.steps,
@@ -1150,6 +1149,155 @@ async def test_streaming_step_restores_chunks_when_translation_refuses_the_rewri
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_streaming_step(_RefusingTranslation(), chunks)
+
+    _assert_passed_with_discard_warning(result, caplog)
+    assert chunks == [_chunk()]
+
+
+class _LegacyHookGuardrail(CustomGuardrail):
+    """A guardrail with only the legacy post-call hook: it never defines apply_guardrail."""
+
+    def __init__(self, replacement=None, raises=None):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+        self.replacement = replacement
+        self.raises = raises
+        self.calls = []
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        self.calls.append({"data": data, "user_api_key_dict": user_api_key_dict, "response": response})
+        if self.raises is not None:
+            raise self.raises
+        return self.replacement
+
+
+class _NativeHooksGuardrail(_LegacyHookGuardrail):
+    use_native_lifecycle_hooks = True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        raise AssertionError("a guardrail that keeps its native hooks never runs apply_guardrail")
+
+
+class _LegacyScanningTranslation:
+    """Stores the assembled response under request_data["response"] before scanning, like the
+    chat, Responses, and Messages handlers, hands hooks a route-native shape, and re-extracts one
+    text per entry of a replacement's "texts"."""
+
+    delivers_ended_stream_text_rewrites = True
+
+    def post_call_hook_response(self, response):
+        return {"native": True, "text": response["text"]}
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far,
+        guardrail_to_apply,
+        litellm_logging_obj=None,
+        user_api_key_dict=None,
+        request_data=None,
+        deliver_ended_stream_rewrites=False,
+    ):
+        request_data.setdefault("response", {"text": responses_so_far[0]["text"]})
+        outputs = await guardrail_to_apply.apply_guardrail(
+            inputs={"texts": [responses_so_far[0]["text"]]},
+            request_data=request_data,
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        responses_so_far[0]["text"] = outputs["texts"][0]
+        return responses_so_far
+
+    async def process_output_response(
+        self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None, request_data=None
+    ):
+        await guardrail_to_apply.apply_guardrail(
+            inputs={"texts": list(response["texts"])},
+            request_data={"response": response},
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        return response
+
+
+async def _run_legacy_streaming_step(monkeypatch, guardrail, chunks, on_fail="block", on_error="next"):
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    return await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="masker", on_pass="allow", on_fail=on_fail, on_error=on_error)],
+        mode="post_call",
+        data={"model": "m"},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="p",
+        streaming_chunks=chunks,
+        endpoint_translation=_LegacyScanningTranslation(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guardrail_class", [_LegacyHookGuardrail, _NativeHooksGuardrail])
+async def test_streaming_step_runs_legacy_hook_and_delivers_its_rewrite(monkeypatch, caplog, guardrail_class):
+    guardrail = guardrail_class(replacement={"texts": ["[REWRITTEN] hello world"]})
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    assert chunks[0]["text"] == "[REWRITTEN] hello world"
+    assert [call["response"] for call in guardrail.calls] == [{"native": True, "text": "hello world"}]
+    assert guardrail.calls[0]["data"]["model"] == "m"
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_passes_untouched_when_legacy_hook_returns_none(monkeypatch, caplog):
+    guardrail = _LegacyHookGuardrail(replacement=None)
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
+
+    assert result.terminal_action == "allow"
+    assert len(guardrail.calls) == 1
+    assert chunks == [_chunk()]
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_streaming_step_blocks_with_the_legacy_hook_exception(monkeypatch):
+    exc = HTTPException(status_code=400, detail={"error": "output blocked"})
+    chunks = [_chunk()]
+
+    result = await _run_legacy_streaming_step(monkeypatch, _LegacyHookGuardrail(raises=exc), chunks)
+
+    assert result.terminal_action == "block"
+    assert [step.outcome for step in result.step_results] == ["fail"]
+    assert result.original_exception is exc
+    assert chunks == [_chunk()]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_takes_on_error_when_legacy_hook_crashes(monkeypatch):
+    chunks = [_chunk()]
+
+    result = await _run_legacy_streaming_step(
+        monkeypatch, _LegacyHookGuardrail(raises=ValueError("boom")), chunks, on_error="block"
+    )
+
+    assert result.terminal_action == "block"
+    assert [step.outcome for step in result.step_results] == ["error"]
+    assert result.step_results[0].error_detail == "boom"
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_discards_legacy_rewrite_whose_texts_do_not_line_up(monkeypatch, caplog):
+    guardrail = _LegacyHookGuardrail(replacement={"texts": ["split", "in two"]})
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
 
     _assert_passed_with_discard_warning(result, caplog)
     assert chunks == [_chunk()]

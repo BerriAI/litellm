@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from copy import deepcopy
 import logging
 from typing import Any, Callable, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1497,29 +1498,78 @@ async def _async_chunk_iter(chunks: List[Any]):
         yield chunk
 
 
-def test_streamable_post_call_pipelines_keeps_supported_and_drops_unsupported(
+def _legacy_hook_stream_guardrail(
+    seen: Dict[str, Any],
+    rewrite: Callable[[Any], Any] | None = None,
+    raises: Exception | None = None,
+    native_lifecycle: bool = False,
+) -> CustomGuardrail:
+    class LegacyHookGuardrail(CustomGuardrail):
+        use_native_lifecycle_hooks = native_lifecycle
+
+        async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+            seen["count"] = seen.get("count", 0) + 1
+            seen["data"] = data
+            seen["user_api_key_dict"] = user_api_key_dict
+            seen["response"] = deepcopy(response)
+            if raises is not None:
+                raise raises
+            return None if rewrite is None else rewrite(response)
+
+    if native_lifecycle:
+
+        class NativeLifecycleGuardrail(LegacyHookGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                raise AssertionError("a guardrail that keeps its native hooks never runs apply_guardrail")
+
+        return NativeLifecycleGuardrail(
+            guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False
+        )
+    return LegacyHookGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)
+
+
+def _iterator_hook_only_guardrail(name: str, seen: Dict[str, Any]) -> CustomGuardrail:
+    class IteratorHookGuardrail(CustomGuardrail):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            seen["count"] = seen.get("count", 0) + 1
+            async for item in response:
+                item.choices[0].delta.content = f"[governed] {item.choices[0].delta.content}"
+                yield item
+
+    return IteratorHookGuardrail(guardrail_name=name, event_hook=GuardrailEventHooks.post_call, default_on=True)
+
+
+def _rewritten_model_response(response: Any) -> litellm.ModelResponse:
+    payload = response.model_dump()
+    payload["choices"][0]["message"]["content"] = "[REWRITTEN] " + payload["choices"][0]["message"]["content"]
+    return litellm.ModelResponse(**payload)
+
+
+def test_streamable_post_call_pipelines_keeps_hook_guardrails_and_drops_iterator_only(
     make_user_api_key_auth, monkeypatch, caplog
 ):
-    class NativeOnlyGuardrail(CustomGuardrail):
-        pass
-
     supported = _unified_stream_guardrail({})
-    native_only = NativeOnlyGuardrail(guardrail_name="gr-native", event_hook=GuardrailEventHooks.post_call)
-    monkeypatch.setattr(litellm, "callbacks", [supported, native_only])
-    governed = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="gr-post", on_fail="block")])
+    legacy = _legacy_hook_stream_guardrail({})
+    legacy.guardrail_name = "gr-legacy"
+    iterator_only = _iterator_hook_only_guardrail("gr-iterator", {})
+    monkeypatch.setattr(litellm, "callbacks", [supported, legacy, iterator_only])
+    governed = GuardrailPipeline(
+        mode="post_call",
+        steps=[PipelineStep(guardrail="gr-post", on_fail="next"), PipelineStep(guardrail="gr-legacy", on_fail="block")],
+    )
     ungoverned = GuardrailPipeline(
         mode="post_call",
-        steps=[PipelineStep(guardrail="gr-post", on_fail="next"), PipelineStep(guardrail="gr-native", on_fail="block")],
+        steps=[PipelineStep(guardrail="gr-post", on_fail="next"), PipelineStep(guardrail="gr-iterator", on_fail="block")],
     )
-    pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="gr-native", on_fail="block")])
+    pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="gr-iterator", on_fail="block")])
     data = {"metadata": {"_guardrail_pipelines": [("governed", governed), ("ungoverned", ungoverned), ("req", pre_call)]}}
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         streamable = _streamable_post_call_pipelines(data, make_user_api_key_auth(request_route="/v1/chat/completions"))
 
     assert streamable == (("governed", governed),)
-    assert any("'ungoverned'" in message and "gr-native" in message for message in _warnings(caplog))
-    assert not any("'governed'" in message for message in _warnings(caplog))
+    assert any("'ungoverned'" in message and "gr-iterator" in message for message in _warnings(caplog))
+    assert not any("'governed'" in message or "gr-legacy" in message for message in _warnings(caplog))
 
 
 def test_streamable_post_call_pipelines_is_empty_on_route_without_translation(
@@ -1569,55 +1619,123 @@ async def test_pre_call_hook_allows_streaming_when_pipeline_guardrail_supports_u
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native_lifecycle", [False, True])
-async def test_streaming_iterator_hook_releases_stream_when_pipeline_guardrail_lacks_unified_support(
+async def test_streaming_iterator_hook_runs_legacy_hook_and_delivers_its_rewrite(
     proxy_logging, make_user_api_key_auth, monkeypatch, native_lifecycle, caplog
 ):
     seen: Dict[str, Any] = {}
-    if native_lifecycle:
-
-        class NativeOnlyGuardrail(CustomGuardrail):
-            use_native_lifecycle_hooks = True
-
-            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
-                seen["count"] = seen.get("count", 0) + 1
-                return inputs
-
-    else:
-
-        class NativeOnlyGuardrail(CustomGuardrail):
-            async def async_post_call_success_hook(self, data, user_api_key_dict, response):
-                seen["count"] = seen.get("count", 0) + 1
-                return response
-
-    monkeypatch.setattr(
-        litellm,
-        "callbacks",
-        [NativeOnlyGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)],
-    )
+    guardrail = _legacy_hook_stream_guardrail(seen, rewrite=_rewritten_model_response, native_lifecycle=native_lifecycle)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
     data = _post_call_pipeline_data(stream=True)
     chunks = _stream_chunks()
-    delivered: List[Any] = []
+    auth = make_user_api_key_auth(request_route="/v1/chat/completions")
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         out = await proxy_logging.pre_call_hook(
-            user_api_key_dict=make_user_api_key_auth(),
-            data=data,
-            call_type="completion",
-            guardrails_only=True,
+            user_api_key_dict=auth, data=data, call_type="completion", guardrails_only=True
         )
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=auth, response=_async_chunk_iter(chunks), request_data=data
+            )
+        ]
+
+    assert out is not None and out.get("stream") is True
+    assert seen["count"] == 1
+    assert isinstance(seen["response"], litellm.ModelResponse)
+    assert seen["response"].choices[0].message.content == "hello world"
+    assert seen["data"]["messages"] == data["messages"]
+    assert seen["user_api_key_dict"] is auth
+    assert [id(item) for item in delivered] == [id(chunk) for chunk in chunks]
+    assert delivered[0].choices[0].delta.content == "[REWRITTEN] hello world"
+    assert delivered[1].choices[0].delta.content in (None, "")
+    assert delivered[1].choices[0].finish_reason == "stop"
+    assert data["metadata"]["applied_guardrails"] == ["gr-post"]
+    assert _warnings(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_releases_stream_untouched_when_legacy_hook_returns_none(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_legacy_hook_stream_guardrail(seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+    chunks = _stream_chunks()
+
+    delivered = [
+        item
         async for item in proxy_logging.async_post_call_streaming_iterator_hook(
             user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
             response=_async_chunk_iter(chunks),
             request_data=data,
+        )
+    ]
+
+    assert seen["count"] == 1
+    assert [id(item) for item in delivered] == [id(chunk) for chunk in chunks]
+    assert [item.choices[0].delta.content for item in delivered] == ["hello ", "world"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_ends_stream_with_legacy_hook_exception(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+    blocked = HTTPException(status_code=400, detail={"error": "output blocked"})
+    monkeypatch.setattr(litellm, "callbacks", [_legacy_hook_stream_guardrail(seen, raises=blocked)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+    delivered: List[Any] = []
+
+    async def _drain() -> None:
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+            response=_async_chunk_iter(_stream_chunks()),
+            request_data=data,
         ):
             delivered.append(item)
 
-    assert out is not None
-    assert out.get("stream") is True
-    assert [item is chunk for item, chunk in zip(delivered, chunks)] == [True, True]
-    assert len(delivered) == 2
-    assert seen.get("count") is None
-    assert any("'response-governance'" in message and "gr-post" in message for message in _warnings(caplog))
+    with pytest.raises(HTTPException) as info:
+        await _drain()
+
+    assert seen["count"] == 1
+    assert delivered == []
+    assert info.value is blocked
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_delivers_legacy_hook_rewrite_on_anthropic_sse(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+
+    def rewrite(response: Any) -> Dict[str, Any]:
+        return {**response, "content": [{"type": "text", "text": "[REWRITTEN] " + response["content"][0]["text"]}]}
+
+    monkeypatch.setattr(litellm, "callbacks", [_legacy_hook_stream_guardrail(seen, rewrite=rewrite)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    delivered = [
+        item
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/messages"),
+            response=_async_chunk_iter(_anthropic_sse_chunks()),
+            request_data=data,
+        )
+    ]
+
+    assert seen["count"] == 1
+    assert seen["response"]["content"][0]["text"] == "hello world"
+    assert seen["response"]["role"] == "assistant"
+    raw = b"".join(delivered).decode()
+    assert "[REWRITTEN] hello world" in raw
+    assert raw.count("event: content_block_delta") == 1
+    for expected_event in ("message_start", "content_block_start", "content_block_stop", "message_delta", "message_stop"):
+        assert f"event: {expected_event}" in raw
 
 
 @pytest.mark.asyncio
@@ -1625,19 +1743,7 @@ async def test_streaming_iterator_hook_runs_iterator_hook_guardrail_whose_pipeli
     proxy_logging, make_user_api_key_auth, monkeypatch, caplog
 ):
     seen: Dict[str, Any] = {}
-
-    class IteratorHookGuardrail(CustomGuardrail):
-        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
-            seen["count"] = seen.get("count", 0) + 1
-            async for item in response:
-                item.choices[0].delta.content = f"[governed] {item.choices[0].delta.content}"
-                yield item
-
-    monkeypatch.setattr(
-        litellm,
-        "callbacks",
-        [IteratorHookGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=True)],
-    )
+    monkeypatch.setattr(litellm, "callbacks", [_iterator_hook_only_guardrail("gr-post", seen)])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
     data = _post_call_pipeline_data(stream=True)
 
