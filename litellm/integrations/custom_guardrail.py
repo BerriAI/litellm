@@ -46,6 +46,7 @@ dc: Final = DualCache()
 
 from litellm.constants import (
     GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
+    LOGS_GUARDRAIL_INFORMATION_MARKER,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
 )
 from litellm.exceptions import (
@@ -150,6 +151,13 @@ class CustomGuardrail(CustomLogger):
     use_native_lifecycle_hooks: ClassVar[bool] = False
 
     records_own_guardrail_information: ClassVar[bool] = False
+
+    def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
+        super().__init_subclass__(**kwargs)
+        own_apply_guardrail: Final = cls.__dict__.get("apply_guardrail")
+        if own_apply_guardrail is None or LOGS_GUARDRAIL_INFORMATION_MARKER in vars(own_apply_guardrail):
+            return
+        cls.apply_guardrail = log_guardrail_information(own_apply_guardrail)
 
     def __init__(
         self,
@@ -940,6 +948,23 @@ class CustomGuardrail(CustomLogger):
         """
         return False
 
+    def _suppressed_by_auto_router_compression(self) -> bool:
+        """True when an auto router's own compression policy suppresses this guardrail.
+
+        Reads request-scoped state set by `arm_pre_call`, never request metadata. The
+        caller controls metadata, and metadata reaches spend logs the caller can read,
+        so a suppression list carried there would be one a request could replay to
+        switch off a PII or content-filter guardrail for itself.
+        """
+        name: Final = self.guardrail_name
+        if not name:
+            return False
+        from litellm.proxy.guardrails.auto_router_compression import (
+            suppressed_compression_guardrails,
+        )
+
+        return name in suppressed_compression_guardrails()
+
     def should_run_guardrail(
         self,
         data,
@@ -948,6 +973,9 @@ class CustomGuardrail(CustomLogger):
         """
         Returns True if the guardrail should be run on the event_type
         """
+        if self._suppressed_by_auto_router_compression():
+            return False
+
         requested_guardrails: Final = self.get_guardrail_from_metadata(data)
         disable_global_guardrail: Final = self.get_disable_global_guardrail(data)
         opted_out_global_guardrails: Final = self.get_opted_out_global_guardrails_from_metadata(data)
@@ -1559,4 +1587,5 @@ def log_guardrail_information(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)
 
+    vars(wrapper)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True  # rebind-ok: stamps the wrapper this call just built
     return wrapper

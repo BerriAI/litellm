@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { LogDetailContent } from "./LogDetailContent";
+import { GuardrailJumpLink, LogDetailContent } from "./LogDetailContent";
 import type { LogEntry } from "../columns";
 
 vi.mock("../GuardrailViewer/GuardrailViewer", () => ({
@@ -487,5 +487,19 @@ describe("LogDetailContent", () => {
     const descriptions = screen.getByText("Provider").parentElement as HTMLElement;
     expect(descriptions).toBeInTheDocument();
     expect(within(descriptions).getByText("-")).toBeInTheDocument();
+  });
+});
+
+describe("GuardrailJumpLink", () => {
+  it.each([
+    [["success", "success"], "text-success", "\u2713"],
+    [["success", "guardrail_flagged"], "text-warning", "\u26A0"],
+    [["guardrail_flagged", "guardrail_intervened"], "text-destructive", "\u2717"],
+  ])("styles %j as %s", (statuses, expectedClass, glyph) => {
+    render(<GuardrailJumpLink guardrailEntries={statuses.map((s) => ({ guardrail_status: s }))} />);
+
+    const pill = screen.getByText(/2 guardrails evaluated/);
+    expect(pill).toHaveClass(expectedClass);
+    expect(pill).toHaveTextContent(glyph);
   });
 });

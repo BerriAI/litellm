@@ -451,6 +451,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
 
       <DataTable
         data={toolsets}
+        paginationMode="client"
         columns={columns}
         getRowId={(toolset, index) => toolset.toolset_id || String(index)}
         sortingMode="client"

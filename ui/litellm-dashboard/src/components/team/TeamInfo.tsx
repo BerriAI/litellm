@@ -74,6 +74,15 @@ import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import {
+  mcpServersForIdentifier,
+  resolveEffectiveMcpServers,
+  type EffectiveMcpServer,
+} from "../mcp_server_management/effectiveMcpServers";
+import type { MCPServer } from "../mcp_tools/types";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
+import { useAccessGroups, type AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import { estimateChecks, estimateTooltips } from "../templates/estimatedOutputTokens";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -117,6 +126,110 @@ const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
 
 const teamModelBadgeHref = (badge: TeamModelBadge): string | undefined =>
   badge.kind === "direct" || badge.kind === "access-group" ? modelGroupHref(badge.label) : undefined;
+
+export type McpGrantResolution =
+  | { readonly kind: "resolved"; readonly serverIds: ReadonlySet<string> }
+  | { readonly kind: "unresolvable"; readonly reason: string };
+
+export type TeamAccessGroupGrants = {
+  readonly ids: readonly string[];
+  readonly serverIds: readonly string[];
+};
+
+const sameIdSelection = (a: readonly string[], b: readonly string[]): boolean => {
+  const aSet = new Set(a);
+  const bSet = new Set(b);
+  return aSet.size === bSet.size && [...aSet].every((id) => bSet.has(id));
+};
+
+export const standingToolPermissionServerIds = (
+  loadedEffectiveServers: readonly EffectiveMcpServer[],
+  loadedAccessGroupIds: readonly string[],
+  accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[],
+  loadedTeamGroupServerIds: readonly string[],
+): ReadonlySet<string> => {
+  const loadedUnifiedServerIds = new Set([
+    ...accessGroups
+      .filter((group) => loadedAccessGroupIds.includes(group.access_group_id))
+      .flatMap((group) => group.access_mcp_server_ids),
+    ...loadedTeamGroupServerIds,
+  ]);
+  return new Set(
+    loadedEffectiveServers
+      .filter(({ source, server }) => source.kind === "toolPermission" && !loadedUnifiedServerIds.has(server.server_id))
+      .map(({ server }) => server.server_id),
+  );
+};
+
+export type McpGrantInput = {
+  readonly effectiveServers: readonly EffectiveMcpServer[];
+  readonly selectedAccessGroupIds: readonly string[];
+  readonly accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[];
+  readonly standingServerIds: ReadonlySet<string>;
+  readonly loadTeamGroups: () => Promise<TeamAccessGroupGrants>;
+};
+
+export const grantedMcpServerIds = async ({
+  effectiveServers,
+  selectedAccessGroupIds,
+  accessGroups,
+  standingServerIds,
+  loadTeamGroups,
+}: McpGrantInput): Promise<McpGrantResolution> => {
+  const selectedGroups = accessGroups.filter((group) => selectedAccessGroupIds.includes(group.access_group_id));
+  const direct = effectiveServers
+    .filter(({ source }) => source.kind !== "toolPermission")
+    .map(({ server }) => server.server_id);
+  if (selectedAccessGroupIds.every((id) => selectedGroups.some((group) => group.access_group_id === id))) {
+    return {
+      kind: "resolved",
+      serverIds: new Set([
+        ...direct,
+        ...selectedGroups.flatMap((group) => group.access_mcp_server_ids),
+        ...standingServerIds,
+      ]),
+    };
+  }
+  const loadedTeamGroups = await loadTeamGroups().catch(() => null);
+  if (loadedTeamGroups === null) {
+    return { kind: "unresolvable", reason: "the team's access groups could not be reloaded" };
+  }
+  if (sameIdSelection(selectedAccessGroupIds, loadedTeamGroups.ids)) {
+    return {
+      kind: "resolved",
+      serverIds: new Set([...direct, ...loadedTeamGroups.serverIds, ...standingServerIds]),
+    };
+  }
+  return { kind: "unresolvable", reason: "the team's access groups could not be loaded" };
+};
+
+export const retainedMcpToolPermissions = (
+  toolPermissions: Record<string, string[]>,
+  grantedServerIds: ReadonlySet<string>,
+  knownServers: readonly MCPServer[],
+): Record<string, string[]> => {
+  const entries = Object.entries(toolPermissions).flatMap(([key, tools]) => {
+    const named = mcpServersForIdentifier(knownServers, key);
+    const granted = named.filter((server) => grantedServerIds.has(server.server_id));
+    if (named.length === 0 || granted.length === named.length) {
+      return [[key, tools] as const];
+    }
+    if (granted.length === 0) {
+      return [];
+    }
+    return granted.map(({ server_id }) => [server_id, [...(toolPermissions[server_id] ?? []), ...tools]] as const);
+  });
+  return entries.reduce<Record<string, string[]>>(
+    (retained, [key, tools]) => ({
+      ...retained,
+      [key]: [...new Set([...(retained[key] ?? []), ...tools])],
+    }),
+    {},
+  );
+};
+
+export const mcpUnresolvableSaveError = (reason: string): string =>
+  `Cannot save MCP tool permissions because ${reason}. Retry once the page has finished loading`;
 
 export interface TeamMembership {
   user_id: string;
@@ -442,6 +555,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
+  const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
+  const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
+  const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
   const canEditTeamEstimates = isProxyAdminRole(userRole);
   const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
   const { data: userOrganizations = [] } = useOrganizations();
@@ -462,6 +578,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const killSwitchOn = form.watch("disable_global_guardrails");
   const watchedMcpSelection = form.watch("mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
+  const mcpLookupFailure =
+    (
+      [
+        [mcpServersFailed, "the MCP server list could not be loaded"],
+        [mcpToolsetsFailed, "the MCP toolset list could not be loaded"],
+        [accessGroupsFailed, "the access group list could not be loaded"],
+        [mcpServersLoading || mcpToolsetsLoading || accessGroupsLoading, "the MCP server inventory is still loading"],
+      ] as const
+    ).find(([failed]) => failed)?.[1] ?? null;
   const availableRateLimitModels = useMemo(() => {
     const selected = watchedModels ?? teamData?.team_info?.models ?? [];
     if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
@@ -837,10 +962,56 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         accessGroups: [],
         toolsets: [],
       };
-      const serverIds = new Set(servers || []);
-      const mcpToolPermissions = Object.fromEntries(
-        Object.entries(values.mcp_tool_permissions || {}).filter(([serverId]) => serverIds.has(serverId)),
+      const submittedToolPermissions: Record<string, string[]> = values.mcp_tool_permissions || {};
+      const effectiveMcpInput = {
+        allServers: allMcpServers,
+        selectedServers: servers || [],
+        selectedAccessGroups: accessGroups || [],
+        selectedToolsets: toolsets || [],
+        toolsets: allMcpToolsets,
+        toolPermissions: submittedToolPermissions,
+      };
+      const loadedObjectPermission = info.object_permission ?? {};
+      const loadedMcpInput = {
+        allServers: allMcpServers,
+        selectedServers: loadedObjectPermission.mcp_servers ?? [],
+        selectedAccessGroups: loadedObjectPermission.mcp_access_groups ?? [],
+        selectedToolsets: loadedObjectPermission.mcp_toolsets ?? [],
+        toolsets: allMcpToolsets,
+        toolPermissions: loadedObjectPermission.mcp_tool_permissions ?? {},
+      };
+      const loadedEffectiveMcpServers = resolveEffectiveMcpServers(loadedMcpInput);
+      const standingServerIds = standingToolPermissionServerIds(
+        loadedEffectiveMcpServers,
+        info.access_group_ids ?? [],
+        allAccessGroups,
+        info.access_group_mcp_server_ids ?? [],
       );
+      const mcpGrantInput: McpGrantInput = {
+        effectiveServers: resolveEffectiveMcpServers(effectiveMcpInput),
+        selectedAccessGroupIds: values.access_group_ids || [],
+        accessGroups: allAccessGroups,
+        standingServerIds,
+        loadTeamGroups: async () => {
+          const teamInfo = await teamInfoCall(accessToken, teamId);
+          return {
+            ids: teamInfo.team_info.access_group_ids ?? [],
+            serverIds: teamInfo.team_info.access_group_mcp_server_ids ?? [],
+          };
+        },
+      };
+      const mcpResolution: McpGrantResolution =
+        mcpLookupFailure !== null
+          ? { kind: "unresolvable", reason: mcpLookupFailure }
+          : await grantedMcpServerIds(mcpGrantInput);
+      if (mcpResolution.kind === "unresolvable" && Object.keys(submittedToolPermissions).length > 0) {
+        toast.fromError(mcpUnresolvableSaveError(mcpResolution.reason));
+        return;
+      }
+      const mcpToolPermissions =
+        mcpResolution.kind === "resolved"
+          ? retainedMcpToolPermissions(submittedToolPermissions, mcpResolution.serverIds, allMcpServers)
+          : submittedToolPermissions;
 
       updateData.object_permission = {};
       if (servers) {
@@ -868,7 +1039,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       delete values.agents_and_groups;
 
       // Handle vector stores permissions
-      if (values.vector_stores && values.vector_stores.length > 0) {
+      if (values.vector_stores) {
         updateData.object_permission.vector_stores = values.vector_stores;
       }
 
@@ -1629,6 +1800,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <MCPToolPermissions
                       accessToken={accessToken || ""}
                       selectedServers={watchedMcpSelection?.servers || []}
+                      selectedAccessGroups={watchedMcpSelection?.accessGroups || []}
+                      selectedToolsets={watchedMcpSelection?.toolsets || []}
                       toolPermissions={watchedToolPermissions || {}}
                       onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
                     />

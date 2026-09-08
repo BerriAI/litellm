@@ -8,6 +8,7 @@ proof-of-fix (real proxy + DB) is performed separately on the repro server.
 
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -455,6 +456,65 @@ async def test_scan_covered_tables_classifies_legacy_and_v2(salt_key, monkeypatc
     assert by_loc["model_table"].plaintext == 1  # "gpt-4" model name, not ciphertext
     assert by_loc["credentials"].already_v2 == 1
     assert by_loc["credentials"].legacy == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("column", ("static_headers", "env"))
+@pytest.mark.parametrize("algorithm", ("xsalsa20-poly1305", "aes-256-gcm"))
+@pytest.mark.parametrize("as_json", (False, True))
+@pytest.mark.parametrize(
+    "case", ("legacy", "encrypted", "wrong-key", "corrupt", "invalid-shape", "invalid-scalar", "empty", "null")
+)
+async def test_check_classifies_mcp_secret_maps(
+    salt_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+    column: str,
+    algorithm: str,
+    as_json: bool,
+    case: str,
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": algorithm})
+    plaintext: Final = {"Authorization": "v2:gcm:operator-text", "CUSTOM": "litellm_enc::literal\n café "}
+    ciphertext: Final = encrypt_value_helper(json.dumps(plaintext))
+    cases: Final[dict[str, object]] = {
+        "legacy": plaintext,
+        "encrypted": ciphertext,
+        "wrong-key": encrypt_value_helper(json.dumps(plaintext), new_encryption_key="different-map-salt"),
+        "corrupt": ciphertext[:-4] + "AAAA",
+        "invalid-shape": encrypt_value_helper(json.dumps({"Authorization": 42})),
+        "invalid-scalar": "null",
+        "empty": {},
+        "null": None,
+    }
+    value: Final = json.dumps(cases[case]) if as_json and case != "null" else cases[case]
+    row: Final = SimpleNamespace(**{column: value})
+    client: Final = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[row])
+    client.db.litellm_mcpservertable.update = AsyncMock()
+    client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+    client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    client.db.litellm_ssoconfig.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    report: Final = await cm.check_encryption(client)
+    expected_legacy: Final = int(case == "legacy" or (case == "encrypted" and algorithm == "xsalsa20-poly1305"))
+    expected_v2: Final = int(case == "encrypted" and algorithm == "aes-256-gcm")
+    expected_invalid: Final = int(case in ("wrong-key", "corrupt", "invalid-shape", "invalid-scalar"))
+
+    assert report.as_dict()["locations"]["mcp_server"] == {
+        "scanned": int(case not in ("empty", "null")),
+        "migrated": 0,
+        "already_v2": expected_v2,
+        "plaintext": 0,
+        "undecryptable": expected_invalid,
+        "legacy": expected_legacy,
+    }
+    assert report.residual_legacy == expected_legacy
+    assert report.total_undecryptable == expected_invalid
+    assert getattr(row, column) == value
+    client.db.litellm_mcpservertable.update.assert_not_awaited()
 
 
 @pytest.mark.asyncio

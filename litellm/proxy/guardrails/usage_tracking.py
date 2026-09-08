@@ -190,14 +190,14 @@ async def _upsert_rows_with_retry(
     return await _upsert_rows_with_retry(retryable, upsert_row, label, sleep, retries_left - 1)
 
 
-def _guardrail_status_to_action(status: str | None) -> str:
+def guardrail_status_to_action(status: str | None) -> str:
     """Map StandardLogging guardrail_status to blocked/passed/flagged."""
     if not status:
         return "passed"
     s: Final = (status or "").lower()
     if "intervened" in s or "block" in s:
         return "blocked"
-    if "fail" in s or "error" in s:
+    if "flagged" in s or "fail" in s or "error" in s:
         return "flagged"
     return "passed"
 
@@ -367,7 +367,7 @@ async def process_spend_logs_guardrail_usage(
                 continue
             key = _MetricsKey(guardrail_id, date_key)
             daily_guardrail[key]["requests_evaluated"] += 1
-            action = _guardrail_status_to_action(entry.get("guardrail_status"))
+            action = guardrail_status_to_action(entry.get("guardrail_status"))
             if action == "passed":
                 daily_guardrail[key]["passed_count"] += 1
             elif action == "blocked":

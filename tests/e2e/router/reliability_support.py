@@ -73,10 +73,25 @@ def create_always_timing_out_deployment(proxy: ProxyClient, name: str) -> str:
     )
 
 
+def create_always_picked_small_context_deployment(proxy: ProxyClient, name: str) -> str:
+    """The always-picked half of a retry pair on the smallest-context model OpenAI
+    still serves: it holds all of the model group's shuffle weight, so an oversized
+    prompt opens on it and earns a real context-window refusal, which never benches
+    a deployment, so only the retry itself can steer the request off it."""
+    return proxy.register_model(
+        ModelNewBody(
+            model_name=name,
+            litellm_params=LiteLLMParamsBody(model=SMALL_CONTEXT_MODEL, api_key=REAL_KEY, weight=1),
+            model_info=ModelInfoBody(),
+        )
+    )
+
+
 def create_zero_weight_backup_deployment(proxy: ProxyClient, name: str) -> str:
     """The other half of a retry pair: healthy, but weight 0, so the weighted shuffle
-    never opens on it. It is reachable only once its sibling is benched and the
-    weighted pick falls through to a uniform one over what is left."""
+    never opens on it. It is reachable only once its sibling is out of the running,
+    benched by a cooldown or skipped by the retry, and the weighted pick falls through
+    to a uniform one over what is left."""
     return proxy.register_model(
         ModelNewBody(
             model_name=name,

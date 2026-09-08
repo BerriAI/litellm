@@ -1,6 +1,7 @@
 
 import json
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -144,6 +145,51 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     )
 
     assert result == 1000
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_cost"),
+    [
+        ("vertex_ai/lyria-002", 0.06),
+        ("vertex_ai/lyria-3-clip-preview", 0.04),
+        ("vertex_ai/lyria-3-pro-preview", 0.08),
+    ],
+)
+@pytest.mark.parametrize("runtime_state", ("complete", "missing", "routing_only", "custom_zero", "custom_price"))
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+def test_vertex_lyria_speech_cost(
+    model: str,
+    expected_cost: float,
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_state: str,
+    call_type: str,
+) -> None:
+    model_info: Final = litellm.model_cost[model]
+    if runtime_state == "missing":
+        monkeypatch.delitem(litellm.model_cost, model)
+    elif runtime_state == "routing_only":
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {key: value for key, value in model_info.items() if key != "output_cost_per_image"},
+        )
+    elif runtime_state in ("custom_zero", "custom_price"):
+        multiplier: Final = 0 if runtime_state == "custom_zero" else 2
+        monkeypatch.setitem(
+            litellm.model_cost,
+            model,
+            {**model_info, "output_cost_per_image": model_info["output_cost_per_image"] * multiplier},
+        )
+
+    cost: Final = completion_cost(
+        model=model,
+        prompt="A bright synth track",
+        call_type=call_type,
+    )
+
+    expected: Final = 0 if runtime_state == "custom_zero" else expected_cost * (2 if runtime_state == "custom_price" else 1)
+    assert cost == pytest.approx(expected)
 
 
 def test_baseten_model_api_pricing_entries(_local_model_cost_map):
@@ -4480,6 +4526,18 @@ def test_explicit_pricing_precedes_private_provider_response_model(
     assert selected == expected
 
 
+def test_cost_per_token_mistral_voxtral_tts_bills_per_input_character(_local_model_cost_map):
+    prompt_usd, completion_usd = cost_per_token(
+        model="voxtral-mini-tts-2603",
+        custom_llm_provider="mistral",
+        call_type="speech",
+        prompt_characters=1000,
+    )
+
+    assert prompt_usd == pytest.approx(1000 * 1.6e-05)
+    assert completion_usd == 0.0
+
+
 def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_model_cost_map):
     """gpt-6-astra batch pricing is 50% off the standard $10 input and $50 output rates per 1M tokens."""
     from litellm.cost_calculator import batch_cost_calculator
@@ -4492,3 +4550,98 @@ def test_batch_cost_calculator_gpt_6_astra_bills_half_the_standard_rate(_local_m
 
     assert prompt_cost == pytest.approx(1000 * 5e-6)
     assert completion_cost == pytest.approx(500 * 2.5e-5)
+
+
+def test_handle_realtime_stream_cost_calculation_bills_nested_reasoning_tokens_once(
+    _local_model_cost_map: None,
+) -> None:
+    """Realtime response.done nests reasoning_tokens inside text_tokens, so they are billed once."""
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-2.1-mini"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "total_tokens": 260,
+                    "input_tokens": 237,
+                    "output_tokens": 23,
+                    "input_token_details": {
+                        "text_tokens": 43,
+                        "audio_tokens": 0,
+                        "image_tokens": 194,
+                        "cached_tokens": 0,
+                        "cached_tokens_details": {"text_tokens": 0, "audio_tokens": 0, "image_tokens": 0},
+                    },
+                    "output_token_details": {"text_tokens": 23, "audio_tokens": 0, "reasoning_tokens": 18},
+                }
+            },
+        },
+    ]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    total_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="azure",
+        litellm_model_name="azure/gpt-realtime-2.1-mini",
+    )
+
+    info = litellm.get_model_info(model="azure/gpt-realtime-2.1-mini", custom_llm_provider="azure")
+    expected = (
+        43 * info["input_cost_per_token"]
+        + 194 * info["input_cost_per_image_token"]
+        + 23 * info["output_cost_per_token"]
+    )
+    assert total_cost == pytest.approx(expected)
+    assert total_cost == pytest.approx(0.0002362)
+
+
+def test_collect_and_combine_realtime_usage_stores_partitioned_text_tokens() -> None:
+    """The combined usage that lands in spend logs keeps reasoning out of text_tokens for every turn."""
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-2.1-mini"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "total_tokens": 307,
+                    "input_tokens": 237,
+                    "output_tokens": 70,
+                    "input_token_details": {
+                        "text_tokens": 43,
+                        "audio_tokens": 0,
+                        "image_tokens": 194,
+                        "cached_tokens": 0,
+                    },
+                    "output_token_details": {"text_tokens": 70, "audio_tokens": 0, "reasoning_tokens": 52},
+                }
+            },
+        },
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "total_tokens": 363,
+                    "input_tokens": 300,
+                    "output_tokens": 63,
+                    "input_token_details": {
+                        "text_tokens": 106,
+                        "audio_tokens": 0,
+                        "image_tokens": 194,
+                        "cached_tokens": 0,
+                    },
+                    "output_token_details": {"text_tokens": 63, "audio_tokens": 0, "reasoning_tokens": 43},
+                }
+            },
+        },
+    ]
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(results=results)
+
+    assert combined.completion_tokens == 133
+    assert combined.completion_tokens_details is not None
+    assert combined.completion_tokens_details.reasoning_tokens == 95
+    assert combined.completion_tokens_details.text_tokens == 38
+    assert combined.completion_tokens_details.audio_tokens == 0
