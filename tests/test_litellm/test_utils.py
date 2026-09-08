@@ -54,7 +54,7 @@ from litellm.utils import (
 # Adds the parent directory to the system path
 
 
-def test_cloudflare_model_info_includes_rpm(local_model_cost_map):
+def test_cloudflare_model_info_includes_rpm(local_model_cost_map: None) -> None:
     assert litellm.get_model_info("cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8")["rpm"] == 300
     assert litellm.get_model_info("cloudflare/@cf/moonshotai/kimi-k2.6")["rpm"] == 20
     assert litellm.get_model_info("cloudflare/@cf/openai/whisper-large-v3-turbo")["rpm"] == 720
