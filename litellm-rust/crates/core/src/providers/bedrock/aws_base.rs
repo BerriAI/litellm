@@ -1,9 +1,8 @@
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::caching::in_memory_cache::InMemoryCache;
 use crate::error::Error;
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::ProvideCredentials;
@@ -25,8 +24,50 @@ use super::constants::{
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
+const MAX_CACHED_CREDENTIALS: usize = 200;
 
-static IAM_CREDENTIALS_CACHE: OnceLock<Mutex<InMemoryCache<Credentials>>> = OnceLock::new();
+#[derive(Default)]
+struct CredentialCache {
+    entries: HashMap<String, (Credentials, Duration)>,
+    expirations: BinaryHeap<Reverse<(Duration, String)>>,
+}
+
+impl CredentialCache {
+    fn get(&mut self, key: &str) -> Option<Credentials> {
+        let now = unix_time();
+        let (credentials, expiration) = self.entries.get(key)?;
+        if *expiration > now {
+            return Some(credentials.clone());
+        }
+        self.entries.remove(key);
+        None
+    }
+
+    fn insert(&mut self, key: String, credentials: Credentials, ttl: Duration) {
+        let now = unix_time();
+        while let Some(Reverse((expiration, key))) = self.expirations.peek().cloned() {
+            if self.entries.get(&key).map(|(_, current)| *current) != Some(expiration) {
+                self.expirations.pop();
+            } else if expiration <= now || self.entries.len() >= MAX_CACHED_CREDENTIALS {
+                self.expirations.pop();
+                self.entries.remove(&key);
+            } else {
+                break;
+            }
+        }
+        let expiration = now + ttl;
+        self.entries.insert(key.clone(), (credentials, expiration));
+        self.expirations.push(Reverse((expiration, key)));
+    }
+}
+
+static IAM_CREDENTIALS_CACHE: OnceLock<Mutex<CredentialCache>> = OnceLock::new();
+
+fn unix_time() -> Duration {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+}
 
 fn credential_cache_ttl(flow: &AwsAuthFlow) -> Option<Duration> {
     match flow {
@@ -108,15 +149,15 @@ fn cache_key(config: &AwsAuthConfig, flow: &AwsAuthFlow) -> String {
 }
 
 fn get_cached_credentials(key: &str) -> Option<Credentials> {
-    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(InMemoryCache::default()));
+    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(CredentialCache::default()));
     let mut entries = cache.lock().ok()?;
-    entries.get_cache(key)
+    entries.get(key)
 }
 
 fn set_cached_credentials(key: String, credentials: Credentials, ttl: Duration) {
-    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(InMemoryCache::default()));
+    let cache = IAM_CREDENTIALS_CACHE.get_or_init(|| Mutex::new(CredentialCache::default()));
     if let Ok(mut entries) = cache.lock() {
-        entries.set_cache(key, credentials, Some(ttl));
+        entries.insert(key, credentials, ttl);
     }
 }
 
