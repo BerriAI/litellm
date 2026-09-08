@@ -12,7 +12,7 @@ from typing import (
 )
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -479,7 +479,18 @@ class ThirdlawGuardrail(CustomGuardrail):
             )
         return {**data, **accepted}  # mutable-ok: the proxy owns the replaced request dict
 
+    @staticmethod
+    def _carry_hidden_params(*, source: object, target: object) -> None:
+        """model_validate() builds a fresh instance with no memory of the source's private
+        attributes -- ``_hidden_params`` (which carries ``additional_headers`` for response-
+        header forwarding) is one of those, so copy it across explicitly.
+        """
+        hidden_params = getattr(source, "_hidden_params", None)
+        if hidden_params is not None:
+            setattr(target, "_hidden_params", hidden_params)  # target's concrete type varies by call site
+
     def _modified_response(self, *, response: object, replacement: Mapping[str, object]) -> object:
+        # LiteLLM's normalized chat-completion response type (e.g. Chat Completions).
         if isinstance(response, ModelResponse):
             # ModelResponse validation coerces a non-list ``choices`` into a single
             # empty choice instead of raising, which would silently blank the response.
@@ -493,15 +504,34 @@ class ThirdlawGuardrail(CustomGuardrail):
                 **replacement,
             }
             try:
-                return ModelResponse.model_validate(merged)
+                validated: Final = ModelResponse.model_validate(merged)
             except ValidationError as error:
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
                     message=f"ThirdLaw guardrail returned a malformed modified response: {error}",
                 ) from error
+            self._carry_hidden_params(source=response, target=validated)
+            return validated
+        # Provider response bodies that arrive as a plain dict (e.g. a TypedDict response,
+        # which is a real dict at runtime).
         response_dict: Final = _dict_of(response)
         if response_dict is not None:
             return {**response_dict, **replacement}  # mutable-ok: the proxy owns the replaced response dict
+        # Any other Pydantic response model (e.g. ResponsesAPIResponse).
+        if isinstance(response, BaseModel):
+            merged_body: Final = {  # mutable-ok: one-shot overlay consumed immediately by model_validate
+                **_JSON_DICT_ADAPTER.validate_python(response.model_dump(mode="json")),
+                **replacement,
+            }
+            try:
+                revalidated: Final = type(response).model_validate(merged_body)
+            except ValidationError as error:
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message=f"ThirdLaw guardrail returned a malformed modified response: {error}",
+                ) from error
+            self._carry_hidden_params(source=response, target=revalidated)
+            return revalidated
         verbose_proxy_logger.warning(
             "ThirdLaw guardrail: modify_response is not supported for %s responses; returning original",
             type(response).__name__,

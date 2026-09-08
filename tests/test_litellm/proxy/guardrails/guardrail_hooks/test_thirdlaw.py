@@ -23,6 +23,7 @@ from litellm.types.guardrails import (
     LitellmParams,
     SupportedGuardrailIntegrations,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.guardrails.guardrail_hooks.thirdlaw import (
     ThirdlawGuardrailConfigModel,
     ThirdlawGuardrailConfigModelOptionalParams,
@@ -134,6 +135,26 @@ def _model_response() -> ModelResponse:
             )
         ],
         usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    )
+
+
+def _responses_api_response() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp-1",
+        created_at=1700000000,
+        model="gpt-5.6",
+        object="response",
+        output=[
+            {
+                "id": "msg-1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "the secret is sk-leak", "annotations": []}],
+            }
+        ],
+        parallel_tool_calls=True,
+        status="completed",
     )
 
 
@@ -458,6 +479,55 @@ async def test_post_call_modify_response_merges_dict_responses():
         "role": "assistant",
         "content": [{"type": "text", "text": "[MASKED]"}],
     }
+
+
+async def test_post_call_modify_response_rewrites_responses_api_output():
+    """ResponsesAPIResponse is a Pydantic model, not a ModelResponse or a raw dict."""
+    g = _make_guardrail(
+        decisions=[
+            _decision_response(
+                {
+                    "action": "modify_response",
+                    "response_body": {
+                        "output": [
+                            {
+                                "id": "msg-1",
+                                "type": "message",
+                                "role": "assistant",
+                                "status": "completed",
+                                "content": [
+                                    {"type": "output_text", "text": "[REDACTED]", "annotations": []}
+                                ],
+                            }
+                        ]
+                    },
+                }
+            )
+        ]
+    )
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=_responses_api_response()
+    )
+    assert isinstance(out, ResponsesAPIResponse)
+    assert out.model_dump()["output"][0]["content"][0]["text"] == "[REDACTED]"
+
+
+@pytest.mark.parametrize("response_factory", [_model_response, _responses_api_response])
+async def test_post_call_modify_response_carries_hidden_params(response_factory):
+    """model_validate() builds a fresh instance that starts with empty _hidden_params --
+    the original's must be carried across explicitly or response-header forwarding breaks.
+    """
+    response = response_factory()
+    response._hidden_params["additional_headers"] = {"x-request-id": "abc123"}
+    g = _make_guardrail(
+        decisions=[
+            _decision_response({"action": "modify_response", "response_body": {"model": "gpt-5.6-redacted"}})
+        ]
+    )
+    out = await g.async_post_call_success_hook(
+        data=_request_data(), user_api_key_dict=UserAPIKeyAuth(), response=response
+    )
+    assert out._hidden_params.get("additional_headers") == {"x-request-id": "abc123"}
 
 
 async def test_post_call_block_raises():
