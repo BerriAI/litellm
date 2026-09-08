@@ -28,6 +28,9 @@ jobs:
     name: "redis-py ${{ matrix.redis-version }}"
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
 
     strategy:
       fail-fast: false
@@ -57,7 +60,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra extra_proxy --extra semantic-router
 
       - name: Pin redis-py to the matrix version
         env:
@@ -66,12 +69,31 @@ jobs:
           uv pip install "redis==${REDIS_VERSION:?}"
           uv run --no-sync python -c "import redis; assert redis.__version__ == '${REDIS_VERSION:?}', redis.__version__; print('redis-py', redis.__version__)"
 
+      - name: Build Redis for cluster authentication tests
+        run: |
+          curl --fail --location --retry 3 https://download.redis.io/releases/redis-7.2.16.tar.gz -o "$RUNNER_TEMP/redis-7.2.16.tar.gz"
+          echo "960a8ec15e34ff40e57ff16837b26b33bd81f2da6d24497bb63de532a323a18e  $RUNNER_TEMP/redis-7.2.16.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/redis-7.2.16.tar.gz" -C "$RUNNER_TEMP"
+          make -C "$RUNNER_TEMP/redis-7.2.16" -j2 MALLOC=libc OPTIMIZATION=-O1 redis-server
+          echo "$RUNNER_TEMP/redis-7.2.16/src" >> "$GITHUB_PATH"
+
       - name: Run redis unit tests
         run: |
+          redis-server --version
           uv run --no-sync pytest \
             tests/test_litellm/test_redis.py \
             tests/test_litellm/caching/test_redis_connection_pool.py \
             --tb=short -vv \
             --reruns 2 \
             --reruns-delay 1 \
-            --durations=20
+            --durations=20 \
+            --cov=./litellm --cov-report=xml:coverage-redis.xml
+
+      - name: Upload Redis coverage
+        if: matrix.redis-version == '5.3.1'
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        with:
+          use_oidc: true
+          files: coverage-redis.xml
+          flags: redis-compat
+          fail_ci_if_error: false
