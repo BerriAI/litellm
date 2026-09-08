@@ -1,5 +1,5 @@
 import asyncio
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
 import pytest
@@ -2382,6 +2382,30 @@ class TestLoggingOnlyApplyGuardrail:
     """LIT-4876 regression: a guardrail in mode logging_only that implements only
     apply_guardrail must still run against the logged request and response and
     record guardrail_information, instead of inheriting the CustomLogger no-op."""
+
+    @pytest.mark.asyncio
+    async def test_content_filter_accepts_logging_only_and_records_detection(self):
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+        from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="content-review",
+            event_hook=GuardrailEventHooks.logging_only,
+            default_on=True,
+            blocked_words=[BlockedWord(keyword="hello", action=ContentFilterAction.BLOCK)],
+        )
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, out_response = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert out_response is response
+        assert out_kwargs["messages"] == kwargs["messages"]
+        assert (
+            out_kwargs["standard_logging_object"]["guardrail_information"][0]["guardrail_status"]
+            == "guardrail_intervened"
+        )
 
     @pytest.mark.asyncio
     async def test_runs_apply_guardrail_observe_only_and_records_verdict(self):
