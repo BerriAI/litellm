@@ -8259,3 +8259,112 @@ class TestPassthroughHeadersAcceptImmutableMappings:
         assert merged["content-type"] == "text/event-stream"
         # the excluded hop-by-hop header is still dropped
         assert "transfer-encoding" not in merged
+
+
+class TestBackgroundResponseRetrievalGovernance:
+    """LIT-7175: retrieving a background Response attaches the model's post_call policy pipelines."""
+
+    GOVERNED_MODEL_GROUP = "gpt-5.4-mini"
+    GOVERNED_MODEL_ID = "deployment-governed"
+
+    @pytest.fixture
+    def policy_engine(self):
+        from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+        get_policy_registry().load_policies(
+            {
+                "response-governance": {
+                    "guardrails": {"add": ["output-word-filter"]},
+                    "pipeline": {
+                        "mode": "post_call",
+                        "steps": [{"guardrail": "output-word-filter", "on_pass": "allow", "on_fail": "block"}],
+                    },
+                }
+            }
+        )
+        get_attachment_registry().load_attachments(
+            [{"policy": "response-governance", "models": [self.GOVERNED_MODEL_GROUP]}]
+        )
+        yield
+        get_policy_registry().clear()
+        get_attachment_registry().clear()
+
+    def _router(self) -> MagicMock:
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        router = MagicMock()
+        router.get_deployment.side_effect = lambda model_id: (
+            Deployment(
+                model_name=self.GOVERNED_MODEL_GROUP,
+                litellm_params=LiteLLM_Params(model=f"openai/{self.GOVERNED_MODEL_GROUP}"),
+                model_info={"id": model_id},
+            )
+            if model_id == self.GOVERNED_MODEL_ID
+            else None
+        )
+        return router
+
+    async def _pre_call(self, route_type: str, monkeypatch) -> dict:
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        client_facing_response_id = "resp_opaque-client-facing-id"
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id=self.GOVERNED_MODEL_ID, response_id="resp_upstream"
+        )
+        processing_obj = ProxyBaseLLMRequestProcessing(
+            data={"response_id": client_facing_response_id, "litellm_metadata": {}}
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def passthrough_add_litellm_data_to_request(data, **kwargs):
+            return data
+
+        async def decrypting_pre_call_hook(user_api_key_dict, data, call_type):
+            if data.get("response_id") == client_facing_response_id:
+                data["response_id"] = encoded_response_id
+            return data
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            passthrough_add_litellm_data_to_request,
+        )
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=decrypting_pre_call_hook)
+        proxy_config = MagicMock(spec=ProxyConfig)
+        proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+        returned_data, _ = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type=route_type,
+            llm_router=self._router(),
+        )
+        return returned_data
+
+    @pytest.mark.asyncio
+    async def test_retrieving_a_background_response_attaches_its_model_post_call_pipeline(
+        self, policy_engine, monkeypatch
+    ):
+        data = await self._pre_call("aget_responses", monkeypatch)
+
+        assert data["response_id"].startswith("resp_bGl0ZWxsbTpjdXN0b21f")
+        pipelines = data["litellm_metadata"]["_guardrail_pipelines"]
+        assert [(policy_name, [step.guardrail for step in pipeline.steps]) for policy_name, pipeline in pipelines] == [
+            ("response-governance", ["output-word-filter"])
+        ]
+        assert data["litellm_metadata"]["applied_policies"] == ["response-governance"]
+        assert data["model"] is None
+
+    @pytest.mark.asyncio
+    async def test_submitting_a_response_does_not_attach_pipelines_from_its_response_id(
+        self, policy_engine, monkeypatch
+    ):
+        data = await self._pre_call("aresponses", monkeypatch)
+
+        assert "_guardrail_pipelines" not in data["litellm_metadata"]
+        assert "applied_policies" not in data["litellm_metadata"]
