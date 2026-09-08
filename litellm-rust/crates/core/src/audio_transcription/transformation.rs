@@ -13,6 +13,21 @@ pub enum AudioTranscriptionAuth {
 }
 
 pub trait AudioTranscriptionProviderConfig: Sync {
+    fn authorize<'a>(
+        &'a self,
+        request: &'a super::types::ProviderAudioTranscriptionRequest,
+        _body: &'a [u8],
+    ) -> crate::providers::AuthorizationFuture<'a> {
+        Box::pin(async move {
+            match &request.auth {
+                AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
+                    "AWS SigV4 requires the bedrock-auth feature",
+                )),
+                _ => Ok(request.upstream_headers.clone()),
+            }
+        })
+    }
+
     fn supported_transcription_params(&self) -> &'static [&'static str];
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]

@@ -14,25 +14,35 @@ use tokio_tungstenite::{
 };
 
 use crate::Error;
-use crate::constants::{OPENAI_RESPONSES_DEFAULT_API_BASE, OPENAI_RESPONSES_PATH};
 use crate::integrations::custom_logger::CallbackTiming;
 use crate::lifecycle::{
     CostInputs, ExecutedCall, RouteProjection, TerminalClassification, TerminalDispatcher,
     TerminalRecord,
 };
-use crate::providers::openai::responses::transformation::OPENAI_RESPONSES_WS_CONFIG;
+use crate::providers::dispatch::responses_websocket_provider_config;
 use crate::responses::instrumentation::ResponsesWsInstrumentation;
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType, ResponsesWsTransformResult};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
-const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
 
 type Upstream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
 
+struct ProviderConnection {
+    upstream: Upstream,
+    config: &'static dyn ResponsesWebSocketProviderConfig,
+}
+
 pub trait ResponsesWebSocketProviderConfig: Sync {
+    fn resolve_api_key(
+        &self,
+        _api_key: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        Err(Error::Unsupported("provider credential resolution"))
+    }
+
     fn supports_native_websocket(&self) -> bool {
         false
     }
@@ -80,8 +90,9 @@ where
     Out: Sink<ResponsesWsEvent> + Unpin + Send,
     Out::Error: std::fmt::Display,
 {
-    let key = resolve_api_key(request.api_key.as_deref())?;
-    let upstream = dial_upstream(&request.model, &key, request.api_base.as_deref()).await?;
+    let config = responses_websocket_provider_config();
+    let key = config.resolve_api_key(request.api_key.as_deref(), &|key| std::env::var(key).ok())?;
+    let upstream = dial_upstream(config, &request.model, &key, request.api_base.as_deref()).await?;
     let start_time = services.now();
     let instrumentation = Arc::new(ResponsesWsInstrumentation::default());
     let mut completion =
@@ -234,7 +245,7 @@ impl ResponsesWsFailure {
 }
 
 async fn splice<In, Out>(
-    upstream: Upstream,
+    connection: ProviderConnection,
     model: &str,
     first_frame: Option<ResponsesWsEvent>,
     idle_timeout: Duration,
@@ -247,9 +258,10 @@ where
     Out: Sink<ResponsesWsEvent> + Unpin + Send,
     Out::Error: std::fmt::Display,
 {
+    let ProviderConnection { upstream, config } = connection;
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
     if let Some(event) = first_frame {
-        send_provider_event(&mut upstream_tx, &event, model)
+        send_provider_event(config, &mut upstream_tx, &event, model)
             .await
             .map_err(ResponsesWsFailure::new)?;
     }
@@ -263,7 +275,7 @@ where
                     ));
                 };
                 let event = event.map_err(ResponsesWsFailure::new)?;
-                send_provider_event(&mut upstream_tx, &event, model).await.map_err(ResponsesWsFailure::new)?;
+                send_provider_event(config, &mut upstream_tx, &event, model).await.map_err(ResponsesWsFailure::new)?;
             }
             message = upstream_rx.next() => {
                 let Some(message) = message else {
@@ -278,7 +290,7 @@ where
                             .map_err(|error| ResponsesWsFailure::new(Error::InvalidResponse(error.to_string())))?;
                         instrumentation.observe(&event);
                         let terminal = instrumentation.terminal_classification(&event);
-                        for outbound in OPENAI_RESPONSES_WS_CONFIG.transform_ws_response(&event, model)
+                        for outbound in config.transform_ws_response(&event, model)
                             .map_err(ResponsesWsFailure::new)?.events {
                             client_out.send(outbound).await
                                 .map_err(|error| ResponsesWsFailure::session(
@@ -306,14 +318,12 @@ where
 }
 
 async fn send_provider_event(
+    config: &dyn ResponsesWebSocketProviderConfig,
     upstream: &mut futures_util::stream::SplitSink<Upstream, Message>,
     event: &ResponsesWsEvent,
     model: &str,
 ) -> Result<(), Error> {
-    for outbound in OPENAI_RESPONSES_WS_CONFIG
-        .transform_ws_request(event, model)?
-        .events
-    {
+    for outbound in config.transform_ws_request(event, model)?.events {
         let payload = serde_json::to_string(&outbound)
             .map_err(|error| Error::InvalidResponse(error.to_string()))?;
         upstream
@@ -325,11 +335,12 @@ async fn send_provider_event(
 }
 
 async fn dial_upstream(
+    config: &'static dyn ResponsesWebSocketProviderConfig,
     model: &str,
     api_key: &str,
     api_base: Option<&str>,
-) -> Result<Upstream, Error> {
-    let url = OPENAI_RESPONSES_WS_CONFIG.complete_websocket_url(api_base, model);
+) -> Result<ProviderConnection, Error> {
+    let url = config.complete_websocket_url(api_base, model);
     let mut request = url.into_client_request().map_err(ws_transport_error)?;
     request.headers_mut().insert(
         AUTHORIZATION,
@@ -344,7 +355,9 @@ async fn dial_upstream(
     let result = tokio::time::timeout(CONNECT_TIMEOUT, connect)
         .await
         .map_err(|_| Error::Connect("Responses WebSocket connection timed out".to_string()))?;
-    result.map(|(socket, _)| socket).map_err(ws_handshake_error)
+    result
+        .map(|(upstream, _)| ProviderConnection { upstream, config })
+        .map_err(ws_handshake_error)
 }
 
 fn tls_config() -> Result<Arc<ClientConfig>, Error> {
@@ -391,69 +404,7 @@ fn ws_transport_error(error: WsError) -> Error {
     }
 }
 
-fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
-    api_key
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            std::env::var(OPENAI_API_KEY_ENV)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
-}
-
-pub fn complete_websocket_url(api_base: Option<&str>, model: &str, model_in_url: bool) -> String {
-    let base = api_base
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(OPENAI_RESPONSES_DEFAULT_API_BASE);
-    let (base, query) = base
-        .split_once('?')
-        .map_or((base, None), |(base, query)| (base, Some(query)));
-    let response_url = format!("{}{}", base.trim_end_matches('/'), OPENAI_RESPONSES_PATH);
-    let response_url = response_url
-        .strip_prefix("https://")
-        .map(|rest| format!("wss://{rest}"))
-        .or_else(|| {
-            response_url
-                .strip_prefix("http://")
-                .map(|rest| format!("ws://{rest}"))
-        })
-        .unwrap_or(response_url);
-    let url = query.map_or_else(
-        || response_url.clone(),
-        |query| format!("{response_url}?{query}"),
-    );
-    if !model_in_url
-        || query.is_some_and(|query| {
-            query
-                .split('&')
-                .any(|part| part.split('=').next() == Some("model"))
-        })
-    {
-        return url;
-    }
-    format!(
-        "{url}{}model={}",
-        if query.is_some() { "&" } else { "?" },
-        percent_encode(model)
-    )
-}
-
-fn percent_encode(value: &str) -> String {
-    value
-        .bytes()
-        .map(|byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                format!("{}", byte as char)
-            } else {
-                format!("%{byte:02X}")
-            }
-        })
-        .collect()
-}
+pub use crate::providers::openai::responses::transformation::complete_websocket_url;
 
 pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent {
     if !event.is_response_create() {
@@ -662,7 +613,7 @@ mod tests {
             .unwrap();
             assert!(matches!(result, ExecutedCall::Failure { .. }));
             assert_eq!(
-                output_rx.next().await.unwrap().event_type.as_str(),
+                output_rx.next().await.unwrap().event_type.as_ref(),
                 expected_type
             );
             assert_failure(services.as_ref(), kind, message);

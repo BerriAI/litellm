@@ -23,20 +23,19 @@ use crate::lifecycle::{
     CallLifecycleContext, Clock, CostInputs, ExecutedCall, RouteProjection, TerminalClassification,
     TerminalDispatcher, TerminalRecord,
 };
-use crate::providers::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
+use crate::providers::dispatch::realtime_provider_config;
 use crate::realtime::transformation::RealtimeProviderConfig;
 use crate::realtime::types::RealtimeEvent;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
-const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
-const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a realtime call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
 
 type Upstream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
 
-#[derive(Clone, Eq)]
+#[derive(Clone)]
 pub struct RealtimeConnectionSpec {
+    config: &'static (dyn RealtimeProviderConfig + Sync),
     model: String,
     api_key: String,
     api_base: Option<String>,
@@ -49,9 +48,11 @@ impl RealtimeConnectionSpec {
         api_base: Option<&str>,
     ) -> Result<Self, Error> {
         let model = model.into();
+        let (model, config) = realtime_provider_config(&model)?;
         Ok(Self {
-            model: openai_model(&model)?.to_string(),
-            api_key: resolve_api_key(api_key)?,
+            config,
+            model: model.to_string(),
+            api_key: config.resolve_api_key(api_key, &|key| std::env::var(key).ok())?,
             api_base: api_base.map(str::to_string),
         })
     }
@@ -60,6 +61,8 @@ impl RealtimeConnectionSpec {
         &self.model
     }
 }
+
+impl Eq for RealtimeConnectionSpec {}
 
 impl PartialEq for RealtimeConnectionSpec {
     fn eq(&self, other: &Self) -> bool {
@@ -233,14 +236,15 @@ where
     Out::Error: std::fmt::Display,
 {
     let WarmConnection {
-        connection: _,
+        connection,
         upstream,
         session_created,
     } = connection;
+    let config = connection.config;
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
     if !session_created.event_type.is_empty() {
         observation.observe(&session_created);
-        send_client_event(&mut client_out, &session_created, model).await?;
+        send_client_event(config, &mut client_out, &session_created, model).await?;
     }
     loop {
         tokio::select! {
@@ -251,7 +255,7 @@ where
                         "realtime client disconnected before provider completion",
                     );
                 };
-                for outbound in OPENAI_REALTIME_CONFIG.transform_realtime_request(&event, model)?.events {
+                for outbound in config.transform_realtime_request(&event, model)?.events {
                     let payload = serde_json::to_string(&outbound)
                         .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                     upstream_tx.send(Message::Text(payload)).await.map_err(ws_transport_error)?;
@@ -270,7 +274,7 @@ where
                         let event = serde_json::from_str::<RealtimeEvent>(&text)
                             .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                         observation.observe(&event);
-                        send_client_event(&mut client_out, &event, model).await?;
+                        send_client_event(config, &mut client_out, &event, model).await?;
                         if event.event_type == "error" || response_failed(&event) {
                             return Err(RealtimeFailure::new(
                                 "ProviderError",
@@ -346,6 +350,7 @@ fn provider_error_message(event: &RealtimeEvent) -> String {
 }
 
 async fn send_client_event<Out>(
+    config: &(dyn RealtimeProviderConfig + Sync),
     client_out: &mut Out,
     event: &RealtimeEvent,
     model: &str,
@@ -354,10 +359,7 @@ where
     Out: Sink<RealtimeEvent> + Unpin,
     Out::Error: std::fmt::Display,
 {
-    for outbound in OPENAI_REALTIME_CONFIG
-        .transform_realtime_response(event, model)?
-        .events
-    {
+    for outbound in config.transform_realtime_response(event, model)?.events {
         client_out
             .send(outbound)
             .await
@@ -389,7 +391,8 @@ async fn read_event(upstream: &mut Upstream) -> Result<RealtimeEvent, Error> {
 }
 
 async fn dial_upstream(connection: &RealtimeConnectionSpec) -> Result<Upstream, Error> {
-    let url = OPENAI_REALTIME_CONFIG
+    let url = connection
+        .config
         .complete_url(connection.api_base.as_deref(), connection.model.as_str());
     let mut request = url.into_client_request().map_err(ws_transport_error)?;
     request.headers_mut().insert(
@@ -431,31 +434,6 @@ fn tls_config() -> Result<Arc<ClientConfig>, Error> {
             .with_no_client_auth();
     let config = Arc::new(config);
     Ok(Arc::clone(TLS_CONFIG.get_or_init(|| config)))
-}
-
-fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
-    api_key
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            std::env::var(OPENAI_API_KEY_ENV)
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
-}
-
-fn openai_model(model: &str) -> Result<&str, Error> {
-    if let Some((provider, provider_model)) = model.split_once('/') {
-        if provider != "openai" {
-            return Err(Error::InvalidProvider(format!(
-                "realtime route does not support provider '{provider}'"
-            )));
-        }
-        return Ok(provider_model);
-    }
-    Ok(model)
 }
 
 fn ws_handshake_error(error: WsError) -> Error {

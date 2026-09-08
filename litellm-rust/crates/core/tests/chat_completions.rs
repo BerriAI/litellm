@@ -832,3 +832,52 @@ mod round_trip {
         ));
     }
 }
+
+#[cfg(feature = "bedrock-auth")]
+#[tokio::test]
+async fn provider_authorization_signs_the_supplied_bytes_without_reserializing() {
+    use litellm_core::providers::bedrock::aws_base::{
+        aws_signature_headers, host_supplied_credentials, sign_bedrock_post,
+    };
+    use std::collections::BTreeMap;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    let mut call = request(
+        "bedrock/us-east-1/anthropic.claude-v2",
+        None,
+        json!([{"role": "user", "content": "hi"}]),
+        json!({"maxTokens": 16, "aws_access_key_id": "test-access", "aws_secret_access_key": "test-secret"}),
+    );
+    call.api_key = None;
+    let built = build_chat_completions_request(call).unwrap();
+    let bytes = b"{ \"settled\": true }\n";
+    let before = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let signed: BTreeMap<_, _> = litellm_core::chat_completions::signed_headers(&built, bytes)
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+    let after = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let credentials = host_supplied_credentials(&built.optional_params).unwrap();
+    let headers = aws_signature_headers(&built.upstream_headers.iter().cloned().collect());
+    assert!((before..=after).any(|second| {
+        let expected = sign_bedrock_post(
+            &built.url,
+            bytes,
+            &headers,
+            "us-east-1",
+            &credentials,
+            UNIX_EPOCH + Duration::from_secs(second),
+        )
+        .unwrap();
+        expected
+            .iter()
+            .all(|(name, value)| signed.get(name) == Some(value))
+    }));
+}

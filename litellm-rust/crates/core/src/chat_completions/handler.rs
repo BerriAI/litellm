@@ -5,7 +5,6 @@ use crate::http_utils::{http_request, truncate_error_body};
 
 use super::client::http_client;
 use super::request::build_provider_request;
-use super::transformation::ChatCompletionsAuth;
 use super::types::{
     ChatBodySnapshot, ChatCompletionsResponse, ChatEndpoint, ProviderChatCompletionsRequest,
     ProviderChatResponseData, ResolvedChatCompletionsRequest, SettledChatRequest,
@@ -100,72 +99,9 @@ pub fn as_response_error(err: Error) -> Error {
     }
 }
 
-#[cfg(feature = "bedrock-auth")]
 pub async fn signed_headers(
     request: &ProviderChatCompletionsRequest,
     body: &[u8],
 ) -> Result<Vec<(String, String)>, Error> {
-    use std::collections::BTreeMap;
-    use std::time::SystemTime;
-
-    use crate::providers::bedrock::aws_base::{
-        aws_auth_config, aws_signature_headers, host_supplied_credentials,
-        is_sigv4_computed_header, resolve_credentials, sign_bedrock_post,
-    };
-
-    let ChatCompletionsAuth::AwsSigV4 { region } = &request.auth else {
-        return Ok(request.upstream_headers.clone());
-    };
-    // Reattaching a header the signer also emits would put both copies on the
-    // wire, and Bedrock rejects that pair. Python instead drops the caller's
-    // copy and prefers a forwarded Authorization over the signature, so leave
-    // the request to Python rather than serving it a different way here.
-    if request
-        .upstream_headers
-        .iter()
-        .any(|(name, _)| is_sigv4_computed_header(name))
-    {
-        return Err(Error::Unsupported(
-            "request forwards a header AWS SigV4 computes",
-        ));
-    }
-    let env_lookup = |key: &str| std::env::var(key).ok();
-    let unsigned: BTreeMap<String, String> = request.upstream_headers.iter().cloned().collect();
-    // A host with its own resolution chain hands the result down; only fall
-    // back to deriving credentials here when it supplied none.
-    let credentials = match host_supplied_credentials(&request.optional_params) {
-        Some(credentials) => credentials,
-        None => {
-            resolve_credentials(
-                aws_auth_config(&request.optional_params, &env_lookup),
-                &env_lookup,
-            )
-            .await?
-        }
-    };
-    let signature = sign_bedrock_post(
-        &request.url,
-        body,
-        &aws_signature_headers(&unsigned),
-        region,
-        &credentials,
-        SystemTime::now(),
-    )?;
-    // Every original header goes back on the wire alongside the computed ones,
-    // as Python reattaches them. The guard above already rejected the names
-    // that would collide, so no name appears twice.
-    Ok(unsigned.into_iter().chain(signature).collect())
-}
-
-#[cfg(not(feature = "bedrock-auth"))]
-pub async fn signed_headers(
-    request: &ProviderChatCompletionsRequest,
-    _body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
-    match &request.auth {
-        ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
-            "AWS SigV4 requires the bedrock-auth feature",
-        )),
-        _ => Ok(request.upstream_headers.clone()),
-    }
+    request.config.authorize(request, body).await
 }

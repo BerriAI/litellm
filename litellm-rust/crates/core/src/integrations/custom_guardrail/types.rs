@@ -3,25 +3,19 @@ use std::future::Future;
 use std::pin::Pin;
 
 use serde_json::Value;
+use strum::AsRefStr;
 
 use crate::integrations::custom_logger::CallType;
 
 pub type GuardrailFuture<'a> =
     Pin<Box<dyn Future<Output = Result<GuardrailDecision, GuardrailError>> + Send + 'a>>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(AsRefStr, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuardrailEventHook {
+    #[strum(serialize = "pre_call")]
     PreCall,
+    #[strum(serialize = "during_call")]
     DuringCall,
-}
-
-impl GuardrailEventHook {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::PreCall => "pre_call",
-            Self::DuringCall => "during_call",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

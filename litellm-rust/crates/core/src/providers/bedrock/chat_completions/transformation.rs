@@ -1,3 +1,4 @@
+use crate::chat_completions::types::ProviderChatCompletionsRequest;
 use serde_json::{Map, Value, json};
 
 use crate::chat_completions::conversation::{Conversation, TurnRole, build_conversation};
@@ -61,7 +62,7 @@ fn converse_body(conversation: &Conversation, params: &Map<String, Value>) -> Va
         .iter()
         .map(|turn| {
             json!({
-                "role": turn.role.as_str(),
+                "role": turn.role.as_ref(),
                 "content": turn.texts.iter().map(|text| json!({"text": text})).collect::<Vec<_>>(),
             })
         })
@@ -105,6 +106,14 @@ fn has_blank_text(message: &ChatMessage) -> bool {
 }
 
 impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
+    fn authorize<'a>(
+        &'a self,
+        request: &'a ProviderChatCompletionsRequest,
+        body: &'a [u8],
+    ) -> crate::providers::AuthorizationFuture<'a> {
+        Box::pin(signed_headers(request, body))
+    }
+
     fn request_body_behavior(&self) -> crate::lifecycle::RequestBodyBehavior {
         crate::lifecycle::RequestBodyBehavior::SERIALIZED_AT_BUILD
     }
@@ -301,4 +310,60 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
             usage,
         })
     }
+}
+
+async fn signed_headers(
+    request: &ProviderChatCompletionsRequest,
+    body: &[u8],
+) -> Result<Vec<(String, String)>, Error> {
+    use std::collections::BTreeMap;
+    use std::time::SystemTime;
+
+    use crate::providers::bedrock::aws_base::{
+        aws_auth_config, aws_signature_headers, host_supplied_credentials,
+        is_sigv4_computed_header, resolve_credentials, sign_bedrock_post,
+    };
+
+    let ChatCompletionsAuth::AwsSigV4 { region } = &request.auth else {
+        return Ok(request.upstream_headers.clone());
+    };
+    // Reattaching a header the signer also emits would put both copies on the
+    // wire, and Bedrock rejects that pair. Python instead drops the caller's
+    // copy and prefers a forwarded Authorization over the signature, so leave
+    // the request to Python rather than serving it a different way here.
+    if request
+        .upstream_headers
+        .iter()
+        .any(|(name, _)| is_sigv4_computed_header(name))
+    {
+        return Err(Error::Unsupported(
+            "request forwards a header AWS SigV4 computes",
+        ));
+    }
+    let env_lookup = |key: &str| std::env::var(key).ok();
+    let unsigned: BTreeMap<String, String> = request.upstream_headers.iter().cloned().collect();
+    // A host with its own resolution chain hands the result down; only fall
+    // back to deriving credentials here when it supplied none.
+    let credentials = match host_supplied_credentials(&request.optional_params) {
+        Some(credentials) => credentials,
+        None => {
+            resolve_credentials(
+                aws_auth_config(&request.optional_params, &env_lookup),
+                &env_lookup,
+            )
+            .await?
+        }
+    };
+    let signature = sign_bedrock_post(
+        &request.url,
+        body,
+        &aws_signature_headers(&unsigned),
+        region,
+        &credentials,
+        SystemTime::now(),
+    )?;
+    // Every original header goes back on the wire alongside the computed ones,
+    // as Python reattaches them. The guard above already rejected the names
+    // that would collide, so no name appears twice.
+    Ok(unsigned.into_iter().chain(signature).collect())
 }

@@ -29,6 +29,14 @@ pub trait OcrProviderConfig: Sync {
         OcrDocumentProjection::RetainedDocument
     }
 
+    fn has_configured_credentials(
+        &self,
+        _request: &super::types::OcrAdmissionRequest,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        false
+    }
+
     fn credential_acquisition_operation(&self) -> Option<&'static str> {
         None
     }

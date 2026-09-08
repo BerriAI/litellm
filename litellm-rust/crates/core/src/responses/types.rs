@@ -1,29 +1,23 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
+use strum::AsRefStr;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(AsRefStr, Clone, Debug, PartialEq, Eq)]
 pub enum ResponsesWsEventType {
+    #[strum(serialize = "response.create")]
     ResponseCreate,
+    #[strum(serialize = "response.created")]
     ResponseCreated,
+    #[strum(serialize = "response.completed")]
     ResponseCompleted,
+    #[strum(serialize = "response.failed")]
     ResponseFailed,
+    #[strum(serialize = "response.incomplete")]
     ResponseIncomplete,
+    #[strum(serialize = "error")]
     Error,
+    #[strum(default, transparent)]
     Other(String),
-}
-
-impl ResponsesWsEventType {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::ResponseCreate => "response.create",
-            Self::ResponseCreated => "response.created",
-            Self::ResponseCompleted => "response.completed",
-            Self::ResponseFailed => "response.failed",
-            Self::ResponseIncomplete => "response.incomplete",
-            Self::Error => "error",
-            Self::Other(value) => value,
-        }
-    }
 }
 
 impl Serialize for ResponsesWsEventType {
@@ -31,7 +25,7 @@ impl Serialize for ResponsesWsEventType {
     where
         S: Serializer,
     {
-        serializer.serialize_str(self.as_str())
+        serializer.serialize_str(self.as_ref())
     }
 }
 

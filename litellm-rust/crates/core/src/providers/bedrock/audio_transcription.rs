@@ -1,3 +1,4 @@
+use crate::audio_transcription::types::ProviderAudioTranscriptionRequest;
 use serde_json::{Map, Value, json};
 
 use crate::audio_transcription::transformation::{
@@ -46,6 +47,14 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 }
 
 impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
+    fn authorize<'a>(
+        &'a self,
+        request: &'a ProviderAudioTranscriptionRequest,
+        body: &'a [u8],
+    ) -> crate::providers::AuthorizationFuture<'a> {
+        Box::pin(signed_headers(request, body))
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_transcription_params(&self) -> &'static [&'static str] {
         SUPPORTED_PARAMS
@@ -143,6 +152,37 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
             service: BEDROCK_SERVICE,
         })
     }
+}
+
+async fn signed_headers(
+    request: &ProviderAudioTranscriptionRequest,
+    body: &[u8],
+) -> Result<Vec<(String, String)>, Error> {
+    use std::collections::BTreeMap;
+    use std::time::SystemTime;
+
+    use crate::audio_transcription::transformation::AudioTranscriptionAuth;
+    use crate::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_post};
+
+    let AudioTranscriptionAuth::AwsSigV4 { region, .. } = &request.auth else {
+        return Ok(request.upstream_headers.clone());
+    };
+    let env_lookup = |key: &str| std::env::var(key).ok();
+    let credentials = resolve_credentials(
+        aws_auth_config(&request.optional_params, &env_lookup),
+        &env_lookup,
+    )
+    .await?;
+    let unsigned: BTreeMap<String, String> = request.upstream_headers.iter().cloned().collect();
+    let signature = sign_bedrock_post(
+        &request.url,
+        body,
+        &unsigned,
+        region,
+        &credentials,
+        SystemTime::now(),
+    )?;
+    Ok(unsigned.into_iter().chain(signature).collect())
 }
 
 #[cfg(test)]

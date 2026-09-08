@@ -11,22 +11,16 @@
 //! accepts; anything richer is declined upstream by the capability gate.
 
 use crate::constants::EMPTY_TEXT_PLACEHOLDER;
+use strum::AsRefStr;
 
 use super::types::{ChatMessage, ChatMessageContent};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(AsRefStr, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnRole {
+    #[strum(serialize = "user")]
     User,
+    #[strum(serialize = "assistant")]
     Assistant,
-}
-
-impl TurnRole {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Assistant => "assistant",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

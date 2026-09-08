@@ -516,6 +516,19 @@ fn transform_document_intelligence_response(
 }
 
 impl OcrProviderConfig for AzureAiOcrConfig {
+    fn has_configured_credentials(
+        &self,
+        request: &crate::ocr::types::OcrAdmissionRequest,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        crate::http_utils::has_header(&request.extra_headers, "api-key")
+            || request
+                .azure_ad_token
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty())
+            || env_lookup("AZURE_AI_API_KEY").is_some_and(|key| !key.trim().is_empty())
+    }
+
     fn document_projection(&self) -> OcrDocumentProjection {
         OcrDocumentProjection::ShallowCopyDocument
     }
@@ -581,6 +594,14 @@ impl OcrProviderConfig for AzureAiOcrConfig {
 }
 
 impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
+    fn has_configured_credentials(
+        &self,
+        request: &crate::ocr::types::OcrAdmissionRequest,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        AZURE_AI_OCR_CONFIG.has_configured_credentials(request, env_lookup)
+    }
+
     fn document_projection(&self) -> OcrDocumentProjection {
         OcrDocumentProjection::Transformed
     }

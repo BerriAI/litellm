@@ -220,6 +220,16 @@ fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> V
 }
 
 impl OcrProviderConfig for VertexAiOcrConfig {
+    fn has_configured_credentials(
+        &self,
+        _request: &crate::ocr::types::OcrAdmissionRequest,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        ["VERTEX_AI_API_KEY", "VERTEXAI_API_KEY"]
+            .into_iter()
+            .any(|name| env_lookup(name).is_some_and(|key| !key.trim().is_empty()))
+    }
+
     fn document_projection(&self) -> OcrDocumentProjection {
         OcrDocumentProjection::ShallowCopyDocument
     }
@@ -275,6 +285,14 @@ impl OcrProviderConfig for VertexAiOcrConfig {
 }
 
 impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
+    fn has_configured_credentials(
+        &self,
+        request: &crate::ocr::types::OcrAdmissionRequest,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        VERTEX_AI_OCR_CONFIG.has_configured_credentials(request, env_lookup)
+    }
+
     fn document_projection(&self) -> OcrDocumentProjection {
         OcrDocumentProjection::Transformed
     }

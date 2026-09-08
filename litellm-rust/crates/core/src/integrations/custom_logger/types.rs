@@ -4,6 +4,7 @@ use std::pin::Pin;
 
 use serde::Serialize;
 use serde_json::Value;
+use strum::{AsRefStr, Display, EnumString};
 
 use crate::integrations::types::{StandardLoggingMetadata, StandardLoggingPayload};
 
@@ -15,46 +16,20 @@ pub struct CallbackDispatchReport {
     pub dropped: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(AsRefStr, Clone, Debug, Display, EnumString, PartialEq, Eq)]
 pub enum CallType {
+    #[strum(serialize = "ocr")]
     Ocr,
+    #[strum(serialize = "realtime")]
     Realtime,
+    #[strum(serialize = "completion")]
     Completion,
+    #[strum(serialize = "acompletion")]
     Acompletion,
+    #[strum(serialize = "chat_completion")]
     ChatCompletion,
+    #[strum(default, transparent)]
     Other(String),
-}
-
-impl CallType {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Ocr => "ocr",
-            Self::Realtime => "realtime",
-            Self::Completion => "completion",
-            Self::Acompletion => "acompletion",
-            Self::ChatCompletion => "chat_completion",
-            Self::Other(value) => value.as_str(),
-        }
-    }
-}
-
-impl From<&str> for CallType {
-    fn from(value: &str) -> Self {
-        match value {
-            "ocr" => Self::Ocr,
-            "realtime" => Self::Realtime,
-            "completion" => Self::Completion,
-            "acompletion" => Self::Acompletion,
-            "chat_completion" => Self::ChatCompletion,
-            other => Self::Other(other.to_string()),
-        }
-    }
-}
-
-impl std::fmt::Display for CallType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -129,7 +104,7 @@ impl ModelCallDetails {
         Self {
             model: payload.model.clone(),
             custom_llm_provider: payload.custom_llm_provider.clone(),
-            call_type: CallType::from(payload.call_type.as_str()),
+            call_type: CallType::from(payload.call_type.as_ref()),
             metadata,
             extra_metadata: HashMap::new(),
             request_id,
@@ -143,7 +118,7 @@ impl ModelCallDetails {
     pub fn with_standard_logging_payload(mut self, payload: StandardLoggingPayload) -> Self {
         self.model = payload.model.clone();
         self.custom_llm_provider = payload.custom_llm_provider.clone();
-        self.call_type = CallType::from(payload.call_type.as_str());
+        self.call_type = CallType::from(payload.call_type.as_ref());
         self.request_id = Some(payload.id.clone());
         self.litellm_call_id = Some(payload.litellm_call_id.clone());
         self.response_cost = Some(payload.response_cost);

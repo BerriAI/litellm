@@ -33,6 +33,21 @@ pub const STREAM_PARAM: &str = "stream";
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
 pub trait ChatCompletionsProviderConfig: Sync {
+    fn authorize<'a>(
+        &'a self,
+        request: &'a super::types::ProviderChatCompletionsRequest,
+        _body: &'a [u8],
+    ) -> crate::providers::AuthorizationFuture<'a> {
+        Box::pin(async move {
+            match &request.auth {
+                ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
+                    "AWS SigV4 requires the bedrock-auth feature",
+                )),
+                _ => Ok(request.upstream_headers.clone()),
+            }
+        })
+    }
+
     fn request_body_behavior(&self) -> RequestBodyBehavior {
         RequestBodyBehavior::STRUCTURED_AT_SEND
     }

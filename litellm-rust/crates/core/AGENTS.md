@@ -68,6 +68,22 @@ The exact spelling may be a method on `LiteLlm<S>`. Public adapters may wrap
 that function but can never reimplement admission, callbacks, provider
 preparation or transport around it.
 
+## Provider and route ownership
+
+`providers/dispatch.rs` selects a typed adapter for each supported provider and
+route pair, including model-specific OCR variants. Routes own their contracts
+and lifecycle sequencing; provider adapters own admission policy, URLs,
+transformation and authorization. Keep provider selection out of handlers
+
+Provider modules share credential and protocol helpers across their route
+adapters. Routes supply the exact settled bytes to the adapter's authorization
+operation at the existing lifecycle phase. Shared helpers must never invoke
+another public route or repeat its callbacks
+
+WebSocket execution carries its selected adapter through dialing and event
+transformation. The existing Responses WebSocket entrypoint defaults to OpenAI;
+realtime resolves its existing optional provider prefix through dispatch
+
 ## Services, not a context
 
 Capabilities are supplied through focused trait implementations. Route-specific

@@ -11,9 +11,7 @@ use crate::chat_completions::types::{
 };
 use crate::constants::ANTHROPIC_OAUTH_TOKEN_PREFIX;
 use crate::error::Error;
-use crate::providers::anthropic::messages::transformation::{
-    complete_anthropic_url, resolve_anthropic_api_key,
-};
+use crate::providers::anthropic::auth::{complete_anthropic_url, resolve_anthropic_api_key};
 
 use crate::chat_completions::response_utils::{finish_reason_for, unix_now, usage_from_parts};
 
@@ -49,7 +47,7 @@ fn anthropic_body(model: &str, conversation: &Conversation, params: Map<String, 
         .iter()
         .map(|turn| {
             json!({
-                "role": turn.role.as_str(),
+                "role": turn.role.as_ref(),
                 "content": turn.texts.iter().map(|text| text_block(text)).collect::<Vec<_>>(),
             })
         })

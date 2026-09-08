@@ -8,22 +8,7 @@ pub const OPENAI_REALTIME_DEFAULT_API_BASE: &str = "https://api.openai.com";
 /// Path appended to the resolved host base to reach the realtime endpoint.
 pub const OPENAI_REALTIME_PATH: &str = "/v1/realtime";
 
-/// Percent-encode a query value, escaping any char outside the RFC 3986
-/// unreserved set (`A-Za-z0-9-._~`). Keeps us dependency-free; common realtime
-/// model slugs have no special chars, but this stays correct for the rest.
-fn percent_encode(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        let unreserved = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~');
-        if unreserved {
-            encoded.push(byte as char);
-        } else {
-            encoded.push('%');
-            encoded.push_str(&format!("{byte:02X}"));
-        }
-    }
-    encoded
-}
+use crate::providers::openai::percent_encode;
 
 /// Build the realtime WebSocket URL, porting Python's `OpenAIRealtime._construct_url`.
 ///
@@ -64,6 +49,14 @@ pub struct OpenAiRealtimeConfig;
 pub const OPENAI_REALTIME_CONFIG: OpenAiRealtimeConfig = OpenAiRealtimeConfig;
 
 impl RealtimeProviderConfig for OpenAiRealtimeConfig {
+    fn resolve_api_key(
+        &self,
+        api_key: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String, Error> {
+        crate::providers::openai::auth::resolve_api_key(api_key, env_lookup, "realtime")
+    }
+
     fn complete_url(&self, api_base: Option<&str>, model: &str) -> String {
         complete_url(api_base, model)
     }

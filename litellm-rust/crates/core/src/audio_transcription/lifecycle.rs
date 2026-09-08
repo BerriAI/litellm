@@ -16,7 +16,7 @@ use crate::lifecycle::{
     ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall, RequestPolicy,
     TerminalDispatcher, TerminalRecord,
 };
-use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
+use crate::providers::dispatch::resolve_audio_route_provider;
 
 use super::handler::execute_audio_transcription_provider_call;
 use super::prepare::prepare_audio_transcription_provider_call;
@@ -70,11 +70,7 @@ impl AudioRoute {
         services: &S,
         request: AudioRouteRequest<'_>,
     ) -> ExecutedCall<Value, Error> {
-        let provider = get_custom_llm_provider(request.model, request.custom_llm_provider)
-            .unwrap_or(CustomLlmProvider {
-                model: request.model,
-                custom_llm_provider: "bedrock",
-            });
+        let provider = resolve_audio_route_provider(request.model, request.custom_llm_provider);
         let context = CallLifecycleContext::new(
             "audio_transcription",
             provider.model,

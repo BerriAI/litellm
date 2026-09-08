@@ -1,11 +1,10 @@
+pub(super) use crate::providers::dispatch::ocr_provider_config as provider_config;
+
 use std::time::Duration;
 
 use serde_json::{Map, Value};
 
 use crate::Error;
-use crate::providers::azure_ai::ocr::transformation as azure_ai;
-use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
-use crate::providers::vertex_ai::ocr::transformation as vertex_ai;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::transformation::{OcrProviderConfig, OcrResponseHandling};
@@ -45,7 +44,7 @@ fn check_admission_capabilities(
     request: &OcrAdmissionRequest,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(), Error> {
-    let (provider, config) = request_config(request)?;
+    let (_, config) = request_config(request)?;
     validate_capabilities(config)?;
     request
         .document
@@ -59,20 +58,7 @@ fn check_admission_capabilities(
             .as_deref()
             .is_some_and(|key| !key.trim().is_empty())
             || crate::http_utils::has_header(&request.extra_headers, "authorization");
-        let configured = match provider.custom_llm_provider {
-            "azure_ai" => {
-                crate::http_utils::has_header(&request.extra_headers, "api-key")
-                    || request
-                        .azure_ad_token
-                        .as_deref()
-                        .is_some_and(|key| !key.trim().is_empty())
-                    || env_lookup("AZURE_AI_API_KEY").is_some_and(|key| !key.trim().is_empty())
-            }
-            "vertex_ai" => ["VERTEX_AI_API_KEY", "VERTEXAI_API_KEY"]
-                .into_iter()
-                .any(|name| env_lookup(name).is_some_and(|key| !key.trim().is_empty())),
-            _ => false,
-        };
+        let configured = config.has_configured_credentials(request, env_lookup);
         if !supplied && !configured {
             return Err(Error::Unsupported(operation));
         }
@@ -153,22 +139,11 @@ pub(super) fn validate_capabilities(config: &dyn OcrProviderConfig) -> Result<()
     }
 }
 
-pub(super) fn provider_config(
-    provider: &str,
-    model: &str,
-) -> Result<&'static dyn OcrProviderConfig, Error> {
-    match provider {
-        "mistral" => Ok(&MISTRAL_OCR_CONFIG),
-        "azure_ai" => azure_ai::config_for_model(model),
-        "vertex_ai" => vertex_ai::config_for_model(model),
-        _ => Err(Error::Unsupported("OCR provider")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ocr::types::OcrDocument;
+    use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
 
     fn request() -> OcrAdmissionRequest {
         OcrAdmissionRequest {

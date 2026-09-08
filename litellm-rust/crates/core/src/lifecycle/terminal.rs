@@ -111,7 +111,7 @@ impl From<&TerminalRecord> for ModelCallDetails {
 
 impl TerminalRecord {
     pub fn call_type(&self) -> CallType {
-        CallType::from(self.call_type.as_str())
+        CallType::from(self.call_type.as_ref())
     }
 }
 

@@ -33,16 +33,16 @@ pub struct AudioRouteRequest<'a> {
 
 #[derive(Clone)]
 pub struct ProviderAudioTranscriptionRequest {
-    pub(super) model: String,
-    pub(super) custom_llm_provider: String,
-    pub(super) config: &'static dyn AudioTranscriptionProviderConfig,
-    pub(super) url: String,
-    pub(super) body: Value,
-    pub(super) upstream_headers: Vec<(String, String)>,
-    pub(super) auth: AudioTranscriptionAuth,
+    pub(crate) model: String,
+    pub(crate) custom_llm_provider: String,
+    pub(crate) config: &'static dyn AudioTranscriptionProviderConfig,
+    pub(crate) url: String,
+    pub(crate) body: Value,
+    pub(crate) upstream_headers: Vec<(String, String)>,
+    pub(crate) auth: AudioTranscriptionAuth,
     #[cfg(feature = "bedrock-auth")]
-    pub(super) optional_params: Map<String, Value>,
-    pub(super) timeout: Option<Duration>,
+    pub(crate) optional_params: Map<String, Value>,
+    pub(crate) timeout: Option<Duration>,
 }
 
 impl ProviderAudioTranscriptionRequest {

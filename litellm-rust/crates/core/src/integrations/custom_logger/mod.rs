@@ -381,4 +381,20 @@ mod tests {
         assert_eq!(details.request_id, Some("req_ocr".to_string()));
         assert_eq!(details.litellm_call_id, Some("call_ocr".to_string()));
     }
+
+    #[test]
+    fn call_type_strings_preserve_known_and_unknown_values() {
+        assert_eq!(
+            CallType::from("chat_completion").as_ref(),
+            "chat_completion"
+        );
+        assert_eq!(
+            CallType::from("audio_transcription").as_ref(),
+            "audio_transcription"
+        );
+        assert_eq!(
+            CallType::from("audio_transcription").to_string(),
+            "audio_transcription"
+        );
+    }
 }
