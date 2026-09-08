@@ -996,7 +996,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     @staticmethod
     def _write_function_call_item(item: object, name: str | None, arguments: str | None) -> None:
-        if not (isinstance(item, dict) or hasattr(item, "get")):
+        if item is None:
             return
         if name is not None:
             OpenAIResponsesHandler._write_event_field(item, "name", name)
