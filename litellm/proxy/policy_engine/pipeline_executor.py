@@ -150,8 +150,8 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     non-streaming hooks, an exception it raises ends the stream through the executor's
     fail/error classification, and a replacement response is re-scanned by the same translation
     so its texts reach the client through the translation's ended-stream write-back. A
-    replacement whose scanned texts do not line up with the originals is undeliverable, so the
-    executor releases the original chunks."""
+    replacement whose scanned texts do not line up with the originals, or whose tool calls
+    differ from them, is undeliverable, so the executor releases the original chunks."""
 
     def __init__(
         self,
@@ -184,8 +184,12 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
             return inputs
         scanned: Final = _text_snapshot(inputs.get("texts"))
         rescanned: Final = await self._rescan(replacement, logging_obj)
-        rewritten: Final = None if rescanned is None else rescanned.get("texts")
-        if scanned is None or rewritten is None or len(rewritten) != len(scanned):
+        if scanned is None or rescanned is None:
+            raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
+        rewritten: Final = rescanned.get("texts")
+        if rewritten is None or len(rewritten) != len(scanned):
+            raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
+        if _tool_call_shapes(rescanned.get("tool_calls")) != _tool_call_shapes(inputs.get("tool_calls")):
             raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
         rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": rewritten}
         return rewritten_inputs
@@ -380,7 +384,9 @@ class PipelineExecutor:
         yet (a tool-call rewrite, a text rewrite on a translation without write-back, or one
         the translation or adapter refused with ``UndeliverableStreamRewrite``) is discarded:
         the buffered chunks go back to the originals and the step passes, so the client gets
-        the stream the merge base sent."""
+        the stream the merge base sent. The response an earlier step's translation stored under
+        ``request_data["response"]`` is dropped first, so this step's hook sees the stream as
+        the steps before it left it."""
         scanner: Final = (
             callback
             if PipelineExecutor.supports_unified_execution(callback)
@@ -389,6 +395,7 @@ class PipelineExecutor:
         observer: Final = _StreamRewriteObserver(scanner)
         deliver_rewrites: Final = type(endpoint_translation).delivers_ended_stream_text_rewrites
         originals: Final = copy.deepcopy(streaming_chunks)
+        hook_input.pop("response", None)  # rebind-ok: an earlier step's stored response goes so this step's is stored
         try:
             if deliver_rewrites:
                 await endpoint_translation.process_output_streaming_response(
