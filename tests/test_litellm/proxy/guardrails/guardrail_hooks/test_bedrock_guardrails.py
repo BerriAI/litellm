@@ -5589,24 +5589,38 @@ class TestBedrockGuardrailImageInput:
 
         assert "could not be read" in str(exc_info.value.detail) or "not a png/jpeg" in str(exc_info.value.detail)
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param("https://example.com/pic.png", id="plain https url"),
+            pytest.param("http://example.com/pic.png", id="plain http url"),
+            # The rejection used to be a prefix test, which these slip past while
+            # `process_image_async` still treats them as remote and fetches them --
+            # an uncapped server-side download straight through the fail-closed path.
+            pytest.param(" https://example.com/pic.png", id="leading space"),
+            pytest.param("\thttps://example.com/pic.png", id="leading tab"),
+            pytest.param("\nhttps://example.com/pic.png", id="leading newline"),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_a_remote_image_url_is_rejected_without_being_fetched(self):
+    async def test_a_remote_image_url_is_rejected_without_being_fetched(self, url):
         """A remote url is named as its own rejection rather than left to the decoder.
 
         Fetching one safely (size cap, SSRF/redirect validation) is separate work; this
         PR only scans inline images, so a url has to fail closed rather than be ignored
-        or silently forwarded to the model unscanned.
+        or silently forwarded to the model unscanned. The refusal has to catch every
+        shape the decoder would fetch, not just the well-formed ones.
         """
-        messages = [
-            {
-                "role": "user",
-                "content": [{"type": "image_url", "image_url": {"url": "https://example.com/pic.png"}}],
-            }
-        ]
+        messages = [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}]
 
-        with pytest.raises(HTTPException) as exc_info:
-            await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
+        with patch(  # test-quality-ok: the fetch is the thing under assertion -- it must never be reached
+            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.BedrockImageProcessor.process_image_async",
+            new_callable=AsyncMock,
+        ) as decode:
+            with pytest.raises(HTTPException) as exc_info:
+                await self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
 
+        decode.assert_not_awaited()
         assert "remote image URLs are not supported" in str(exc_info.value.detail)
 
     def test_file_backed_part_counting_skips_non_mapping_entries(self):

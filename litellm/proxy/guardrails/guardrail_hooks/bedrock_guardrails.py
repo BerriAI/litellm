@@ -606,8 +606,16 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         same bytes to the model), so the operator gets "not supported" instead of
         the decoder's "could not be read". Anything else that is not a data URI is
         an unrecognized payload and falls through to the decoder, which rejects it.
+
+        The test is a substring, not a prefix, deliberately: it has to reject
+        everything `BedrockImageProcessor.process_image_async` would treat as
+        remote, and that check is `"http://" in image_url or "https://" in
+        image_url`. A prefix test reads more naturally but leaves a hole -- a url
+        carrying leading whitespace fails it, then matches downstream and is
+        fetched, so the fail-closed policy here would be bypassed into an
+        uncapped server-side download. Keep the two predicates identical.
         """
-        if image_url.startswith(("http://", "https://")):
+        if "http://" in image_url or "https://" in image_url:
             self._handle_unscannable_image(reason="remote image URLs are not supported")
 
         try:
