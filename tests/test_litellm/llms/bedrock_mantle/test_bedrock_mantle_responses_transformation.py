@@ -1216,13 +1216,10 @@ class TestMantleBaseSegment:
             ),
             ("openai.gpt-oss-120b", {}, "v1"),
             (None, {}, "v1"),
-            # unmapped openai.gpt-* (not gpt-oss) -> family fallback to /openai/v1
             ("openai.gpt-daybreak-blue-5.6-sol", {}, "openai/v1"),
             ("openai.gpt-5.7", {}, "openai/v1"),
             ("openai.gpt-oss-safeguard-20b", {}, "v1"),
             ("somelab.unmapped", {}, "v1"),
-            # the Router registers a bare {} entry for unmapped deployments; the
-            # family fallback must still apply, while an explicit False wins
             ("openai.gpt-5.7", {"bedrock_mantle/openai.gpt-5.7": {}}, "openai/v1"),
             (
                 "openai.gpt-5.7",

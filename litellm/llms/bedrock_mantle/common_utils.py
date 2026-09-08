@@ -31,7 +31,6 @@ BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
 
-# OpenAI models on Mantle served from the /openai/v1 base; gpt-oss stays on /v1.
 OPENAI_V1_FAMILY_RE: Final = re.compile(r"^openai\.gpt-(?!oss)")
 
 
