@@ -15,12 +15,13 @@ env:
   FORK_REPO: leecoder/litellm
   UPSTREAM_REPO: BerriAI/litellm
   UPSTREAM_BASE: litellm_internal_staging
+  # carries the monitor script until PR #38950 lands upstream
+  SCRIPT_REF: feat/dbx-pricing-monitor-clean
 
 jobs:
   monitor-db-pricing:
-    # Upstream runs the same checkout on schedule; skip there so only the
-    # fork drives the monitor. Manual dispatch still works on upstream.
-    if: github.repository == 'leecoder/litellm' || github.event_name == 'workflow_dispatch'
+    # cron would fire on both repos after merge; only the fork may open PRs, or they'd race
+    if: github.repository == 'leecoder/litellm'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -29,6 +30,14 @@ jobs:
           fetch-depth: 0
           repository: ${{ env.UPSTREAM_REPO }}
           ref: ${{ env.UPSTREAM_BASE }}
+
+      - name: Bootstrap monitor script until #38950 lands upstream
+        run: |
+          if [ ! -f scripts/monitor_databricks_pricing.py ]; then
+            mkdir -p scripts
+            curl -fsSL "https://raw.githubusercontent.com/${FORK_REPO}/${SCRIPT_REF}/scripts/monitor_databricks_pricing.py" \
+              -o scripts/monitor_databricks_pricing.py
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
