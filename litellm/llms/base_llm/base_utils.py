@@ -321,43 +321,44 @@ def _merged_system_runs(messages: Sequence[AllMessageValues]) -> Iterator[AllMes
 _INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
 
 
-def _leading_system_block_length(messages: Sequence[AllMessageValues]) -> int:
-    return next(
-        (index for index, message in enumerate(messages) if message["role"] not in _INSTRUCTION_ROLES),
-        len(messages),
-    )
+def _leading_instruction_block_length(roles: Sequence[str | None]) -> int:
+    return next((index for index, role in enumerate(roles) if role not in _INSTRUCTION_ROLES), len(roles))
 
 
-def _closing_instruction_block_start(messages: Sequence[AllMessageValues], leading_length: int) -> int:
+def _closing_instruction_block_start(roles: Sequence[str | None], leading_length: int) -> int:
     last_conversation_index: Final = next(
-        (
-            index
-            for index in range(len(messages) - 1, leading_length - 1, -1)
-            if messages[index]["role"] not in _INSTRUCTION_ROLES
-        ),
+        (index for index in range(len(roles) - 1, leading_length - 1, -1) if roles[index] not in _INSTRUCTION_ROLES),
         None,
     )
-    if last_conversation_index is None or messages[last_conversation_index]["role"] != "assistant":
-        return len(messages)
+    if last_conversation_index is None or roles[last_conversation_index] != "assistant":
+        return len(roles)
     return last_conversation_index + 1
 
 
-def _move_later_developer_messages_up(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
-    leading_length: Final = _leading_system_block_length(messages)
-    closing_start: Final = _closing_instruction_block_start(messages, leading_length)
-    conversation: Final = messages[leading_length:closing_start]
-    hoisted: Final = tuple(message for message in conversation if message["role"] == "developer")
+def hoisted_developer_item_order(roles: Sequence[str | None]) -> tuple[int, ...]:
+    """
+    Index order that moves every developer item after the leading instruction block
+    up into it, except a developer block that closes the conversation right after an
+    assistant turn, which stays in place so the request does not end on the assistant's
+    turn. Items without a role (tool calls and their outputs) count as conversation.
+    """
+    leading_length: Final = _leading_instruction_block_length(roles)
+    closing_start: Final = _closing_instruction_block_start(roles, leading_length)
+    conversation: Final = range(leading_length, closing_start)
+    hoisted: Final = tuple(index for index in conversation if roles[index] == "developer")
     if hoisted:
-        verbose_logger.debug(
-            "Hoisting %d developer message(s) into the leading system block for OpenAI-compatible backends.",
-            len(hoisted),
-        )
+        verbose_logger.debug("Hoisting %d developer message(s) into the leading system block.", len(hoisted))
     return (
-        *messages[:leading_length],
+        *range(leading_length),
         *hoisted,
-        *(message for message in conversation if message["role"] != "developer"),
-        *messages[closing_start:],
+        *(index for index in conversation if roles[index] != "developer"),
+        *range(closing_start, len(roles)),
     )
+
+
+def _move_later_developer_messages_up(messages: Sequence[AllMessageValues]) -> tuple[AllMessageValues, ...]:
+    order: Final = hoisted_developer_item_order(tuple(message["role"] for message in messages))
+    return tuple(messages[index] for index in order)
 
 
 def hoist_developer_messages_into_leading_system_message(

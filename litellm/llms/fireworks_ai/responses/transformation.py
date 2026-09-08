@@ -6,6 +6,7 @@ from urllib.parse import unquote
 import httpx
 from openai.types.responses import EasyInputMessageParam, ResponseInputItemParam
 
+from litellm.llms.base_llm.base_utils import hoisted_developer_item_order
 from litellm.llms.fireworks_ai.common_utils import (
     resolve_fireworks_api_key,
     resolve_fireworks_resource_name,
@@ -31,16 +32,23 @@ def _session_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object
     )
 
 
+def _item_role(item: ResponseInputItemParam) -> str | None:
+    if "role" not in item:
+        return None
+    return item["role"]
+
+
 def _developer_item_as_system(item: ResponseInputItemParam) -> ResponseInputItemParam:
     if "role" not in item or item["role"] != "developer":
         return item
     return EasyInputMessageParam(role="system", content=item["content"], type="message")
 
 
-def _developer_items_as_system(input: str | ResponseInputParam) -> str | ResponseInputParam:
+def _hoisted_developer_items_as_system(input: str | ResponseInputParam) -> str | ResponseInputParam:
     if isinstance(input, str):
         return input
-    return [_developer_item_as_system(item) for item in input]
+    order: Final = hoisted_developer_item_order(tuple(_item_role(item) for item in input))
+    return [_developer_item_as_system(input[index]) for index in order]
 
 
 class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -69,7 +77,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return f"{base}/responses"
 
     def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
-        return _developer_items_as_system(super()._validate_input_param(input))
+        return _hoisted_developer_items_as_system(super()._validate_input_param(input))
 
     def transform_responses_api_request(
         self,
