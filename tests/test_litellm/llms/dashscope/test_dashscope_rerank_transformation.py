@@ -7,9 +7,10 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 
 
-from litellm.llms.dashscope.common_utils import DashScopeError
+from litellm.llms.dashscope.common_utils import DashScopeError, get_dashscope_family_rerank_config
 from litellm.llms.dashscope.rerank.transformation import (
     DEFAULT_RERANK_URL,
     DashScopeRerankConfig,
@@ -103,6 +104,7 @@ class TestDashScopeRerankRequest:
             return_documents=True,
             max_chunks_per_doc=5,
             max_tokens_per_doc=100,
+            instruction="Unsupported on the compatible protocol",
         )
         assert params == {
             "query": "什么是文本排序模型",
@@ -274,30 +276,32 @@ class TestDashScopeRerankResponse:
         )
         assert out.id is not None and len(out.id) > 0
 
-    def test_error_envelope_raises(self):
+    @pytest.mark.parametrize("model", ["qwen3-rerank", "qwen3.7-text-rerank"])
+    def test_error_envelope_raises(self, model):
         body = {
             "code": "InvalidApiKey",
             "message": "Invalid API-key provided.",
             "request_id": "fb53",
         }
         with pytest.raises(DashScopeError) as exc_info:
-            self.config.transform_rerank_response(
-                model="qwen3-rerank",
+            get_dashscope_family_rerank_config("dashscope", model).transform_rerank_response(
+                model=model,
                 raw_response=self._resp(body, status_code=401),
                 model_response=RerankResponse(),
                 logging_obj=self.logging,
             )
         assert "Invalid API-key provided." in str(exc_info.value)
 
-    def test_non_json_response_raises(self):
+    @pytest.mark.parametrize("model", ["qwen3-rerank", "qwen3.7-text-rerank"])
+    def test_non_json_response_raises(self, model):
         bad = httpx.Response(
             status_code=500,
             content=b"<html>bad gateway</html>",
             request=httpx.Request("POST", "https://example.com"),
         )
         with pytest.raises(DashScopeError):
-            self.config.transform_rerank_response(
-                model="qwen3-rerank",
+            get_dashscope_family_rerank_config("dashscope", model).transform_rerank_response(
+                model=model,
                 raw_response=bad,
                 model_response=RerankResponse(),
                 logging_obj=self.logging,
@@ -323,3 +327,166 @@ class TestProviderConfigManagerDispatch:
             present_version_params=[],
         )
         assert isinstance(cfg, DashScopeRerankConfig)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("return_documents", [False, True])
+@pytest.mark.parametrize(
+    "provider,host",
+    [
+        ("dashscope", "dashscope.aliyuncs.com"),
+        ("qwencloud", "dashscope-intl.aliyuncs.com"),
+        ("qwen_ai_platform", "dashscope.aliyuncs.com"),
+    ],
+)
+async def test_qwen37_rerank_public_call(
+    is_async, return_documents, provider, host, respx_mock: respx.MockRouter, monkeypatch
+):
+    import litellm
+
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_BASE_RERANK", raising=False)
+    monkeypatch.delenv(f"{provider.upper()}_API_BASE", raising=False)
+    monkeypatch.delenv(f"{provider.upper()}_API_BASE_RERANK", raising=False)
+    monkeypatch.setenv(f"{provider.upper()}_API_KEY", "fake-brand-key")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route = respx_mock.post(f"https://{host}/api/v1/services/rerank/text-rerank/text-rerank")
+    results = [{"index": 1, "relevance_score": 0.88, **({"document": {"text": "answer"}} if return_documents else {})}]
+    route.respond(
+        200,
+        json={
+            "output": {"results": results},
+            "usage": {"prompt_tokens": 237, "total_tokens": 261, "details": {"provider_metadata": True}},
+            "request_id": "qwen37-request-id",
+        },
+    )
+    kwargs = {
+        "model": f"{provider}/qwen3.7-text-rerank",
+        "query": "question",
+        "documents": ["unrelated", "answer"],
+        "top_n": 1,
+        "return_documents": return_documents,
+        "instruction": "Retrieve semantically similar text.",
+    }
+
+    response = await litellm.arerank(**kwargs) if is_async else litellm.rerank(**kwargs)
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "qwen3.7-text-rerank",
+        "input": {"query": "question", "documents": ["unrelated", "answer"]},
+        "parameters": {
+            "top_n": 1,
+            "return_documents": return_documents,
+            "instruct": "Retrieve semantically similar text.",
+        },
+    }
+    assert route.calls[0].request.headers["authorization"] == "Bearer fake-brand-key"
+    assert response.id == "qwen37-request-id"
+    assert response.results == results
+    assert response.meta == {"billed_units": {"total_tokens": 261}, "tokens": {"input_tokens": 237}}
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://proxy.example/api/v1",
+        "https://proxy.example/api/v1/services/rerank/text-rerank/text-rerank/",
+    ],
+)
+def test_qwen37_rerank_custom_url(api_base):
+    assert get_dashscope_family_rerank_config("dashscope", "qwen3.7-text-rerank").get_complete_url(
+        api_base, "qwen3.7-text-rerank"
+    ) == ("https://proxy.example/api/v1/services/rerank/text-rerank/text-rerank")
+
+
+@pytest.mark.parametrize(
+    "provider,host",
+    [("dashscope", "dashscope-intl.aliyuncs.com"), ("qwencloud", "dashscope.aliyuncs.com")],
+)
+def test_qwen37_rerank_explicit_region(provider, host):
+    config = get_dashscope_family_rerank_config(provider, "qwen3.7-text-rerank")
+    assert config.get_complete_url(f"https://{host}/compatible-mode/v1", "qwen3.7-text-rerank") == (
+        f"https://{host}/api/v1/services/rerank/text-rerank/text-rerank"
+    )
+
+
+def test_qwen37_rerank_response_logging():
+    config = get_dashscope_family_rerank_config("dashscope", "qwen3.7-text-rerank")
+    logging = MagicMock()
+    request = {"model": "qwen3.7-text-rerank", "input": {"query": "question", "documents": ["answer"]}, "parameters": {}}
+    payload = {"request_id": "request-id", "output": {"results": [{"index": 0, "relevance_score": 0.88}]}}
+
+    response = config.transform_rerank_response(
+        model="qwen3.7-text-rerank",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=RerankResponse(),
+        logging_obj=logging,
+        request_data=request,
+    )
+
+    logging.post_call.assert_called_once_with(
+        input="question", api_key=None, additional_args={"complete_input_dict": request}, original_response=payload
+    )
+    assert response.id == "request-id"
+    assert response.results == [{"index": 0, "relevance_score": 0.88}]
+
+
+@pytest.mark.parametrize("provider", ["dashscope", "qwencloud", "qwen_ai_platform"])
+def test_qwen37_rerank_environment_url(provider, respx_mock: respx.MockRouter, monkeypatch):
+    import litellm
+
+    monkeypatch.delenv("DASHSCOPE_API_BASE", raising=False)
+    monkeypatch.delenv(f"{provider.upper()}_API_BASE", raising=False)
+    monkeypatch.setenv(f"{provider.upper()}_API_BASE_RERANK", "https://proxy.example/api/v1")
+    route = respx_mock.post("https://proxy.example/api/v1/services/rerank/text-rerank/text-rerank")
+    route.respond(
+        200,
+        json={
+            "output": {"results": [{"index": 0, "relevance_score": 0.88}]},
+            "request_id": "all-results",
+            "usage": {"prompt_tokens": 10, "total_tokens": 10},
+        },
+    )
+
+    response = litellm.rerank(
+        model=f"{provider}/qwen3.7-text-rerank",
+        query="question",
+        documents=["answer"],
+        return_documents=None,
+        api_key="fake-dashscope-key",
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "qwen3.7-text-rerank",
+        "input": {"query": "question", "documents": ["answer"]},
+        "parameters": {},
+    }
+    assert response.results == [{"index": 0, "relevance_score": 0.88}]
+    assert response.meta["tokens"]["input_tokens"] == 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_qwen37_rerank_preserves_provider_error(is_async, respx_mock: respx.MockRouter, monkeypatch):
+    import litellm
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route = respx_mock.post("https://proxy.example/api/v1/services/rerank/text-rerank/text-rerank")
+    route.respond(
+        400,
+        json={"code": "InvalidParameter", "message": "documents must not be empty", "request_id": "invalid-documents"},
+    )
+    kwargs = {
+        "model": "dashscope/qwen3.7-text-rerank",
+        "query": "question",
+        "documents": [],
+        "api_key": "fake-dashscope-key",
+        "api_base": "https://proxy.example/api/v1",
+    }
+
+    with pytest.raises(litellm.BadRequestError, match="documents must not be empty") as error:
+        await litellm.arerank(**kwargs) if is_async else litellm.rerank(**kwargs)
+
+    assert error.value.status_code == 400
+    assert "DashscopeException" in str(error.value)

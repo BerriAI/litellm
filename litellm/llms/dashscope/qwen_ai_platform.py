@@ -1,4 +1,4 @@
-from typing import Final
+from typing import ClassVar, Final
 
 from litellm.secret_managers.main import get_secret_str
 
@@ -47,11 +47,13 @@ class QwenAIPlatformEmbeddingConfig(DashScopeEmbeddingConfig):
 
 
 class QwenAIPlatformRerankConfig(DashScopeRerankConfig):
+    DEFAULT_RERANK_API_BASE: ClassVar[str] = QWEN_AI_PLATFORM_RERANK_API_BASE
+
     def _resolve_api_key(self, api_key: str | None) -> str:
         return _require_qwen_ai_platform_api_key(api_key)
 
     def _resolve_rerank_api_base(self, api_base: str | None) -> str:
-        return api_base or get_secret_str("QWEN_AI_PLATFORM_API_BASE_RERANK") or QWEN_AI_PLATFORM_RERANK_API_BASE
+        return api_base or get_secret_str("QWEN_AI_PLATFORM_API_BASE_RERANK") or self.DEFAULT_RERANK_API_BASE
 
 
 class QwenAIPlatformImageGenerationConfig(DashScopeImageGenerationConfig):

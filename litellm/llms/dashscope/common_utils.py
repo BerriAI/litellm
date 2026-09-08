@@ -2,7 +2,7 @@
 Common utilities for the DashScope LLM provider.
 """
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         BaseImageGenerationConfig,
     )
     from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
+    from litellm.llms.dashscope.rerank.transformation import DashScopeRerankConfig
 
 
 def get_dashscope_family_embedding_config(custom_llm_provider: str) -> "BaseEmbeddingConfig":
@@ -33,7 +34,16 @@ def get_dashscope_family_embedding_config(custom_llm_provider: str) -> "BaseEmbe
     return DashScopeEmbeddingConfig()
 
 
-def get_dashscope_family_rerank_config(custom_llm_provider: str) -> "BaseRerankConfig":
+def get_dashscope_family_rerank_config(custom_llm_provider: str, model: str) -> "BaseRerankConfig":
+    provider_config: Final = _get_dashscope_family_rerank_provider_config(custom_llm_provider)
+    if model == "qwen3.7-text-rerank":
+        from litellm.llms.dashscope.rerank.native_transformation import DashScopeNativeRerankConfig
+
+        return DashScopeNativeRerankConfig(provider_config)
+    return provider_config
+
+
+def _get_dashscope_family_rerank_provider_config(custom_llm_provider: str) -> "DashScopeRerankConfig":
     if custom_llm_provider == "qwencloud":
         from litellm.llms.dashscope.qwencloud import QwenCloudRerankConfig
 
