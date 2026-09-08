@@ -43,7 +43,13 @@ def ocr_server():
         thread.join()
 
 
-def test_ocr_with_rust_extension(ocr_server):
+def test_ocr_with_rust_extension(ocr_server, monkeypatch):
+    from litellm.ocr import main as ocr_main
+
+    def reject_python_transport(**kwargs):
+        pytest.fail("OCR used the Python transport instead of the Rust extension")
+
+    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", reject_python_transport)
     server, requests = ocr_server
     host, port = server.server_address
 
