@@ -672,11 +672,19 @@ def load_credentials_from_list(kwargs: dict):
     CredentialAccessor: Final = getattr(sys.modules[__name__], "CredentialAccessor")
 
     credential_name: Final = kwargs.get("litellm_credential_name")
-    if credential_name and litellm.credential_list:
-        credential_accessor: Final[Mapping[str, object]] = CredentialAccessor.get_credential_values(credential_name)
-        for key, value in credential_accessor.items():
-            if key not in kwargs:
-                kwargs[key] = value
+    if not credential_name:
+        return
+    credential: Final = CredentialAccessor.find_credential(credential_name)
+    if credential is None:
+        verbose_logger.warning(
+            "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
+            credential_name,
+            len(litellm.credential_list),
+        )
+        return
+    for key, value in credential.credential_values.items():
+        if key not in kwargs:
+            kwargs[key] = value
 
 
 def get_dynamic_callbacks(
