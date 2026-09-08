@@ -382,6 +382,31 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert chunks == original
 
     @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_use_rewrite_with_server_tool_use_block_fails_closed(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = AnthropicMessagesHandler()
+        server_tool_use = [
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"query": "fruit"}'}}),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ]
+        tool_use = self._ended_tool_use_sse_chunks()
+        chunks = (
+            tool_use[:1]
+            + [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in server_tool_use]
+            + [chunk.replace(b'"index": 0', b'"index": 1') for chunk in tool_use[1:]]
+        )
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await handler.process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._argument_masking_guardrail(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+    @pytest.mark.asyncio
     async def test_ended_stream_rewrite_leaves_chunks_untouched_by_default(self):
         handler = AnthropicMessagesHandler()
         chunks = self._ended_sse_chunks()
