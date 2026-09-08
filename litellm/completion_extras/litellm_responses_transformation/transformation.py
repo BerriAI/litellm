@@ -1462,7 +1462,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
-            else:
+            elif content_part != "":
                 raise ValueError(f"Chat provider: Invalid function argument delta {parsed_chunk}")
         elif event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
             # New output item added
