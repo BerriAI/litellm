@@ -44,8 +44,9 @@ import {
 } from "./ComplexityRouterConfig";
 
 const DEFAULT_SCORING_EXPLANATION =
-  "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical " +
-  "terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:";
+  "The router scores each request across 7 built-in dimensions: token count, code presence, reasoning markers, technical " +
+  "terms, simple indicators, multi-step patterns, and question complexity, plus any custom dimensions you add. " +
+  "The weighted score determines the tier:";
 
 const HEURISTIC_V2_EXPLANATION =
   "The router estimates success probability for all four tiers with the bundled calibrated model, then selects " +

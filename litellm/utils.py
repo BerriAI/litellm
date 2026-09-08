@@ -672,11 +672,19 @@ def load_credentials_from_list(kwargs: dict):
     CredentialAccessor: Final = getattr(sys.modules[__name__], "CredentialAccessor")
 
     credential_name: Final = kwargs.get("litellm_credential_name")
-    if credential_name and litellm.credential_list:
-        credential_accessor: Final[Mapping[str, object]] = CredentialAccessor.get_credential_values(credential_name)
-        for key, value in credential_accessor.items():
-            if key not in kwargs:
-                kwargs[key] = value
+    if not credential_name:
+        return
+    credential: Final = CredentialAccessor.find_credential(credential_name)
+    if credential is None:
+        verbose_logger.warning(
+            "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
+            credential_name,
+            len(litellm.credential_list),
+        )
+        return
+    for key, value in credential.credential_values.items():
+        if key not in kwargs:
+            kwargs[key] = value
 
 
 def get_dynamic_callbacks(
@@ -2803,6 +2811,13 @@ def supports_reasoning(model: str, custom_llm_provider: str | None = None) -> bo
     Check if the given model supports reasoning and return a boolean value.
     """
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_reasoning")
+
+
+def supports_none_reasoning_effort(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model accepts reasoning effort "none" and return a boolean value.
+    """
+    return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_none_reasoning_effort")
 
 
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -5212,13 +5227,16 @@ def _strip_openai_finetune_model_name(model_name: str) -> str:
     input: ft:gpt-3.5-turbo:my-org:custom_suffix:id
     output: ft:gpt-3.5-turbo
 
+    input: ft:gpt-4o-2024-08-06:my-org::id (OpenAI leaves the suffix empty when none was set)
+    output: ft:gpt-4o-2024-08-06
+
     Args:
     model_name (str): The full model name
 
     Returns:
     str: The stripped model name
     """
-    return re.sub(r"(:[^:]+){3}$", "", model_name)
+    return re.sub(r"(:[^:]*){3}$", "", model_name)
 
 
 def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
@@ -8687,6 +8705,8 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
+        elif litellm.LlmProviders.FIREWORKS_AI == provider:
+            return litellm.FireworksAIResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
             # Both decisions are data-driven from the model's price-map entry, with
             # no model-name logic. Capability (can it serve Responses?) comes from

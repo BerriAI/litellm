@@ -308,3 +308,64 @@ def test_completion_plumbs_stream_chunk_size_through_converse():
         stream_chunk_size=2048,
     )
     iter_bytes_spy.assert_called_once_with(chunk_size=2048)
+
+
+def _bedrock_error_response(status_code: int, request_id: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        headers={
+            "x-amzn-RequestId": request_id,
+            "x-amzn-ErrorType": "InternalServerException",
+        },
+        text=json.dumps({"message": "Amazon Bedrock is unable to process your request."}),
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+
+
+def test_converse_completion_error_forwards_bedrock_response_headers():
+    error_response = _bedrock_error_response(500, "req-err-123")
+    client = HTTPHandler()
+    client.post = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        litellm.completion(
+            model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-err-123"
+
+
+@pytest.mark.asyncio
+async def test_async_converse_completion_error_forwards_bedrock_response_headers():
+    error_response = _bedrock_error_response(500, "req-err-456")
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await litellm.acompletion(
+            model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-err-456"
