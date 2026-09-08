@@ -30,16 +30,12 @@ binds ``127.0.0.1:0``, so it reaches no network and needs no credentials.
 """
 
 import asyncio
-import os
 import socket
 import struct
-import sys
 from typing import List, NamedTuple, Optional, Tuple
 
 import httpx
 import pytest
-
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -183,15 +179,7 @@ class _StaleKeepAliveServer:
         writer.close()
 
 
-@pytest.fixture
-def restore_transport_globals():
-    """litellm picks its transport from module globals; put them back afterwards."""
-    saved = (litellm.disable_aiohttp_transport, litellm.force_ipv4)
-    yield
-    litellm.disable_aiohttp_transport, litellm.force_ipv4 = saved
-
-
-def _make_handler(transport: str) -> Tuple[AsyncHTTPHandler, List[str]]:
+def _make_handler(monkeypatch, transport: str) -> Tuple[AsyncHTTPHandler, List[str]]:
     """Build a handler that records the method of every request httpx sends.
 
     Counting sends is the only way to tell a litellm retry from aiohttp's own.
@@ -204,9 +192,12 @@ def _make_handler(transport: str) -> Tuple[AsyncHTTPHandler, List[str]]:
     afterwards, so it covers every client the handler uses. A re-send issued on
     a second, short-lived client, which is how the retry was written before it
     was removed, therefore still shows up in this count.
+
+    litellm picks its transport from module globals, so they are set through
+    ``monkeypatch`` and put back when the test ends.
     """
-    litellm.disable_aiohttp_transport = transport == "httpcore"
-    litellm.force_ipv4 = False
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", transport == "httpcore")
+    monkeypatch.setattr(litellm, "force_ipv4", False)
 
     sends: List[str] = []
 
@@ -257,7 +248,7 @@ def _assert_pool_was_poisoned(server: _StaleKeepAliveServer) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", AIOHTTP_DECLINES_THESE)
 @pytest.mark.parametrize("transport,drop,expected", TRANSPORT_PARAMS)
-async def test_a_dead_connection_is_not_replayed(method, transport, drop, expected, restore_transport_globals):
+async def test_a_dead_connection_is_not_replayed(monkeypatch, method, transport, drop, expected):
     """The upstream reads the request, dies, and litellm lets the failure through.
 
     The server has already consumed the body at this point, so a replay would
@@ -265,7 +256,7 @@ async def test_a_dead_connection_is_not_replayed(method, transport, drop, expect
     one request at the server, and the transport error reaches the caller.
     """
     async with _StaleKeepAliveServer(drop=drop) as server:
-        handler, sends = _make_handler(transport)
+        handler, sends = _make_handler(monkeypatch, transport)
         try:
             await _warm_pool(handler, server.url)
 
@@ -283,24 +274,22 @@ async def test_a_dead_connection_is_not_replayed(method, transport, drop, expect
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transport,drop,expected", TRANSPORT_PARAMS)
-async def test_a_dead_connection_on_a_streaming_post_is_not_replayed(
-    transport, drop, expected, restore_transport_globals
-):
+async def test_a_dead_connection_on_a_streaming_post_is_not_replayed(monkeypatch, transport, drop, expected):
     """Streaming takes the same path, and used to hide the replay best.
 
     The retry returned a stream over a client it then closed, so the body died
     partway through and the second billed generation was invisible to the
-    caller. With no retry the connection failure is what the caller sees.
+    caller. With no retry the connection failure is what the caller sees, and it
+    reaches it from the ``post`` itself: the dropped connection carries no
+    response line, so there is never a body to iterate.
     """
     async with _StaleKeepAliveServer(drop=drop, stream_frames=6) as server:
-        handler, sends = _make_handler(transport)
+        handler, sends = _make_handler(monkeypatch, transport)
         try:
             await _warm_pool(handler, server.url)
 
             with pytest.raises(expected):
-                response = await handler.post(server.url, data=BODY, stream=True)
-                async for _ in response.aiter_bytes():
-                    pass
+                await handler.post(server.url, data=BODY, stream=True)
 
             _assert_pool_was_poisoned(server)
             assert len(sends) == 2, f"litellm re-sent the request: {sends}"
@@ -311,9 +300,7 @@ async def test_a_dead_connection_on_a_streaming_post_is_not_replayed(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", AIOHTTP_RETRIES_THESE)
 @pytest.mark.parametrize("transport,drop,expected", TRANSPORT_PARAMS)
-async def test_litellm_adds_no_retry_where_the_transport_has_its_own(
-    method, transport, drop, expected, restore_transport_globals
-):
+async def test_litellm_adds_no_retry_where_the_transport_has_its_own(monkeypatch, method, transport, drop, expected):
     """PUT and DELETE are aiohttp's to retry, and litellm does not add a second one.
 
     aiohttp retries these below httpx, so on that transport the call can still
@@ -326,7 +313,7 @@ async def test_litellm_adds_no_retry_where_the_transport_has_its_own(
     comes back.
     """
     async with _StaleKeepAliveServer(drop=drop) as server:
-        handler, sends = _make_handler(transport)
+        handler, sends = _make_handler(monkeypatch, transport)
         try:
             await _warm_pool(handler, server.url)
 
