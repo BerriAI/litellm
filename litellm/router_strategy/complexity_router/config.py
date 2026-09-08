@@ -56,11 +56,9 @@ DEFAULT_CLASSIFICATION_RUBRIC: Final[ClassificationRubric] = ClassificationRubri
 LLM_CLASSIFIER_TYPES: Final[frozenset[str]] = frozenset({"llm", "heuristic_first", "hybrid"})
 
 
-# The ladder as it has always shipped. NON_REASONING is absent because it is opt-in: an existing
-# router must not gain a rubric bullet, a wire label, or a rung it never configured, and the
-# heuristic_v2 artifact is trained on exactly these four classes. Read the active ladder off the
-# config (`tier_names`, `active_tier_severity_order`) rather than this constant wherever the
-# operator's `enable_non_reasoning_tier` can reach.
+# Excludes NON_REASONING so an existing router keeps the ladder, rubric and wire labels it already
+# has, and so heuristic_v2 keeps mapping onto the four classes its artifact is trained on. Anywhere
+# `enable_non_reasoning_tier` can reach, read the ladder off the config instead.
 TIER_SEVERITY_ORDER: Final[tuple[ComplexityTier, ...]] = (
     ComplexityTier.SIMPLE,
     ComplexityTier.MEDIUM,

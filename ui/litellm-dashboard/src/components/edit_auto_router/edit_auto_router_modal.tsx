@@ -136,10 +136,8 @@ export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
   complexityRouterDefaultModel: string | null | undefined,
 ): ComplexityRouterConfigValue => {
-  // `tiers` is rewritten wholesale on save, so a stored tier this misses is deleted from the
-  // router by any edit at all, including one made for an unrelated reason. NON_REASONING is
-  // therefore read back from the stored config rather than assumed absent, and the toggle follows
-  // what is actually stored so the round-trip cannot silently turn the tier off.
+  // `tiers` is rewritten wholesale on save, so a stored tier this misses is deleted by any edit,
+  // including one made for an unrelated reason. Hence reading both back rather than assuming four.
   const storedNonReasoning: string[] = normalizeTierModels(parsedConfig.tiers?.NON_REASONING);
   const enable_non_reasoning_tier: boolean =
     parsedConfig.enable_non_reasoning_tier === true || storedNonReasoning.length > 0;

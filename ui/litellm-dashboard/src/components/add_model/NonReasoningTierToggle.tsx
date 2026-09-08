@@ -15,8 +15,7 @@ const NonReasoningTierToggle: React.FC<{
   onChange: (value: ComplexityRouterConfigValue) => void;
   available: boolean;
 }> = ({ value, onChange, available }) => {
-  // Turning it off drops the tier's key rather than leaving an empty pool, which the backend
-  // rejects; turning it back on restores whatever pool the form still held.
+  // Off drops the tier's key rather than leaving the empty pool the backend rejects.
   const handleToggle = (enabled: boolean): void => {
     const { NON_REASONING: existingPool, ...keptTiers } = value.tiers;
     const next: ComplexityRouterConfigValue = {
