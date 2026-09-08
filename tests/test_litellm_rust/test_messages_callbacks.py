@@ -10,7 +10,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import CallTypes
-from tests.test_litellm_rust.callback_recorder import RecordingLogger
+from tests.test_litellm_rust.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.contracts import (
     MESSAGES,
     MESSAGES_MODEL,
@@ -54,18 +54,7 @@ async def test_messages_pre_call_receives_expected_provider_request(messages_ser
     assert len(observations) == 1
     model, messages, additional_args = observations[0]
     assert model == "claude-sonnet-4-5-20250929"
-    assert messages == [
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "model": "claude-sonnet-4-5-20250929",
-                    "messages": MESSAGES,
-                    "max_tokens": 64,
-                }
-            ),
-        }
-    ]
+    assert messages == MESSAGES
     assert additional_args["api_base"] == f"{messages_server.base_url}/v1/messages"
     assert additional_args["complete_input_dict"] == {
         "model": "claude-sonnet-4-5-20250929",
@@ -153,6 +142,32 @@ async def test_messages_callbacks_run_once(messages_server: RecordingServer) -> 
     assert recorder.names.count("async_log_success_event") == 1
     assert "log_failure_event" not in recorder.names
     assert "async_log_failure_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+async def test_messages_logging_drain_waits_for_suspended_callback(messages_server: RecordingServer) -> None:
+    started: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    finished: Final = asyncio.Event()
+
+    class SuspendedLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            started.set()
+            await release.wait()
+            finished.set()
+
+    await call_messages(messages_server, [SuspendedLogger()])
+    draining: Final = asyncio.create_task(drain_logging())
+    try:
+        await asyncio.wait_for(started.wait(), timeout=10)
+        await asyncio.sleep(0)
+        assert not draining.done()
+        assert not finished.is_set()
+    finally:
+        release.set()
+        await asyncio.wait_for(draining, timeout=10)
+
+    assert finished.is_set()
 
 
 @pytest.mark.asyncio
@@ -268,6 +283,7 @@ async def test_messages_post_call_guardrail_replacement_reaches_caller_and_loggi
 @pytest.mark.asyncio
 async def test_messages_logging_hook_replacement_reaches_later_loggers_only(messages_server: RecordingServer) -> None:
     observations: Final = []
+    exported: Final = asyncio.Event()
 
     class RecordGuardrailVerdict(CustomLogger):
         async def async_logging_hook(self, kwargs, result, call_type):
@@ -280,9 +296,10 @@ async def test_messages_logging_hook_replacement_reaches_later_loggers_only(mess
 
         async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
             observations.append(("export", kwargs["guardrail-verdict"]))
+            exported.set()
 
     response: Final = await call_messages(messages_server, [RecordGuardrailVerdict(), ExportLog()])
-    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    await asyncio.wait_for(exported.wait(), timeout=10)
 
     assert observations == ["guardrail", ("export", "allowed")]
     assert response["content"][0]["text"] == "Hello from native Messages"

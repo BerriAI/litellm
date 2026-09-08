@@ -6,6 +6,14 @@ from dataclasses import dataclass
 from typing import Final
 
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER, LoggingWorker
+
+
+async def drain_logging(worker: LoggingWorker = GLOBAL_LOGGING_WORKER) -> None:
+    # The wrapper's scheduled helper enqueues without awaiting; let it run before joining the queue.
+    await asyncio.sleep(0)
+    worker.start()
+    await asyncio.wait_for(worker.flush(), timeout=10)
 
 
 @dataclass(frozen=True, slots=True)

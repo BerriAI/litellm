@@ -199,11 +199,7 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Py<MessagesState>>
     let message = PyDict::new(py);
     message.set_item("role", "user")?;
     message.set_item("content", serialized)?;
-    let messages = vec![message];
-    logging
-        .bind(py)
-        .call_method1("update_messages", (&messages,))?;
-    kwargs.set_item("input", messages)?;
+    kwargs.set_item("input", vec![message])?;
     kwargs.set_item("api_key", "")?;
     kwargs.set_item("additional_args", additional)?;
     logging
@@ -340,7 +336,7 @@ class Host:
         self.current = arguments
         self.asynchronous = asynchronous
         self.logger = arguments.get('litellm_logging_obj')
-        self.deployment_hooks_owned = self.logger is None
+        self.lifecycle_owned = self.logger is None
         self.state = None
         self.response = None
         self.error = None
@@ -354,7 +350,7 @@ class Host:
         self.streaming = self.logger.stream is True
 
     async def deployment_pre(self):
-        if not self.deployment_hooks_owned:
+        if not self.lifecycle_owned:
             return
         modified = await utils.async_pre_call_deployment_hook(self.current, 'anthropic_messages')
         if modified is not None:
@@ -373,7 +369,7 @@ class Host:
         self.end = datetime.now()
 
     async def deployment_success(self):
-        if self.deployment_hooks_owned:
+        if self.lifecycle_owned:
             self.response = await utils.async_post_call_success_deployment_hook(self.current, self.response, CallTypes.aanthropic_messages)
         if self.streaming:
             self.response = retain_stream_response(
@@ -384,11 +380,11 @@ class Host:
             )
 
     async def deployment_failure(self):
-        if self.deployment_hooks_owned:
+        if self.lifecycle_owned:
             await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'anthropic_messages')
 
     def terminal(self, action, value):
-        if self.streaming:
+        if self.streaming or not self.lifecycle_owned:
             return None
         return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, None, value, self.start, self.end)
 
@@ -398,7 +394,7 @@ class Host:
     def sync_failure(self): return self.terminal('sync_failure', self.error)
     def async_failure(self): return self.terminal('async_failure', self.error)
     def restore(self):
-        if not self.streaming:
+        if not self.streaming and self.lifecycle_owned:
             utils._restore_correlation_context_if_supported(self.logger)
 
     def advance(self, outcome, error=None):
