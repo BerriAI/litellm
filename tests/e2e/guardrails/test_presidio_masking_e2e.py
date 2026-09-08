@@ -14,8 +14,8 @@ configuration: the post_call prompt asks for a value derived from the raw email
 address itself, so the answer proves the model saw the raw address while the
 address in the same response comes back as <EMAIL_ADDRESS>.
 
-The analyzer/anonymizer endpoints come from PRESIDIO_ANALYZER_API_BASE /
-PRESIDIO_ANONYMIZER_API_BASE; missing env is a hard failure, never a skip.
+The analyzer/anonymizer endpoints come from the environment and are treated as
+secrets; see presidio_env. Missing env is a hard failure, never a skip.
 Each guardrail registers with an explicit presidio_filter_scope so only the
 configured hook's callback exists (the default "both" registers input masking
 AND a post_call output masker), and is deleted on teardown.
@@ -29,7 +29,6 @@ this suite deliberately requires the detected-entity details to remain visible.
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Callable
 from typing import Final, Literal
@@ -48,6 +47,7 @@ from models import (
     GuardrailRunRecord,
     SpendLogRow,
 )
+from presidio_env import presidio_bases, scrub
 
 pytestmark = pytest.mark.e2e
 
@@ -70,17 +70,6 @@ MASKED_PHONE_TOKEN = "PHONE_NUMBER"
 FAKE_PHONE = "+1 415-555-0134"
 
 
-def _presidio_bases() -> tuple[str, str]:
-    analyzer = os.environ.get("PRESIDIO_ANALYZER_API_BASE", "").strip()
-    anonymizer = os.environ.get("PRESIDIO_ANONYMIZER_API_BASE", "").strip()
-    if not analyzer or not anonymizer:
-        pytest.fail(
-            "Presidio e2e requires PRESIDIO_ANALYZER_API_BASE and PRESIDIO_ANONYMIZER_API_BASE "
-            "(the running Presidio analyzer/anonymizer services); missing env is a hard failure, not a skip"
-        )
-    return analyzer, anonymizer
-
-
 def _register_presidio(
     client: GuardrailsClient,
     resources: ResourceManager,
@@ -90,7 +79,7 @@ def _register_presidio(
     filter_scope: Literal["input", "output", "both"] = "input",
     entities: dict[PiiEntity, PiiAction] | None = None,
 ) -> None:
-    analyzer, anonymizer = _presidio_bases()
+    analyzer, anonymizer = presidio_bases()
     guardrail_id = client.register(
         name,
         PresidioParamsBody(
@@ -110,9 +99,17 @@ def _fake_email() -> str:
 
 
 def _pii_prompt(marker: str, email: str) -> str:
+    """A transcription framing rather than "repeat this back".
+
+    The model is handed the masked placeholders. Asked to repeat those, a model
+    may instead explain that it will not echo someone's contact details, which
+    leaves the assertion testing the model's mood rather than the guardrail.
+    Framed as transcription, the line comes back verbatim.
+    """
     return (
-        f"{marker} Repeat this sentence back to me exactly, word for word: "
-        f"My email address is {email} and my phone number is {FAKE_PHONE}."
+        f"{marker} You are a text transcription tool. Output the input text character for character, "
+        f"with no commentary and no explanation. "
+        f"Input: My email address is {email} and my phone number is {FAKE_PHONE}."
     )
 
 
@@ -160,7 +157,7 @@ def _assert_eventually_masked[R: BaseModel](
                     )
                     return
             case _:
-                last = f"<non-Success result: {result}>"
+                last = scrub(f"<non-Success result: {result}>")
         if time.monotonic() >= deadline:
             pytest.fail(
                 f"presidio pre_call guardrail never masked the PII within "
@@ -281,7 +278,7 @@ class TestPresidioPostCallMasking:
                         )
                         return
                 case _:
-                    last = f"<non-Success result: {result}>"
+                    last = scrub(f"<non-Success result: {result}>")
             if time.monotonic() >= deadline:
                 pytest.fail(
                     f"presidio post_call guardrail never masked the model's output within "

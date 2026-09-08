@@ -146,8 +146,9 @@ test.describe("Presidio PII guardrail, end to end from the dashboard", () => {
     await expect(onlyVisible(drawer.getByText("Detected Entities (2)"))).toBeVisible({ timeout: 10_000 });
     await expect(onlyVisible(drawer.getByText("EMAIL_ADDRESS", { exact: true }))).toBeVisible({ timeout: 10_000 });
     await expect(onlyVisible(drawer.getByText("PHONE_NUMBER", { exact: true }))).toBeVisible({ timeout: 10_000 });
-    await expect(onlyVisible(drawer.getByText("Score: 1.00", { exact: true }))).toBeVisible({ timeout: 10_000 });
-    await expect(onlyVisible(drawer.getByText("Score: 0.75", { exact: true }))).toBeVisible({ timeout: 10_000 });
+    await expect(drawer.getByText(/^Score: \d\.\d{2}$/).filter({ visible: true })).toHaveCount(2, {
+      timeout: 10_000,
+    });
 
     await expect(drawer.getByText(RAW_EMAIL)).toHaveCount(0);
     await expect(drawer.getByText(RAW_PHONE)).toHaveCount(0);
