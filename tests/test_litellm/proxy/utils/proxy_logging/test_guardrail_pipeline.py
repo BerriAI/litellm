@@ -2128,7 +2128,11 @@ async def test_per_chunk_streaming_hook_skips_pipeline_managed_guardrail(
             seen[self.guardrail_name] = seen.get(self.guardrail_name, 0) + 1
             return None
 
-    managed = RecordingGuardrail(
+    class UnifiedRecordingGuardrail(RecordingGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    managed = UnifiedRecordingGuardrail(
         guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=True
     )
     free = RecordingGuardrail(
@@ -2147,3 +2151,34 @@ async def test_per_chunk_streaming_hook_skips_pipeline_managed_guardrail(
     assert result is not None
     assert seen.get("gr-post") is None
     assert seen["gr-free"] == 1
+
+
+@pytest.mark.asyncio
+async def test_per_chunk_streaming_hook_runs_guardrail_whose_pipeline_cannot_stream(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+
+    class ChunkHookGuardrail(CustomGuardrail):
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            seen["count"] = seen.get("count", 0) + 1
+            seen["response"] = response
+            return None
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [ChunkHookGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=True)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    result = await proxy_logging.async_post_call_streaming_hook(
+        data=data,
+        response=_stream_chunks()[0],
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+    )
+
+    assert result is not None
+    assert seen["count"] == 1
+    assert seen["response"] == "hello "

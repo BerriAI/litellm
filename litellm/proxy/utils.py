@@ -555,6 +555,24 @@ def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> 
     return False
 
 
+def _route_supports_streaming_pipelines(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return not user_api_key_dict.request_route or resolve_endpoint_translation(user_api_key_dict, None) is not None
+
+
+def _stream_gated_guardrail_names(
+    request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
+) -> frozenset[str]:
+    if not _route_supports_streaming_pipelines(user_api_key_dict):
+        return frozenset()
+    return _pipeline_step_guardrail_names(
+        tuple(
+            (policy_name, pipeline)
+            for policy_name, pipeline in _post_call_pipelines(request_data)
+            if all(_pipeline_step_supports_unified_streaming(step.guardrail) for step in pipeline.steps)
+        )
+    )
+
+
 def _streamable_post_call_pipelines(
     request_data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth
 ) -> tuple[tuple[str, "GuardrailPipeline"], ...]:
@@ -571,13 +589,12 @@ def _streamable_post_call_pipelines(
     post_call_pipelines: Final = _post_call_pipelines(request_data)
     if not post_call_pipelines:
         return ()
-    route: Final = user_api_key_dict.request_route
-    if route and resolve_endpoint_translation(user_api_key_dict, None) is None:
+    if not _route_supports_streaming_pipelines(user_api_key_dict):
         verbose_proxy_logger.warning(
             "Policies with post_call guardrail pipelines cannot scan streaming responses on route %s yet "
             "(no endpoint guardrail translation); the stream skips the pipelines and their guardrails run "
             "on their own: %s",
-            route,
+            user_api_key_dict.request_route,
             ", ".join(policy_name for policy_name, _pipeline in post_call_pipelines),
         )
         return ()
@@ -3271,15 +3288,15 @@ class ProxyLogging:
             # dict lookups + llm_router.get_deployment() per callback per chunk.
             _cached_guardrail_data: dict | None = None
             _guardrail_data_computed = False
-            pipeline_managed: Final = (
-                _pipeline_managed_guardrail_names(data, "post_call") if caps.has_guardrail else frozenset()
+            pipeline_gated: Final = (
+                _stream_gated_guardrail_names(data, user_api_key_dict) if caps.has_guardrail else frozenset()
             )
 
             for callback in litellm.callbacks:
                 try:
                     _callback: CustomLogger | None = None
                     if isinstance(callback, CustomGuardrail):
-                        if callback.guardrail_name in pipeline_managed:
+                        if callback.guardrail_name in pipeline_gated:
                             continue
                         # Main - V2 Guardrails implementation
                         from litellm.types.guardrails import GuardrailEventHooks
