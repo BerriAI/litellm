@@ -283,6 +283,53 @@ def test_azure_passthrough_streaming_chunks_for_unknown_endpoint_return_none():
     assert response is None
 
 
+def _azure_responses_stream_chunks(terminal_event: str | None = "response.completed") -> list[str]:
+    in_progress = {**RESPONSES_BODY, "status": "in_progress", "output": [], "usage": None}
+    events = [
+        ("response.created", {"type": "response.created", "sequence_number": 0, "response": in_progress}),
+        (
+            "response.output_text.delta",
+            {"type": "response.output_text.delta", "sequence_number": 1, "item_id": "msg_1", "delta": "hi"},
+        ),
+    ] + ([(terminal_event, {"type": terminal_event, "sequence_number": 2, "response": RESPONSES_BODY})] if terminal_event else [])
+    return [line for name, payload in events for line in (f"event: {name}", _sse_line(payload))]
+
+
+def test_azure_passthrough_streaming_responses_chunks_are_costed_per_token():
+    logging_obj = _relay_logging_obj("gpt-4.1-mini")
+
+    response = AzurePassthroughConfig().handle_logging_collected_chunks(
+        all_chunks=_azure_responses_stream_chunks(),
+        litellm_logging_obj=logging_obj,
+        model="gpt-4.1-mini",
+        custom_llm_provider="azure",
+        endpoint="openai/responses",
+    )
+    info = litellm.get_model_info("azure/gpt-4.1-mini")
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert response.usage.input_tokens == 1000
+    assert logging_obj.call_type == "aresponses"
+    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(
+        1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
+    )
+
+
+def test_azure_passthrough_streaming_responses_without_a_terminal_event_are_not_costed():
+    logging_obj = _relay_logging_obj("gpt-4.1-mini")
+
+    response = AzurePassthroughConfig().handle_logging_collected_chunks(
+        all_chunks=_azure_responses_stream_chunks(terminal_event=None),
+        litellm_logging_obj=logging_obj,
+        model="gpt-4.1-mini",
+        custom_llm_provider="azure",
+        endpoint="openai/responses",
+    )
+
+    assert response is None
+    assert logging_obj.call_type == "allm_passthrough_route"
+
+
 def _complete_url(request_query_params: dict, litellm_params: dict) -> httpx.URL:
     url, _ = AzurePassthroughConfig().get_complete_url(
         api_base="https://my-resource.openai.azure.com",

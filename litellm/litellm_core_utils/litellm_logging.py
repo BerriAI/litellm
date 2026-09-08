@@ -119,7 +119,6 @@ from litellm.types.utils import (
     CachingDetails,
     CallTypes,
     CostBreakdown,
-    CostResponseTypes,
     CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
@@ -201,7 +200,7 @@ if TYPE_CHECKING:
     from mcp.types import EmbeddedResource, ImageContent, TextContent
 
     from litellm.integrations.otel.logger import OpenTelemetryV2
-    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, LoggedRelayResponse
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -2363,7 +2362,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self,
         raw_bytes: list[bytes],
         provider_config: "BasePassthroughConfig",
-    ) -> Optional["CostResponseTypes"]:
+    ) -> Optional["LoggedRelayResponse"]:
         all_chunks: Final = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
         complete_streaming_response: Final = provider_config.handle_logging_collected_chunks(
             all_chunks=all_chunks,

@@ -23,7 +23,6 @@ if TYPE_CHECKING:
     from httpx import URL
 
     from litellm.llms.base_llm.passthrough.transformation import LoggedRelayResponse
-    from litellm.types.utils import CostResponseTypes
 
 
 class RelayedChatRequest(BaseModel):
@@ -42,11 +41,27 @@ def _relayed_messages(litellm_logging_obj: Logging) -> Sequence[Mapping[str, obj
     return details.request_data.messages if details.request_data else None
 
 
+RESPONSES_RELAY_SHAPE: Final = RelayShape("/responses", CallTypes.aresponses, ResponsesAPIResponse.model_validate)
+
 OPENAI_RELAY_SHAPES: Final = (
     RelayShape("/embeddings", CallTypes.aembedding, EmbeddingResponse.model_validate),
-    RelayShape("/responses", CallTypes.aresponses, ResponsesAPIResponse.model_validate),
+    RESPONSES_RELAY_SHAPE,
     RelayShape("/images/generations", CallTypes.aimage_generation, ImageResponse.model_validate),
 )
+
+
+def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> ResponsesAPIResponse | None:
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    terminal_response: Final = OpenAIResponsesAPIConfig.parse_terminal_response_from_stream_chunks(
+        all_chunks=list(all_chunks)
+    )
+    if terminal_response is None:
+        return None
+    logging_obj.call_type = (
+        RESPONSES_RELAY_SHAPE.call_type.value
+    )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
+    return terminal_response
 
 
 class AzurePassthroughConfig(BasePassthroughConfig):
@@ -157,11 +172,13 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         model: str,
         custom_llm_provider: str,
         endpoint: str,
-    ) -> Optional["CostResponseTypes"]:
+    ) -> Optional["LoggedRelayResponse"]:
         from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
         )
 
+        if f"/{endpoint.strip('/')}".endswith(RESPONSES_RELAY_SHAPE.path_suffix):
+            return logged_responses_stream(all_chunks, litellm_logging_obj)
         if "chat/completions" not in endpoint:
             return None
 

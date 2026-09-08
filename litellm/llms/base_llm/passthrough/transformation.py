@@ -179,7 +179,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         model: str,
         custom_llm_provider: str,
         endpoint: str,
-    ) -> CostResponseTypes | None:
+    ) -> LoggedRelayResponse | None:
         return None
 
     def _convert_raw_bytes_to_str_lines(self, raw_bytes: list[bytes]) -> list[str]:
