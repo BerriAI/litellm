@@ -29,6 +29,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
     PipelineStep,
     PipelineStepResult,
 )
+from litellm.types.utils import StandardLoggingGuardrailInformation
 
 try:
     from fastapi.exceptions import HTTPException
@@ -122,7 +123,7 @@ class PipelineExecutor:
                 return _allow_result(step_results=step_results, working_data=working_data, request_data=data)
 
             if action == "block":
-                _carry_guardrail_information(source=working_data, request_data=data)
+                _carry_working_guardrail_information(working_data=working_data, request_data=data)
                 return PipelineExecutionResult(
                     terminal_action="block",
                     step_results=step_results,
@@ -131,7 +132,7 @@ class PipelineExecutor:
                 )
 
             if action == "modify_response":
-                _carry_guardrail_information(source=working_data, request_data=data)
+                _carry_working_guardrail_information(working_data=working_data, request_data=data)
                 return PipelineExecutionResult(
                     terminal_action="modify_response",
                     step_results=step_results,
@@ -191,6 +192,7 @@ class PipelineExecutor:
         )
         if hook_input is not data:
             hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]
+        snapshot_entries_before: Final = len(_recorded_guardrail_information(hook_input))
 
         # Use unified_guardrail path if callback implements apply_guardrail
         target: CustomLogger = callback
@@ -239,7 +241,10 @@ class PipelineExecutor:
                 return ("error", None, str(e), e)
         finally:
             if hook_input is not data:
-                _carry_guardrail_information(source=hook_input, request_data=data)
+                _append_guardrail_information(
+                    request_data=data,
+                    entries=_recorded_guardrail_information(hook_input)[snapshot_entries_before:],
+                )
 
     @staticmethod
     def find_guardrail_callback(guardrail_name: str) -> CustomGuardrail | None:
@@ -290,25 +295,38 @@ def _restore_request_guardrails(
     return {**working_data, "metadata": stripped}  # mutable-ok: request dict
 
 
-def _carry_guardrail_information(
-    source: Mapping[str, object],
-    request_data: dict,  # mutable-ok: same request-payload shape as execute_steps' data
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+
+
+def _recorded_guardrail_information(source: Mapping[str, object]) -> list[StandardLoggingGuardrailInformation]:
+    bucket: Final = source.get(get_metadata_variable_name_from_kwargs(source))
+    recorded: Final = bucket.get(_GUARDRAIL_INFORMATION_KEY) if isinstance(bucket, dict) else None
+    return recorded if isinstance(recorded, list) else []
+
+
+def _append_guardrail_information(
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    entries: Sequence[StandardLoggingGuardrailInformation],
 ) -> None:
-    """Copy the guardrail telemetry a step recorded on its working dict onto the caller's request dict."""
-    source_bucket: Final = source.get(get_metadata_variable_name_from_kwargs(source))
-    recorded: Final = (
-        source_bucket.get("standard_logging_guardrail_information") if isinstance(source_bucket, dict) else None
-    )
-    if not isinstance(recorded, list) or not recorded:
+    if not entries:
         return
     _, request_bucket = get_or_create_metadata_bucket(request_data)
-    existing: Final = request_bucket.get("standard_logging_guardrail_information")
-    if existing is recorded:
+    existing: Final = request_bucket.get(_GUARDRAIL_INFORMATION_KEY)
+    if isinstance(existing, list):
+        existing.extend(entries)
         return
-    if not isinstance(existing, list):
-        request_bucket["standard_logging_guardrail_information"] = list(recorded)
+    request_bucket[_GUARDRAIL_INFORMATION_KEY] = list(entries)
+
+
+def _carry_working_guardrail_information(
+    working_data: Mapping[str, object],
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+) -> None:
+    recorded: Final = _recorded_guardrail_information(working_data)
+    existing: Final = _recorded_guardrail_information(request_data)
+    if recorded is existing:
         return
-    existing.extend(entry for entry in recorded if entry not in existing)
+    _append_guardrail_information(request_data=request_data, entries=[e for e in recorded if e not in existing])
 
 
 def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:

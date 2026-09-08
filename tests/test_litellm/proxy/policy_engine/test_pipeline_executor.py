@@ -4,20 +4,25 @@ Tests for the pipeline executor.
 Uses mock guardrails to validate pipeline execution without external services.
 """
 
+import copy
 from unittest.mock import MagicMock
 
 import pytest
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
 )
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
     PipelineStep,
 )
+from litellm.types.utils import CallTypesLiteral
 
 try:
     from fastapi.exceptions import HTTPException
@@ -159,8 +164,6 @@ class ContentCheckGuardrail(CustomGuardrail):
 
 
 class RecordingGuardrail(CustomGuardrail):
-    """Mock guardrail that records guardrail information into request metadata, then blocks or passes."""
-
     def __init__(self, guardrail_name: str, scan_raw_request: bool = False, block: bool = True):
         super().__init__(
             guardrail_name=guardrail_name,
@@ -170,10 +173,12 @@ class RecordingGuardrail(CustomGuardrail):
         )
         self.block = block
 
-    def should_run_guardrail(self, data, event_type) -> bool:
+    def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool:
         return True
 
-    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> dict:
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response={"detected": ["aws_access_key"]},
             request_data=data,
@@ -181,6 +186,7 @@ class RecordingGuardrail(CustomGuardrail):
         )
         if self.block:
             raise HTTPException(status_code=400, detail="Content policy violation")
+        return copy.deepcopy(data)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,9 +233,9 @@ async def test_terminal_block_carries_guardrail_information_to_request(monkeypat
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
 async def test_terminal_block_merges_guardrail_information_without_duplicates(monkeypatch):
-    """A scan_raw_request step evaluates a deep copy of the request taken before the pipeline
-    ran, so entries recorded before that appear in both dicts and must be carried back once,
-    while entries an earlier step recorded on the working request must be kept."""
+    """A pass_data step that returns a rewritten copy of the request, and a scan_raw_request step
+    that evaluates a deep copy taken before the pipeline ran, both leave earlier entries in two
+    dicts at once. Those must be carried back once while every step's own entry is kept."""
     first = RecordingGuardrail(guardrail_name="pii-scan", block=False)
     second = RecordingGuardrail(guardrail_name="credentials-api-keys", scan_raw_request=True)
     monkeypatch.setattr(litellm, "callbacks", [first, second])
@@ -239,7 +245,7 @@ async def test_terminal_block_merges_guardrail_information_without_duplicates(mo
 
     result = await PipelineExecutor.execute_steps(
         steps=[
-            PipelineStep(guardrail="pii-scan", on_fail="block", on_pass="next"),
+            PipelineStep(guardrail="pii-scan", on_fail="block", on_pass="next", pass_data=True),
             PipelineStep(guardrail="credentials-api-keys", on_fail="block", on_pass="next"),
         ],
         mode="pre_call",
@@ -256,6 +262,39 @@ async def test_terminal_block_merges_guardrail_information_without_duplicates(mo
     assert result.terminal_action == "block"
     recorded = data["metadata"]["standard_logging_guardrail_information"]
     assert [entry["guardrail_name"] for entry in recorded] == ["earlier-guard", "pii-scan", "credentials-api-keys"]
+
+
+@pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
+@pytest.mark.asyncio
+async def test_repeated_scan_raw_request_step_is_counted_once_per_evaluation(monkeypatch):
+    """Running the same raw-scan guardrail twice yields two identical entries; both must reach the caller,
+    while the entries the raw snapshot already held before the pipeline ran are not copied again."""
+    guard = RecordingGuardrail(guardrail_name="credentials-raw", scan_raw_request=True, block=False)
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+    earlier = {"guardrail_name": "earlier-guard", "guardrail_status": "success"}
+    data = {"messages": [{"role": "user", "content": "hi"}], "metadata": {}}
+    data["metadata"]["standard_logging_guardrail_information"] = [earlier]
+
+    result = await PipelineExecutor.execute_steps(
+        steps=[
+            PipelineStep(guardrail="credentials-raw", on_fail="block", on_pass="next"),
+            PipelineStep(guardrail="credentials-raw", on_fail="block", on_pass="next"),
+        ],
+        mode="pre_call",
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="raw-scan-policy",
+        raw_request_snapshot={
+            "messages": data["messages"],
+            "metadata": {"standard_logging_guardrail_information": [dict(earlier)]},
+        },
+    )
+
+    assert result.terminal_action == "allow"
+    assert result.modified_data is not None
+    recorded = result.modified_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_name"] for entry in recorded] == ["earlier-guard", "credentials-raw", "credentials-raw"]
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
