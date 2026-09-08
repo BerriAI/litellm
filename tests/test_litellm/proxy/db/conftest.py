@@ -103,6 +103,24 @@ sys.exit(0)
 """
 
 
+def _process_is_zombie(pid: int) -> bool:
+    """A killed grandchild whose parent (the fake prisma) was killed at the same
+    time is reparented to whichever ancestor is a subreaper. Under pytest-xdist
+    that ancestor is the worker, which never wait()s for a process it did not
+    spawn, so the zombie can outlive the poll window on a busy CI runner. Treat
+    a Z-state entry as gone because it means the process has exited, which is
+    what the timeout-kill contract is actually about."""
+    try:
+        status = Path(f"/proc/{pid}/status").read_text()
+    except OSError:
+        return False
+    for line in status.splitlines():
+        if line.startswith("State:"):
+            parts = line.split()
+            return len(parts) >= 2 and parts[1] in ("Z", "X")
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class FakePrismaCli:
     """A stand-in `prisma` on PATH, recording every invocation.
@@ -124,9 +142,12 @@ class FakePrismaCli:
     def grandchild_is_gone(self, within_seconds: float) -> bool:
         deadline = time.monotonic() + within_seconds
         while time.monotonic() < deadline:
+            pid = int(self.grandchild_pidfile.read_text())
             try:
-                os.kill(int(self.grandchild_pidfile.read_text()), 0)
+                os.kill(pid, 0)
             except ProcessLookupError:
+                return True
+            if _process_is_zombie(pid):
                 return True
             time.sleep(0.05)
         return False
