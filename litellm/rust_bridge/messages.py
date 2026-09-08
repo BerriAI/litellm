@@ -56,8 +56,8 @@ _UNSET: Final[_Unset] = _Unset()
 
 @dataclass(slots=True)
 class _RustMessagesState:
-    messages: RustMessages | None = None
-    amessages: RustAmessages | None = None
+    messages: RustMessages | None | _Unset = _UNSET
+    amessages: RustAmessages | None | _Unset = _UNSET
 
 
 _STATE: Final = _RustMessagesState()
@@ -87,13 +87,13 @@ def set_rust_messages(
 
 
 def load_rust_messages() -> RustMessages | None:
-    if _STATE.messages is not None:
+    if not isinstance(_STATE.messages, _Unset):
         return _STATE.messages
     return _MESSAGES.load()
 
 
 def load_rust_amessages() -> RustAmessages | None:
-    if _STATE.amessages is not None:
+    if not isinstance(_STATE.amessages, _Unset):
         return _STATE.amessages
     return _AMESSAGES.load()
 

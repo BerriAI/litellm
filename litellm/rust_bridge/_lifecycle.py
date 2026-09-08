@@ -20,9 +20,7 @@ TerminalAction = Literal[
     "sync_failure",
     "async_failure",
 ]
-_OPTIONAL_ARGUMENTS_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(
-    dict[str, object] | None
-)
+_OPTIONAL_ARGUMENTS_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(dict[str, object] | None)
 
 
 class NativeOutcome(IntEnum):

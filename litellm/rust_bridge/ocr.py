@@ -257,7 +257,12 @@ def invoke_terminal(
         return None
     if action == "sync_success_if_needed":
         if logging._should_run_sync_callbacks_for_async_calls():  # pyright: ignore[reportPrivateUsage]  # preserves Logging's async callback policy
-            return invoke_terminal("sync_success", roots, logger, record, value, fallback_start_time, fallback_end_time)
+
+            def run() -> None:
+                _retained: Final = roots
+                logging.success_handler(value, start_time, end_time)
+
+            return utils.executor.submit(copy_context().run, run)
         return None
     exception: Final = cast(Exception, value)  # cast-ok: Rust routes terminal failure values as Python exceptions
     trace: Final = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
