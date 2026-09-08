@@ -7,18 +7,39 @@
 //! socket we fresh-dial exactly as before — the pool is never on the critical path
 //! for correctness, only latency.
 
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::io::realtime_pool::{RealtimePool, upstream_key};
 use futures_util::{Sink, Stream};
 use litellm_core::error::Error;
-use litellm_core::integrations::custom_logger::{CustomLogger, CustomLoggerRunner};
+use litellm_core::integrations::custom_logger::{CustomLogger, CustomLoggerRunner, LogFuture};
 use litellm_core::integrations::types::{RequestMetadata, StandardLoggingMetadata};
-use litellm_core::lifecycle::{CallLifecycleContext, ExecutedCall};
-use litellm_core::realtime::{RealtimeRequest, realtime};
+use litellm_core::lifecycle::{
+    CallLifecycleContext, Clock, ExecutedCall, TerminalDispatcher, TerminalRecord,
+};
 use litellm_core::realtime::types::RealtimeEvent;
+use litellm_core::realtime::{RealtimeRequest, realtime};
 use litellm_core::router::Router;
+
+struct GatewayRealtimeServices {
+    runner: CustomLoggerRunner,
+}
+
+impl Clock for GatewayRealtimeServices {
+    fn now(&self) -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs_f64())
+            .unwrap_or(0.0)
+    }
+}
+
+impl TerminalDispatcher for GatewayRealtimeServices {
+    fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
+        self.runner.dispatch(terminal)
+    }
+}
 
 /// Select a deployment for `model` and splice the client stream to the provider.
 ///
@@ -45,29 +66,28 @@ where
         .get_available_deployment(model)
         .ok_or_else(|| Error::Routing(format!("no deployment available for model '{model}'")))?;
     let params = &deployment.litellm_params;
-    // Strip a leading `openai/` so the OpenAI-only realtime fn gets the bare model.
-    let provider_model = params
-        .model
-        .strip_prefix("openai/")
-        .unwrap_or(&params.model);
-
     let connection = upstream_key(
-        provider_model,
+        &params.model,
         params.api_key.as_deref(),
         params.api_base.as_deref(),
-    ).ok_or_else(|| Error::Auth("missing realtime provider API key".to_string()))?;
-    let warm = pool.take(&connection);
-    let context = CallLifecycleContext::new("realtime", model, "openai", call_id)
-        .with_metadata(StandardLoggingMetadata {
+    );
+    let warm = connection.as_ref().and_then(|key| pool.take(key));
+    let context = CallLifecycleContext::new("realtime", model, "openai", call_id).with_metadata(
+        StandardLoggingMetadata {
             user_api_key_hash: metadata.user_api_key_hash,
             user_api_key_user_id: metadata.user_api_key_user_id,
             user_api_key_team_id: metadata.user_api_key_team_id,
             ..Default::default()
-        });
+        },
+    );
     Ok(realtime(
-        &CustomLoggerRunner::new(loggers.as_ref().clone()),
+        &GatewayRealtimeServices {
+            runner: CustomLoggerRunner::new(loggers.as_ref().clone()),
+        },
         RealtimeRequest {
-            connection,
+            model: params.model.clone(),
+            api_key: params.api_key.clone(),
+            api_base: params.api_base.clone(),
             warm,
             idle_timeout,
         },

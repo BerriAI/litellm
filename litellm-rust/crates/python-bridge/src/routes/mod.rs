@@ -1,6 +1,5 @@
 use pyo3::prelude::*;
 
-#[macro_use]
 mod definition;
 
 #[cfg(feature = "trace-parity")]

@@ -7,7 +7,7 @@ use super::client::http_client;
 use super::types::ProviderAudioTranscriptionRequest;
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub async fn execute_audio_transcription_provider_call(
+pub(super) async fn execute_audio_transcription_provider_call(
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {
     let body = serde_json::to_vec(&request.body)

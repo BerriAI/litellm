@@ -93,7 +93,7 @@ async fn upstream(status: u16) -> (String, tokio::task::JoinHandle<()>) {
         let mut buffer = [0_u8; 4096];
         let _ = socket.read(&mut buffer).await.unwrap();
         let body = if status == 200 {
-            r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":"end_turn","stop_sequence":null}"#
+            r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":7}}"#
         } else {
             r#"{"error":"failed"}"#
         };
@@ -168,6 +168,9 @@ async fn success_dispatches_exactly_one_terminal() {
     let terminals = services.terminals.lock().unwrap();
     assert_eq!(terminals.len(), 1);
     assert_eq!(terminals[0].classification, TerminalClassification::Success);
+    assert_eq!(terminals[0].usage.prompt_tokens, 11);
+    assert_eq!(terminals[0].usage.completion_tokens, 7);
+    assert_eq!(terminals[0].usage.total_tokens, 18);
 }
 
 #[tokio::test]

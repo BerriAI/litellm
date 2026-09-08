@@ -1,10 +1,10 @@
 use crate::Error;
 use crate::ocr::{OcrAdmissionRequest, prepare};
 
-use super::{
-    ActionBinding, ActionKind, Delivery, ErrorDisposition, FailurePolicy, LifecycleRoute, Outcome,
-    Owner, ResultPolicy,
-};
+use super::program::{CallProgram, ProgramOptions, actions_for};
+use super::{ActionBinding, LifecycleRoute, Outcome};
+
+pub use super::program::{Observations, Operation, Transition};
 
 #[derive(Debug)]
 pub enum NativeOutcome<T> {
@@ -45,42 +45,9 @@ pub struct Identity {
     pub generated_call_id: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation {
-    Setup,
-    DeploymentPre,
-    Prepare,
-    PreCall,
-    Send,
-    DeploymentSuccess,
-    DeploymentFailure,
-    SyncSuccess,
-    AsyncSuccess,
-    SyncSuccessIfNeeded,
-    SyncFailure,
-    AsyncFailure,
-    Restore,
-    Complete(Outcome),
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Observations {
-    pub logger_available: bool,
-    pub has_fallbacks: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Transition {
-    pub operation: Operation,
-    pub error: ErrorDisposition,
-}
-
 #[derive(Debug)]
 pub struct OcrState {
-    operation: Operation,
-    outcome: Outcome,
-    asynchronous: bool,
-    internal_call: bool,
+    program: CallProgram,
     identity: Identity,
 }
 
@@ -102,6 +69,14 @@ impl Lifecycle {
 
     pub fn identity(&self) -> &Identity {
         &self.state.identity
+    }
+
+    pub fn commitment(&self) -> super::Commitment {
+        self.state.program.commitment()
+    }
+
+    pub fn failure_stage(&self) -> Option<super::FailureStage> {
+        self.state.program.failure_stage()
     }
 }
 
@@ -132,10 +107,11 @@ impl LifecycleRoute for OcrRoute {
         let generated_call_id = options.call_id.is_none();
         let call_id = options.call_id.unwrap_or_else(generate_call_id);
         Ok(Ok(OcrState {
-            operation: Operation::Setup,
-            outcome: Outcome::Success,
-            asynchronous: options.asynchronous,
-            internal_call: options.internal_call,
+            program: CallProgram::new(ProgramOptions {
+                asynchronous: options.asynchronous,
+                internal_call: options.internal_call,
+                pre_call: true,
+            }),
             identity: Identity {
                 requested_model: admission.model.clone(),
                 call_id,
@@ -146,7 +122,7 @@ impl LifecycleRoute for OcrRoute {
     }
 
     fn operation(state: &Self::State) -> Self::Operation {
-        state.operation
+        state.program.operation()
     }
 
     fn advance(
@@ -154,114 +130,19 @@ impl LifecycleRoute for OcrRoute {
         outcome: Self::Outcome,
         observations: Self::Observation,
     ) -> Result<Self::Transition, Self::Error> {
-        use Operation::*;
-
-        if matches!(state.operation, Complete(_)) {
-            return Err(Error::InvalidRequest(
-                "OCR lifecycle is already complete".into(),
-            ));
-        }
-        let failure =
-            if observations.logger_available && !(state.asynchronous && state.internal_call) {
-                SyncFailure
-            } else {
-                Restore
-            };
-        let error = if outcome != Outcome::Success && state.operation != DeploymentFailure {
-            state.outcome = outcome;
-            ErrorDisposition::Replace
-        } else {
-            ErrorDisposition::Preserve
-        };
-        state.operation = match (state.operation, outcome) {
-            (Restore, _) => Complete(state.outcome),
-            (DeploymentFailure, _) => failure,
-            (_, Outcome::Abort) => Restore,
-            (SyncFailure | AsyncFailure, Outcome::Failure) => Restore,
-            (Prepare | PreCall | Send, Outcome::Failure) if state.asynchronous => DeploymentFailure,
-            (_, Outcome::Failure) => failure,
-            (Setup, Outcome::Success) if state.asynchronous => DeploymentPre,
-            (Setup | DeploymentPre, Outcome::Success) => Prepare,
-            (Prepare, Outcome::Success) => PreCall,
-            (PreCall, Outcome::Success) => Send,
-            (Send, Outcome::Success) if state.asynchronous => DeploymentSuccess,
-            (Send, Outcome::Success) => SyncSuccess,
-            (DeploymentSuccess, Outcome::Success) => {
-                if state.internal_call || observations.has_fallbacks {
-                    SyncSuccessIfNeeded
-                } else {
-                    AsyncSuccess
-                }
-            }
-            (AsyncSuccess, Outcome::Success) => SyncSuccessIfNeeded,
-            (SyncFailure, Outcome::Success) if state.asynchronous => AsyncFailure,
-            (SyncSuccess | SyncSuccessIfNeeded | SyncFailure | AsyncFailure, Outcome::Success) => {
-                Restore
-            }
-            (Complete(_), _) => unreachable!(),
-        };
-        Ok(Transition {
-            operation: state.operation,
-            error,
-        })
+        state
+            .program
+            .advance(outcome, observations)
+            .ok_or_else(|| Error::InvalidRequest("OCR lifecycle is already complete".into()))
     }
 
     fn actions_for(
         operation: Self::Operation,
         _context: &Self::Context,
     ) -> &'static [ActionBinding] {
-        match operation {
-            Operation::Prepare | Operation::Send => &PROVIDER_ACTION,
-            Operation::PreCall => &PRE_CALL_ACTION,
-            Operation::SyncFailure | Operation::AsyncFailure | Operation::DeploymentFailure => {
-                &FAILURE_ACTION
-            }
-            Operation::Restore => &RESTORE_ACTION,
-            Operation::Complete(_) => &[],
-            _ => &CALLBACK_ACTION,
-        }
+        actions_for(operation)
     }
 }
-
-const PROVIDER_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::ProviderCall,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Replace,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
-
-const PRE_CALL_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::RequestPolicy,
-    delivery: Delivery::InlineDirect,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Route,
-}];
-
-const CALLBACK_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::TerminalSuccess,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::RecordAndContinue,
-    owner: Owner::Route,
-}];
-
-const FAILURE_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::TerminalFailure,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::PreserveOriginalFailure,
-    owner: Owner::Route,
-}];
-
-const RESTORE_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::Restore,
-    delivery: Delivery::InlineDirect,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
 
 fn generate_call_id() -> String {
     let id = (rand::random::<u128>() & !(0xf000_u128 << 64 | 0xc000_u128 << 48))
@@ -282,6 +163,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
+    use crate::lifecycle::ErrorDisposition;
     use crate::ocr::types::OcrDocument;
 
     fn request() -> OcrAdmissionRequest {
@@ -461,6 +343,10 @@ mod tests {
             }
             assert!(Rc::ptr_eq(&original, &retained));
             assert_eq!(transition.operation, Operation::SyncFailure);
+            assert_eq!(
+                machine.failure_stage(),
+                Some(crate::lifecycle::FailureStage::ProviderCall)
+            );
         }
     }
 

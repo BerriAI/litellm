@@ -2455,6 +2455,15 @@ class BaseLLMHTTPHandler:
                 timeout=timeout,
             )
         except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
+            from litellm.rust_bridge.bindings import native_exception_types
+            from litellm.rust_bridge.runtime import BridgeErrorContext, _raise_upstream
+
+            exception_types: Final = native_exception_types()
+            if exception_types is not None and isinstance(rust_error, exception_types[1]):
+                _raise_upstream(
+                    rust_error,
+                    BridgeErrorContext(route="messages", provider=custom_llm_provider, model=model),
+                )
             verbose_logger.debug(
                 "Rust Anthropic messages bridge raised %s; falling back to Python path",
                 type(rust_error).__name__,
@@ -2463,7 +2472,7 @@ class BaseLLMHTTPHandler:
         if rust_response is None:
             return None
 
-        response_obj: Final = cast(AnthropicMessagesResponse, dict(rust_response))
+        response_obj: Final = cast(AnthropicMessagesResponse, rust_response)
         response_obj["_hidden_params"] = {"additional_headers": {"x-litellm-rust": "true"}}
         return response_obj
 
@@ -2479,7 +2488,13 @@ class BaseLLMHTTPHandler:
             AnthropicMessagesStreamingResponse,
         )
 
-        completion_stream = cast(AsyncIterator[bytes], FakeAnthropicMessagesStreamIterator(response=rust_response))
+        completion_stream = cast(
+            AsyncIterator[bytes],
+            FakeAnthropicMessagesStreamIterator(
+                response=rust_response,
+                on_complete=getattr(rust_response, "complete", None),
+            ),
+        )
         hidden_params: Final = AnthropicMessagesStreamHiddenParams(additional_headers={"x-litellm-rust": "true"})
         return AnthropicMessagesStreamingResponse(
             completion_stream=completion_stream,

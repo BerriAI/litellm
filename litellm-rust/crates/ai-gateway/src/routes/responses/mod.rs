@@ -212,7 +212,11 @@ async fn bridge(
     };
     let client_in = Box::pin(stream.filter_map(|message| async move {
         match message {
-            Ok(Message::Text(text)) => serde_json::from_str::<ResponsesWsEvent>(&text).ok(),
+            Ok(Message::Text(text)) => Some(
+                serde_json::from_str::<ResponsesWsEvent>(&text)
+                    .map_err(|error| litellm_core::Error::InvalidRequest(error.to_string())),
+            ),
+            Err(error) => Some(Err(litellm_core::Error::Network(error.to_string()))),
             _ => None,
         }
     }));

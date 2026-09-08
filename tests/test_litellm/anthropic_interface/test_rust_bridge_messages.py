@@ -1,6 +1,9 @@
 """Tests for the optional Rust-backed Anthropic Messages path."""
 
+import asyncio
 import importlib
+import weakref
+from datetime import datetime
 from typing import cast
 
 import httpx
@@ -74,6 +77,19 @@ class RaisingAsyncMessages:
     async def __call__(self, **kwargs: object) -> dict[str, object]:
         self.calls += 1
         raise RuntimeError("upstream request failed with status 400: bad request")
+
+
+class _CommittedMessagesError(Exception):
+    pass
+
+
+class _DeclinedMessagesError(Exception):
+    pass
+
+
+class _NativeExceptions:
+    RustBridgeDeclined = _DeclinedMessagesError
+    RustUpstreamError = _CommittedMessagesError
 
 
 @pytest.fixture(autouse=True)
@@ -218,6 +234,26 @@ async def test_gate_falls_back_to_python_when_bridge_raises():
 
 
 @pytest.mark.asyncio
+async def test_gate_does_not_fall_back_after_provider_commit(monkeypatch):
+    calls = 0
+
+    async def committed(**kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        raise _CommittedMessagesError(429, "rate limited")
+
+    monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _NativeExceptions())
+    rust_messages.set_rust_messages(amessages=committed)
+    litellm.rust(True)
+
+    with pytest.raises(litellm.APIError) as raised:
+        await _gate()
+
+    assert raised.value.status_code == 429
+    assert calls == 1
+
+
+@pytest.mark.asyncio
 async def test_gate_skips_rust_when_flag_absent():
     bridge = ExplodingAsyncMessages()
     rust_messages.set_rust_messages(amessages=bridge)
@@ -346,6 +382,111 @@ async def test_fake_stream_wraps_rust_response_as_anthropic_sse():
     assert b"event: content_block_delta" in joined
     assert b"hello world" in joined
     assert b"event: message_stop" in joined
+
+
+def test_fake_stream_completes_retained_response_after_sync_exhaustion():
+    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+
+    completed: list[bool] = []
+    stream = FakeAnthropicMessagesStreamIterator(
+        response=cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE)),
+        on_complete=lambda: completed.append(True),
+    )
+
+    assert list(stream)
+    assert completed == [True]
+    assert list(stream) == []
+    assert completed == [True]
+
+
+@pytest.mark.asyncio
+async def test_fake_stream_async_exhaustion_and_close_settle_exactly_once():
+    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+
+    completed: list[bool] = []
+    stream = FakeAnthropicMessagesStreamIterator(
+        response=cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE)),
+        on_complete=lambda: completed.append(True),
+    )
+
+    assert [chunk async for chunk in stream]
+    await stream.aclose()
+    stream.close()
+    assert completed == [True]
+
+
+@pytest.mark.asyncio
+async def test_fake_stream_context_closes_after_early_cancellation():
+    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        FakeAnthropicMessagesStreamIterator,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        AnthropicMessagesStreamHiddenParams,
+        AnthropicMessagesStreamingResponse,
+    )
+
+    completed: list[bool] = []
+    completion_stream = FakeAnthropicMessagesStreamIterator(
+        cast(AnthropicMessagesResponse, dict(FAKE_MESSAGES_RESPONSE)),
+        on_complete=lambda: completed.append(True),
+    )
+    stream = AnthropicMessagesStreamingResponse(
+        completion_stream,
+        AnthropicMessagesStreamHiddenParams(additional_headers={}),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        async with stream:
+            await anext(stream)
+            raise asyncio.CancelledError
+
+    await stream.aclose()
+    assert completed == [True]
+
+
+def test_retained_response_releases_roots_and_restores_when_terminal_fails(monkeypatch):
+    class Root:
+        pass
+
+    class Logger:
+        def __init__(self) -> None:
+            self.model_call_details: dict[str, object] = {}
+
+        def _handle_anthropic_messages_response_logging(self, result: object) -> object:
+            return result
+
+    root = Root()
+    root_ref = weakref.ref(root)
+    restored: list[object] = []
+
+    terminal_calls: list[bool] = []
+
+    def terminal(*args: object) -> None:
+        terminal_calls.append(True)
+        if len(terminal_calls) == 1:
+            raise RuntimeError("terminal callback failed")
+
+    monkeypatch.setattr(rust_messages, "invoke_terminal", terminal)
+    monkeypatch.setattr(
+        litellm.utils,
+        "_restore_correlation_context_if_supported",
+        lambda logger: restored.append(logger),
+    )
+    logger = Logger()
+    response = rust_messages.retain_stream_response(dict(FAKE_MESSAGES_RESPONSE), root, logger, datetime.now())
+    del root
+
+    with pytest.raises(RuntimeError, match="terminal callback failed"):
+        response.complete()
+    response.complete()
+
+    assert root_ref() is None
+    assert terminal_calls == [True, True]
+    assert restored == [logger]
 
 
 @pytest.mark.asyncio

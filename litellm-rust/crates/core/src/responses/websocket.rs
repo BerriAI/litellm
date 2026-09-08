@@ -67,7 +67,7 @@ pub struct ResponsesWebSocketRequest {
 }
 
 pub async fn responses_websocket<S, In, Out>(
-    services: &S,
+    services: Arc<S>,
     request: ResponsesWebSocketRequest,
     context: crate::lifecycle::CallLifecycleContext,
     client_in: In,
@@ -75,67 +75,162 @@ pub async fn responses_websocket<S, In, Out>(
 ) -> Result<ExecutedCall<(), Error>, Error>
 where
     S: TerminalDispatcher + crate::lifecycle::Clock,
-    In: Stream<Item = ResponsesWsEvent> + Unpin + Send,
+    S: 'static,
+    In: Stream<Item = Result<ResponsesWsEvent, Error>> + Unpin + Send,
     Out: Sink<ResponsesWsEvent> + Unpin + Send,
     Out::Error: std::fmt::Display,
 {
     let key = resolve_api_key(request.api_key.as_deref())?;
     let upstream = dial_upstream(&request.model, &key, request.api_base.as_deref()).await?;
     let start_time = services.now();
-    let instrumentation = ResponsesWsInstrumentation::default();
+    let instrumentation = Arc::new(ResponsesWsInstrumentation::default());
+    let mut completion =
+        ResponsesWsCompletion::new(services, context, start_time, Arc::clone(&instrumentation));
     let result = splice(
         upstream,
         &request.model,
         request.first_frame,
         request.idle_timeout.unwrap_or(IDLE_TIMEOUT),
-        &instrumentation,
+        instrumentation.as_ref(),
         client_in,
         client_out,
     )
     .await;
-    let observation = instrumentation.snapshot();
-    let model = if observation.model.is_empty() {
-        context.model.clone()
-    } else {
-        observation.model
-    };
     let classification = match &result {
-        Ok(()) => TerminalClassification::Success,
-        Err(error) => TerminalClassification::Failure {
-            kind: error_kind(error).to_string(),
-            message: error.to_string(),
-        },
+        Ok(classification) => classification.clone(),
+        Err(failure) => failure.classification.clone(),
     };
-    let projection = match &classification {
-        TerminalClassification::Success => Value::Null,
-        TerminalClassification::Failure { kind, message } => {
-            json!({"kind": kind, "message": message})
-        }
-    };
-    let terminal = TerminalRecord {
-        call_id: context.litellm_call_id,
-        trace_id: context.trace_id,
-        attempt: context.attempt,
-        call_type: context.call_type,
-        model,
-        provider: context.custom_llm_provider,
-        timing: CallbackTiming::new(start_time, services.now()),
-        usage: observation.usage,
-        cost_inputs: CostInputs {
-            response_cost: context.response_cost,
-            metadata: context.metadata,
-        },
-        classification,
-        projection: RouteProjection::ResponsesWs { value: projection },
-    };
-    let _ = services.dispatch(&terminal).await;
+    let terminal = completion.settle(classification).await;
     Ok(match result {
-        Ok(()) => ExecutedCall::Success {
+        Ok(TerminalClassification::Success) => ExecutedCall::Success {
             response: (),
             terminal,
         },
-        Err(error) => ExecutedCall::Failure { error, terminal },
+        Ok(TerminalClassification::Failure { message, .. }) => ExecutedCall::Failure {
+            error: Error::InvalidResponse(message),
+            terminal,
+        },
+        Err(failure) => ExecutedCall::Failure {
+            error: failure.error,
+            terminal,
+        },
     })
+}
+
+trait ResponsesCompletionServices: TerminalDispatcher + crate::lifecycle::Clock {}
+
+impl<T> ResponsesCompletionServices for T where T: TerminalDispatcher + crate::lifecycle::Clock {}
+
+struct ResponsesWsCompletion {
+    services: Arc<dyn ResponsesCompletionServices>,
+    context: Option<crate::lifecycle::CallLifecycleContext>,
+    start_time: f64,
+    instrumentation: Arc<ResponsesWsInstrumentation>,
+}
+
+impl ResponsesWsCompletion {
+    fn new<S>(
+        services: Arc<S>,
+        context: crate::lifecycle::CallLifecycleContext,
+        start_time: f64,
+        instrumentation: Arc<ResponsesWsInstrumentation>,
+    ) -> Self
+    where
+        S: ResponsesCompletionServices + 'static,
+    {
+        Self {
+            services,
+            context: Some(context),
+            start_time,
+            instrumentation,
+        }
+    }
+
+    async fn settle(&mut self, classification: TerminalClassification) -> TerminalRecord {
+        let terminal = self.terminal(classification);
+        let dispatched = terminal.clone();
+        let services = Arc::clone(&self.services);
+        let dispatch = tokio::spawn(async move {
+            let _ = services.dispatch(&dispatched).await;
+        });
+        let _ = dispatch.await;
+        terminal
+    }
+
+    fn terminal(&mut self, classification: TerminalClassification) -> TerminalRecord {
+        let context = self.context.take().expect("Responses session settled once");
+        let observation = self.instrumentation.snapshot();
+        let model = if observation.model.is_empty() {
+            context.model
+        } else {
+            observation.model
+        };
+        let projection = match &classification {
+            TerminalClassification::Success => Value::Null,
+            TerminalClassification::Failure { kind, message } => {
+                json!({"kind": kind, "message": message})
+            }
+        };
+        TerminalRecord {
+            call_id: context.litellm_call_id,
+            trace_id: context.trace_id,
+            attempt: context.attempt,
+            call_type: context.call_type,
+            model,
+            provider: context.custom_llm_provider,
+            timing: CallbackTiming::new(self.start_time, self.services.now()),
+            usage: observation.usage,
+            cost_inputs: CostInputs {
+                response_cost: context.response_cost,
+                metadata: context.metadata,
+            },
+            classification,
+            projection: RouteProjection::ResponsesWs { value: projection },
+        }
+    }
+}
+
+impl Drop for ResponsesWsCompletion {
+    fn drop(&mut self) {
+        if self.context.is_none() {
+            return;
+        }
+        let terminal = self.terminal(TerminalClassification::Failure {
+            kind: "Cancelled".to_string(),
+            message: "Responses WebSocket session was cancelled before completion".to_string(),
+        });
+        let services = Arc::clone(&self.services);
+        tokio::spawn(async move {
+            let _ = services.dispatch(&terminal).await;
+        });
+    }
+}
+
+struct ResponsesWsFailure {
+    error: Error,
+    classification: TerminalClassification,
+}
+
+impl ResponsesWsFailure {
+    fn new(error: Error) -> Self {
+        Self {
+            classification: TerminalClassification::Failure {
+                kind: error_kind(&error).to_string(),
+                message: error.to_string(),
+            },
+            error,
+        }
+    }
+
+    fn session(kind: &str, message: &str) -> Self {
+        Self {
+            error: Error::Network(message.to_string()),
+            classification: TerminalClassification::Failure {
+                kind: kind.to_string(),
+                message: message.to_string(),
+            },
+        }
+    }
 }
 
 async fn splice<In, Out>(
@@ -146,39 +241,66 @@ async fn splice<In, Out>(
     instrumentation: &ResponsesWsInstrumentation,
     mut client_in: In,
     mut client_out: Out,
-) -> Result<(), Error>
+) -> Result<TerminalClassification, ResponsesWsFailure>
 where
-    In: Stream<Item = ResponsesWsEvent> + Unpin + Send,
+    In: Stream<Item = Result<ResponsesWsEvent, Error>> + Unpin + Send,
     Out: Sink<ResponsesWsEvent> + Unpin + Send,
     Out::Error: std::fmt::Display,
 {
     let (mut upstream_tx, mut upstream_rx) = upstream.split();
     if let Some(event) = first_frame {
-        send_provider_event(&mut upstream_tx, &event, model).await?;
+        send_provider_event(&mut upstream_tx, &event, model)
+            .await
+            .map_err(ResponsesWsFailure::new)?;
     }
     loop {
         tokio::select! {
             event = client_in.next() => {
-                let Some(event) = event else { return Ok(()) };
-                send_provider_event(&mut upstream_tx, &event, model).await?;
+                let Some(event) = event else {
+                    return Err(ResponsesWsFailure::session(
+                        "ClientDisconnected",
+                        "client disconnected before response.completed",
+                    ));
+                };
+                let event = event.map_err(ResponsesWsFailure::new)?;
+                send_provider_event(&mut upstream_tx, &event, model).await.map_err(ResponsesWsFailure::new)?;
             }
             message = upstream_rx.next() => {
-                let Some(message) = message else { return Ok(()) };
-                match message.map_err(ws_transport_error)? {
+                let Some(message) = message else {
+                    return Err(ResponsesWsFailure::session(
+                        "ProviderDisconnected",
+                        "provider disconnected before a terminal response frame",
+                    ));
+                };
+                match message.map_err(ws_transport_error).map_err(ResponsesWsFailure::new)? {
                     Message::Text(text) => {
                         let event = serde_json::from_str::<ResponsesWsEvent>(&text)
-                            .map_err(|error| Error::InvalidResponse(error.to_string()))?;
+                            .map_err(|error| ResponsesWsFailure::new(Error::InvalidResponse(error.to_string())))?;
                         instrumentation.observe(&event);
-                        for outbound in OPENAI_RESPONSES_WS_CONFIG.transform_ws_response(&event, model)?.events {
+                        let terminal = instrumentation.terminal_classification(&event);
+                        for outbound in OPENAI_RESPONSES_WS_CONFIG.transform_ws_response(&event, model)
+                            .map_err(ResponsesWsFailure::new)?.events {
                             client_out.send(outbound).await
-                                .map_err(|error| Error::Network(error.to_string()))?;
+                                .map_err(|error| ResponsesWsFailure::session(
+                                    "ClientDisconnected",
+                                    &format!("failed to deliver provider event to client: {error}"),
+                                ))?;
+                        }
+                        if let Some(classification) = terminal {
+                            return Ok(classification);
                         }
                     }
-                    Message::Close(_) => return Ok(()),
+                    Message::Close(_) => return Err(ResponsesWsFailure::session(
+                        "ProviderDisconnected",
+                        "provider closed before a terminal response frame",
+                    )),
                     _ => {}
                 }
             }
-            _ = tokio::time::sleep(idle_timeout) => return Ok(()),
+            _ = tokio::time::sleep(idle_timeout) => return Err(ResponsesWsFailure::session(
+                "IdleTimeout",
+                "Responses WebSocket session timed out before a terminal response frame",
+            )),
         }
     }
 }
@@ -361,8 +483,7 @@ pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent 
 pub fn is_terminal_event(event_type: &ResponsesWsEventType) -> bool {
     matches!(
         event_type,
-        ResponsesWsEventType::ResponseCreated
-            | ResponsesWsEventType::ResponseCompleted
+        ResponsesWsEventType::ResponseCompleted
             | ResponsesWsEventType::ResponseFailed
             | ResponsesWsEventType::ResponseIncomplete
             | ResponsesWsEventType::Error
@@ -417,33 +538,64 @@ mod tests {
         serde_json::from_value(value).expect("event")
     }
 
-    async fn mock_provider() -> (String, tokio::task::JoinHandle<()>) {
+    async fn provider_with_frames(
+        frames: Vec<Value>,
+        remain_open: bool,
+    ) -> (String, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let mut socket = accept_async(stream).await.unwrap();
-            if let Some(Ok(Message::Text(text))) = socket.next().await {
-                let request: Value = serde_json::from_str(&text).unwrap();
-                assert_eq!(request["model"], "authorized");
-                socket.send(Message::Text(json!({"type":"response.completed","response":{"id":"resp-1","model":"authorized","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}).to_string().into())).await.unwrap();
+            for frame in frames {
+                socket
+                    .send(Message::Text(frame.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+            if remain_open {
+                futures_util::future::pending::<()>().await;
+            } else {
                 socket.close(None).await.unwrap();
             }
         });
         (format!("http://{address}"), task)
     }
 
+    fn input() -> (
+        futures_channel::mpsc::UnboundedSender<Result<ResponsesWsEvent, Error>>,
+        futures_channel::mpsc::UnboundedReceiver<Result<ResponsesWsEvent, Error>>,
+    ) {
+        futures_channel::mpsc::unbounded()
+    }
+
+    fn assert_failure(services: &Services, kind: &str, message: &str) {
+        let terminals = services.terminals.lock().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert_eq!(
+            terminals[0].classification,
+            TerminalClassification::Failure {
+                kind: kind.to_string(),
+                message: message.to_string(),
+            }
+        );
+    }
+
     #[tokio::test]
-    async fn core_owns_splice_transformation_and_one_terminal() {
-        let (api_base, server) = mock_provider().await;
-        let services = Services::default();
-        let (client_tx, client_rx) = futures_channel::mpsc::unbounded();
+    async fn completed_frame_is_delivered_and_settles_once_while_provider_remains_open() {
+        let (api_base, server) = provider_with_frames(
+            vec![json!({"type":"response.completed","response":{"id":"resp-1","model":"authorized","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}})],
+            true,
+        )
+        .await;
+        let services = Arc::new(Services::default());
+        let (client_tx, client_rx) = input();
         let (output_tx, mut output_rx) = futures_channel::mpsc::unbounded();
         client_tx
-            .unbounded_send(event(json!({"type":"response.create","model":"wrong"})))
+            .unbounded_send(Ok(event(json!({"type":"response.create","model":"wrong"}))))
             .unwrap();
         let result = responses_websocket(
-            &services,
+            Arc::clone(&services),
             ResponsesWebSocketRequest {
                 model: "authorized".into(),
                 api_key: Some("key".into()),
@@ -464,8 +616,59 @@ mod tests {
         );
         let terminals = services.terminals.lock().unwrap();
         assert_eq!(terminals.len(), 1);
+        assert_eq!(terminals[0].classification, TerminalClassification::Success);
         assert_eq!(terminals[0].usage.total_tokens, 3);
-        server.await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn provider_failure_terminals_are_failures_and_are_delivered_once() {
+        let cases = [
+            (
+                json!({"type":"response.failed","response":{"error":{"message":"request rejected"}}}),
+                "ResponseFailed",
+                "request rejected",
+            ),
+            (
+                json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}),
+                "ResponseIncomplete",
+                "max_output_tokens",
+            ),
+            (
+                json!({"type":"error","error":{"message":"provider unavailable"}}),
+                "ProviderError",
+                "provider unavailable",
+            ),
+        ];
+        for (frame, kind, message) in cases {
+            let expected_type = frame["type"].as_str().unwrap().to_string();
+            let (api_base, server) = provider_with_frames(vec![frame], true).await;
+            let services = Arc::new(Services::default());
+            let (_client_tx, client_rx) = input();
+            let (output_tx, mut output_rx) = futures_channel::mpsc::unbounded();
+            let result = responses_websocket(
+                Arc::clone(&services),
+                ResponsesWebSocketRequest {
+                    model: "model".into(),
+                    api_key: Some("key".into()),
+                    api_base: Some(api_base),
+                    first_frame: None,
+                    idle_timeout: Some(Duration::from_secs(1)),
+                },
+                CallLifecycleContext::new("responses_websocket", "model", "openai", "call-1"),
+                client_rx,
+                output_tx,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(result, ExecutedCall::Failure { .. }));
+            assert_eq!(
+                output_rx.next().await.unwrap().event_type.as_str(),
+                expected_type
+            );
+            assert_failure(services.as_ref(), kind, message);
+            server.abort();
+        }
     }
 
     #[tokio::test]
@@ -479,14 +682,14 @@ mod tests {
                 .await
                 .unwrap();
         });
-        let services = Services::default();
+        let services = Arc::new(Services::default());
         let (_, input): (
             _,
-            futures_channel::mpsc::UnboundedReceiver<ResponsesWsEvent>,
-        ) = futures_channel::mpsc::unbounded();
+            futures_channel::mpsc::UnboundedReceiver<Result<ResponsesWsEvent, Error>>,
+        ) = input();
         let (output, _) = futures_channel::mpsc::unbounded();
         let error = responses_websocket(
-            &services,
+            Arc::clone(&services),
             ResponsesWebSocketRequest {
                 model: "model".into(),
                 api_key: Some("key".into()),
@@ -513,11 +716,11 @@ mod tests {
             let mut socket = accept_async(stream).await.unwrap();
             socket.send(Message::Text("not-json".into())).await.unwrap();
         });
-        let services = Services::default();
-        let (client_tx, input) = futures_channel::mpsc::unbounded();
+        let services = Arc::new(Services::default());
+        let (client_tx, input) = input();
         let (output, _) = futures_channel::mpsc::unbounded();
         let result = responses_websocket(
-            &services,
+            Arc::clone(&services),
             ResponsesWebSocketRequest {
                 model: "model".into(),
                 api_key: Some("key".into()),
@@ -545,6 +748,135 @@ mod tests {
             terminals[0].classification,
             TerminalClassification::Failure { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn client_drop_provider_close_and_idle_timeout_are_distinct_failures() {
+        let cases = [
+            (
+                true,
+                true,
+                "ClientDisconnected",
+                "client disconnected before response.completed",
+            ),
+            (
+                false,
+                false,
+                "ProviderDisconnected",
+                "provider closed before a terminal response frame",
+            ),
+            (
+                false,
+                true,
+                "IdleTimeout",
+                "Responses WebSocket session timed out before a terminal response frame",
+            ),
+        ];
+        for (drop_client, remain_open, kind, message) in cases {
+            let (api_base, server) = provider_with_frames(Vec::new(), remain_open).await;
+            let services = Arc::new(Services::default());
+            let (client_tx, client_rx) = input();
+            if drop_client {
+                drop(client_tx);
+            }
+            let (output_tx, _) = futures_channel::mpsc::unbounded();
+            let result = responses_websocket(
+                Arc::clone(&services),
+                ResponsesWebSocketRequest {
+                    model: "model".into(),
+                    api_key: Some("key".into()),
+                    api_base: Some(api_base),
+                    first_frame: None,
+                    idle_timeout: Some(Duration::from_millis(20)),
+                },
+                CallLifecycleContext::new("responses_websocket", "model", "openai", "call-1"),
+                client_rx,
+                output_tx,
+            )
+            .await
+            .unwrap();
+            assert!(matches!(result, ExecutedCall::Failure { .. }));
+            assert_failure(services.as_ref(), kind, message);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_committed_session_dispatches_one_failure() {
+        let (api_base, server) = provider_with_frames(Vec::new(), true).await;
+        let services = Arc::new(Services::default());
+        let (_client_tx, client_rx) = input();
+        let (output_tx, _) = futures_channel::mpsc::unbounded();
+        let task = tokio::spawn(responses_websocket(
+            Arc::clone(&services),
+            ResponsesWebSocketRequest {
+                model: "model".into(),
+                api_key: Some("key".into()),
+                api_base: Some(api_base),
+                first_frame: None,
+                idle_timeout: Some(Duration::from_secs(60)),
+            },
+            CallLifecycleContext::new("responses_websocket", "model", "openai", "call-1"),
+            client_rx,
+            output_tx,
+        ));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        task.abort();
+        let _ = task.await;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while services.terminals.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_failure(
+            services.as_ref(),
+            "Cancelled",
+            "Responses WebSocket session was cancelled before completion",
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn client_protocol_error_dispatches_one_failure() {
+        let (api_base, server) = provider_with_frames(Vec::new(), true).await;
+        let services = Arc::new(Services::default());
+        let (client_tx, client_rx) = input();
+        client_tx
+            .unbounded_send(Err(Error::InvalidRequest(
+                "invalid client frame".to_string(),
+            )))
+            .unwrap();
+        let (output_tx, _) = futures_channel::mpsc::unbounded();
+        let result = responses_websocket(
+            Arc::clone(&services),
+            ResponsesWebSocketRequest {
+                model: "model".into(),
+                api_key: Some("key".into()),
+                api_base: Some(api_base),
+                first_frame: None,
+                idle_timeout: Some(Duration::from_secs(1)),
+            },
+            CallLifecycleContext::new("responses_websocket", "model", "openai", "call-1"),
+            client_rx,
+            output_tx,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            result,
+            ExecutedCall::Failure {
+                error: Error::InvalidRequest(_),
+                ..
+            }
+        ));
+        assert_failure(
+            services.as_ref(),
+            "InvalidRequest",
+            "invalid request: invalid client frame",
+        );
+        server.abort();
     }
 
     #[test]

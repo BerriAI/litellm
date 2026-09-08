@@ -63,6 +63,21 @@ pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
     }
 }
 
+pub(crate) fn messages_provider_error_to_pyerr(err: Error) -> PyErr {
+    match err {
+        Error::Http { status, .. } => {
+            RustUpstreamError::new_err((status, format!("Provider request failed (HTTP {status})")))
+        }
+        Error::Network(_) | Error::Connect(_) => {
+            RustUpstreamError::new_err((0u16, "Provider transport failed"))
+        }
+        Error::InvalidResponse(_) => {
+            RustUpstreamError::new_err((0u16, "Invalid provider response"))
+        }
+        error => core_error_to_pyerr(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -106,6 +106,21 @@ pub struct SettledOcrRequest {
     pub(super) body: Value,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct OcrTransportRequest {
+    pub url: String,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    pub body: Vec<u8>,
+    pub timeout_seconds: f64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct OcrTransportResponse {
+    pub status: u16,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    pub content: Vec<u8>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OcrRequestData {
     pub data: Value,

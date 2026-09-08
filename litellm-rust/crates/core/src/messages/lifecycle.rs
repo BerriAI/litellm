@@ -4,32 +4,17 @@ use std::sync::Arc;
 use crate::Error;
 use crate::integrations::custom_logger::{LogError, LogFuture};
 use crate::integrations::types::Usage;
+use crate::lifecycle::program::{CallProgram, ProgramOptions, actions_for};
 use crate::lifecycle::{
-    ActionBinding, ActionKind, ActionResult, CallLifecycle, CallLifecycleContext, Clock, Delivery,
-    ErrorDisposition, ExecutedCall, FailurePolicy, Lifecycle, LifecycleRoute, Outcome, Owner,
-    RequestPolicy, ResultPolicy, StreamingCall, StreamingObserver, TerminalDispatcher,
-    TerminalRecord,
+    ActionBinding, ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall,
+    Lifecycle, LifecycleRoute, Outcome, RequestPolicy, StreamingCall, StreamingObserver,
+    TerminalDispatcher, TerminalRecord,
 };
 
 use super::handler::{execute_messages_provider_call, execute_messages_provider_stream};
 use super::types::{AnthropicMessagesResponse, MessagesRequest};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation {
-    Setup,
-    DeploymentPre,
-    Prepare,
-    Send,
-    DeploymentSuccess,
-    DeploymentFailure,
-    SyncSuccess,
-    AsyncSuccess,
-    SyncSuccessIfNeeded,
-    SyncFailure,
-    AsyncFailure,
-    Restore,
-    Complete(Outcome),
-}
+pub use crate::lifecycle::program::{Observations, Operation, Transition};
 
 #[derive(Clone, Debug, Default)]
 pub struct Options {
@@ -39,24 +24,9 @@ pub struct Options {
     pub trace_id: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Observations {
-    pub logger_available: bool,
-    pub has_fallbacks: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Transition {
-    pub operation: Operation,
-    pub error: ErrorDisposition,
-}
-
 #[derive(Debug)]
 pub struct MessagesState {
-    operation: Operation,
-    outcome: Outcome,
-    asynchronous: bool,
-    internal_call: bool,
+    program: CallProgram,
 }
 
 #[derive(Debug)]
@@ -76,15 +46,16 @@ impl LifecycleRoute for MessagesRoute {
 
     fn admit(_: &(), options: Options) -> Result<Result<Self::State, Self::Decline>, Error> {
         Ok(Ok(MessagesState {
-            operation: Operation::Setup,
-            outcome: Outcome::Success,
-            asynchronous: options.asynchronous,
-            internal_call: options.internal_call,
+            program: CallProgram::new(ProgramOptions {
+                asynchronous: options.asynchronous,
+                internal_call: options.internal_call,
+                pre_call: false,
+            }),
         }))
     }
 
     fn operation(state: &Self::State) -> Operation {
-        state.operation
+        state.program.operation()
     }
 
     fn advance(
@@ -92,98 +63,26 @@ impl LifecycleRoute for MessagesRoute {
         outcome: Outcome,
         observations: Observations,
     ) -> Result<Transition, Error> {
-        use Operation::*;
-
-        if matches!(state.operation, Complete(_)) {
-            return Err(Error::InvalidRequest(
-                "messages lifecycle is already complete".into(),
-            ));
-        }
-        let failure =
-            if observations.logger_available && !(state.asynchronous && state.internal_call) {
-                SyncFailure
-            } else {
-                Restore
-            };
-        let error = if outcome != Outcome::Success && state.operation != DeploymentFailure {
-            state.outcome = outcome;
-            ErrorDisposition::Replace
-        } else {
-            ErrorDisposition::Preserve
-        };
-        state.operation = match (state.operation, outcome) {
-            (Restore, _) => Complete(state.outcome),
-            (DeploymentFailure, _) => failure,
-            (_, Outcome::Abort) => Restore,
-            (SyncFailure | AsyncFailure, Outcome::Failure) => Restore,
-            (Prepare | Send, Outcome::Failure) if state.asynchronous => DeploymentFailure,
-            (_, Outcome::Failure) => failure,
-            (Setup, Outcome::Success) if state.asynchronous => DeploymentPre,
-            (Setup | DeploymentPre, Outcome::Success) => Prepare,
-            (Prepare, Outcome::Success) => Send,
-            (Send, Outcome::Success) if state.asynchronous => DeploymentSuccess,
-            (Send, Outcome::Success) => SyncSuccess,
-            (DeploymentSuccess, Outcome::Success) => {
-                if state.internal_call || observations.has_fallbacks {
-                    SyncSuccessIfNeeded
-                } else {
-                    AsyncSuccess
-                }
-            }
-            (AsyncSuccess, Outcome::Success) => SyncSuccessIfNeeded,
-            (SyncFailure, Outcome::Success) if state.asynchronous => AsyncFailure,
-            (SyncSuccess | SyncSuccessIfNeeded | SyncFailure | AsyncFailure, Outcome::Success) => {
-                Restore
-            }
-            (Complete(_), _) => unreachable!(),
-        };
-        Ok(Transition {
-            operation: state.operation,
-            error,
-        })
+        state
+            .program
+            .advance(outcome, observations)
+            .ok_or_else(|| Error::InvalidRequest("messages lifecycle is already complete".into()))
     }
 
     fn actions_for(operation: Operation, _: &Observations) -> &'static [ActionBinding] {
-        match operation {
-            Operation::Prepare | Operation::Send => &PROVIDER_ACTION,
-            Operation::SyncFailure | Operation::AsyncFailure | Operation::DeploymentFailure => {
-                &FAILURE_ACTION
-            }
-            Operation::Restore => &RESTORE_ACTION,
-            Operation::Complete(_) => &[],
-            _ => &CALLBACK_ACTION,
-        }
+        actions_for(operation)
     }
 }
 
-const PROVIDER_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::ProviderCall,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Replace,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
-const CALLBACK_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::TerminalSuccess,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::RecordAndContinue,
-    owner: Owner::Route,
-}];
-const FAILURE_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::TerminalFailure,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::PreserveOriginalFailure,
-    owner: Owner::Route,
-}];
-const RESTORE_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::Restore,
-    delivery: Delivery::InlineDirect,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
+impl Lifecycle<MessagesRoute> {
+    pub fn commitment(&self) -> crate::lifecycle::Commitment {
+        self.state.program.commitment()
+    }
+
+    pub fn failure_stage(&self) -> Option<crate::lifecycle::FailureStage> {
+        self.state.program.failure_stage()
+    }
+}
 
 pub trait MessagesServices:
     RequestPolicy<MessagesRequest, MessagesRequest> + TerminalDispatcher + Clock
@@ -241,15 +140,27 @@ pub async fn messages<S: MessagesServices>(
     context: CallLifecycleContext,
 ) -> ExecutedCall<AnthropicMessagesResponse, Error> {
     CallLifecycle
-        .run(
+        .run_with_usage(
             context,
             request,
             services,
             services,
             services,
             |request| async move { execute_messages_provider_call(request).await },
+            anthropic_response_usage,
         )
         .await
+}
+
+fn anthropic_response_usage(response: &AnthropicMessagesResponse) -> Option<Usage> {
+    let usage = response.usage.as_ref()?;
+    let prompt_tokens = usage.get("input_tokens")?.as_u64()?;
+    let completion_tokens = usage.get("output_tokens")?.as_u64()?;
+    Some(Usage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens: prompt_tokens + completion_tokens,
+    })
 }
 
 pub async fn messages_stream<S: MessagesServices + 'static>(

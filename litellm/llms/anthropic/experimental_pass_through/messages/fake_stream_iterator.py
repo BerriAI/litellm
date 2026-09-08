@@ -9,7 +9,8 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from types import TracebackType
 from typing import Any, Final, cast
 
 from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -34,10 +35,11 @@ class FakeAnthropicMessagesStreamIterator:
     - message_stop
     """
 
-    def __init__(self, response: AnthropicMessagesResponse):
+    def __init__(self, response: AnthropicMessagesResponse, on_complete: Callable[[], None] | None = None):
         self.response = response
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
+        self.on_complete = on_complete
 
     def _create_content_block_chunks(self, block_dict: Mapping[str, object], index: int) -> list[bytes]:
         """Build SSE chunks for a single content block."""
@@ -196,6 +198,7 @@ class FakeAnthropicMessagesStreamIterator:
 
     async def __anext__(self):
         if self.current_index >= len(self.chunks):
+            self.close()
             raise StopAsyncIteration
 
         chunk: Final = self.chunks[self.current_index]
@@ -207,8 +210,46 @@ class FakeAnthropicMessagesStreamIterator:
 
     def __next__(self):
         if self.current_index >= len(self.chunks):
+            self.close()
             raise StopIteration
 
         chunk: Final = self.chunks[self.current_index]
         self.current_index += 1
         return chunk
+
+    def close(self) -> None:
+        if self.on_complete is None:
+            return
+        on_complete, self.on_complete = self.on_complete, None
+        on_complete()
+
+    async def aclose(self) -> None:
+        self.close()
+
+    def __enter__(self) -> "FakeAnthropicMessagesStreamIterator":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    async def __aenter__(self) -> "FakeAnthropicMessagesStreamIterator":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass

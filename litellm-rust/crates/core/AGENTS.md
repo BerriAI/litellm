@@ -46,8 +46,9 @@ core/src/messages/
 authoritative roots into a native request after callbacks, and sends it through
 `http_utils::buffered_post`. Reducto upload, Azure Document Intelligence polling,
 and HTTP document URL conversion are declined at admission until they have an
-implementation on this settled-request path. `audio_transcription` and
-`realtime` remain in flight.
+implementation on this settled-request path. Audio transcription provider I/O,
+realtime WebSocket dialing and splicing, and Responses WebSocket dialing and
+splicing are also core-owned.
 
 The invariant is one function body owns the route lifecycle. The conceptual
 shape is:
@@ -75,7 +76,7 @@ requirements traits (an `OcrServices` bundle) declare exactly what a route needs
 passed a catch-all gateway environment. The ordinary Rust client supplies native
 defaults; callers override implementations at construction.
 
-`CallServices` opens one request-scoped sessions per call, owning per-call state
+`CallServices` opens one request-scoped session per call, owning per-call state
 (timing, logging state, retained host objects, deferred completion, correlation
 state). No-op call services are the default, and their presence must not move
 provider behavior into a host or force callback payload materialization on an
@@ -108,21 +109,20 @@ service construction dependencies do not leak into service interfaces
 
 ## Not the target
 
-The current `CallLifecycleHooks` shape is not the final public service API: it
-folds lifecycle sequencing into a stateless generic transformation interface,
-needs `Send` futures, cannot express the full replacement and error contracts,
-and does not model request-scoped retained ownership or Python caller-task
-driving. It is a stepping stone, not the contract to build new routes against.
-
 Do not introduce a dynamic `TypeId` service map, a shared gateway callback
 environment reused from core or the bridge, per-callback JSON serialization, or
 a full Effect layer API. Services traits plus constructors and a scoped call
 owner are the minimum design; add more machinery only when concrete consumers
 require it.
 
-## Gateway migration
+## Streaming ownership
 
-Existing gateway-hosted OCR, transcription and WebSocket provider execution
-predates this boundary and must move here as those routes migrate. Keeping a
-gateway callback as a `CallServices` implementation does not justify keeping
-provider orchestration beside it in the gateway.
+Core owns provider sessions through completion. Streaming HTTP calls transfer a
+`StreamingCall` whose completion registration keeps terminal dispatch alive
+until the host finishes or drops the stream. Realtime and Responses WebSocket
+entrypoints retain the provider connection while they splice events, then emit
+exactly one terminal record after the committed session completes or fails.
+
+Realtime pool warmup is not a user call and must emit zero terminal records on
+both success and failure. A warmed connection transfers into `realtime`; only
+that serving session owns completion and terminal dispatch.

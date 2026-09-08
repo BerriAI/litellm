@@ -6,7 +6,7 @@ use super::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrateg
 use super::types::{MessagesRequest, ProviderMessagesRequest};
 use serde_json::{Map, Value};
 
-pub(super) fn prepare_provider_request(
+pub fn prepare_provider_request(
     request: MessagesRequest,
 ) -> Result<ProviderMessagesRequest, Error> {
     let provider_info =

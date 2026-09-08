@@ -158,6 +158,11 @@ fn invoke(
         Operation::Setup => ("setup", false),
         Operation::DeploymentPre => ("deployment_pre", true),
         Operation::Prepare => ("prepare", false),
+        Operation::PreCall => {
+            return Err(PyRuntimeError::new_err(
+                "chat completions lifecycle selected an unsupported pre-call operation",
+            ));
+        }
         Operation::Send if asynchronous => ("send", true),
         Operation::Send => ("send_sync", false),
         Operation::DeploymentSuccess => ("deployment_success", true),

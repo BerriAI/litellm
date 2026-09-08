@@ -7,7 +7,7 @@ use litellm_core::lifecycle::ocr::{NativeOutcome, Observations, OcrRoute, Operat
 use litellm_core::lifecycle::{
     CallLifecycleContext, ErrorDisposition, ExecutedCall, Lifecycle, Outcome, TerminalRecord,
 };
-use litellm_core::ocr::NoopOcrServices;
+use litellm_core::ocr::DefaultOcrServices;
 use litellm_core::ocr::types::{
     OcrAdmissionRequest, OcrDocumentProjection, OcrDraft, OcrEndpoint, SettledOcrRequest,
 };
@@ -490,7 +490,7 @@ fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
         });
         let executed = run_async_value(
             async move {
-                let services = NoopOcrServices;
+                let services = DefaultOcrServices;
                 Ok::<_, std::convert::Infallible>(
                     litellm_core::ocr::ocr(
                         &services,
@@ -552,7 +552,7 @@ fn send_sync(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
     let executed = run_sync_value(
         py,
         async move {
-            let services = NoopOcrServices;
+            let services = DefaultOcrServices;
             Ok::<_, std::convert::Infallible>(
                 litellm_core::ocr::ocr(
                     &services,

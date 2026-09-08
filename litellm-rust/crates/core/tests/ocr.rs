@@ -8,7 +8,7 @@ use litellm_core::Error;
 use litellm_core::lifecycle::CallLifecycleContext;
 use litellm_core::ocr::prepare::prepare;
 use litellm_core::ocr::types::{OcrDocument, OcrDocumentProjection};
-use litellm_core::ocr::{NoopOcrServices, OcrAdmissionRequest as OcrRequest, OcrDraft};
+use litellm_core::ocr::{DefaultOcrServices, OcrAdmissionRequest as OcrRequest, OcrDraft};
 use serde_json::{Value, json};
 
 fn request() -> OcrRequest {
@@ -49,7 +49,7 @@ async fn ocr(
     let model = prepared.endpoint.model().to_string();
     let provider = prepared.endpoint.custom_llm_provider().to_string();
     let response = litellm_core::ocr::ocr(
-        &NoopOcrServices,
+        &DefaultOcrServices,
         prepared.endpoint.settle(headers, body),
         Default::default(),
         CallLifecycleContext::new("ocr", model, provider, "test-call"),

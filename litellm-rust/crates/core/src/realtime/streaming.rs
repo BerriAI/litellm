@@ -20,8 +20,8 @@ use crate::Error;
 use crate::integrations::custom_logger::CallbackTiming;
 use crate::integrations::types::Usage;
 use crate::lifecycle::{
-    CallLifecycleContext, Clock, CostInputs, ExecutedCall, RouteProjection,
-    TerminalClassification, TerminalDispatcher, TerminalRecord,
+    CallLifecycleContext, Clock, CostInputs, ExecutedCall, RouteProjection, TerminalClassification,
+    TerminalDispatcher, TerminalRecord,
 };
 use crate::providers::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
 use crate::realtime::transformation::RealtimeProviderConfig;
@@ -48,8 +48,9 @@ impl RealtimeConnectionSpec {
         api_key: Option<&str>,
         api_base: Option<&str>,
     ) -> Result<Self, Error> {
+        let model = model.into();
         Ok(Self {
-            model: model.into(),
+            model: openai_model(&model)?.to_string(),
             api_key: resolve_api_key(api_key)?,
             api_base: api_base.map(str::to_string),
         })
@@ -88,6 +89,7 @@ impl std::fmt::Debug for RealtimeConnectionSpec {
 }
 
 pub struct WarmConnection {
+    connection: RealtimeConnectionSpec,
     upstream: Upstream,
     session_created: RealtimeEvent,
 }
@@ -95,12 +97,17 @@ pub struct WarmConnection {
 impl WarmConnection {
     pub fn is_live(&mut self) -> bool {
         let mut context = Context::from_waker(futures_util::task::noop_waker_ref());
-        matches!(Pin::new(&mut self.upstream).poll_next(&mut context), Poll::Pending)
+        matches!(
+            Pin::new(&mut self.upstream).poll_next(&mut context),
+            Poll::Pending
+        )
     }
 }
 
 pub struct RealtimeRequest {
-    pub connection: RealtimeConnectionSpec,
+    pub model: String,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
     pub warm: Option<WarmConnection>,
     pub idle_timeout: Option<Duration>,
 }
@@ -115,6 +122,7 @@ pub async fn warmup(connection: &RealtimeConnectionSpec) -> Result<WarmConnectio
         )));
     }
     Ok(WarmConnection {
+        connection: connection.clone(),
         upstream,
         session_created,
     })
@@ -134,15 +142,25 @@ where
     Out::Error: std::fmt::Display,
 {
     let start_time = services.now();
-    let model = request.connection.model.clone();
-    let connection = match request.warm {
-        Some(warm) => Ok(warm),
-        None => dial_upstream(&request.connection)
+    let model = request.model;
+    let connection = RealtimeConnectionSpec::new(
+        model.clone(),
+        request.api_key.as_deref(),
+        request.api_base.as_deref(),
+    );
+    let connection = match (connection, request.warm) {
+        (Ok(connection), Some(warm)) if warm.connection == connection => Ok(warm),
+        (Ok(_), Some(_)) => Err(Error::InvalidRequest(
+            "realtime warm connection does not match the requested provider connection".to_string(),
+        )),
+        (Ok(connection), None) => dial_upstream(&connection)
             .await
             .map(|upstream| WarmConnection {
+                connection,
                 upstream,
                 session_created: empty_event(),
             }),
+        (Err(error), _) => Err(error),
     };
     let mut observation = RealtimeObservation::new(context.litellm_call_id.clone(), model.clone());
     let result = match connection {
@@ -157,13 +175,13 @@ where
             )
             .await
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     };
     let classification = match &result {
         Ok(()) => TerminalClassification::Success,
-        Err(error) => TerminalClassification::Failure {
-            kind: error_kind(error).to_string(),
-            message: error.to_string(),
+        Err(failure) => TerminalClassification::Failure {
+            kind: failure.kind.to_string(),
+            message: failure.error.to_string(),
         },
     };
     let projection = match &classification {
@@ -194,7 +212,10 @@ where
             response: (),
             terminal,
         },
-        Err(error) => ExecutedCall::Failure { error, terminal },
+        Err(failure) => ExecutedCall::Failure {
+            error: failure.error,
+            terminal,
+        },
     }
 }
 
@@ -205,13 +226,14 @@ async fn splice<In, Out>(
     observation: &mut RealtimeObservation,
     mut client_in: In,
     mut client_out: Out,
-) -> Result<(), Error>
+) -> Result<(), RealtimeFailure>
 where
     In: Stream<Item = RealtimeEvent> + Unpin + Send,
     Out: Sink<RealtimeEvent> + Unpin + Send,
     Out::Error: std::fmt::Display,
 {
     let WarmConnection {
+        connection: _,
         upstream,
         session_created,
     } = connection;
@@ -223,29 +245,104 @@ where
     loop {
         tokio::select! {
             event = client_in.next() => {
-                let Some(event) = event else { return Ok(()) };
+                let Some(event) = event else {
+                    return observation.settle(
+                        "Cancelled",
+                        "realtime client disconnected before provider completion",
+                    );
+                };
                 for outbound in OPENAI_REALTIME_CONFIG.transform_realtime_request(&event, model)?.events {
                     let payload = serde_json::to_string(&outbound)
                         .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                     upstream_tx.send(Message::Text(payload.into())).await.map_err(ws_transport_error)?;
                 }
+                observation.observe_client(&event);
             }
             message = upstream_rx.next() => {
-                let Some(message) = message else { return Ok(()) };
+                let Some(message) = message else {
+                    return observation.settle(
+                        "NetworkError",
+                        "realtime provider closed before completion",
+                    );
+                };
                 match message.map_err(ws_transport_error)? {
                     Message::Text(text) => {
                         let event = serde_json::from_str::<RealtimeEvent>(&text)
                             .map_err(|error| Error::InvalidResponse(error.to_string()))?;
                         observation.observe(&event);
                         send_client_event(&mut client_out, &event, model).await?;
+                        if event.event_type == "error" || response_failed(&event) {
+                            return Err(RealtimeFailure::new(
+                                "ProviderError",
+                                Error::InvalidResponse(provider_error_message(&event)),
+                            ));
+                        }
                     }
-                    Message::Close(_) => return Ok(()),
+                    Message::Close(_) => {
+                        return observation.settle(
+                            "NetworkError",
+                            "realtime provider closed before completion",
+                        );
+                    }
                     _ => {}
                 }
             }
-            _ = tokio::time::sleep(idle_timeout) => return Ok(()),
+            _ = tokio::time::sleep(idle_timeout) => {
+                return Err(RealtimeFailure::new(
+                    "Timeout",
+                    Error::Network("realtime session idle timeout".to_string()),
+                ));
+            }
         }
     }
+}
+
+struct RealtimeFailure {
+    kind: &'static str,
+    error: Error,
+}
+
+impl RealtimeFailure {
+    fn new(kind: &'static str, error: Error) -> Self {
+        Self { kind, error }
+    }
+}
+
+impl From<Error> for RealtimeFailure {
+    fn from(error: Error) -> Self {
+        Self {
+            kind: error_kind(&error),
+            error,
+        }
+    }
+}
+
+fn response_failed(event: &RealtimeEvent) -> bool {
+    event.event_type == "response.done"
+        && event
+            .data
+            .get("response")
+            .and_then(|response| response.get("status"))
+            .and_then(Value::as_str)
+            .is_some_and(|status| status != "completed")
+}
+
+fn provider_error_message(event: &RealtimeEvent) -> String {
+    event
+        .data
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .or_else(|| {
+            event
+                .data
+                .get("response")
+                .and_then(|response| response.get("status_details"))
+                .and_then(|details| details.get("error"))
+                .and_then(|error| error.get("message"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or("realtime provider reported an error")
+        .to_string()
 }
 
 async fn send_client_event<Out>(
@@ -292,10 +389,8 @@ async fn read_event(upstream: &mut Upstream) -> Result<RealtimeEvent, Error> {
 }
 
 async fn dial_upstream(connection: &RealtimeConnectionSpec) -> Result<Upstream, Error> {
-    let url = OPENAI_REALTIME_CONFIG.complete_url(
-        connection.api_base.as_deref(),
-        connection.model.as_str(),
-    );
+    let url = OPENAI_REALTIME_CONFIG
+        .complete_url(connection.api_base.as_deref(), connection.model.as_str());
     let mut request = url.into_client_request().map_err(ws_transport_error)?;
     request.headers_mut().insert(
         AUTHORIZATION,
@@ -328,13 +423,12 @@ fn tls_config() -> Result<Arc<ClientConfig>, Error> {
             native.errors
         )));
     }
-    let config = ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_safe_default_protocol_versions()
-    .map_err(|error| Error::Connect(error.to_string()))?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
+    let config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .map_err(|error| Error::Connect(error.to_string()))?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
     let config = Arc::new(config);
     Ok(Arc::clone(TLS_CONFIG.get_or_init(|| config)))
 }
@@ -350,6 +444,18 @@ fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .filter(|value| !value.trim().is_empty())
         })
         .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+}
+
+fn openai_model(model: &str) -> Result<&str, Error> {
+    if let Some((provider, provider_model)) = model.split_once('/') {
+        if provider != "openai" {
+            return Err(Error::InvalidProvider(format!(
+                "realtime route does not support provider '{provider}'"
+            )));
+        }
+        return Ok(provider_model);
+    }
+    Ok(model)
 }
 
 fn ws_handshake_error(error: WsError) -> Error {
@@ -400,6 +506,8 @@ struct RealtimeObservation {
     call_id: String,
     model: String,
     usage: Usage,
+    completed_response: bool,
+    pending_responses: usize,
 }
 
 impl RealtimeObservation {
@@ -408,6 +516,30 @@ impl RealtimeObservation {
             call_id,
             model,
             usage: Usage::default(),
+            completed_response: false,
+            pending_responses: 0,
+        }
+    }
+
+    fn settle(&self, kind: &'static str, message: &str) -> Result<(), RealtimeFailure> {
+        if self.completed_response && self.pending_responses == 0 {
+            Ok(())
+        } else if kind == "Cancelled" {
+            Err(RealtimeFailure::new(
+                kind,
+                Error::InvalidRequest(message.to_string()),
+            ))
+        } else {
+            Err(RealtimeFailure::new(
+                kind,
+                Error::Network(message.to_string()),
+            ))
+        }
+    }
+
+    fn observe_client(&mut self, event: &RealtimeEvent) {
+        if event.event_type == "response.create" {
+            self.pending_responses += 1;
         }
     }
 
@@ -433,6 +565,10 @@ impl RealtimeObservation {
         if event.event_type != "response.done" {
             return;
         }
+        if !response_failed(event) {
+            self.completed_response = true;
+            self.pending_responses = self.pending_responses.saturating_sub(1);
+        }
         let Some(usage) = event
             .data
             .get("response")
@@ -442,7 +578,10 @@ impl RealtimeObservation {
         else {
             return;
         };
-        let input = usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
+        let input = usage
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         let output = usage
             .get("output_tokens")
             .and_then(Value::as_u64)
@@ -488,20 +627,30 @@ mod tests {
         }
     }
 
-    async fn provider() -> String {
+    async fn scripted_provider(events: Vec<Value>, close_after_events: bool) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
+                let events = events.clone();
                 tokio::spawn(async move {
                     let mut socket = accept_async(stream).await.unwrap();
                     socket.send(Message::Text(json!({"type":"session.created","session":{"id":"sess-core","model":"upstream-model"}}).to_string().into())).await.unwrap();
                     while let Some(Ok(Message::Text(text))) = socket.next().await {
                         let event: RealtimeEvent = serde_json::from_str(&text).unwrap();
                         if event.event_type == "response.create" {
-                            socket.send(Message::Text(json!({"type":"response.done","response":{"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}).to_string().into())).await.unwrap();
-                            socket.send(Message::Text(json!({"type":"response.done","response":{"usage":{"input_tokens":7,"output_tokens":11}}}).to_string().into())).await.unwrap();
-                            socket.close(None).await.unwrap();
+                            for event in &events {
+                                if socket
+                                    .send(Message::Text(event.to_string().into()))
+                                    .await
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            if close_after_events {
+                                let _ = socket.close(None).await;
+                            }
                         }
                     }
                 });
@@ -510,25 +659,88 @@ mod tests {
         format!("ws://{address}")
     }
 
+    async fn provider() -> String {
+        scripted_provider(
+            vec![
+                json!({"type":"response.done","response":{"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}),
+                json!({"type":"response.done","response":{"usage":{"input_tokens":7,"output_tokens":11}}}),
+            ],
+            true,
+        )
+        .await
+    }
+
+    async fn execute_scenario(
+        events: Vec<Value>,
+        close_after_events: bool,
+        send_response_create: bool,
+        disconnect_client: bool,
+        idle_timeout: Duration,
+    ) -> (ExecutedCall<(), Error>, Vec<TerminalRecord>) {
+        let base = scripted_provider(events, close_after_events).await;
+        let services = Services::default();
+        let (input_tx, input) = mpsc::unbounded();
+        if send_response_create {
+            input_tx
+                .unbounded_send(serde_json::from_value(json!({"type":"response.create"})).unwrap())
+                .unwrap();
+        }
+        if disconnect_client {
+            drop(input_tx);
+        }
+        let (output, _output_rx) = mpsc::unbounded();
+        let result = realtime(
+            &services,
+            RealtimeRequest {
+                model: "requested".to_string(),
+                api_key: Some("key".to_string()),
+                api_base: Some(base),
+                warm: None,
+                idle_timeout: Some(idle_timeout),
+            },
+            CallLifecycleContext::new("realtime", "requested", "openai", "fallback"),
+            input,
+            output,
+        )
+        .await;
+        let terminals = services.terminals.into_inner().unwrap();
+        (result, terminals)
+    }
+
     async fn execute(warm: bool) -> (ExecutedCall<(), Error>, Vec<RealtimeEvent>, usize) {
         let base = provider().await;
         let spec = RealtimeConnectionSpec::new("requested", Some("key"), Some(&base)).unwrap();
         let services = Services::default();
-        let warm = if warm { Some(warmup(&spec).await.unwrap()) } else { None };
+        let warm = if warm {
+            Some(warmup(&spec).await.unwrap())
+        } else {
+            None
+        };
         assert!(services.terminals.lock().unwrap().is_empty());
         let (input_tx, input) = mpsc::unbounded();
         let (output, mut output_rx) = mpsc::unbounded();
         input_tx.unbounded_send(serde_json::from_value(json!({"type":"response.done","response":{"usage":{"input_tokens":1000,"output_tokens":1000,"total_tokens":2000}}})).unwrap()).unwrap();
-        input_tx.unbounded_send(serde_json::from_value(json!({"type":"response.create"})).unwrap()).unwrap();
+        input_tx
+            .unbounded_send(serde_json::from_value(json!({"type":"response.create"})).unwrap())
+            .unwrap();
         let result = realtime(
             &services,
-            RealtimeRequest { connection: spec, warm, idle_timeout: Some(Duration::from_secs(1)) },
+            RealtimeRequest {
+                model: spec.model.clone(),
+                api_key: Some("key".to_string()),
+                api_base: Some(base),
+                warm,
+                idle_timeout: Some(Duration::from_secs(1)),
+            },
             CallLifecycleContext::new("realtime", "requested", "openai", "fallback"),
             input,
             output,
-        ).await;
+        )
+        .await;
         let mut events = Vec::new();
-        while let Ok(Some(event)) = tokio::time::timeout(Duration::from_millis(10), output_rx.next()).await {
+        while let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(10), output_rx.next()).await
+        {
             events.push(event);
         }
         let count = services.terminals.lock().unwrap().len();
@@ -541,11 +753,80 @@ mod tests {
             let (result, events, count) = execute(warm).await;
             assert_eq!(count, 1);
             assert_eq!(events.first().unwrap().event_type, "session.created");
-            let ExecutedCall::Success { terminal, .. } = result else { panic!("session failed") };
+            let ExecutedCall::Success { terminal, .. } = result else {
+                panic!("session failed")
+            };
+            assert_eq!(terminal.classification, TerminalClassification::Success);
             assert_eq!(terminal.call_id, "sess-core");
             assert_eq!(terminal.model, "upstream-model");
-            assert_eq!(terminal.usage, Usage { prompt_tokens: 9, completion_tokens: 14, total_tokens: 23 });
+            assert_eq!(
+                terminal.usage,
+                Usage {
+                    prompt_tokens: 9,
+                    completion_tokens: 14,
+                    total_tokens: 23
+                }
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn client_disconnect_before_provider_completion_is_cancelled_once() {
+        let (result, terminals) =
+            execute_scenario(Vec::new(), false, false, true, Duration::from_secs(1)).await;
+
+        assert!(matches!(result, ExecutedCall::Failure { .. }));
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0].classification,
+            TerminalClassification::Failure { kind, .. } if kind == "Cancelled"
+        ));
+    }
+
+    #[tokio::test]
+    async fn idle_timeout_before_provider_completion_fails_once() {
+        let (result, terminals) =
+            execute_scenario(Vec::new(), false, false, false, Duration::from_millis(20)).await;
+
+        assert!(matches!(result, ExecutedCall::Failure { .. }));
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0].classification,
+            TerminalClassification::Failure { kind, .. } if kind == "Timeout"
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_error_event_fails_once() {
+        let (result, terminals) = execute_scenario(
+            vec![json!({"type":"error","error":{"message":"provider rejected event"}})],
+            false,
+            true,
+            false,
+            Duration::from_secs(1),
+        )
+        .await;
+
+        assert!(matches!(result, ExecutedCall::Failure { .. }));
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0].classification,
+            TerminalClassification::Failure { kind, message }
+                if kind == "ProviderError" && message.contains("provider rejected event")
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_close_before_response_done_fails_once() {
+        let (result, terminals) =
+            execute_scenario(Vec::new(), true, true, false, Duration::from_secs(1)).await;
+
+        assert!(matches!(result, ExecutedCall::Failure { .. }));
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            &terminals[0].classification,
+            TerminalClassification::Failure { kind, .. } if kind == "NetworkError"
+        ));
     }
 
     #[tokio::test]
@@ -554,8 +835,38 @@ mod tests {
         let base = provider().await;
         let good = RealtimeConnectionSpec::new("model", Some("key"), Some(&base)).unwrap();
         assert!(warmup(&good).await.is_ok());
-        let bad = RealtimeConnectionSpec::new("model", Some("key"), Some("ws://127.0.0.1:1")).unwrap();
+        let bad =
+            RealtimeConnectionSpec::new("model", Some("key"), Some("ws://127.0.0.1:1")).unwrap();
         assert!(warmup(&bad).await.is_err());
         assert!(services.terminals.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fresh_dial_failure_returns_and_dispatches_one_terminal() {
+        let services = Services::default();
+        let (_, input) = mpsc::unbounded();
+        let (output, _) = mpsc::unbounded();
+        let result = realtime(
+            &services,
+            RealtimeRequest {
+                model: "model".to_string(),
+                api_key: Some("key".to_string()),
+                api_base: Some("ws://127.0.0.1:1".to_string()),
+                warm: None,
+                idle_timeout: None,
+            },
+            CallLifecycleContext::new("realtime", "model", "openai", "call-failure"),
+            input,
+            output,
+        )
+        .await;
+
+        assert!(matches!(result, ExecutedCall::Failure { .. }));
+        let terminals = services.terminals.lock().unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert!(matches!(
+            terminals[0].classification,
+            TerminalClassification::Failure { .. }
+        ));
     }
 }

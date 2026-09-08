@@ -240,7 +240,31 @@ async def aocr(
         )
         ```
     """
-    return await _legacy_aocr(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs)
+    from litellm.rust_bridge import ocr as rust_ocr_bridge
+    from litellm.rust_bridge.configuration import rust_enabled
+
+    if not rust_enabled() or rust_ocr_bridge.load_rust_aocr() is None:
+        return await _legacy_aocr(
+            model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs
+        )
+    arguments: Final[dict[str, object]] = {
+        **kwargs,
+        "model": model,
+        "document": document,
+        "api_key": api_key,
+        "api_base": api_base,
+        "timeout": timeout,
+        "custom_llm_provider": custom_llm_provider,
+        "extra_headers": extra_headers,
+    }
+    try:
+        return await rust_ocr_bridge.aocr(arguments)
+    except NotImplementedError:
+        if "litellm_logging_obj" in arguments:
+            raise
+        return await _legacy_aocr(
+            model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs
+        )
 
 
 async def _legacy_aocr(
@@ -510,7 +534,27 @@ def ocr(
             print(f"Page {page.index}: {page.markdown}")
         ```
     """
-    return _legacy_ocr(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs)
+    from litellm.rust_bridge import ocr as rust_ocr_bridge
+    from litellm.rust_bridge.configuration import rust_enabled
+
+    if not rust_enabled() or kwargs.get("aocr") is True or rust_ocr_bridge.load_rust_ocr() is None:
+        return _legacy_ocr(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs)
+    arguments: Final[dict[str, object]] = {
+        **kwargs,
+        "model": model,
+        "document": document,
+        "api_key": api_key,
+        "api_base": api_base,
+        "timeout": timeout,
+        "custom_llm_provider": custom_llm_provider,
+        "extra_headers": extra_headers,
+    }
+    try:
+        return rust_ocr_bridge.ocr(arguments)
+    except NotImplementedError:
+        if "litellm_logging_obj" in arguments:
+            raise
+        return _legacy_ocr(model, document, api_key, api_base, timeout, custom_llm_provider, extra_headers, **kwargs)
 
 
 def _legacy_ocr(

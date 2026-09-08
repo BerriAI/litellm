@@ -1,4 +1,5 @@
 use crate::integrations::types::Usage;
+use crate::lifecycle::TerminalClassification;
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType};
 use serde_json::Value;
 use std::sync::Mutex;
@@ -69,6 +70,71 @@ impl ResponsesWsInstrumentation {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     }
+
+    pub(crate) fn terminal_classification(
+        &self,
+        event: &ResponsesWsEvent,
+    ) -> Option<TerminalClassification> {
+        match event.event_type {
+            ResponsesWsEventType::ResponseCompleted => Some(TerminalClassification::Success),
+            ResponsesWsEventType::ResponseFailed => Some(provider_failure(
+                "ResponseFailed",
+                response_error_message(event).unwrap_or("provider response failed"),
+            )),
+            ResponsesWsEventType::ResponseIncomplete => Some(provider_failure(
+                "ResponseIncomplete",
+                incomplete_message(event).unwrap_or("provider response was incomplete"),
+            )),
+            ResponsesWsEventType::Error => Some(provider_failure(
+                "ProviderError",
+                top_level_error_message(event).unwrap_or("provider returned an error"),
+            )),
+            _ => None,
+        }
+    }
+}
+
+fn response_error_message(event: &ResponsesWsEvent) -> Option<&str> {
+    event
+        .data
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| response.get("error"))
+        .and_then(Value::as_object)
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+}
+
+fn incomplete_message(event: &ResponsesWsEvent) -> Option<&str> {
+    event
+        .data
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| response.get("incomplete_details"))
+        .and_then(Value::as_object)
+        .and_then(|details| details.get("reason"))
+        .and_then(Value::as_str)
+}
+
+fn top_level_error_message(event: &ResponsesWsEvent) -> Option<&str> {
+    event
+        .data
+        .get("error")
+        .and_then(Value::as_object)
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+}
+
+fn provider_failure(kind: &str, message: &str) -> TerminalClassification {
+    let message = message.trim().chars().take(512).collect::<String>();
+    TerminalClassification::Failure {
+        kind: kind.to_string(),
+        message: if message.is_empty() {
+            "provider returned an unspecified failure".to_string()
+        } else {
+            message
+        },
+    }
 }
 
 #[cfg(test)]
@@ -101,5 +167,37 @@ mod tests {
         assert_eq!(observation.usage.prompt_tokens, 3);
         assert_eq!(observation.usage.completion_tokens, 5);
         assert_eq!(observation.usage.total_tokens, 8);
+    }
+
+    #[test]
+    fn classifies_provider_terminal_frames_without_serializing_the_frame() {
+        let instrumentation = ResponsesWsInstrumentation::default();
+        let cases = [
+            (
+                serde_json::json!({"type":"response.failed","response":{"error":{"message":"request rejected"}}}),
+                "ResponseFailed",
+                "request rejected",
+            ),
+            (
+                serde_json::json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}),
+                "ResponseIncomplete",
+                "max_output_tokens",
+            ),
+            (
+                serde_json::json!({"type":"error","error":{"type":"server_error","message":"provider unavailable"}}),
+                "ProviderError",
+                "provider unavailable",
+            ),
+        ];
+
+        for (frame, expected_kind, expected_message) in cases {
+            assert_eq!(
+                instrumentation.terminal_classification(&event(frame)),
+                Some(TerminalClassification::Failure {
+                    kind: expected_kind.to_string(),
+                    message: expected_message.to_string(),
+                })
+            );
+        }
     }
 }

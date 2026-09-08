@@ -51,7 +51,7 @@ pub async fn run<In, Out>(
     client_out: Out,
 ) -> Result<ExecutedCall<(), Error>, Error>
 where
-    In: Stream<Item = ResponsesWsEvent> + Unpin + Send,
+    In: Stream<Item = Result<ResponsesWsEvent, Error>> + Unpin + Send,
     Out: Sink<ResponsesWsEvent> + Unpin + Send,
     Out::Error: std::fmt::Display,
 {
@@ -76,7 +76,7 @@ where
             ..Default::default()
         });
     responses_websocket(
-        &GatewayResponsesServices::new(loggers),
+        Arc::new(GatewayResponsesServices::new(loggers)),
         ResponsesWebSocketRequest {
             model: provider_model.to_string(),
             api_key: params.api_key.clone(),

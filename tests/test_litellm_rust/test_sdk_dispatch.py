@@ -15,10 +15,6 @@ def ocr_server(recording_server: RecordingServer) -> RecordingServer:
     return recording_server
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="public litellm.ocr does not dispatch to the native OCR bridge yet",
-)
 def test_public_ocr_entrypoint_uses_native_transport_when_enabled(ocr_server: RecordingServer) -> None:
     response: Final = litellm.ocr(
         model=OCR_MODEL,
@@ -29,3 +25,42 @@ def test_public_ocr_entrypoint_uses_native_transport_when_enabled(ocr_server: Re
 
     assert response.pages[0].markdown == "native OCR response"
     assert ocr_server.requests[0].headers["accept-encoding"] == "identity"
+
+
+@pytest.mark.asyncio
+async def test_public_aocr_entrypoint_uses_native_transport_when_enabled(ocr_server: RecordingServer) -> None:
+    response: Final = await litellm.aocr(
+        model=OCR_MODEL,
+        document=OCR_DOCUMENT,
+        api_key="test-key",
+        api_base=ocr_server.base_url,
+    )
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert ocr_server.requests[0].headers["accept-encoding"] == "identity"
+
+
+def test_public_ocr_falls_back_when_native_transport_declines(ocr_server: RecordingServer) -> None:
+    response: Final = litellm.ocr(
+        model=OCR_MODEL,
+        document={"type": "file", "file": b"%PDF-1.4", "mime_type": "application/pdf"},
+        api_key="test-key",
+        api_base=ocr_server.base_url,
+    )
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert ocr_server.requests[0].headers["accept-encoding"] != "identity"
+
+
+def test_public_ocr_uses_python_transport_when_disabled(ocr_server: RecordingServer) -> None:
+    litellm.rust(False)
+
+    response: Final = litellm.ocr(
+        model=OCR_MODEL,
+        document=OCR_DOCUMENT,
+        api_key="test-key",
+        api_base=ocr_server.base_url,
+    )
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert ocr_server.requests[0].headers["accept-encoding"] != "identity"

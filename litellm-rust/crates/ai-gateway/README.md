@@ -1,8 +1,8 @@
 # LiteLLM Rust AI Gateway
 
-A minimal Axum service that fronts OpenAI's realtime API. Clients open a
-WebSocket to `GET /v1/realtime`; the gateway authenticates, selects a deployment,
-dials OpenAI upstream, and splices the two sockets frame-by-frame.
+A minimal Axum service that hosts LiteLLM core routes. For realtime, clients open
+a WebSocket to `GET /v1/realtime`; the gateway authenticates, selects a
+deployment, and adapts frames while core dials OpenAI and splices the session.
 
 ## Crates
 
@@ -16,7 +16,9 @@ dials OpenAI upstream, and splices the two sockets frame-by-frame.
 | litellm-python-interop | Domain-neutral PyO3 foundation: typed Python/Serde conversion, retained callbacks, and sync/async Python↔Tokio execution. |
 | litellm-python-bridge | PyO3 cdylib exposing LiteLLM Rust APIs to the Python SDK. |
 
-Dependency direction is acyclic: config depends on core, the gateway depends on config and core, and the Python bridge depends on the domain layers and Python interop.
+Dependency direction is acyclic: config depends on core, the gateway depends on
+config and core, and the Python bridge depends on core and Python interop. Its
+optional `trace-parity` diagnostics also depend on the gateway.
 
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)
@@ -94,12 +96,15 @@ stand-in only for the leanest possible build.
 
 ## Request logging
 
-The gateway runs no spend logic. When a session ends it builds one
+The gateway runs no spend logic. When core completes a call or session, the
+gateway terminal logger builds one
 `StandardLoggingPayload` and POSTs it to `{LITELLM_PROXY_BASE_URL}/v1/rust_control_plane/logs`
 (admin-only, bearer = `LITELLM_MASTER_KEY`), and the proxy replays it through its
 normal callbacks (spend logs, Langfuse, etc.). The POST is non-blocking: a bounded
 channel drained by a background worker, dropping with a counter if the proxy is
-down. It sends one payload per session. Both env vars are in the table above.
+down. It sends one payload per completed call or session. Realtime connection
+warmup sends none; only a connection handed to a serving session can complete
+and emit a terminal payload. Both env vars are in the table above.
 
 Worker tuning, rarely needed: `LITELLM_LOG_CHANNEL_CAPACITY` (4096),
 `LITELLM_LOG_BATCH_SIZE` (256), `LITELLM_LOG_FLUSH_INTERVAL_MS` (500).

@@ -13,6 +13,12 @@ pub(super) async fn execute_messages_provider_call(
     request: MessagesRequest,
 ) -> Result<AnthropicMessagesResponse, Error> {
     let request = prepare_provider_request(request)?;
+    execute_prepared_messages_provider_call(request).await
+}
+
+pub async fn execute_prepared_messages_provider_call(
+    request: super::types::ProviderMessagesRequest,
+) -> Result<AnthropicMessagesResponse, Error> {
     let mut request_builder = http_client().post(&request.url).json(&request.body);
     for (key, value) in &request.upstream_headers {
         request_builder = request_builder.header(key, value);

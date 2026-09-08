@@ -3,6 +3,7 @@ pub mod executed;
 pub mod execution;
 pub mod machine;
 pub mod ocr;
+pub mod program;
 mod streaming;
 pub mod terminal;
 pub mod types;
@@ -14,6 +15,7 @@ pub use execution::{
     TerminalDispatcher,
 };
 pub use machine::{Lifecycle, LifecycleRoute};
+pub use program::{Commitment, FailureStage};
 pub use streaming::{
     BytesStream, StreamingCall, StreamingCompletion, StreamingMetadata, StreamingObserver,
     StreamingSource,

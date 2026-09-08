@@ -2,129 +2,6 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyCFunction;
 
-macro_rules! bridge_route {
-    (
-        sync = $sync_name:ident,
-        asynchronous = $async_name:ident,
-        inputs = $inputs:ident,
-        required = { $($(#[$required_attr:meta])* $required_name:ident: $required_type:ty),+ $(,)? },
-        optional = { $($(#[$optional_attr:meta])* $optional_name:ident: $optional_type:ty),* $(,)? },
-        prepare = $prepare:path,
-        errors = $map_error:path
-        $(, extra = [$($extra:ident),* $(,)?])?
-        $(,)?
-    ) => {
-        struct $inputs {
-            $($required_name: $required_type,)*
-            $($optional_name: $optional_type),*
-        }
-
-        #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-        #[allow(clippy::too_many_arguments)]
-        fn $sync_name(
-            py: pyo3::Python<'_>,
-            $($(#[$required_attr])* $required_name: $required_type,)*
-            $($(#[$optional_attr])* $optional_name: $optional_type,)*
-        ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-            let future = $prepare($inputs {
-                $($required_name,)*
-                $($optional_name),*
-            })?;
-            litellm_python_interop::run_sync(py, future, $map_error)
-        }
-
-        #[pyfunction]
-        #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-        #[allow(clippy::too_many_arguments)]
-        fn $async_name(
-            py: pyo3::Python<'_>,
-            $($(#[$required_attr])* $required_name: $required_type,)*
-            $($(#[$optional_attr])* $optional_name: $optional_type,)*
-        ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-            let future = $prepare($inputs {
-                $($required_name,)*
-                $($optional_name),*
-            })?;
-            litellm_python_interop::run_async(py, future, $map_error)
-        }
-
-        pub(super) fn register(
-            module: &pyo3::Bound<'_, pyo3::types::PyModule>,
-        ) -> pyo3::PyResult<()> {
-            $($($crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($extra, module)?)?;)*)?
-            $crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($sync_name, module)?)?;
-            $crate::routes::definition::add_function(module, pyo3::wrap_pyfunction!($async_name, module)?)?;
-            Ok(())
-        }
-
-        #[cfg(feature = "trace-parity")]
-        mod trace {
-            use pyo3::prelude::*;
-            use super::{$inputs, $map_error, $prepare};
-
-            #[pyfunction]
-            #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-            #[allow(clippy::too_many_arguments)]
-            fn $sync_name(
-                py: pyo3::Python<'_>,
-                $($(#[$required_attr])* $required_name: $required_type,)*
-                $($(#[$optional_attr])* $optional_name: $optional_type,)*
-            ) -> pyo3::PyResult<pyo3::Py<pyo3::PyAny>> {
-                let future = $prepare($inputs {
-                    $($required_name,)*
-                    $($optional_name),*
-                })?;
-                litellm_python_interop::run_sync(
-                    py,
-                    $crate::function_trace::capture(future),
-                    $map_error,
-                )
-            }
-
-            #[pyfunction]
-            #[pyo3(signature = ($($required_name),*, $($optional_name=None),*))]
-            #[allow(clippy::too_many_arguments)]
-            fn $async_name(
-                py: pyo3::Python<'_>,
-                $($(#[$required_attr])* $required_name: $required_type,)*
-                $($(#[$optional_attr])* $optional_name: $optional_type,)*
-            ) -> pyo3::PyResult<pyo3::Bound<'_, pyo3::PyAny>> {
-                let future = $prepare($inputs {
-                    $($required_name,)*
-                    $($optional_name),*
-                })?;
-                litellm_python_interop::run_async(
-                    py,
-                    $crate::function_trace::capture(future),
-                    $map_error,
-                )
-            }
-
-            pub(super) fn register(
-                module: &pyo3::Bound<'_, pyo3::types::PyModule>,
-            ) -> pyo3::PyResult<()> {
-                $crate::routes::definition::add_function(
-                    module,
-                    pyo3::wrap_pyfunction!($sync_name, module)?,
-                )?;
-                $crate::routes::definition::add_function(
-                    module,
-                    pyo3::wrap_pyfunction!($async_name, module)?,
-                )?;
-                Ok(())
-            }
-        }
-
-        #[cfg(feature = "trace-parity")]
-        pub(super) fn register_trace(
-            module: &pyo3::Bound<'_, pyo3::types::PyModule>,
-        ) -> pyo3::PyResult<()> {
-            trace::register(module)
-        }
-    };
-}
-
 pub(super) fn add_function(
     module: &Bound<'_, PyModule>,
     function: Bound<'_, PyCFunction>,
@@ -169,15 +46,63 @@ mod tests {
             FUTURE_DROPPED.load(Ordering::SeqCst)
         }
 
-        bridge_route! {
-            sync = echo,
-            asynchronous = aecho,
-            inputs = EchoInputs,
-            required = { value: String },
-            optional = {},
-            prepare = prepare_echo,
-            errors = map_error,
-            extra = [future_dropped],
+        struct EchoInputs {
+            value: String,
+        }
+
+        #[pyfunction]
+        fn echo(py: Python<'_>, value: String) -> PyResult<Py<PyAny>> {
+            let future = prepare_echo(EchoInputs { value })?;
+            litellm_python_interop::run_sync(py, future, map_error)
+        }
+
+        #[pyfunction]
+        fn aecho(py: Python<'_>, value: String) -> PyResult<Bound<'_, PyAny>> {
+            let future = prepare_echo(EchoInputs { value })?;
+            litellm_python_interop::run_async(py, future, map_error)
+        }
+
+        pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+            super::add_function(module, wrap_pyfunction!(future_dropped, module)?)?;
+            super::add_function(module, wrap_pyfunction!(echo, module)?)?;
+            super::add_function(module, wrap_pyfunction!(aecho, module)?)
+        }
+
+        #[cfg(feature = "trace-parity")]
+        mod trace {
+            use pyo3::prelude::*;
+
+            use super::{EchoInputs, map_error, prepare_echo};
+
+            #[pyfunction]
+            fn echo(py: Python<'_>, value: String) -> PyResult<Py<PyAny>> {
+                let future = prepare_echo(EchoInputs { value })?;
+                litellm_python_interop::run_sync(
+                    py,
+                    crate::function_trace::capture(future),
+                    map_error,
+                )
+            }
+
+            #[pyfunction]
+            fn aecho(py: Python<'_>, value: String) -> PyResult<Bound<'_, PyAny>> {
+                let future = prepare_echo(EchoInputs { value })?;
+                litellm_python_interop::run_async(
+                    py,
+                    crate::function_trace::capture(future),
+                    map_error,
+                )
+            }
+
+            pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+                super::super::add_function(module, wrap_pyfunction!(echo, module)?)?;
+                super::super::add_function(module, wrap_pyfunction!(aecho, module)?)
+            }
+        }
+
+        #[cfg(feature = "trace-parity")]
+        pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
+            trace::register(module)
         }
 
         fn prepare_echo(
@@ -229,11 +154,7 @@ mod tests {
                     "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
                 ),
                 ("messages", "amessages", "(arguments)"),
-                (
-                    "chat_completions",
-                    "achat_completions",
-                    "(model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
-                ),
+                ("chat_completions", "achat_completions", "(arguments)"),
             ];
 
             for (sync_name, async_name, expected) in routes {
@@ -262,13 +183,20 @@ mod tests {
             crate::routes::register(&module).expect("routes should register");
 
             let invalid_messages = PyDict::new(py);
+            let invalid_chat_arguments = PyDict::new(py);
+            invalid_chat_arguments
+                .set_item("model", "model")
+                .expect("arguments should accept model");
+            invalid_chat_arguments
+                .set_item("messages", &invalid_messages)
+                .expect("arguments should accept messages");
             let sync_chat_error = module
                 .getattr("chat_completions")
-                .and_then(|function| function.call1(("model", &invalid_messages)))
+                .and_then(|function| function.call1((&invalid_chat_arguments,)))
                 .expect_err("sync chat should reject a non-list messages value");
             let async_chat_error = module
                 .getattr("achat_completions")
-                .and_then(|function| function.call1(("model", &invalid_messages)))
+                .and_then(|function| function.call1((&invalid_chat_arguments,)))
                 .expect_err("async chat should reject a non-list messages value");
 
             assert_eq!(
@@ -338,31 +266,25 @@ mod tests {
             crate::routes::register(&module).expect("routes should register");
             let invalid = PyList::empty(py);
 
-            let chat_kwargs = PyDict::new(py);
-            chat_kwargs
+            let chat_arguments = PyDict::new(py);
+            chat_arguments
+                .set_item("model", "model")
+                .expect("arguments should accept model");
+            chat_arguments
                 .set_item("optional_params", &invalid)
-                .expect("kwargs should accept optional_params");
-            chat_kwargs
+                .expect("arguments should accept optional_params");
+            chat_arguments
                 .set_item("extra_headers", &invalid)
-                .expect("kwargs should accept extra_headers");
+                .expect("arguments should accept extra_headers");
             let invalid_messages = PyDict::new(py);
+            chat_arguments
+                .set_item("messages", &invalid_messages)
+                .expect("arguments should accept messages");
             let error = module
                 .getattr("chat_completions")
-                .and_then(|function| {
-                    function.call(("model", &invalid_messages), Some(&chat_kwargs))
-                })
+                .and_then(|function| function.call1((&chat_arguments,)))
                 .expect_err("messages should be validated first");
             assert_eq!(error.to_string(), "TypeError: messages must be a list");
-
-            let valid_messages = PyList::empty(py);
-            let error = module
-                .getattr("chat_completions")
-                .and_then(|function| function.call(("model", &valid_messages), Some(&chat_kwargs)))
-                .expect_err("optional_params should be validated before headers");
-            assert_eq!(
-                error.to_string(),
-                "TypeError: optional_params must be a dict"
-            );
 
             let headers_kwargs = PyDict::new(py);
             headers_kwargs

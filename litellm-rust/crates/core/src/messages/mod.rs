@@ -19,6 +19,8 @@ pub mod types;
 use std::sync::Arc;
 
 use crate::lifecycle::StreamingCall;
+pub use handler::execute_prepared_messages_provider_call;
+pub use prepare::prepare_provider_request;
 use types::{AnthropicMessagesResponse, MessagesRequest};
 
 pub async fn messages(request: MessagesRequest) -> Result<AnthropicMessagesResponse, Error> {

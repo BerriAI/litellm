@@ -1,29 +1,12 @@
 use crate::Error;
-use crate::lifecycle::{
-    ActionBinding, ActionKind, Delivery, ErrorDisposition, FailurePolicy, Lifecycle,
-    LifecycleRoute, Outcome, Owner, ResultPolicy,
-};
+use crate::lifecycle::program::{CallProgram, ProgramOptions, actions_for};
+use crate::lifecycle::{ActionBinding, Lifecycle, LifecycleRoute, Outcome};
 
 use super::chat_completions_decline_reason;
 
 use serde_json::{Map, Value};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Operation {
-    Setup,
-    DeploymentPre,
-    Prepare,
-    Send,
-    DeploymentSuccess,
-    DeploymentFailure,
-    SyncSuccess,
-    AsyncSuccess,
-    SyncSuccessIfNeeded,
-    SyncFailure,
-    AsyncFailure,
-    Restore,
-    Complete(Outcome),
-}
+pub use crate::lifecycle::program::{Observations, Operation, Transition};
 
 #[derive(Clone, Debug)]
 pub struct Admission {
@@ -39,17 +22,6 @@ pub struct Options {
     pub internal_call: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Observations {
-    pub logger_available: bool,
-    pub has_fallbacks: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Transition {
-    pub error: ErrorDisposition,
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct Decline(&'static str);
 
@@ -61,10 +33,7 @@ impl Decline {
 
 #[derive(Debug)]
 pub struct ChatCompletionsState {
-    operation: Operation,
-    outcome: Outcome,
-    asynchronous: bool,
-    internal_call: bool,
+    program: CallProgram,
 }
 
 #[derive(Debug)]
@@ -95,15 +64,16 @@ impl LifecycleRoute for ChatCompletionsRoute {
             return Ok(Err(Decline(reason)));
         }
         Ok(Ok(ChatCompletionsState {
-            operation: Operation::Setup,
-            outcome: Outcome::Success,
-            asynchronous: options.asynchronous,
-            internal_call: options.internal_call,
+            program: CallProgram::new(ProgramOptions {
+                asynchronous: options.asynchronous,
+                internal_call: options.internal_call,
+                pre_call: false,
+            }),
         }))
     }
 
     fn operation(state: &Self::State) -> Operation {
-        state.operation
+        state.program.operation()
     }
 
     fn advance(
@@ -111,95 +81,25 @@ impl LifecycleRoute for ChatCompletionsRoute {
         outcome: Outcome,
         observations: Observations,
     ) -> Result<Transition, Error> {
-        use Operation::*;
-
-        if matches!(state.operation, Complete(_)) {
-            return Err(Error::InvalidRequest(
-                "chat completions lifecycle is already complete".into(),
-            ));
-        }
-        let failure =
-            if observations.logger_available && !(state.asynchronous && state.internal_call) {
-                SyncFailure
-            } else {
-                Restore
-            };
-        let error = if outcome != Outcome::Success && state.operation != DeploymentFailure {
-            state.outcome = outcome;
-            ErrorDisposition::Replace
-        } else {
-            ErrorDisposition::Preserve
-        };
-        state.operation = match (state.operation, outcome) {
-            (Restore, _) => Complete(state.outcome),
-            (DeploymentFailure, _) => failure,
-            (_, Outcome::Abort) => Restore,
-            (SyncFailure | AsyncFailure, Outcome::Failure) => Restore,
-            (Prepare | Send, Outcome::Failure) if state.asynchronous => DeploymentFailure,
-            (_, Outcome::Failure) => failure,
-            (Setup, Outcome::Success) if state.asynchronous => DeploymentPre,
-            (Setup | DeploymentPre, Outcome::Success) => Prepare,
-            (Prepare, Outcome::Success) => Send,
-            (Send, Outcome::Success) if state.asynchronous => DeploymentSuccess,
-            (Send, Outcome::Success) => SyncSuccess,
-            (DeploymentSuccess, Outcome::Success) => {
-                if state.internal_call || observations.has_fallbacks {
-                    SyncSuccessIfNeeded
-                } else {
-                    AsyncSuccess
-                }
-            }
-            (AsyncSuccess, Outcome::Success) => SyncSuccessIfNeeded,
-            (SyncFailure, Outcome::Success) if state.asynchronous => AsyncFailure,
-            (SyncSuccess | SyncSuccessIfNeeded | SyncFailure | AsyncFailure, Outcome::Success) => {
-                Restore
-            }
-            (Complete(_), _) => unreachable!(),
-        };
-        Ok(Transition { error })
+        state.program.advance(outcome, observations).ok_or_else(|| {
+            Error::InvalidRequest("chat completions lifecycle is already complete".into())
+        })
     }
 
     fn actions_for(operation: Operation, _: &Observations) -> &'static [ActionBinding] {
-        match operation {
-            Operation::Prepare | Operation::Send => &PROVIDER_ACTION,
-            Operation::SyncFailure | Operation::AsyncFailure | Operation::DeploymentFailure => {
-                &FAILURE_ACTION
-            }
-            Operation::Restore => &RESTORE_ACTION,
-            Operation::Complete(_) => &[],
-            _ => &CALLBACK_ACTION,
-        }
+        actions_for(operation)
     }
 }
 
-const PROVIDER_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::ProviderCall,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Replace,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
-const CALLBACK_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::TerminalSuccess,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::RecordAndContinue,
-    owner: Owner::Route,
-}];
-const FAILURE_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::TerminalFailure,
-    delivery: Delivery::InlineAwaited,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::PreserveOriginalFailure,
-    owner: Owner::Route,
-}];
-const RESTORE_ACTION: [ActionBinding; 1] = [ActionBinding {
-    kind: ActionKind::Restore,
-    delivery: Delivery::InlineDirect,
-    on_result: ResultPolicy::Continue,
-    on_error: FailurePolicy::Propagate,
-    owner: Owner::Core,
-}];
+impl Lifecycle<ChatCompletionsRoute> {
+    pub fn commitment(&self) -> crate::lifecycle::Commitment {
+        self.state.program.commitment()
+    }
+
+    pub fn failure_stage(&self) -> Option<crate::lifecycle::FailureStage> {
+        self.state.program.failure_stage()
+    }
+}
 
 pub fn machine(
     admission: &Admission,

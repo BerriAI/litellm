@@ -1,7 +1,9 @@
+use litellm_core::lifecycle::FailureStage;
 use litellm_core::lifecycle::{ErrorDisposition, Lifecycle, Outcome};
 use litellm_core::messages::lifecycle::{MessagesRoute, Observations, Operation, Options, machine};
-use litellm_core::messages::types::MessagesRequest;
-use litellm_python_interop::{Pythonized, from_py, run_async_value, run_sync_value};
+use litellm_core::messages::types::{MessagesRequest, ProviderMessagesRequest};
+use litellm_core::messages::{execute_prepared_messages_provider_call, prepare_provider_request};
+use litellm_python_interop::{Pythonized, from_py, run_async_value, run_sync_value, to_py};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::{PyTraverseError, PyVisit};
@@ -9,25 +11,34 @@ use pyo3::sync::PyOnceLock;
 use pyo3::types::PyDict;
 use serde_json::{Map, Value};
 
-use crate::errors::core_error_to_pyerr;
+use crate::errors::{RustUpstreamError, core_error_to_pyerr, messages_provider_error_to_pyerr};
 use crate::marshal::optional_timeout;
 
 #[pyclass]
 struct MessagesState {
     arguments: Option<Py<PyDict>>,
-    request: Option<MessagesRequest>,
+    body: Option<Py<PyDict>>,
+    headers: Option<Py<PyDict>>,
+    prepared: Option<ProviderMessagesRequest>,
 }
 
 #[pymethods]
 impl MessagesState {
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.arguments)
+        visit.call(&self.arguments)?;
+        visit.call(&self.body)?;
+        visit.call(&self.headers)
     }
 
     fn __clear__(slf: &Bound<'_, Self>) {
         let roots = {
             let mut state = slf.borrow_mut();
-            (state.arguments.take(), state.request.take())
+            (
+                state.arguments.take(),
+                state.body.take(),
+                state.headers.take(),
+                state.prepared.take(),
+            )
         };
         drop(roots);
     }
@@ -41,33 +52,30 @@ fn scalar(arguments: &Bound<'_, PyDict>, name: &str) -> PyResult<Option<String>>
         .transpose()
 }
 
-fn decode_state(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<MessagesState> {
-    let bag = arguments.bind(py);
-    let body = bag
+fn decode_request(py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<MessagesRequest> {
+    let body = arguments
         .get_item(pyo3::intern!(py, "body"))?
         .ok_or_else(|| PyValueError::new_err("messages requires body"))?;
     let timeout = optional_timeout(
-        bag.get_item(pyo3::intern!(py, "timeout_seconds"))?
+        arguments
+            .get_item(pyo3::intern!(py, "timeout_seconds"))?
             .filter(|value| !value.is_none())
             .map(|value| value.extract::<f64>())
             .transpose()?,
     )?;
-    Ok(MessagesState {
-        request: Some(MessagesRequest {
-            body: from_py(&body)?,
-            model: scalar(bag, "model")?
-                .ok_or_else(|| PyValueError::new_err("messages requires model"))?,
-            api_key: scalar(bag, "api_key")?,
-            api_base: scalar(bag, "api_base")?,
-            custom_llm_provider: scalar(bag, "custom_llm_provider")?,
-            extra_headers: bag
-                .get_item("extra_headers")?
-                .filter(|value| !value.is_none())
-                .map(|value| from_py::<Map<String, Value>>(&value))
-                .transpose()?,
-            timeout,
-        }),
-        arguments: Some(arguments),
+    Ok(MessagesRequest {
+        body: from_py(&body)?,
+        model: scalar(arguments, "model")?
+            .ok_or_else(|| PyValueError::new_err("messages requires model"))?,
+        api_key: scalar(arguments, "api_key")?,
+        api_base: scalar(arguments, "api_base")?,
+        custom_llm_provider: scalar(arguments, "custom_llm_provider")?,
+        extra_headers: arguments
+            .get_item("extra_headers")?
+            .filter(|value| !value.is_none())
+            .map(|value| from_py::<Map<String, Value>>(&value))
+            .transpose()?,
+        timeout,
     })
 }
 
@@ -121,6 +129,10 @@ impl MessagesLifecycle {
             _ => None,
         }
     }
+
+    fn failed_after_provider_response(&self) -> bool {
+        self.machine.failure_stage() == Some(FailureStage::AfterProviderResponse)
+    }
 }
 
 #[pyfunction]
@@ -137,6 +149,11 @@ fn invoke(
         Operation::Setup => ("setup", false),
         Operation::DeploymentPre => ("deployment_pre", true),
         Operation::Prepare => ("prepare", false),
+        Operation::PreCall => {
+            return Err(PyRuntimeError::new_err(
+                "messages lifecycle selected an unsupported pre-call operation",
+            ));
+        }
         Operation::Send if asynchronous => ("send", true),
         Operation::Send => ("send_sync", false),
         Operation::DeploymentSuccess => ("deployment_success", true),
@@ -156,46 +173,78 @@ fn invoke(
 
 #[pyfunction]
 fn prepare(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Py<MessagesState>> {
-    let state = decode_state(py, arguments)?;
-    let bag = state.arguments.as_ref().unwrap().bind(py);
+    let bag = arguments.bind(py);
+    let request = decode_request(py, bag)?;
+    let prepared = py
+        .detach(|| prepare_provider_request(request))
+        .map_err(core_error_to_pyerr)?;
+    let body = to_py(py, &prepared.body)?
+        .into_bound(py)
+        .cast_into::<PyDict>()?;
+    let headers = PyDict::new(py);
+    for (name, value) in &prepared.upstream_headers {
+        headers.set_item(name, value)?;
+    }
     let logging = bag
         .get_item("litellm_logging_obj")?
         .filter(|value| !value.is_none())
         .map(|value| value.unbind())
         .ok_or_else(|| PyRuntimeError::new_err("messages logging was not initialized"))?;
     let additional = PyDict::new(py);
-    additional.set_item(
-        pyo3::intern!(py, "complete_input_dict"),
-        bag.get_item(pyo3::intern!(py, "body"))?,
-    )?;
-    additional.set_item(
-        pyo3::intern!(py, "api_base"),
-        bag.get_item(pyo3::intern!(py, "api_base"))?,
-    )?;
-    additional.set_item(
-        pyo3::intern!(py, "headers"),
-        bag.get_item(pyo3::intern!(py, "extra_headers"))?,
-    )?;
+    additional.set_item(pyo3::intern!(py, "complete_input_dict"), &body)?;
+    additional.set_item(pyo3::intern!(py, "api_base"), &prepared.url)?;
+    additional.set_item(pyo3::intern!(py, "headers"), &headers)?;
     let kwargs = PyDict::new(py);
-    kwargs.set_item(
-        "input",
-        bag.get_item("messages")?
-            .unwrap_or_else(|| py.None().into_bound(py)),
-    )?;
+    let serialized = py.import("json")?.call_method1("dumps", (&body,))?;
+    let message = PyDict::new(py);
+    message.set_item("role", "user")?;
+    message.set_item("content", serialized)?;
+    let messages = vec![message];
+    logging
+        .bind(py)
+        .call_method1("update_messages", (&messages,))?;
+    kwargs.set_item("input", messages)?;
     kwargs.set_item("api_key", "")?;
     kwargs.set_item("additional_args", additional)?;
     logging
         .bind(py)
         .call_method(pyo3::intern!(py, "pre_call"), (), Some(&kwargs))?;
-    Py::new(py, state)
+    Py::new(
+        py,
+        MessagesState {
+            arguments: Some(arguments),
+            body: Some(body.unbind()),
+            headers: Some(headers.unbind()),
+            prepared: Some(prepared),
+        },
+    )
 }
 
-fn take_request(py: Python<'_>, state: &Py<MessagesState>) -> PyResult<MessagesRequest> {
-    state
-        .borrow_mut(py)
-        .request
-        .take()
-        .ok_or_else(|| PyRuntimeError::new_err("messages request was already sent or cleared"))
+fn take_request(py: Python<'_>, state: &Py<MessagesState>) -> PyResult<ProviderMessagesRequest> {
+    let (mut prepared, body, headers) = {
+        let mut state = state.borrow_mut(py);
+        let prepared = state.prepared.take().ok_or_else(|| {
+            PyRuntimeError::new_err("messages request was already sent or cleared")
+        })?;
+        let body = state
+            .body
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("messages body was cleared"))?
+            .clone_ref(py);
+        let headers = state
+            .headers
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("messages headers were cleared"))?
+            .clone_ref(py);
+        (prepared, body, headers)
+    };
+    prepared.body = from_py(body.bind(py).as_any())?;
+    prepared.upstream_headers = headers
+        .bind(py)
+        .iter()
+        .map(|(name, value)| Ok((name.extract()?, value.extract()?)))
+        .collect::<PyResult<_>>()?;
+    Ok(prepared)
 }
 
 fn validate_arguments(arguments: &Bound<'_, PyDict>) -> PyResult<()> {
@@ -221,8 +270,8 @@ fn send(py: Python<'_>, state: Py<MessagesState>) -> PyResult<Bound<'_, PyAny>> 
     litellm_python_interop::run_async_py(py, async move {
         let _state = state;
         let response = run_async_value(
-            litellm_core::messages::messages(request),
-            core_error_to_pyerr,
+            execute_prepared_messages_provider_call(request),
+            messages_provider_error_to_pyerr,
         )
         .await?;
         Ok(Pythonized(response))
@@ -234,10 +283,18 @@ fn send_sync(py: Python<'_>, state: Py<MessagesState>) -> PyResult<Py<PyAny>> {
     let request = take_request(py, &state)?;
     let response = run_sync_value(
         py,
-        litellm_core::messages::messages(request),
-        core_error_to_pyerr,
+        execute_prepared_messages_provider_call(request),
+        messages_provider_error_to_pyerr,
     )?;
     Ok(Pythonized(response).into_pyobject(py)?.unbind().into_any())
+}
+
+#[pyfunction]
+fn committed_failure() -> PyResult<()> {
+    Err(RustUpstreamError::new_err((
+        0u16,
+        "Messages lifecycle failed after the provider returned",
+    )))
 }
 
 #[pyfunction]
@@ -263,6 +320,10 @@ fn driver(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
     module.add("_prepare", wrap_pyfunction!(prepare, &module)?)?;
     module.add("_send", wrap_pyfunction!(send, &module)?)?;
     module.add("_send_sync", wrap_pyfunction!(send_sync, &module)?)?;
+    module.add(
+        "_committed_failure",
+        wrap_pyfunction!(committed_failure, &module)?,
+    )?;
     Ok(DRIVER.get_or_init(py, || module.unbind()).bind(py))
 }
 
@@ -270,7 +331,7 @@ const HOST: &str = r#"
 from datetime import datetime
 from litellm import utils
 from litellm.types.utils import CallTypes
-from litellm.rust_bridge.messages import initialize_logging, invoke_terminal
+from litellm.rust_bridge.messages import initialize_logging, invoke_terminal, retain_stream_response
 
 class Host:
     def __init__(self, arguments, asynchronous):
@@ -284,10 +345,12 @@ class Host:
         self.error = None
         self.start = datetime.now()
         self.end = None
+        self.streaming = False
 
     def setup(self):
         self.logger = initialize_logging(self.arguments, self.asynchronous)
         self.arguments['litellm_logging_obj'] = self.logger
+        self.streaming = self.logger.stream is True
 
     async def deployment_pre(self):
         modified = await utils.async_pre_call_deployment_hook(self.current, 'amessages')
@@ -308,11 +371,20 @@ class Host:
 
     async def deployment_success(self):
         self.response = await utils.async_post_call_success_deployment_hook(self.current, self.response, CallTypes.aanthropic_messages)
+        if self.streaming:
+            self.response = retain_stream_response(
+                self.response,
+                (self.arguments, self.current, self.state),
+                self.logger,
+                self.start,
+            )
 
     async def deployment_failure(self):
         await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'amessages')
 
     def terminal(self, action, value):
+        if self.streaming:
+            return None
         return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, None, value, self.start, self.end)
 
     def sync_success(self): return self.terminal('sync_success', self.response)
@@ -320,7 +392,9 @@ class Host:
     def sync_success_if_needed(self): return self.terminal('sync_success_if_needed', self.response)
     def sync_failure(self): return self.terminal('sync_failure', self.error)
     def async_failure(self): return self.terminal('async_failure', self.error)
-    def restore(self): utils._restore_correlation_context_if_supported(self.logger)
+    def restore(self):
+        if not self.streaming:
+            utils._restore_correlation_context_if_supported(self.logger)
 
     def advance(self, outcome, error=None):
         if error is not None and self.end is None:
@@ -334,6 +408,8 @@ class Host:
     def result(self):
         if self.machine.complete():
             return self.response
+        if self.machine.failed_after_provider_response():
+            _committed_failure()
         raise self.error
 "#;
 
@@ -361,7 +437,7 @@ mod tests {
                 arguments.set_item("model", "model").unwrap();
                 arguments.set_item("body", PyDict::new(py)).unwrap();
                 arguments.set_item("timeout_seconds", timeout).unwrap();
-                let error = match decode_state(py, arguments.unbind()) {
+                let error = match decode_request(py, &arguments) {
                     Ok(_) => panic!("invalid timeout should fail normally"),
                     Err(error) => error,
                 };

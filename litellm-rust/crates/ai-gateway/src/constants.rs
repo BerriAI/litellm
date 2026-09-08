@@ -5,10 +5,6 @@
 //! modules. Env-overridable tunables keep their `DEFAULT_*` value here; the env
 //! read + fallback happens at the host/config layer.
 
-/// Provider attributed to realtime sessions in the logging payload.
-#[cfg(feature = "server")]
-pub(crate) const DEFAULT_PROVIDER: &str = "openai";
-
 /// HTTP path for the non-streaming Anthropic Messages route.
 #[cfg(feature = "server")]
 pub(crate) const MESSAGES_ROUTE_PATH: &str = "/v1/messages";

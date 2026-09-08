@@ -18,7 +18,7 @@ fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProv
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub fn prepare_audio_transcription_provider_call(
+pub(super) fn prepare_audio_transcription_provider_call(
     request: AudioTranscriptionRequest<'_>,
 ) -> Result<ProviderAudioTranscriptionRequest, Error> {
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)

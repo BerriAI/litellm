@@ -1,9 +1,11 @@
 # Realtime route (`GET /v1/realtime`)
 
-Proxies OpenAI's realtime WebSocket. `mod.rs` is the axum surface (handler +
-socket↔events adapter); `service.rs` is the pure logic (select a deployment, then
-splice client ↔ upstream). The pool itself lives in
-`crates/providers/src/realtime_pool.rs`.
+Proxies OpenAI's realtime WebSocket. `mod.rs` is the Axum surface and converts
+socket frames to core events. `service.rs` selects a deployment and calls
+`litellm_core::realtime::realtime`. Core owns provider resolution, upstream
+dialing, event splicing, usage observation, and session completion. The pool
+lives in `ai-gateway/src/io/realtime_pool.rs` and stores core `WarmConnection`
+values as a transport optimization.
 
 ## Connection pooling
 
@@ -45,6 +47,11 @@ A warm session is indistinguishable from a fresh one: OpenAI sends `session.crea
 unprompted on connect, we pre-read exactly that one frame and relay it on handoff,
 and we send nothing else on the socket before a client exists — so the client's first
 `session.update` behaves identically either way.
+
+Warmup has no user-visible call lifecycle. Whether it succeeds or fails, it emits
+zero terminal records. Ownership transfers only when a warm connection is handed
+to the core realtime route; that serving session emits exactly one terminal record
+when splicing completes or fails.
 
 ### Sizing
 

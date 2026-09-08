@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
+from types import TracebackType
 from typing import Any, Final, Protocol, runtime_checkable
 
 import httpx
@@ -372,6 +373,17 @@ class AnthropicMessagesStreamingResponse:
 
     async def aclose(self) -> None:
         await aclose_if_supported(self.completion_stream)
+
+    async def __aenter__(self) -> "AnthropicMessagesStreamingResponse":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        await self.aclose()
 
 
 class BaseAnthropicMessagesStreamingIterator:

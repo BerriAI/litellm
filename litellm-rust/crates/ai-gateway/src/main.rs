@@ -1,8 +1,8 @@
 //! LiteLLM AI Gateway — a minimal Axum server fronting the Rust router.
 //!
 //! Flow: client → `POST /v1/realtime` → `router.realtime()` selects a deployment
-//! (simple-shuffle) → `io::realtime::realtime()` invokes OpenAI. The
-//! server owns transport + config; routing lives in the `router` crate.
+//! (simple-shuffle) → `core::realtime()` invokes OpenAI. The server owns config
+//! and Axum adaptation; routing and provider execution live in core.
 //!
 //! The binary requires the `server` feature (declared in `Cargo.toml` via
 //! `required-features`), so cargo skips it unless that feature is on. Everything
@@ -135,12 +135,8 @@ where
 fn register_deployments(router: &Router, pool: &RealtimePool) {
     for deployment in router.deployments() {
         let params = &deployment.litellm_params;
-        let provider_model = params
-            .model
-            .strip_prefix("openai/")
-            .unwrap_or(&params.model);
         if let Some(key) = upstream_key(
-            provider_model,
+            &params.model,
             params.api_key.as_deref(),
             params.api_base.as_deref(),
         ) {

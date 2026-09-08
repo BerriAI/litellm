@@ -189,6 +189,47 @@ impl CallLifecycle {
         ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
         ProviderFuture: Future<Output = Result<Resp, Error>>,
     {
+        self.run_with_usage(
+            context,
+            request,
+            policy,
+            dispatcher,
+            clock,
+            provider_call,
+            |_| None,
+        )
+        .await
+    }
+
+    pub(crate) async fn run_with_usage<
+        InitialReq,
+        ProviderReq,
+        Resp,
+        Policy,
+        Dispatcher,
+        ClockImpl,
+        ProviderCall,
+        ProviderFuture,
+        ResponseUsage,
+    >(
+        &self,
+        mut context: CallLifecycleContext,
+        request: InitialReq,
+        policy: &Policy,
+        dispatcher: &Dispatcher,
+        clock: &ClockImpl,
+        provider_call: ProviderCall,
+        response_usage: ResponseUsage,
+    ) -> ExecutedCall<Resp, Error>
+    where
+        Resp: Serialize,
+        Policy: RequestPolicy<InitialReq, ProviderReq>,
+        Dispatcher: TerminalDispatcher,
+        ClockImpl: Clock,
+        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
+        ProviderFuture: Future<Output = Result<Resp, Error>>,
+        ResponseUsage: FnOnce(&Resp) -> Option<Usage>,
+    {
         let start_time = clock.now();
         let request = match policy.async_pre_call_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
@@ -204,6 +245,9 @@ impl CallLifecycle {
         };
         match provider_call(provider_request).await {
             Ok(response) => {
+                if let Some(usage) = response_usage(&response) {
+                    context.usage = usage;
+                }
                 let terminal = context.terminal(
                     CallbackTiming::new(start_time, clock.now()),
                     TerminalClassification::Success,

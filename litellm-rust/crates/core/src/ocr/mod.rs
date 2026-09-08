@@ -3,42 +3,75 @@ pub mod transformation;
 pub mod types;
 
 use serde_json::Value;
+use std::future::Future;
 
 use crate::Error;
 use crate::error::json_type_name;
 use crate::http_utils::{buffered_post, has_header};
 
-pub use types::{OcrAdmissionRequest, OcrDraft, OcrEndpoint, OcrResponseData, SettledOcrRequest};
+pub use types::{
+    OcrAdmissionRequest, OcrDraft, OcrEndpoint, OcrResponseData, OcrTransportRequest,
+    OcrTransportResponse, SettledOcrRequest,
+};
 use types::{OcrDocument, OcrDocumentProjection};
 
 use crate::lifecycle::{
     CallLifecycle, CallLifecycleContext, Clock, ExecutedCall, TerminalDispatcher,
 };
 
-pub trait OcrServices: TerminalDispatcher + Clock {}
+pub trait OcrTransport {
+    type SendFuture<'a>: Future<Output = Result<OcrTransportResponse, Error>>
+    where
+        Self: 'a;
 
-impl<T> OcrServices for T where T: TerminalDispatcher + Clock {}
+    fn send(&self, request: OcrTransportRequest) -> Self::SendFuture<'_>;
+}
 
-pub struct NoopOcrServices;
+pub trait OcrServices: TerminalDispatcher + Clock + OcrTransport {}
 
-impl Default for NoopOcrServices {
+impl<T> OcrServices for T where T: TerminalDispatcher + Clock + OcrTransport {}
+
+pub struct DefaultOcrServices;
+
+impl Default for DefaultOcrServices {
     fn default() -> Self {
         Self
     }
 }
 
-impl Clock for NoopOcrServices {
+impl Clock for DefaultOcrServices {
     fn now(&self) -> f64 {
         crate::lifecycle::SystemClock.now()
     }
 }
 
-impl TerminalDispatcher for NoopOcrServices {
+impl TerminalDispatcher for DefaultOcrServices {
     fn dispatch<'a>(
         &'a self,
         _: &'a crate::lifecycle::TerminalRecord,
     ) -> crate::integrations::custom_logger::LogFuture<'a> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+impl OcrTransport for DefaultOcrServices {
+    type SendFuture<'a> = impl Future<Output = Result<OcrTransportResponse, Error>> + 'a;
+
+    fn send(&self, request: OcrTransportRequest) -> Self::SendFuture<'_> {
+        async move {
+            let response = buffered_post::send(buffered_post::Request {
+                url: request.url,
+                headers: request.headers,
+                body: request.body,
+                timeout_seconds: request.timeout_seconds,
+            })
+            .await?;
+            Ok(OcrTransportResponse {
+                status: response.status,
+                headers: response.headers,
+                content: response.content,
+            })
+        }
     }
 }
 
@@ -55,7 +88,11 @@ pub async fn ocr<S: OcrServices>(
             &SettledOcrPolicy,
             services,
             services,
-            |request| async move { send(request).await.map(OcrResponseData::into_json) },
+            |request| async move {
+                send(services, request)
+                    .await
+                    .map(OcrResponseData::into_json)
+            },
         )
         .await
 }
@@ -89,7 +126,10 @@ impl crate::lifecycle::RequestPolicy<SettledOcrRequest, SettledOcrRequest> for S
     }
 }
 
-pub(crate) async fn send(request: SettledOcrRequest) -> Result<OcrResponseData, Error> {
+pub(crate) async fn send<S: OcrTransport>(
+    transport: &S,
+    request: SettledOcrRequest,
+) -> Result<OcrResponseData, Error> {
     let SettledOcrRequest {
         endpoint,
         headers,
@@ -132,13 +172,14 @@ pub(crate) async fn send(request: SettledOcrRequest) -> Result<OcrResponseData, 
         .collect();
     let body = serde_json::to_vec(&body)
         .map_err(|_| Error::InvalidRequest("could not encode OCR request".into()))?;
-    let response = buffered_post::send(buffered_post::Request {
+    let response = transport
+        .send(OcrTransportRequest {
         url: endpoint.url,
         headers,
         body,
         timeout_seconds: endpoint.timeout_seconds,
-    })
-    .await?;
+        })
+        .await?;
     if !(200..300).contains(&response.status) {
         return Err(Error::Http {
             status: response.status,
