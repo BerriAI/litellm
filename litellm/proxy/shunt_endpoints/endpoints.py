@@ -16,10 +16,12 @@ from typing import TYPE_CHECKING, Annotated, Final
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.proxy._types import LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.guardrails.auto_router_shunt import ShuntConfig, shunt_config_for_model
 from litellm.proxy.guardrails.shunt_capability_token import open_shunt_capability_token
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.shunt_endpoints.worker import (
     BULK_READ_SYSTEM_PROMPT,
     CODE_WRITE_SYSTEM_PROMPT,
@@ -28,7 +30,8 @@ from litellm.proxy.shunt_endpoints.worker import (
     build_code_write_message,
     strip_code_fences,
 )
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage, ChatCompletionUserMessage
+from litellm.types.llms.openai import ChatCompletionSystemMessage, ChatCompletionUserMessage
+from litellm.types.utils import Choices, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -117,6 +120,7 @@ def _worker_config(
 
 
 async def _worker_text(
+    request: Request,
     llm_router: "Router",
     *,
     model: str,
@@ -127,49 +131,95 @@ async def _worker_text(
 ) -> str:
     """The worker model's reply text, or a 502 if it produced none.
 
-    One call site for both endpoints, since they differ only in model, system prompt, and
-    message. Attribution reuses the proxy's own key-metadata builder so the call is billed and
-    budgeted against the calling key/user/team/org like a normal request.
-
-    `proxy_logging_obj.pre_call_hook` runs first: `llm_router.acompletion` alone skips every
-    rate-limit and budget callback, since those register as `async_pre_call_hook` and only
-    `/chat/completions` and friends normally walk that list before routing. Without this call a
-    caller already over budget or rate-limited could keep spending through this endpoint.
+    Goes through the same `common_processing_pre_call_logic` + `route_request` pipeline
+    `/chat/completions` and every other LLM-calling route uses, rather than calling
+    `llm_router.acompletion` directly: that pipeline is what actually applies model-level
+    guardrails, budget/rate-limit enforcement, and fallbacks to the model being called, and a
+    hand-rolled call here would have to re-derive each of those separately and correctly.
+    Skips only the HTTP response/streaming shaping half of that pipeline, since a worker call
+    is never itself an HTTP response and is never streamed.
     """
-    from litellm.proxy.proxy_server import proxy_logging_obj
+    from litellm.proxy.proxy_server import general_settings, proxy_config, proxy_logging_obj
 
     system: Final = ChatCompletionSystemMessage(role="system", content=system_prompt)
     user: Final = ChatCompletionUserMessage(role="user", content=message)
-    messages: Final[
-        list[AllMessageValues]
-    ] = [  # mutable-ok: shared between pre_call_hook and acompletion, both take a list
-        system,
-        user,
-    ]
-    key_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
-        user_api_key_dict=user_api_key_dict
+    processor: Final = ProxyBaseLLMRequestProcessing(
+        data={"model": model, "messages": [system, user], "temperature": WORKER_TEMPERATURE, "stream": False}
     )
-    metadata: Final = {**key_metadata, "user_api_key": user_api_key_dict.api_key}  # mutable-ok: same
-    request_data: Final = {  # mutable-ok: pre_call_hook's own signature takes a plain dict
-        "model": model,
-        "messages": messages,
-        "metadata": metadata,
-    }
-    await proxy_logging_obj.pre_call_hook(
-        user_api_key_dict=user_api_key_dict, data=request_data, call_type="acompletion"
-    )
-
-    response: Final = await llm_router.acompletion(
-        model=model, messages=messages, temperature=WORKER_TEMPERATURE, stream=False, metadata=metadata
-    )
-    text: Final = response.choices[0].message.content
+    try:
+        data, _logging_obj = await processor.common_processing_pre_call_logic(  # pyright: ignore[reportUnknownVariableType]  # common_processing_pre_call_logic's own dict/Logging return is unrefined at this call shape
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="acompletion",
+            llm_router=llm_router,
+        )
+        response: Final = await route_request(  # pyright: ignore[reportUnknownVariableType]  # route_request's own return type is intentionally an untyped union (see its ANN202 suppression)
+            data=data,
+            route_type="acompletion",
+            llm_router=llm_router,
+            user_model=None,
+            user_api_key_dict=user_api_key_dict,
+        )
+        processed: Final = await proxy_logging_obj.post_call_success_hook(
+            data=data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,  # pyright: ignore[reportArgumentType]  # response is the same real ModelResponse a router acompletion call returns; the hook's own signature just can't narrow it here
+        )
+    except Exception as e:  # noqa: BLE001  # _handle_llm_api_exception must see every failure mode a real request can hit, same as proxy_server.py's own catch-all here
+        raise await processor._handle_llm_api_exception(  # pyright: ignore[reportPrivateUsage]  # same cross-module call proxy_server.py's own /chat/completions and /embeddings routes already make
+            e=e, user_api_key_dict=user_api_key_dict, proxy_logging_obj=proxy_logging_obj
+        )
+    if not isinstance(processed, ModelResponse):
+        raise HTTPException(status_code=502, detail=f"shunt {label}: worker model returned no completion")
+    choice: Final = processed.choices[0] if processed.choices else None
+    text: Final = choice.message.content if isinstance(choice, Choices) else None
     if not isinstance(text, str):
         raise HTTPException(status_code=502, detail=f"shunt {label}: worker model returned no text")
     return text
 
 
-async def _read_upload_text(upload: UploadFile) -> str:
-    content: Final = await upload.read()
+# A global request-size limit exists (RequestSizeLimitMiddleware) but is opt-in and
+# premium-gated, so these endpoints cannot rely on it: they accept arbitrary caller-supplied
+# multipart uploads specifically to hand their contents to a worker model, an authenticated
+# caller with a valid capability token could otherwise upload enough data to exhaust a proxy
+# worker's memory before the size limit ever runs.
+_MAX_UPLOAD_BYTES_PER_FILE: Final = get_env_int("LITELLM_SHUNT_MAX_UPLOAD_BYTES_PER_FILE", 1024 * 1024)
+_MAX_UPLOAD_BYTES_TOTAL: Final = get_env_int("LITELLM_SHUNT_MAX_UPLOAD_BYTES_TOTAL", 8 * 1024 * 1024)
+_MAX_UPLOAD_FILE_COUNT: Final = get_env_int("LITELLM_SHUNT_MAX_UPLOAD_FILE_COUNT", 20)
+
+
+async def _read_upload_text(upload: UploadFile, *, remaining_total_bytes: int) -> str:
+    """`upload`'s content as UTF-8 text, reading at most the smaller of the per-file and
+    remaining-total byte budgets -- never the whole file, so a caller can't force this endpoint
+    to buffer more than that regardless of how large the real upload is.
+
+    `remaining_total_bytes <= 0` is checked explicitly rather than left to `min()` +
+    `.read(limit + 1)`: a non-positive `remaining_total_bytes` would make `limit` zero or
+    negative, and `UploadFile.read` treats a negative size as "read the whole file", which
+    would silently defeat this budget for any caller of this function that ever passes one.
+    `_read_upload_texts` below never actually produces a negative value (each read is already
+    bounded by what was left when it started), so this is the function's own contract holding
+    regardless of caller, not a path reachable through that call site today.
+    """
+    if remaining_total_bytes <= 0:
+        raise ProxyException(
+            message=f"uploads exceed the {_MAX_UPLOAD_BYTES_TOTAL}-byte total limit for this call",
+            type=ProxyErrorTypes.bad_request_error,
+            param="paths",
+            code=400,
+        )
+    limit: Final = min(_MAX_UPLOAD_BYTES_PER_FILE, remaining_total_bytes)
+    content: Final = await upload.read(limit + 1)
+    if len(content) > limit:
+        raise ProxyException(
+            message=f"'{upload.filename}' exceeds the {limit}-byte upload limit for this call",
+            type=ProxyErrorTypes.bad_request_error,
+            param="paths" if upload.filename else "file",
+            code=400,
+        )
     try:
         return content.decode("utf-8")
     except UnicodeDecodeError as e:
@@ -179,6 +229,30 @@ async def _read_upload_text(upload: UploadFile) -> str:
             param="paths" if upload.filename else "file",
             code=400,
         ) from e
+
+
+async def _read_upload_texts(uploads: Sequence[UploadFile]) -> tuple[str, ...]:
+    """Every upload's text, in order, enforcing the aggregate byte and file-count budgets
+    across the whole request rather than per file.
+
+    A plain accumulator, not a comprehension: each read's byte budget is whatever the
+    aggregate limit has left after every earlier file in this same request, so the reads are
+    inherently sequential and the running total has to be rebound as they complete.
+    """
+    if len(uploads) > _MAX_UPLOAD_FILE_COUNT:
+        raise ProxyException(
+            message=f"at most {_MAX_UPLOAD_FILE_COUNT} files are allowed per call",
+            type=ProxyErrorTypes.bad_request_error,
+            param="paths",
+            code=400,
+        )
+    texts: tuple[str, ...] = ()  # rebind-ok: sequential running total, see docstring
+    remaining_total_bytes: int = _MAX_UPLOAD_BYTES_TOTAL  # rebind-ok: same
+    for upload in uploads:
+        text = await _read_upload_text(upload, remaining_total_bytes=remaining_total_bytes)
+        texts = (*texts, text)
+        remaining_total_bytes -= len(text.encode("utf-8"))
+    return texts
 
 
 @router.post(
@@ -206,11 +280,15 @@ async def bulk_read(
     """
     llm_router, config = _worker_config(router_name, user_api_key_dict, tags or ())
 
-    files: Final = MappingProxyType({upload.filename or "unnamed": await _read_upload_text(upload) for upload in paths})
+    texts: Final = await _read_upload_texts(paths)
+    files: Final = MappingProxyType(
+        {upload.filename or "unnamed": text for upload, text in zip(paths, texts, strict=True)}
+    )
     message: Final = build_bulk_read_message(question=question, files=files)
 
     verbose_proxy_logger.debug("shunt bulk_read: %s file(s) via %s", len(files), config.bulk_read_model)
     return await _worker_text(
+        request,
         llm_router,
         model=config.bulk_read_model,
         system_prompt=BULK_READ_SYSTEM_PROMPT,
@@ -246,7 +324,7 @@ async def code_write(
     """
     llm_router, config = _worker_config(router_name, user_api_key_dict, tags or ())
 
-    reference_content: Final = await _read_upload_text(reference)
+    reference_content: Final = await _read_upload_text(reference, remaining_total_bytes=_MAX_UPLOAD_BYTES_TOTAL)
     message: Final = build_code_write_message(
         spec=spec, reference_path=reference.filename or "", reference_content=reference_content
     )
@@ -254,6 +332,7 @@ async def code_write(
     verbose_proxy_logger.debug("shunt code_write: reference=%s via %s", reference.filename, config.code_write_model)
     return strip_code_fences(
         await _worker_text(
+            request,
             llm_router,
             model=config.code_write_model,
             system_prompt=CODE_WRITE_SYSTEM_PROMPT,
