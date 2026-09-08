@@ -4313,6 +4313,8 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     access_group_mcp_server_ids: list[str] | None = None
     access_group_agent_ids: list[str] | None = None
     access_group_details: tuple[TeamAccessGroupModelGrant, ...] | None = None
+    # Parent org's model ceiling. None = no org; [] or ["all-proxy-models"] = no ceiling.
+    organization_models: list[str] | None = None
 
 
 class TeamInfoResponseObject(TypedDict):
