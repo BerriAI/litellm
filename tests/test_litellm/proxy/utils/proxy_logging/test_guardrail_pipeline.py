@@ -1969,28 +1969,61 @@ async def test_streaming_iterator_hook_pipeline_releases_stream_echoed_in_anothe
 
 
 @pytest.mark.asyncio
-async def test_streaming_iterator_hook_pipeline_releases_originals_on_unresolvable_response_shape(
+async def test_streaming_iterator_hook_skips_pipeline_and_warns_without_request_route(
     proxy_logging, make_user_api_key_auth, monkeypatch, caplog
 ):
     seen: Dict[str, Any] = {}
     monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen)])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
     data = _post_call_pipeline_data(stream=True)
-    chunks = [object(), object()]
-    delivered: List[Any] = []
+    chunks = _stream_chunks()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=make_user_api_key_auth(),
-            response=_async_chunk_iter(chunks),
-            request_data=data,
-        ):
-            delivered.append(item)
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=make_user_api_key_auth(),
+                response=_async_chunk_iter(chunks),
+                request_data=data,
+            )
+        ]
 
     assert [item is chunk for item, chunk in zip(delivered, chunks)] == [True, True]
     assert len(delivered) == 2
     assert seen.get("count") is None
-    assert any("response-governance" in message and "shape" in message for message in _warnings(caplog))
+    assert any("response-governance" in message and "route None" in message for message in _warnings(caplog))
+
+
+@pytest.mark.asyncio
+async def test_per_chunk_streaming_hook_runs_pipeline_managed_guardrail_without_request_route(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    seen: Dict[str, Any] = {}
+
+    class UnifiedRecordingGuardrail(CustomGuardrail):
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            seen[self.guardrail_name] = seen.get(self.guardrail_name, 0) + 1
+            return None
+
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            return inputs
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [UnifiedRecordingGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=True)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    result = await proxy_logging.async_post_call_streaming_hook(
+        data=data,
+        response=_stream_chunks()[0],
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    assert result is not None
+    assert seen["gr-post"] == 1
 
 
 def _anthropic_sse_chunks() -> List[bytes]:
