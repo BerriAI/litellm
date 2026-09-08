@@ -45,6 +45,7 @@ _EMPTY_UNITS: Final[Mapping[str, int]] = MappingProxyType({})
 _ACTION_SEVERITY: Final[Mapping[str, int]] = MappingProxyType({"passed": 0, "flagged": 1, "blocked": 2})
 
 _T = TypeVar("_T")
+_MetricsRowT = TypeVar("_MetricsRowT", bound="_DailyMetricsRow")
 
 _USAGE_MAX_RANGE_DAYS: Final = 366
 
@@ -360,10 +361,12 @@ def _trend_from_comparison(current_fail: float, previous_fail: float) -> str:
     return "stable"
 
 
-def _aggregate_daily_metrics(metrics: "Sequence[_DailyMetricsRow]", id_attr: str) -> Mapping[str, _MetricTotals]:
+def _aggregate_daily_metrics(
+    metrics: "Sequence[_MetricsRowT]", id_of: "Callable[[_MetricsRowT], str]"
+) -> Mapping[str, _MetricTotals]:
     agg: Final[dict[str, _MetricTotals]] = {}
     for m in metrics:
-        gid: str = getattr(m, id_attr)
+        gid: str = id_of(m)
         if gid not in agg:
             agg[gid] = {"requests": 0, "passed": 0, "blocked": 0, "flagged": 0}
         agg[gid]["requests"] += int(m.requests_evaluated or 0)
@@ -373,10 +376,12 @@ def _aggregate_daily_metrics(metrics: "Sequence[_DailyMetricsRow]", id_attr: str
     return agg
 
 
-def _prev_fail_rates(metrics_prev: "Sequence[_DailyMetricsRow]", id_attr: str) -> Mapping[str, float]:
+def _prev_fail_rates(
+    metrics_prev: "Sequence[_MetricsRowT]", id_of: "Callable[[_MetricsRowT], str]"
+) -> Mapping[str, float]:
     prev_agg_raw: Final[dict[str, _PrevPeriodCounts]] = {}
     for m in metrics_prev:
-        gid: str = getattr(m, id_attr)
+        gid: str = id_of(m)
         r, b = int(m.requests_evaluated or 0), int(m.blocked_count or 0)
         if gid not in prev_agg_raw:
             prev_agg_raw[gid] = {"req": 0, "blocked": 0}
@@ -429,7 +434,7 @@ def _field_str(mapping: Mapping[str, object], key: str, default: str) -> str:
     return str(mapping.get(key, default))
 
 
-def _get_guardrail_attrs(g: "_DbOrConfigGuardrail") -> tuple[Any, str]:
+def _get_guardrail_attrs(g: "_DbOrConfigGuardrail") -> tuple[str | None, str]:
     """Get (guardrail_id, display_name) from guardrail - handles Prisma model or dict."""
     gid: Final = _get_guardrail_field(g, "guardrail_id")
     name: Final = _get_guardrail_field(g, "guardrail_name")
@@ -592,8 +597,8 @@ async def guardrails_usage_overview(
             Sequence[prisma_models.LiteLLM_DailyGuardrailUsageUnits]
         ] = await _find_daily_guardrail_usage_units(prisma_client, where=units_where)
 
-        agg: Final = _aggregate_daily_metrics(metrics, "guardrail_id")
-        prev_agg: Final = _prev_fail_rates(metrics_prev, "guardrail_id")
+        agg: Final = _aggregate_daily_metrics(metrics, lambda m: m.guardrail_id)
+        prev_agg: Final = _prev_fail_rates(metrics_prev, lambda m: m.guardrail_id)
         units_agg: Final = _by(units_rows, lambda r: r.guardrail_id, _sum_counter_units)
         cost_agg: Final = _by(units_rows, lambda r: r.guardrail_id, _sum_tracked_cost)
         untracked_agg: Final = _by(units_rows, lambda r: r.guardrail_id, _sum_untracked_units)
@@ -811,7 +816,7 @@ def _usage_log_entry_from_row(
     )
 
 
-def _snippet(text: Any, max_len: int = 200) -> str | None:
+def _snippet(text: object, max_len: int = 200) -> str | None:
     if text is None:
         return None
     if isinstance(text, str):
@@ -964,8 +969,8 @@ async def policies_usage_overview(
                 }
             },
         )
-        agg: Final = _aggregate_daily_metrics(metrics, "policy_id")
-        prev_agg: Final = _prev_fail_rates(metrics_prev, "policy_id")
+        agg: Final = _aggregate_daily_metrics(metrics, lambda m: m.policy_id)
+        prev_agg: Final = _prev_fail_rates(metrics_prev, lambda m: m.policy_id)
         chart: Final = _chart_from_metrics(metrics)
         total_requests: Final = sum(a["requests"] for a in agg.values())
         total_blocked: Final = sum(a["blocked"] for a in agg.values())

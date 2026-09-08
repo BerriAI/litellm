@@ -793,7 +793,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             },
         )
 
-    def _prepare_metadata_from_request(self, data: dict[str, Any]) -> dict[str, Any]:
+    def _prepare_metadata_from_request(self, data: dict[str, Any]) -> dict[str, object]:
         """
         Extract and prepare metadata from request data for PANW API call.
 
@@ -809,7 +809,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         """
         user_metadata: Final = data.get("metadata", {}) or {}
         requester_meta: Final = user_metadata.get("requester_metadata", {}) or {}
-        metadata: Final = {
+        metadata: Final[dict[str, object]] = {
             "user": data.get("user") or "litellm_user",
             "model": data.get("model") or "unknown",
         }

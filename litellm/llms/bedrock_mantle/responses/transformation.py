@@ -16,8 +16,8 @@ BaseAWSLLM._sign_request after the request body is finalized.
 """
 
 import json
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
@@ -142,9 +142,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return False
 
     @staticmethod
-    def _filter_unsupported_tools(tools: list[Any]) -> list[Any]:
+    def _filter_unsupported_tools(tools: "Sequence[object]") -> "list[object]":
         """Keep only tool types Mantle's Responses API accepts."""
-        kept: Final[list[Any]] = []
+        kept: Final[list[object]] = []
         dropped_types: Final[list[str]] = []
         for tool in tools:
             if not isinstance(tool, dict):
@@ -217,11 +217,11 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         )
 
     @staticmethod
-    def _is_codex_additional_tools_item(item: Any) -> bool:
+    def _is_codex_additional_tools_item(item: object) -> bool:
         return isinstance(item, dict) and item.get("type") == _CODEX_ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
 
     @staticmethod
-    def _tools_of_additional_tools_item(item: "dict[str, Any]") -> "list[Any]":
+    def _tools_of_additional_tools_item(item: "Mapping[str, object]") -> "list[object]":
         tools: Final = item.get("tools")
         return tools if isinstance(tools, list) else []
 
@@ -229,7 +229,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def _hoist_codex_additional_tools(
         cls,
         input: "str | ResponseInputParam",
-    ) -> "tuple[str | ResponseInputParam, list[Any]]":
+    ) -> "tuple[str | ResponseInputParam, list[object]]":
         """Codex's "responses lite" wire mode ships tool definitions inside
         `input` as {"type": "additional_tools", "role": "developer",
         "tools": [...]} items. api.openai.com accepts that item type; Mantle

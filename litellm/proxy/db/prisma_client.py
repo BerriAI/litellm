@@ -13,7 +13,7 @@ import urllib
 import urllib.parse
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.token_auth import (
@@ -26,6 +26,9 @@ from litellm.proxy.db.token_auth import (
     parse_iam_endpoint_from_url,
 )
 from litellm.secret_managers.main import str_to_bool
+
+if TYPE_CHECKING:
+    from prisma import Prisma
 
 __all__ = (
     "IAMEndpoint",
@@ -242,7 +245,7 @@ class PrismaWrapper:
     def _write_engine(prisma_client: _PrismaClient, engine: _PrismaEngine) -> None:
         prisma_client._Prisma__engine = engine
 
-    def _instrument_prisma_client(self, prisma_client: _PrismaClient) -> _PrismaDrainTracker | None:
+    def _instrument_prisma_client(self, prisma_client: "Prisma | _PrismaClient") -> _PrismaDrainTracker | None:
         from prisma.errors import ClientNotConnectedError
 
         try:
@@ -255,7 +258,7 @@ class PrismaWrapper:
         self._write_engine(prisma_client, _TrackedPrismaEngine(engine, tracker))
         return tracker
 
-    def _get_engine_pid(self, prisma_client: _PrismaClient | None = None) -> int:
+    def _get_engine_pid(self, prisma_client: "Prisma | _PrismaClient | None" = None) -> int:
         """Get the PID of the current Prisma engine subprocess, or 0 if unavailable.
 
         Must never raise: it runs inside the reconnect path, where the client

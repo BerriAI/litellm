@@ -2,7 +2,7 @@ import asyncio
 import traceback
 from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -578,18 +578,36 @@ def _get_request_tags_for_cost_tracking(
     return None
 
 
+class _IncrementSpendCounters(Protocol):
+    """The ``increment_spend_counters`` coroutine :func:`_update_database_and_spend_counters` awaits."""
+
+    async def __call__(
+        self,
+        token: str | None,
+        team_id: str | None,
+        user_id: str | None,
+        response_cost: float | None,
+        org_id: str | None = None,
+        budget_reservation: dict[str, object] | None = None,
+        end_user_id: str | None = None,
+        tags: list[str] | None = None,
+        request_started_at: datetime | None = None,
+        model_access_groups: Sequence[str] | None = None,
+    ) -> None: ...
+
+
 async def _update_database_and_spend_counters(
     proxy_logging_obj: "ProxyLogging",
-    increment_spend_counters: Any,
+    increment_spend_counters: _IncrementSpendCounters,
     user_api_key: str | None,
     user_id: str | None,
     end_user_id: str | None,
     team_id: str | None,
     org_id: str | None,
     kwargs: dict,
-    completion_response: litellm.ModelResponse | Any | None,
-    start_time: Any,
-    end_time: Any,
+    completion_response: object,
+    start_time: datetime | None,
+    end_time: datetime | None,
     response_cost: float,
     budget_reservation: dict | None,
     request_tags: list[str] | None = None,
