@@ -201,8 +201,8 @@ async def test_reasoning_effort_grid(
 
 
 def test_grid_cell_count() -> None:
-    assert len(_PARAMS) == 31 * 11, (
-        f"expected 341 cells (31 provider x model combos x 11 efforts), "
+    assert len(_PARAMS) == 35 * 11, (
+        f"expected 385 cells (35 provider x model combos x 11 efforts), "
         f"got {len(_PARAMS)}"
     )
 

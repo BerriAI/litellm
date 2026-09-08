@@ -52,7 +52,7 @@ _TOOL_PAYLOAD_KEYS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
         "function": ("name", "description", "parameters", "strict"),
     }
 )
-_EMPTY_TOOL_PAYLOAD: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_TOOL_PAYLOAD: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _convert_tool_payload_value(key: str, value: object, *, to_chat: bool) -> object:
@@ -105,7 +105,7 @@ def _normalize_tool_dialect(
     return {**data, **{key: value for key, value in replaceable if key in data}}  # mutable-ok: plain body dict
 
 
-def _is_chat_completions_body(data: Mapping[str, Any]) -> bool:
+def _is_chat_completions_body(data: Mapping[str, object]) -> bool:
     messages: Final = data.get("messages")
     if isinstance(messages, list) and messages:
         return True
@@ -1373,7 +1373,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
     request: Request,
     model: str,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_router: Any | None,
+    llm_router: "Router | None",
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import (
         _enforce_key_and_fallback_model_access,
@@ -1417,7 +1417,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
 async def responses_websocket_endpoint(
     websocket: WebSocket,
     model: str | None = fastapi.Query(None, description="The model to use for the responses WebSocket session."),
-    user_api_key_dict=Depends(user_api_key_auth_websocket),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth_websocket),
 ):
     """
     Responses API WebSocket mode endpoint.
@@ -1462,7 +1462,7 @@ async def responses_websocket_endpoint(
             return
         model, first_message = result
 
-    data: dict[str, Any] = {
+    data: dict[str, object] = {
         "model": model,
         "websocket": websocket,
     }
@@ -1471,7 +1471,7 @@ async def responses_websocket_endpoint(
 
     # Construct a synthetic Request for pre-call processing
     headers_list: Final = list(websocket.scope.get("headers") or [])
-    scope: Final[dict[str, Any]] = {
+    scope: Final[dict[str, object]] = {
         "type": "http",
         "method": "POST",
         "path": "/v1/responses",

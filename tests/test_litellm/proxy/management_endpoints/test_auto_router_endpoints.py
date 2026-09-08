@@ -10,7 +10,6 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-
 from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -21,11 +20,11 @@ from litellm.proxy.management_endpoints.auto_router_endpoints import (
     preview_auto_router_routing,
 )
 from litellm.router import Router
-from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarksResponse,
     AutoRouterRoutingTestRequest,
 )
+from litellm.types.utils import Choices, Message, ModelResponse
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
 
@@ -489,6 +488,7 @@ class TestAutoRouterBenchmarks:
         monkeypatch: pytest.MonkeyPatch,
         rows: Sequence[Mapping[str, object]],
         model_list: Sequence[object],
+        api_key: str | None = None,
     ) -> AutoRouterBenchmarksResponse:
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
@@ -503,6 +503,7 @@ class TestAutoRouterBenchmarks:
             user_api_key_dict=ADMIN,
             start_date="2026-07-01",
             end_date="2026-08-01",
+            api_key=api_key,
         )
 
     ROW = _SessionAggRow(
@@ -527,6 +528,8 @@ class TestAutoRouterBenchmarks:
         total_tokens=4000,
         spend=10.0,
         saved_spend=30.0,
+        classifier_cost=0.4,
+        classifier_cost_recorded_turns=40,
         session_seconds=400.0,
     )
 
@@ -565,6 +568,7 @@ class TestAutoRouterBenchmarks:
         totals = _benchmark_totals(losing)
         assert totals.baseline_spend == 5.0
         assert totals.saved_pct == -100.0
+        assert totals.classifier_cost == 0.4
 
     def test_an_empty_window_folds_to_zeros(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
@@ -577,6 +581,7 @@ class TestAutoRouterBenchmarks:
         assert totals.turns == 0
         assert totals.saved_pct == 0.0
         assert totals.cache.hit_rate_pct == 0.0
+        assert totals.classifier_cost == 0.0
 
     def test_totals_sum_counters_across_groups_before_deriving_ratios(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
@@ -652,11 +657,44 @@ class TestAutoRouterBenchmarks:
             user_api_key_dict=ADMIN,
             start_date="2026-07-01",
             end_date="2026-08-01",
+            api_key="key-hash",
         )
-        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00")
+        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash")
         assert response.routers_in_scope == 1
         assert response.groups[0].router_name == "live-auto"
         assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
+        assert response.groups[0].classifier_cost == response.totals.classifier_cost == 0.4
+        assert response.totals.spend - response.totals.classifier_cost == pytest.approx(9.6)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("recorded_turns", [0, 3, 10])
+    async def test_classifier_subtotals_require_every_included_turn_to_be_recorded(
+        self, recorded_turns: int, monkeypatch: pytest.MonkeyPatch
+    ):
+        other: Final = self.ROW.model_copy(
+            update={
+                "router_name": "other-auto",
+                "sessions": 1,
+                "turns": 10,
+                "spend": 2.0,
+                "saved_spend": -0.5,
+                "classifier_cost": recorded_turns * 0.02,
+                "classifier_cost_recorded_turns": recorded_turns,
+            }
+        )
+        response: Final = await self._benchmarks(
+            monkeypatch, rows=[self.ROW.model_dump(), other.model_dump()], model_list=[]
+        )
+        wire: Final = response.model_dump()
+        assert wire["groups"][0]["classifier_cost"] == 0.4
+        assert wire["groups"][1]["classifier_cost"] == (pytest.approx(0.2) if recorded_turns == 10 else None)
+        assert wire["totals"]["classifier_cost"] == (pytest.approx(0.6) if recorded_turns == 10 else None)
+        assert response.totals.turns == 50
+        assert response.totals.spend == 12.0
+        assert response.totals.saved_spend == 29.5
+        assert response.totals.baseline_spend == 41.5
+        assert response.totals.saved_pct == 71.1
+        assert response.totals.saved_per_session == 5.9
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -720,6 +758,7 @@ class TestAutoRouterBenchmarks:
             assert (idle.cache.hit_rate_pct, idle.cache.coverage_pct) == (0.0, 0.0)
             assert idle.cache.same_model.turns == idle.cache.return_to_tier.hits == 0
             assert idle.tier_turns == {}
+            assert idle.classifier_cost == 0.0
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -795,7 +834,6 @@ class TestAutoRouterBenchmarks:
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
-
 
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,
@@ -882,6 +920,7 @@ def _leg_record(**overrides: object) -> MagicMock:
         "target_id": "key-hash",
         "router_name": "my-router",
         "router_names": (),
+        "models": (),
         "direction": "forward",
         "baseline_model": None,
         "judge_model": "anthropic/claude-sonnet-5",
@@ -1033,6 +1072,7 @@ def _shadow_prisma(
             "target_id",
             "router_name",
             "router_names",
+            "models",
             "direction",
             "baseline_model",
             "judge_model",
@@ -1129,7 +1169,9 @@ async def test_start_shadow_eval_writes_one_leg_per_key_in_one_statement(monkeyp
     assert (
         len(
             {
-                frozenset((k, tuple(v) if isinstance(v, list) else v) for k, v in row.items() if k not in ("target_id", "id"))
+                frozenset(
+                    (k, tuple(v) if isinstance(v, list) else v) for k, v in row.items() if k not in ("target_id", "id")
+                )
                 for row in rows
             }
         )
@@ -1256,8 +1298,8 @@ async def test_start_shadow_eval_accepts_an_sdk_judge_when_anthropic_secret_look
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import litellm
-    from litellm.integrations.custom_secret_manager import CustomSecretManager
     import litellm.proxy.proxy_server as proxy_server
+    from litellm.integrations.custom_secret_manager import CustomSecretManager
     from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
     class AnthropicSecretManager(CustomSecretManager):
@@ -1534,6 +1576,87 @@ async def test_start_shadow_eval_forward_leaves_the_baseline_column_empty(monkey
 
 
 @pytest.mark.asyncio
+async def test_start_shadow_eval_writes_the_model_scope_on_every_leg_and_echoes_it(monkeypatch: pytest.MonkeyPatch):
+    """A model scope is job config, so every leg carries the same copy and both the start
+    response and a later list read report it; an auto-router is a legitimate scope (a
+    forward job on one router may sample what another router serves today)."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    response = await start_shadow_eval(
+        _start_request(api_key_ids=("key-hash", "key-hash-2"), models=("cheap", "sonnet-router")), ADMIN
+    )
+
+    rows = prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"]
+    assert [row["models"] for row in rows] == [["cheap", "sonnet-router"], ["cheap", "sonnet-router"]]
+    assert response.models == ("cheap", "sonnet-router")
+
+    listed = _shadow_prisma(legs=[_leg_record(models=("cheap",)), _leg_record(id="leg-0", group_id="job-0")])
+    monkeypatch.setattr(proxy_server, "prisma_client", listed)
+    jobs = await list_shadow_eval_jobs(VIEWER, target_type=None, target_id=None, limit=50)
+    assert {job.job_id: job.models for job in jobs} == {"job-1": ("cheap",), "job-0": ()}
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_accepts_a_team_public_scope_for_a_user_target(monkeypatch: pytest.MonkeyPatch):
+    """A user's traffic can arrive on any team's key, so a name only one team can ask for
+    is a legitimate scope for a user target even though it resolves for nobody unscoped."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma = _shadow_prisma(known_users={"dev-alice": "alice@example.com"})
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    response = await start_shadow_eval(
+        _start_request(api_key_ids=(), user_ids=("dev-alice",), models=("house-judge",)), ADMIN
+    )
+
+    assert response.models == ("house-judge",)
+    assert prisma.db.litellm_shadowevaljob.create_many.call_args.kwargs["data"][0]["models"] == ["house-judge"]
+
+
+@pytest.mark.asyncio
+async def test_start_shadow_eval_rejects_a_model_scope_this_proxy_does_not_serve(monkeypatch: pytest.MonkeyPatch):
+    """A typo'd model name would otherwise start a job that samples nothing. Only the
+    unresolvable names are reported, so the caller fixes them in one round."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    _configure_anthropic_sdk_judge(monkeypatch)
+    prisma = _shadow_prisma()
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "llm_router", _shadow_router())
+
+    with pytest.raises(HTTPException) as exc:
+        await start_shadow_eval(_start_request(models=("cheap", "no-such-model-zzz")), ADMIN)
+    assert exc.value.status_code == 400
+    assert "'no-such-model-zzz'" in exc.value.detail
+    assert "'cheap'" not in exc.value.detail
+    prisma.db.litellm_shadowevaljob.create_many.assert_not_called()
+
+
+def test_start_request_dedupes_the_model_scope_and_rejects_blank_names():
+    assert _start_request(models=("cheap", "mid", "cheap")).models == ("cheap", "mid")
+    assert _start_request().models == ()
+    with pytest.raises(ValidationError, match="non-empty model group names"):
+        _start_request(models=("cheap", " "))
+
+
+def test_start_request_rejects_a_model_scope_on_a_reverse_job():
+    """Reverse admission is the router's own traffic, whose requested group is always the
+    router, so a plain-model scope would sample nothing and the router itself is a no-op."""
+    with pytest.raises(ValidationError, match="only meaningful for a forward job"):
+        _start_request(direction="reverse", baseline_model="cheap", models=("mid",))
+    with pytest.raises(ValidationError, match="only meaningful for a forward job"):
+        _start_request(direction="reverse", baseline_model="cheap", models=("my-router",))
+    assert _start_request(direction="reverse", baseline_model="cheap").models == ()
+
+
+@pytest.mark.asyncio
 async def test_start_shadow_eval_rejects_keys_this_proxy_does_not_know(monkeypatch: pytest.MonkeyPatch):
     """A typo'd api_key_id would otherwise create a leg no traffic can ever match. Every
     unknown key is named at once, so a caller passing several fixes them in one round."""
@@ -1738,8 +1861,9 @@ async def test_list_shadow_eval_jobs_rejects_a_lone_filter_half(monkeypatch: pyt
 
 @pytest.mark.asyncio
 async def test_start_shadow_eval_concurrent_unique_violation_is_a_409(monkeypatch: pytest.MonkeyPatch):
-    import litellm.proxy.proxy_server as proxy_server
     from prisma.errors import UniqueViolationError
+
+    import litellm.proxy.proxy_server as proxy_server
 
     _configure_anthropic_sdk_judge(monkeypatch)
     prisma = _shadow_prisma()

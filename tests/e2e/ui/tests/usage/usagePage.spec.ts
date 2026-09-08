@@ -1,10 +1,11 @@
-import { test, expect, type Locator, type Page as PlaywrightPage } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page as PlaywrightPage } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import {
-  CHAT_MODEL_A,
   createVirtualKey,
+  masterKey,
+  rootPath,
   sendChatCompletion,
   waitForKeyInDailyActivity,
   waitForSpendLog,
@@ -27,8 +28,104 @@ async function openUsage(page: PlaywrightPage): Promise<Locator> {
   return card;
 }
 
+/** The upstream fixtures/config.yml points its models at, so the mock server answers this too. */
+const MOCK_DEPLOYMENT = "openai/fake-gpt-4";
+
+/** A deployment whose traffic costs real money, so the key that used it outranks the $0 crowd. */
+async function createPricedDeployment(
+  request: APIRequestContext,
+  label: string,
+  registerForCleanup: string[],
+): Promise<{ modelName: string }> {
+  const modelName = `e2e-usage-priced-${label}`;
+  // Claimed before the call: /model/new can persist the deployment and still answer non-2xx, so a
+  // name recorded up front is the only registration no response shape can skip.
+  registerForCleanup.push(modelName);
+  const res = await request.post("/model/new", {
+    headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
+    data: {
+      model_name: modelName,
+      litellm_params: {
+        model: MOCK_DEPLOYMENT,
+        api_base: `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`,
+        api_key: "fake-key",
+        input_cost_per_token: 0.01,
+        output_cost_per_token: 0.01,
+      },
+    },
+  });
+  expect(res.ok(), `POST /model/new failed (${res.status()}): ${await res.text()}`).toBe(true);
+
+  // /model/new returns once the row is written, but the router only picks the deployment up on its
+  // next refresh, so sending traffic straight away can still get "no healthy deployments". A ping
+  // that fails writes no spend log, so retrying it costs the ranking this test asserts nothing.
+  await expect
+    .poll(
+      async () => {
+        const ping = await request.post(`${rootPath()}/v1/chat/completions`, {
+          headers: { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" },
+          data: { model: modelName, messages: [{ role: "user", content: "readiness ping" }] },
+        });
+        return ping.ok();
+      },
+      { message: `deployment ${modelName} never became routable`, timeout: 60_000 },
+    )
+    .toBe(true);
+
+  return { modelName };
+}
+
 test.describe("Usage page", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
+
+  const pricedDeployments: string[] = [];
+
+  test.afterEach(async ({ request }) => {
+    // A deployment left behind keeps its custom pricing, so it goes on changing what later runs
+    // route and what they cost. Runs on the failure path too, which the test body would not.
+    // Resolved by name rather than by a returned id, so a create that persisted without answering
+    // 2xx is still cleaned up. /model/info serves the router, and /model/new answers 2xx even when
+    // its in-request router reload failed, so the search-backed listing is what covers a deployment
+    // that reached the database only. Absent from both means it never persisted.
+    const names = pricedDeployments.splice(0);
+    if (names.length === 0) return;
+    const auth = { Authorization: `Bearer ${masterKey()}`, "Content-Type": "application/json" };
+
+    type Lookup =
+      | { readonly listed: true; readonly id: string | undefined }
+      | { readonly listed: false; readonly status: number };
+
+    const idIn = async (path: string, name: string): Promise<Lookup> => {
+      const listed = await request.get(path, { headers: auth });
+      if (!listed.ok()) return { listed: false, status: listed.status() };
+      const deployments = ((await listed.json()).data ?? []) as {
+        model_name?: string;
+        model_info?: { id?: string };
+      }[];
+      return { listed: true, id: deployments.find((d) => d.model_name === name)?.model_info?.id };
+    };
+
+    const remove = async (name: string, id: string) => {
+      const deleted = await request.post(`${rootPath()}/model/delete`, { headers: auth, data: { id } });
+      expect(deleted.ok(), `POST /model/delete for ${name} (${deleted.status()})`).toBe(true);
+    };
+
+    for (const name of names) {
+      const fromRouter = await idIn(`${rootPath()}/model/info`, name);
+      if (fromRouter.listed && fromRouter.id !== undefined) {
+        await remove(name, fromRouter.id);
+        continue;
+      }
+      const search = encodeURIComponent(name);
+      const fromDb = await idIn(`${rootPath()}/v2/model/info?search=${search}`, name);
+      expect(
+        fromDb.listed,
+        `GET /v2/model/info?search=${search} (${fromDb.listed ? 200 : fromDb.status}), so ${name} could not be checked`,
+      ).toBe(true);
+      if (!fromDb.listed || fromDb.id === undefined) continue;
+      await remove(name, fromDb.id);
+    }
+  });
 
   test("Top Virtual Keys lists a key that served traffic, toggles views, and opens key info", async ({
     page,
@@ -39,8 +136,13 @@ test.describe("Usage page", () => {
       key_alias: alias,
     });
 
+    // Top Virtual Keys ranks by spend, and every mock deployment costs $0, so once a run has more
+    // keys than the list shows, whether this one makes the cut is down to how ties happen to sort.
+    // Give it a priced deployment of its own so it earns its place.
+    const { modelName } = await createPricedDeployment(request, alias, pricedDeployments);
+
     const requestId = await sendChatCompletion(request, {
-      model: CHAT_MODEL_A,
+      model: modelName,
       prompt: `usage ping for ${alias}`,
       apiKey: key,
     });

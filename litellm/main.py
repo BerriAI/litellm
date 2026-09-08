@@ -26,6 +26,7 @@ from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, Union, cast, get_args
+from urllib.parse import urlsplit
 
 from litellm._logging import _redact_string
 from litellm._uuid import uuid
@@ -60,6 +61,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import TokenCountResponse
 
 from litellm.constants import (
+    AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
@@ -141,7 +143,6 @@ from litellm.utils import (
     convert_to_model_response_object,
     create_pretrained_tokenizer,
     create_tokenizer,
-    get_api_key,
     get_llm_provider,
     get_model_info,
     get_non_default_completion_params,
@@ -985,6 +986,12 @@ def mock_completion(
 
 
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
+_OPENAI_API_HOST: Final = "api.openai.com"
+
+
+def _is_openai_backed_api_base(api_base: str) -> bool:
+    hostname: Final = urlsplit(api_base).hostname
+    return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
 def _resolve_openai_api_base(api_base: str | None) -> str:
@@ -1054,7 +1061,7 @@ def responses_api_bridge_check(
     #   natively by Chat Completions with reasoning on, so custom-only requests stay on
     #   chat and keep their native custom tool_call response shape.
     # - The UNSET-effort arm only fires against endpoints known to enforce that
-    #   constraint (the default OpenAI endpoint, or Azure OpenAI where api_base is
+    #   constraint (any api.openai.com host, or Azure OpenAI where api_base is
     #   always set): chat-only OpenAI-compatible backends registered under the openai
     #   provider with a custom api_base and gpt-5.4+ model names serve tools without
     #   reasoning fine and have no /responses route, so they keep pre-existing
@@ -1069,14 +1076,15 @@ def responses_api_bridge_check(
         reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
     else:
         reasoning_active = reasoning_effort != "none"
-    # The reasoning+tools constraint is enforced only by the real OpenAI endpoint (and Azure OpenAI).
-    # Resolve the effective base arg>global>env>default exactly as the chat handler does, so a custom
-    # base set via litellm.api_base or OPENAI_BASE_URL/OPENAI_API_BASE isn't misread as the default and
-    # bridged to a /responses route it lacks. A whitespace-only base collapses to the default too.
-    resolved_api_base: Final = _resolve_openai_api_base(api_base)
-    on_constraint_enforcing_endpoint: Final = custom_llm_provider == "azure" or resolved_api_base.strip() in (
-        "",
-        _OPENAI_DEFAULT_API_BASE,
+    # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
+    # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
+    # by Azure OpenAI. Resolve the effective base arg>global>env>default exactly as the chat handler
+    # does, so a custom base set via litellm.api_base or OPENAI_BASE_URL/OPENAI_API_BASE isn't misread
+    # as the default and bridged to a /responses route it lacks. A whitespace-only base collapses to
+    # the default too.
+    resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
+    on_constraint_enforcing_endpoint: Final = (
+        custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
     )
     if (
         custom_llm_provider in ("openai", "azure")
@@ -4466,7 +4474,7 @@ def _complete_snowflake(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     acompletion: Final = ctx.acompletion
     api_base: Final = ctx.api_base
     api_key: Final = ctx.api_key
-    client = _dispatch_client_http(ctx)
+    injected_client: Final = _dispatch_client_http(ctx)
     custom_llm_provider: Final = ctx.custom_llm_provider
     headers: Final = ctx.headers
     litellm_params: Final = ctx.litellm_params
@@ -4478,11 +4486,11 @@ def _complete_snowflake(ctx: _CompletionDispatchContext) -> _CompletionDispatchR
     shared_session: Final = ctx.shared_session
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
+    client: Final = (
+        injected_client if injected_client is not None else (HTTPHandler(timeout=timeout) if stream is False else None)
+    )  # Keep this here, otherwise, the httpx.client closes and streaming is impossible
 
     try:
-        client = (
-            HTTPHandler(timeout=timeout) if stream is False else None
-        )  # Keep this here, otherwise, the httpx.client closes and streaming is impossible
         response: Final = base_llm_http_handler.completion(
             model=model,
             messages=messages,
@@ -7770,7 +7778,7 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
-    if custom_llm_provider == "azure" and provider_config is None:
+    if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
@@ -8057,7 +8065,10 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
+    if custom_llm_provider == "openai" or (
+        custom_llm_provider in litellm.openai_compatible_providers
+        and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS
+    ):
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
                 message="'voice' is required to be passed as a string for OpenAI TTS",
@@ -8111,7 +8122,7 @@ def speech(
             aspeech=aspeech,
             shared_session=shared_session,
         )
-    elif custom_llm_provider == "azure":
+    elif custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         # Check if this is Azure Speech Service (Cognitive Services TTS)
         if model.startswith("speech/"):
             from litellm.llms.azure.text_to_speech.transformation import (
@@ -8236,6 +8247,7 @@ def speech(
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         from litellm.llms.vertex_ai.text_to_speech.transformation import (
+            VertexAILyriaTextToSpeechConfig,
             VertexAITextToSpeechConfig,
         )
 
@@ -8260,7 +8272,11 @@ def speech(
 
         # Vertex AI Text-to-Speech (Google Cloud TTS)
         if text_to_speech_provider_config is None:
-            text_to_speech_provider_config = VertexAITextToSpeechConfig()
+            text_to_speech_provider_config = (  # rebind-ok: model metadata selects the Vertex TTS implementation
+                VertexAILyriaTextToSpeechConfig()
+                if VertexAILyriaTextToSpeechConfig.is_lyria_model(model)
+                else VertexAITextToSpeechConfig()
+            )
 
         # Cast to specific Vertex AI config type to access dispatch method
         vertex_config: Final = cast(VertexAITextToSpeechConfig, text_to_speech_provider_config)
@@ -8364,6 +8380,34 @@ def speech(
             input=input,
             voice=voice_str,
             text_to_speech_provider_config=minimax_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
+    elif custom_llm_provider == "mistral":
+        from litellm.llms.mistral.audio_speech.transformation import (
+            MistralTextToSpeechConfig,
+        )
+
+        mistral_tts_config: Final = text_to_speech_provider_config or MistralTextToSpeechConfig()
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        mistral_voice: Final[str | None] = voice if isinstance(voice, str) else None
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=mistral_voice,
+            text_to_speech_provider_config=mistral_tts_config,
             text_to_speech_optional_params=optional_params,
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params_dict,
@@ -8596,9 +8640,19 @@ def stream_chunk_builder_text_completion(chunks: list, messages: list | None = N
     return TextCompletionResponse(**response)
 
 
+_CALCULATOR_PRICED_REPORTED_COST_PROVIDERS: Final = frozenset({LlmProviders.XAI.value})
+
+
+def _reported_cost_is_priced_by_calculator(logging_obj: Optional["Logging"]) -> bool:
+    if logging_obj is None:
+        return False
+    provider: Final[object] = logging_obj.model_call_details.get("custom_llm_provider")
+    return provider in _CALCULATOR_PRICED_REPORTED_COST_PROVIDERS
+
+
 def _stream_builder_response_cost(response: ModelResponse, logging_obj: Optional["Logging"]) -> float | None:
     usage_cost: Final = getattr(getattr(response, "usage", None), "cost", None)
-    if isinstance(usage_cost, (int, float)):
+    if isinstance(usage_cost, (int, float)) and not _reported_cost_is_priced_by_calculator(logging_obj):
         return float(usage_cost)
     if logging_obj is not None:
         return None
@@ -8635,6 +8689,16 @@ def _set_stream_builder_response_cost(response: ModelResponse, logging_obj: Opti
         return
     hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
     hidden_params["response_cost"] = response_cost
+
+
+def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_obj: Optional["Logging"]) -> None:
+    if logging_obj is None:
+        return
+    if isinstance(getattr(usage, "cost", None), (int, float)):
+        return
+    computed_cost: Final = logging_obj._response_cost_calculator(result=response)
+    if isinstance(computed_cost, (int, float)) and computed_cost > 0:
+        setattr(usage, "cost", computed_cost)
 
 
 def stream_chunk_builder(
@@ -8731,12 +8795,7 @@ def stream_chunk_builder(
                     )
                     break
 
-            if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-                setattr(
-                    usage,
-                    "cost",
-                    logging_obj._response_cost_calculator(result=response),
-                )
+            _stamp_streaming_usage_cost(usage, response, logging_obj)
             _set_stream_builder_response_cost(response, logging_obj)
 
             processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)
@@ -8915,10 +8974,7 @@ def stream_chunk_builder(
                 )
                 break
 
-        # Add cost to usage object if include_cost_in_streaming_usage is True
-        if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-            setattr(usage, "cost", logging_obj._response_cost_calculator(result=response))
-
+        _stamp_streaming_usage_cost(usage, response, logging_obj)
         _set_stream_builder_response_cost(response, logging_obj)
 
         processor.apply_provider_assembled_streaming_metadata(response, chunks, logging_obj)

@@ -503,7 +503,7 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self,
         new_db_url: str,
-        http_client: Any | None = None,
+        http_client: object | None = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -541,7 +541,7 @@ class PrismaWrapper:
     async def _recreate_prisma_client_locked(
         self,
         new_db_url: str,
-        http_client: Any | None = None,
+        http_client: object | None = None,
         *,
         expected_generation: int | None = None,
     ) -> bool:
@@ -937,9 +937,17 @@ class PrismaManager:
                         use_v2_resolver=use_v2_resolver,
                     )
                 else:
+                    try:
+                        from litellm_proxy_extras.prisma_toolchain import (
+                            prisma_command_timeout,
+                            run_prisma,
+                        )
+                    except ImportError as e:
+                        verbose_proxy_logger.error("\x1b[1;31mLiteLLM: Failed to import proxy extras. Got %s\x1b[0m", e)
+                        return False
+
                     PrismaManager._raise_if_partitioned_spend_logs()
-                    # Use prisma db push with increased timeout
-                    subprocess.run(
+                    run_prisma(
                         [
                             "prisma",
                             "db",
@@ -947,13 +955,15 @@ class PrismaManager:
                             "--accept-data-loss",
                             "--skip-generate",
                         ],
-                        timeout=60,
-                        check=True,
+                        timeout=prisma_command_timeout(),
+                        env=os.environ.copy(),
+                        stdout=None,
+                        stderr=None,
                     )
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True
-            except subprocess.TimeoutExpired:
-                verbose_proxy_logger.warning("Attempt %s timed out", attempt + 1)
+            except subprocess.TimeoutExpired as e:
+                verbose_proxy_logger.warning("Attempt %s timed out after %.0fs", attempt + 1, e.timeout)
                 time.sleep(random.randrange(5, 15))
             except subprocess.CalledProcessError as e:
                 attempts_left = 3 - attempt

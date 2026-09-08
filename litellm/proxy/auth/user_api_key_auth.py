@@ -58,6 +58,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
+    jwt_key_mapping_cache_key,
     resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
@@ -970,7 +971,7 @@ async def _resolve_jwt_to_virtual_key(
             )
         return None
 
-    cache_key: Final = f"jwt_key_mapping:{virtual_key_claim_field}:{claim_value}"
+    cache_key: Final = jwt_key_mapping_cache_key(virtual_key_claim_field, str(claim_value))
     cached_mapping: Final = await user_api_key_cache.async_get_cache(cache_key)
 
     if cached_mapping == _JWT_PROXY_ADMIN_SENTINEL:
@@ -2705,14 +2706,6 @@ async def _reserve_budget_after_common_checks(
     if skip_budget_checks:
         return
     if general_settings.get("disable_budget_reservation") is True:
-        verbose_proxy_logger.warning(
-            "disable_budget_reservation is enabled: skipping optimistic budget "
-            "reservation. Budget enforcement is read-time only — concurrent "
-            "requests can each pass the spend check before their cost is recorded, "
-            "so a configured budget may be briefly exceeded under high concurrency. "
-            "Set disable_budget_reservation to False or remove it to restore "
-            "hard per-request budget enforcement."
-        )
         return
 
     from litellm.proxy.spend_tracking.budget_reservation import (

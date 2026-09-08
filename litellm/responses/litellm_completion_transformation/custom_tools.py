@@ -17,6 +17,7 @@ logic.
 
 import json
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -27,6 +28,15 @@ from litellm.types.llms.openai import (
 )
 
 _MAX_ARGUMENTS_LEN: Final = 1_000_000
+
+TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE: Final = MappingProxyType({"function_call": "fc", "custom_tool_call": "ctc"})
+
+
+def openai_shaped_tool_call_item_id(item_type: str, tool_id: str) -> str:
+    prefix: Final = TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE.get(item_type)
+    if prefix is None or not tool_id or tool_id.startswith(prefix):
+        return tool_id
+    return f"{prefix}_{tool_id}"
 
 
 def extract_custom_tool_names(tools: Sequence[object] | None) -> set[str]:
@@ -103,7 +113,7 @@ def build_tool_call_item_kwargs(
     item_type: Final = "custom_tool_call" if custom else "function_call"
     kwargs: Final[dict[str, str]] = {
         "type": item_type,
-        "id": call_id,
+        "id": openai_shaped_tool_call_item_id(item_type, call_id),
         "call_id": call_id,
         "name": name,
         "status": status,
