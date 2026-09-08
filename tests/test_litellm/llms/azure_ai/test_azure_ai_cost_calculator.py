@@ -528,3 +528,29 @@ def test_mai_thinking_1_model_info_and_cost(local_model_cost_map):
     assert model_info["supports_function_calling"] is True
     assert prompt_cost == pytest.approx(2.0)
     assert completion_cost == pytest.approx(8.0)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("router_entry_name", ["model_router", "model-router"])
+def test_router_entry_as_response_model_charges_the_fee_once(router_entry_name: str) -> None:
+    usage = Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
+    prompt_cost, completion_cost = cost_per_token(model=router_entry_name, usage=usage)
+    assert prompt_cost == pytest.approx(0.14, rel=1e-9)
+    assert completion_cost == 0.0
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_unmapped_router_deployment_name_still_charges_the_fee() -> None:
+    usage = Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
+    prompt_cost, completion_cost = cost_per_token(model="azure-model-router", usage=usage)
+    assert prompt_cost == pytest.approx(0.14, rel=1e-9)
+    assert completion_cost == 0.0
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_routed_model_response_adds_the_fee_on_top() -> None:
+    usage = Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
+    routed_prompt_cost, _ = cost_per_token(model="gpt-5-nano", usage=usage)
+    prompt_cost, _ = cost_per_token(model="gpt-5-nano", usage=usage, request_model="azure_ai/model-router")
+    assert routed_prompt_cost > 0
+    assert prompt_cost == pytest.approx(routed_prompt_cost + 0.14, rel=1e-9)
