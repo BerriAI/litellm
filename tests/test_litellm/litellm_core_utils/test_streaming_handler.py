@@ -1097,6 +1097,81 @@ async def test_async_streaming_read_timeout_triggers_midstream_fallback(
     assert isinstance(excinfo.value.original_exception, Exception)
 
 
+def _incomplete_openai_chat_chunk() -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-incomplete-eof",
+        created=int(time.time()),
+        model="gpt-5.6",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content='{"findings":[{"title":"unfinished', role="assistant"),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+@pytest.mark.asyncio
+async def test_async_openai_chat_clean_eof_without_finish_reason_raises_midstream_fallback(
+    logging_obj: Logging, custom_llm_provider: str
+):
+    """An OpenAI-compatible stream without a provider finish reason must fail at clean EOF."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    async def source():
+        yield _incomplete_openai_chat_chunk()
+
+    logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    response = CustomStreamWrapper(
+        completion_stream=source(),
+        model="gpt-5.6",
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        stream_options={"include_usage": True},
+    )
+
+    first_chunk = await response.__anext__()
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert first_chunk.choices[0].delta.content == '{"findings":[{"title":"unfinished'
+    assert excinfo.value.generated_content == '{"findings":[{"title":"unfinished'
+    assert excinfo.value.is_pre_first_chunk is False
+    assert response.received_finish_reason is None
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
+def test_sync_openai_chat_clean_eof_without_finish_reason_raises_midstream_fallback(
+    logging_obj: Logging, custom_llm_provider: str
+):
+    """The synchronous OpenAI-compatible stream must fail at clean EOF too."""
+    from litellm.exceptions import MidStreamFallbackError
+
+    def source():
+        yield _incomplete_openai_chat_chunk()
+
+    logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    response = CustomStreamWrapper(
+        completion_stream=source(),
+        model="gpt-5.6",
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        stream_options={"include_usage": True},
+    )
+
+    first_chunk = next(response)
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        next(response)
+
+    assert first_chunk.choices[0].delta.content == '{"findings":[{"title":"unfinished'
+    assert excinfo.value.generated_content == '{"findings":[{"title":"unfinished'
+    assert excinfo.value.is_pre_first_chunk is False
+    assert response.received_finish_reason is None
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):

@@ -55,6 +55,7 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 
 _GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
+_OPENAI_AZURE_CHAT_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENAI.value, LlmProviders.AZURE.value})
 
 
 def _next_sync_or_exhausted(it: Any) -> object:
@@ -236,10 +237,12 @@ class CustomStreamWrapper:
         stream_options=None,
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
+        is_mock: bool = False,
     ):
         self.model = model
         self.make_call = make_call
         self.custom_llm_provider = custom_llm_provider
+        self.is_mock = is_mock
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = completion_stream
         self.sent_first_chunk = False
@@ -1874,6 +1877,18 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason = "tool_calls"
         return model_response
 
+    def _should_fail_on_clean_eof(self) -> bool:
+        return (
+            not self.is_mock
+            and self.custom_llm_provider in _OPENAI_AZURE_CHAT_PROVIDERS
+            and self.received_finish_reason is None
+            and self.intermittent_finish_reason is None
+        )
+
+    @staticmethod
+    def _stream_eof_error() -> httpx.RemoteProtocolError:
+        return httpx.RemoteProtocolError("Stream ended before a finish_reason was received")
+
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
         """
         Keep provider usage-only chunks (e.g. OpenRouter's post-finish chunk, which carries a
@@ -1993,6 +2008,12 @@ class CustomStreamWrapper:
                     return response
 
         except StopIteration:
+            if self._should_fail_on_clean_eof():
+                error: Final = self._stream_eof_error()
+                eof_traceback: Final = traceback.format_exc()
+                self._record_partial_usage_for_failure()
+                threading.Thread(target=self.logging_obj.failure_handler, args=(error, eof_traceback)).start()
+                self._handle_stream_fallback_error(error)
             if self.sent_last_chunk is True:
                 try:
                     complete_streaming_response = litellm.stream_chunk_builder(
@@ -2224,6 +2245,8 @@ class CustomStreamWrapper:
                         self.chunks.append(processed_chunk)
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
+            if self._should_fail_on_clean_eof():
+                self._log_stream_failure_and_raise(self._stream_eof_error())
             return await self._finalize_completed_stream(cache_hit=cache_hit)
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
