@@ -484,6 +484,8 @@ class _SessionAggRow(BaseModel):
     total_tokens: int
     spend: float
     saved_spend: float
+    classifier_cost: float
+    classifier_cost_recorded_turns: int
     session_seconds: float
 
 
@@ -520,6 +522,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         avg_tokens_per_session=row.total_tokens / sessions if sessions else 0.0,
         spend=row.spend,
         saved_spend=row.saved_spend,
+        classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
         saved_pct=_pct(row.saved_spend, baseline_spend),
         saved_per_session=row.saved_spend / sessions if sessions else 0.0,
@@ -552,6 +555,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         avg_tokens_per_session=totals.avg_tokens_per_session,
         spend=totals.spend,
         saved_spend=totals.saved_spend,
+        classifier_cost=totals.classifier_cost,
         baseline_spend=totals.baseline_spend,
         saved_pct=totals.saved_pct,
         saved_per_session=totals.saved_per_session,
@@ -582,6 +586,8 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         total_tokens=sum(row.total_tokens for row in rows),
         spend=sum(row.spend for row in rows),
         saved_spend=sum(row.saved_spend for row in rows),
+        classifier_cost=sum(row.classifier_cost for row in rows),
+        classifier_cost_recorded_turns=sum(row.classifier_cost_recorded_turns for row in rows),
         session_seconds=sum(row.session_seconds for row in rows),
     )
 
