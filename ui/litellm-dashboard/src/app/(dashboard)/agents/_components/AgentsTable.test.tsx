@@ -90,7 +90,7 @@ describe("AgentsTable", () => {
       />,
     );
 
-    const search = screen.getByPlaceholderText("Search agent names or descriptions...");
+    const search = screen.getByPlaceholderText("Search agents by name, ID, or description...");
     await user.type(search, "billing");
     expect(screen.getByText("Billing Router")).toBeInTheDocument();
     expect(screen.queryByText("Second Agent")).not.toBeInTheDocument();
@@ -101,11 +101,36 @@ describe("AgentsTable", () => {
     expect(screen.queryByText("Billing Router")).not.toBeInTheDocument();
   });
 
+  it("filters agents by a pasted agent_id so only that agent's row survives", async () => {
+    const user = userEvent.setup();
+    render(
+      <AgentsTable
+        agents={[
+          makeAgent({ agent_id: "5f3c2a1b-9d8e-4f7a-b6c5-d4e3f2a1b0c9", agent_name: "Billing Router" }),
+          makeAgent({ agent_id: "0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d", agent_name: "Second Agent" }),
+        ]}
+        {...baseProps}
+      />,
+    );
+
+    const search = screen.getByPlaceholderText("Search agents by name, ID, or description...");
+    await user.click(search);
+    await user.paste("5f3c2a1b-9d8e-4f7a-b6c5-d4e3f2a1b0c9");
+    expect(screen.getByText("Billing Router")).toBeInTheDocument();
+    expect(screen.queryByText("Second Agent")).not.toBeInTheDocument();
+
+    await user.clear(search);
+    await user.paste("ffffffff-0000-4000-8000-000000000000");
+    expect(screen.queryByText("Billing Router")).not.toBeInTheDocument();
+    expect(screen.queryByText("Second Agent")).not.toBeInTheDocument();
+    expect(screen.getByText("No matching agents")).toBeInTheDocument();
+  });
+
   it("shows the no-match empty state when the search matches nothing", async () => {
     const user = userEvent.setup();
     render(<AgentsTable agents={[makeAgent()]} {...baseProps} />);
 
-    await user.type(screen.getByPlaceholderText("Search agent names or descriptions..."), "zzzz");
+    await user.type(screen.getByPlaceholderText("Search agents by name, ID, or description..."), "zzzz");
     expect(screen.queryByText("Test Agent")).not.toBeInTheDocument();
     expect(screen.getByText("No matching agents")).toBeInTheDocument();
   });

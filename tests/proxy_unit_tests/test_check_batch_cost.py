@@ -1760,6 +1760,35 @@ class TestUnmanagedVertexRouting:
         )
         router.get_model_ids.assert_called_once_with(model_name="gemini-2.5-flash")
 
+    def test_flag_on_routes_fine_tuned_endpoint_to_vertex_deployment(self):
+        """A fine-tuned Gemini batch stores `endpoints/<id>` in the gs:// path; the bare model
+        (the endpoint id) must round-trip to the deployment configured as
+        `vertex_ai/gemini/<id>` (LIT-6899)."""
+        endpoint_id = "7768560373388541952"
+        router = MagicMock()
+        router.resolve_model_name_from_model_id.return_value = None
+        router.get_model_list.return_value = [
+            {
+                "model_name": "gemini-2.5-flash-dts-usc1",
+                "litellm_params": {
+                    "model": f"vertex_ai/gemini/{endpoint_id}",
+                    "custom_llm_provider": "vertex_ai",
+                },
+                "model_info": {"id": "deploy-ft"},
+            },
+        ]
+        instance = self._instance(track_unmanaged=True, router=router)
+        job = self._job(
+            file_object=_unmanaged_vertex_file_object(
+                input_file_id=f"gs://bucket/litellm-vertex-files/endpoints/{endpoint_id}/abc.jsonl"
+            )
+        )
+
+        with patch(_IS_B64, return_value=False):
+            result = instance._resolve_job_routing(job, MagicMock())
+
+        assert result == ("deploy-ft", "8823717160934178816")
+
     def test_flag_on_skips_non_vertex_deployment_sharing_model_group(self):
         """Flag on, but the only deployment for the model group is a non-vertex_ai
         provider: must not be selected, even though the model group name matches."""
@@ -2445,6 +2474,7 @@ class TestBatchCostAttribution:
         metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key"] == "hash-alice"
+        assert metadata["user_api_key_hash"] == "hash-alice"
         assert metadata["user_api_key_user_id"] == "alice"
         assert metadata["user_api_key_team_id"] == "team-alpha"
         assert metadata["user_api_key_alias"] == "prod-key"
@@ -2552,6 +2582,48 @@ class TestBatchCostAttribution:
         metadata = await instance._build_creator_attribution_metadata(self._job(), "batch-1")
 
         assert metadata["user_api_key_alias"] == "prod-key"
+
+    @pytest.mark.asyncio
+    async def test_metadata_provenance_keeps_spend_log_api_key_joinable(self):
+        """
+        CheckBatchCost stores the VerificationToken hash on the managed object. The
+        spend-log writer must receive matching user_api_key_hash provenance so it
+        does not re-hash that value; otherwise DailyUserSpend.api_key no longer joins
+        VerificationToken and Usage shows key-hash-... with a null alias/email.
+        """
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+        from litellm.proxy.utils import hash_token
+
+        token_hash = hash_token("sk-batch-creator-key")
+        instance = self._instance(
+            key_row=SimpleNamespace(key_alias="prod-key"),
+            user_row=SimpleNamespace(user_email="alice@example.com", user_alias=None),
+        )
+        metadata = await instance._build_creator_attribution_metadata(
+            self._job(api_key=token_hash), "batch-1"
+        )
+
+        assert metadata["user_api_key"] == token_hash
+        assert metadata["user_api_key_hash"] == token_hash
+
+        payload = get_logging_payload(
+            kwargs={
+                "model": "gpt-4o",
+                "call_type": "aretrieve_batch",
+                "litellm_params": {"metadata": metadata},
+            },
+            response_obj={
+                "id": "batch_123",
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+        )
+        assert payload["api_key"] == token_hash
+        assert payload["api_key"] != hash_token(token_hash)
 
 
 class TestPollPageStarvation:

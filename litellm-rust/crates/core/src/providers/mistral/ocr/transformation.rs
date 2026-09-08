@@ -134,6 +134,8 @@ impl OcrProviderConfig for MistralOcrConfig {
             document_annotation,
             usage_info,
             object: "ocr".to_string(),
+            extra_fields: Map::new(),
+            provider_native_response: None,
         })
     }
 
@@ -186,68 +188,180 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn supported_params_match_python_mistral_ocr_config() {
+    fn extract_header_is_a_supported_ocr_param() {
+        assert!(supported_ocr_params().contains(&"extract_header"));
+    }
+
+    #[test]
+    fn extract_footer_is_a_supported_ocr_param() {
+        assert!(supported_ocr_params().contains(&"extract_footer"));
+    }
+
+    #[test]
+    fn existing_ocr_params_remain_supported() {
+        for param in [
+            "pages",
+            "include_image_base64",
+            "image_limit",
+            "image_min_size",
+            "bbox_annotation_format",
+            "document_annotation_format",
+        ] {
+            assert!(supported_ocr_params().contains(&param));
+        }
+    }
+
+    #[test]
+    fn map_ocr_params_forwards_extract_header() {
+        let params = json!({"extract_header": true});
         assert_eq!(
-            supported_ocr_params(),
-            &[
-                "pages",
-                "include_image_base64",
-                "image_limit",
-                "image_min_size",
-                "bbox_annotation_format",
-                "document_annotation_format",
-                "document_annotation_prompt",
-                "extract_header",
-                "extract_footer",
-                "table_format",
-                "confidence_scores_granularity",
-                "include_blocks",
-                "id",
-            ]
+            map_ocr_params(params.as_object().unwrap()),
+            params.as_object().unwrap().clone()
+        );
+    }
+
+    #[test]
+    fn map_ocr_params_forwards_extract_footer() {
+        let params = json!({"extract_footer": true});
+        assert_eq!(
+            map_ocr_params(params.as_object().unwrap()),
+            params.as_object().unwrap().clone()
+        );
+    }
+
+    #[test]
+    fn map_ocr_params_forwards_extract_header_and_footer() {
+        let params = json!({"extract_header": true, "extract_footer": false});
+        assert_eq!(
+            map_ocr_params(params.as_object().unwrap()),
+            params.as_object().unwrap().clone()
         );
     }
 
     #[test]
     fn map_ocr_params_drops_unknown_params() {
-        let params = json!({
-            "extract_header": true,
-            "unsupported_param": "value",
-            "pages": [0, 1]
-        });
+        let params = json!({"extract_header": true, "unsupported_param": "value"});
         let mapped = map_ocr_params(params.as_object().unwrap());
-
         assert_eq!(mapped.get("extract_header"), Some(&json!(true)));
-        assert_eq!(mapped.get("pages"), Some(&json!([0, 1])));
         assert!(!mapped.contains_key("unsupported_param"));
     }
 
     #[test]
-    fn transform_ocr_request_builds_mistral_body() {
+    fn new_ocr_params_are_supported() {
+        for param in [
+            "table_format",
+            "confidence_scores_granularity",
+            "document_annotation_prompt",
+            "include_blocks",
+            "id",
+        ] {
+            assert!(supported_ocr_params().contains(&param));
+        }
+    }
+
+    #[test]
+    fn map_ocr_params_forwards_new_ocr_params() {
+        for (param, value) in [
+            ("table_format", json!("html")),
+            ("confidence_scores_granularity", json!("word")),
+            (
+                "document_annotation_prompt",
+                json!("Extract all invoice line items"),
+            ),
+            ("include_blocks", json!(true)),
+            ("id", json!("req-123")),
+        ] {
+            let params = json!({param: value});
+            assert_eq!(
+                map_ocr_params(params.as_object().unwrap()),
+                params.as_object().unwrap().clone()
+            );
+        }
+    }
+
+    #[test]
+    fn transform_ocr_request_includes_each_optional_param() {
+        let document = json!({
+            "type": "document_url",
+            "document_url": "https://example.com/doc.pdf"
+        });
+        for (param, value) in [
+            ("table_format", json!("html")),
+            ("confidence_scores_granularity", json!("word")),
+            (
+                "document_annotation_prompt",
+                json!("Extract all invoice line items"),
+            ),
+            ("id", json!("req-123")),
+            ("extract_header", json!(true)),
+            ("include_blocks", json!(true)),
+            ("pages", json!([0, 1])),
+        ] {
+            let result = transform_ocr_request(
+                "mistral-ocr-latest",
+                document.clone(),
+                json!({param: value}).as_object().unwrap().clone(),
+            )
+            .expect("request should transform");
+            assert_eq!(result.data.get(param), Some(&value));
+            assert_eq!(result.data.get("model"), Some(&json!("mistral-ocr-latest")));
+            assert_eq!(result.data.get("document"), Some(&document));
+            assert_eq!(result.files, None);
+        }
+    }
+
+    #[test]
+    fn transform_ocr_request_includes_multiple_new_params() {
         let document = json!({
             "type": "document_url",
             "document_url": "https://example.com/doc.pdf"
         });
         let optional_params = json!({
-            "include_image_base64": true,
-            "table_format": "html"
+            "table_format": "html",
+            "confidence_scores_granularity": "page",
+            "extract_header": true
         })
         .as_object()
         .unwrap()
         .clone();
-
-        let result = transform_ocr_request("mistral-ocr-latest", document.clone(), optional_params)
+        let result = transform_ocr_request("mistral-ocr-latest", document, optional_params)
             .expect("request should transform");
-
+        assert_eq!(result.data.get("table_format"), Some(&json!("html")));
         assert_eq!(
-            result.data,
-            json!({
-                "model": "mistral-ocr-latest",
-                "document": document,
-                "include_image_base64": true,
-                "table_format": "html"
-            })
+            result.data.get("confidence_scores_granularity"),
+            Some(&json!("page"))
         );
-        assert_eq!(result.files, None);
+        assert_eq!(result.data.get("extract_header"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn transform_ocr_response_preserves_blocks_and_confidence_scores() {
+        let blocks = json!([{"type": "title", "content": "Invoice"}]);
+        let confidence_scores = json!({"page": 0.98});
+        let response = json!({
+            "pages": [{"index": 0, "markdown": "# Invoice", "blocks": blocks, "confidence_scores": confidence_scores}],
+            "model": "mistral-ocr-4-0",
+            "usage_info": {"pages_processed": 1}
+        });
+        let result =
+            transform_ocr_response("mistral-ocr-4-0", response).expect("response should transform");
+        assert_eq!(result.pages[0].get("blocks"), Some(&blocks));
+        assert_eq!(
+            result.pages[0].get("confidence_scores"),
+            Some(&confidence_scores)
+        );
+    }
+
+    #[test]
+    fn transform_ocr_response_preserves_ocr4_page_fields() {
+        let response = json!({
+            "pages": [{"index": 0, "markdown": "table page", "tables": [{"rows": 2, "cols": 3}], "hyperlinks": ["https://example.com"], "header": "Acme Corp", "footer": "Page 1"}],
+            "model": "mistral-ocr-4-0",
+            "usage_info": {"pages_processed": 1}
+        });
+        let result = transform_ocr_response("mistral-ocr-4-0", response.clone())
+            .expect("response should transform");
+        assert_eq!(result.pages[0], response["pages"][0]);
     }
 
     #[test]

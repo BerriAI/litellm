@@ -8,7 +8,7 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Final
 
 # Call types whose body carries free-form chat / prompt text that
@@ -33,6 +33,22 @@ def is_text_content_call_type(call_type: str) -> bool:
     return call_type in TEXT_CONTENT_CALL_TYPES
 
 
+# Call types whose request body carries no conversation at all. Embeddings carry
+# ``input`` — documents being indexed, not a prompt — which
+# :func:`build_inspection_messages` would lift into synthetic chat messages.
+#
+# Deny-list on purpose: ``TEXT_CONTENT_CALL_TYPES`` above omits conversational
+# call types (``anthropic_messages``, ``responses``, ``call_mcp_tool``), so a
+# blocking guardrail gated on that allow-list would stop inspecting real chat
+# traffic. Testing this instead leaves an unrecognised call type inspected.
+NON_CONVERSATIONAL_CALL_TYPES: Final[frozenset[str]] = frozenset({"embedding", "aembedding"})
+
+
+def is_non_conversational_call_type(call_type: str) -> bool:
+    """Return True if ``call_type``'s body carries no conversation to inspect."""
+    return call_type in NON_CONVERSATIONAL_CALL_TYPES
+
+
 TEXT_PART_TYPES: Final[frozenset[str]] = frozenset(
     {"text", "input_text", "output_text", "summary_text", "reasoning_text"}
 )
@@ -54,7 +70,7 @@ def _part_text(part: Mapping[str, object]) -> str | None:
     return None
 
 
-def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
+def _iter_text_parts_in_content(content: object) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
     multimodal list). Non-text parts (images, audio, …) are skipped."""
     if isinstance(content, str):
@@ -75,13 +91,13 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
                 yield text
 
 
-def _coerce_input_to_messages(input_value: Any) -> list[dict[str, Any]]:
+def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
     """Coerce a Responses-API ``data["input"]`` value into chat-style messages."""
     if isinstance(input_value, str):
         return [{"role": "user", "content": input_value}]
     if not isinstance(input_value, list):
         return []
-    messages: Final[list[dict[str, Any]]] = []
+    messages: Final[list[dict[str, object]]] = []
     for item in input_value:
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
@@ -110,7 +126,7 @@ def _coerce_input_to_messages(input_value: Any) -> list[dict[str, Any]]:
     return messages
 
 
-def _iter_inspection_messages(data: dict[str, Any]) -> Iterator[dict[str, Any]]:
+def _iter_inspection_messages(data: Mapping[str, object]) -> Iterator[object]:
     """Yield every message-like dict, walking ``messages`` AND ``input``."""
     messages: Final = data.get("messages")
     if isinstance(messages, list):
@@ -118,7 +134,7 @@ def _iter_inspection_messages(data: dict[str, Any]) -> Iterator[dict[str, Any]]:
     yield from _coerce_input_to_messages(data.get("input"))
 
 
-def iter_message_text(data: dict[str, Any]) -> Iterator[str]:
+def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
     """Yield every text fragment from ``messages`` AND ``input``.
 
     Walks every role (user, assistant, system, …) — guardrails inspect
@@ -139,7 +155,7 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     """
     visited = 0
 
-    def _rewrite_content(content: Any) -> Any:
+    def _rewrite_content(content: object) -> object:
         nonlocal visited
         if isinstance(content, str):
             if content:
@@ -147,7 +163,7 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
                 return visit(content)
             return content
         if isinstance(content, list):
-            new_parts: Final[list[Any]] = []
+            new_parts: Final[list[object]] = []
             for part in content:
                 if isinstance(part, str) and part:
                     visited += 1
@@ -196,7 +212,17 @@ def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     return visited
 
 
-def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[dict[str, Any]]) -> None:
+def is_string_batch_input(data: Mapping[str, object]) -> bool:
+    """Return True when the only inspected content is an ``input`` list of plain
+    strings, the /embeddings batch shape, which :func:`apply_redacted_messages_back`
+    rewrites element-wise."""
+    if "messages" in data:
+        return False
+    input_value: Final = data.get("input")
+    return isinstance(input_value, list) and bool(input_value) and all(isinstance(item, str) for item in input_value)
+
+
+def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: Sequence[object]) -> bool:
     """Write redacted messages back to whichever field(s) the caller used.
 
     Mask/anonymize paths take a synthesised messages list (from
@@ -205,20 +231,42 @@ def apply_redacted_messages_back(data: dict[str, Any], redacted_messages: list[d
     only to ``data["messages"]`` leaves the Responses-API ``data["input"]``
     field untouched, so the unredacted text still reaches the LLM.
 
-    This helper updates both fields when both are present.
+    This helper updates both fields when both are present. A string batch
+    (``/embeddings`` ``input`` list) is rewritten element-wise: the n-th
+    redacted message replaces the n-th non-empty element, because
+    :func:`build_inspection_messages` emits one message per non-empty string.
+
+    Returns False, leaving ``data`` untouched, when a batch response does not
+    carry exactly one message per inspected element: a partial rewrite would
+    forward the remaining originals unredacted. Callers must block on False.
     """
+    if is_string_batch_input(data):
+        batch: Final = data["input"]
+        inspected_indices: Final = tuple(idx for idx, item in enumerate(batch) if item)
+        if len(redacted_messages) != len(inspected_indices):
+            return False
+        if any(not isinstance(message, Mapping) or message.get("content") is None for message in redacted_messages):
+            return False
+        redacted_texts: Final = tuple(
+            "\n".join(_iter_text_parts_in_content(message["content"])) for message in redacted_messages
+        )
+        for idx, text in zip(inspected_indices, redacted_texts):
+            batch[idx] = text
+        return True
     if "messages" in data:
         data["messages"] = redacted_messages
-    if isinstance(data.get("input"), str):
+    input_value: Final = data.get("input")
+    if isinstance(input_value, str):
         text_parts: Final[list[str]] = []
         for msg in redacted_messages:
             if not isinstance(msg, dict):
                 continue
             text_parts.extend(_iter_text_parts_in_content(msg.get("content")))
         data["input"] = "\n".join(text_parts)
+    return True
 
 
-def has_non_string_content(data: dict[str, Any]) -> bool:
+def has_non_string_content(data: Mapping[str, object]) -> bool:
     """Return True if any inspected content is not a plain string.
 
     Used by hooks whose mask/redact path operates on string offsets and

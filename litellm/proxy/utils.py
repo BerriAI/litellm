@@ -152,7 +152,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.hooks.sensitive_data_routing import (
     _PROXY_SensitiveDataRoutingHandler,
 )
-from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_guardrails_from_auth_metadata
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.repositories.budget_repository import BudgetRepository
@@ -924,7 +924,13 @@ class ProxyLogging:
             "incoming_bearer_token": kwargs.get("incoming_bearer_token"),
             "metadata": {"headers": kwargs.get("headers") or {}},
         }
-
+        user_api_key_auth: Final = kwargs.get("user_api_key_auth")
+        if isinstance(user_api_key_auth, UserAPIKeyAuth):
+            add_guardrails_from_auth_metadata(
+                user_api_key_dict=user_api_key_auth,
+                data=synthetic_data,
+                metadata_variable_name="metadata",
+            )
         return synthetic_data
 
     def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
@@ -1478,28 +1484,27 @@ class ProxyLogging:
     ) -> None:
         """Process prompt template if applicable."""
 
-        from litellm.proxy.prompts.prompt_endpoints import (
-            construct_versioned_prompt_id,
-            get_latest_version_prompt_id,
-        )
         from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
         from litellm.responses.utils import ResponsesAPIRequestUtils
         from litellm.utils import get_non_default_completion_params
 
-        if prompt_version is None:
-            lookup_prompt_id = get_latest_version_prompt_id(
-                prompt_id=prompt_id,
-                all_prompt_ids=IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS,
-            )
-        else:
-            lookup_prompt_id = construct_versioned_prompt_id(prompt_id=prompt_id, version=prompt_version)
-
-        custom_logger: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_by_id(lookup_prompt_id)
-        prompt_spec: Final = IN_MEMORY_PROMPT_REGISTRY.get_prompt_by_id(lookup_prompt_id)
+        raw_prompt_environment: Final = data.get("prompt_environment", None)
+        prompt_environment: Final = raw_prompt_environment if isinstance(raw_prompt_environment, str) else None
+        prompt_spec: Final = IN_MEMORY_PROMPT_REGISTRY.resolve_prompt_spec(
+            prompt_id,
+            version=prompt_version,
+            environment=prompt_environment,
+        )
+        custom_logger: Final = (
+            IN_MEMORY_PROMPT_REGISTRY.get_prompt_callback_for_prompt(prompt=prompt_spec)
+            if prompt_spec is not None
+            else None
+        )
         litellm_prompt_id: str | None = None
         if prompt_spec is not None:
             litellm_prompt_id = prompt_spec.litellm_params.prompt_id
             data.pop("prompt_id", None)
+            data.pop("prompt_environment", None)
 
         if custom_logger and prompt_spec is not None:
             is_responses_call: Final = call_type == "aresponses"
@@ -1542,6 +1547,7 @@ class ProxyLogging:
             data.pop("prompt_variables", None)
             data.pop("prompt_label", None)
             data.pop("prompt_version", None)
+            data.pop("prompt_environment", None)
 
     def _process_guardrail_metadata(self, data: dict) -> None:
         """Process guardrails from metadata and add to applied_guardrails."""
@@ -1750,7 +1756,6 @@ class ProxyLogging:
 
         litellm_logging_obj: Final = cast(Optional["LiteLLMLoggingObj"], data.get("litellm_logging_obj", None))
         prompt_id: Final[str | None] = data.get("prompt_id", None)
-        prompt_version: Final[int | None] = data.get("prompt_version", None)
 
         ## PROMPT TEMPLATE CHECK ##
 
@@ -1760,11 +1765,13 @@ class ProxyLogging:
             and prompt_id is not None
             and (call_type == "completion" or call_type == "acompletion" or call_type == "aresponses")
         ):
+            from litellm.proxy.prompts.prompt_registry import parse_prompt_version
+
             await self._process_prompt_template(
                 data=data,
                 litellm_logging_obj=litellm_logging_obj,
                 prompt_id=prompt_id,
-                prompt_version=prompt_version,
+                prompt_version=parse_prompt_version(data.get("prompt_version", None)),
                 call_type=call_type,
             )
 
@@ -2567,6 +2574,8 @@ class ProxyLogging:
         # Remove before callbacks iterate — not serialisable
         request_data.pop("litellm_logging_obj", None)
 
+        redacted_traceback_str: Final = _redact_string(traceback_str) if traceback_str is not None else None
+
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: HTTPException | None = None
 
@@ -2585,7 +2594,7 @@ class ProxyLogging:
                             request_data=request_data,
                             user_api_key_dict=user_api_key_dict,
                             original_exception=original_exception,
-                            traceback_str=traceback_str,
+                            traceback_str=redacted_traceback_str,
                         )
                         # If callback returned an HTTPException, use it (first one wins)
                         if isinstance(hook_result, HTTPException) and transformed_exception is None:
@@ -6385,10 +6394,17 @@ class ProxyUpdateSpend:
                         )
                     break
                 except Exception as e:
-                    if not PrismaDBExceptionHandler.is_database_transport_error(e):
+                    if not _is_transient_spend_log_write_error(e):
+                        if PrismaDBExceptionHandler.is_prisma_error(e):
+                            await enqueue_spend_logs(prisma_client, logs_to_process, at_head=True)
+                            verbose_proxy_logger.warning(
+                                "Spend tracking - DB error writing spend logs, requeued %d rows for the next flush. error=%s",
+                                len(logs_to_process),
+                                str(e),
+                            )
                         raise
                     verbose_proxy_logger.warning(
-                        "Spend tracking - DB connection error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
+                        "Spend tracking - transient DB error writing spend logs, retry %d/%d. logs_count=%d, error=%s",
                         i + 1,
                         n_retry_times,
                         len(logs_to_process),
@@ -6731,6 +6747,10 @@ async def _monitor_spend_logs_queue(
 MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH: Final = 256
 
 
+def _is_transient_spend_log_write_error(e: Exception) -> bool:
+    return PrismaDBExceptionHandler.is_database_transport_error(e) or PrismaDBExceptionHandler.is_deadlock_error(e)
+
+
 async def _create_spend_logs_with_poison_isolation(
     repo: SpendLogsRepository,
     rows: Sequence[Mapping[str, object]],
@@ -6765,6 +6785,8 @@ async def _create_spend_logs_with_poison_isolation(
         if not PrismaDBExceptionHandler.is_prisma_data_error(e):
             raise
         if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+            raise
+        if PrismaDBExceptionHandler.is_deadlock_error(e):
             raise
         budget_left: Final = max(failure_budget - 1, 0)
         if len(rows) == 1:
@@ -7190,7 +7212,19 @@ def get_custom_url(request_base_url: str, route: str | None = None) -> str:
     else:
         base_url = request_base_url
 
-    server_root_path: Final = get_server_root_path()
+    # get_request_root_path() returns the prefix the router is actually
+    # resolving this request under: the matched SERVER_ROOT_PATHS entry when
+    # PerRequestRootPathMiddleware ran, otherwise the SERVER_ROOT_PATH scalar.
+    # This keeps the emitted URL under one prefix — the one the client called —
+    # instead of stacking the scalar onto a request already living under a
+    # dynamic prefix (which would produce /tenant-a/legacy/... — a path that
+    # doesn't exist). join_paths()'s tail-dedup then collapses the append when
+    # base_url (i.e. request.base_url) already ends in the same prefix.
+    from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports utils
+        get_request_root_path,
+    )
+
+    server_root_path: Final = get_request_root_path()
     if route is not None:
         if server_root_path != "":
             # First join base_url with server_root_path, then with route
@@ -7531,6 +7565,9 @@ def create_model_info_response(
             max_input_tokens = configured_input
         if configured_output is not None:
             max_output_tokens = configured_output
+        configured_mode: Final = llm_router.get_configured_mode(model_id)
+        if isinstance(configured_mode, str):
+            base["mode"] = configured_mode
 
     if max_input_tokens is not None:
         base["max_input_tokens"] = max_input_tokens

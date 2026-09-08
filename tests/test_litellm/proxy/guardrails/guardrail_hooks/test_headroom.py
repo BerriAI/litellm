@@ -35,7 +35,6 @@ import litellm
 
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
     HeadroomGuardrail,
-    extract_hashes_from_messages,
     has_headroom_retrieve_tool,
     HEADROOM_RETRIEVE_TOOL_NAME,
 )
@@ -93,7 +92,11 @@ def _make_guardrail(**kwargs) -> HeadroomGuardrail:
     return HeadroomGuardrail(**defaults)
 
 
-def _make_compress_response(messages: list, status: int = 200) -> MagicMock:
+def _make_compress_response(
+    messages: list,
+    status: int = 200,
+    ccr_hashes: list[str] | None = None,
+) -> MagicMock:
     mock = MagicMock()
     mock.status_code = status
     mock.json.return_value = {
@@ -102,6 +105,7 @@ def _make_compress_response(messages: list, status: int = 200) -> MagicMock:
         "tokens_after": 100,
         "compression_ratio": 0.1,
         "transforms_applied": ["router:smart_crusher:0.35"],
+        **({} if ccr_hashes is None else {"ccr_hashes": ccr_hashes}),
     }
     mock.text = ""
     return mock
@@ -191,6 +195,33 @@ async def test_apply_guardrail_compresses_and_returns_structured_messages(
     assert entries[0]["guardrail_status"] == "success"
     assert entries[0]["guardrail_provider"] == "headroom"
     assert "headroom" in _applied_guardrails(request_data)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_leaves_background_requests_uncompressed(
+    guardrail: HeadroomGuardrail,
+):
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+    request_data = {"model": "gpt-4o", "background": True}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ) as post:
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert result is inputs
+    post.assert_not_awaited()
+    assert _recorded_guardrail_entries(request_data) == []
 
 
 def _recorded_guardrail_response(request_data: dict) -> dict:
@@ -308,7 +339,7 @@ async def test_apply_guardrail_injects_retrieve_tool_when_hashes_present(
         texts=["A" * 5000],
         structured_messages=ORIGINAL_MESSAGES,
     )
-    mock_response = _make_compress_response(COMPRESSED_MESSAGES_WITH_HASH)
+    mock_response = _make_compress_response(COMPRESSED_MESSAGES_WITH_HASH, ccr_hashes=["b573993006976af767214fac"])
 
     with patch.object(
         guardrail.async_handler,
@@ -363,7 +394,7 @@ async def test_apply_guardrail_preserves_existing_tools_when_injecting(
         structured_messages=ORIGINAL_MESSAGES,
         tools=[existing_tool],
     )
-    mock_response = _make_compress_response(COMPRESSED_MESSAGES_WITH_HASH)
+    mock_response = _make_compress_response(COMPRESSED_MESSAGES_WITH_HASH, ccr_hashes=["b573993006976af767214fac"])
 
     with patch.object(
         guardrail.async_handler,
@@ -462,17 +493,18 @@ async def test_async_build_agentic_loop_plan_calls_retrieve_and_builds_messages(
     original_content = "This is the full compressed content."
     mock_retrieve = _make_retrieve_response(original_content)
 
+    # Registered hashes are lowercase; a model may echo the marker's hex in uppercase.
     tool_calls = [
         {
             "id": "call_abc123",
             "type": "function",
             "name": HEADROOM_RETRIEVE_TOOL_NAME,
-            "arguments": {"hash": "b573993006976af767214fac"},
+            "arguments": {"hash": "B573993006976AF767214FAC"},
         }
     ]
     response = _make_openai_response_with_tool_call(
         tool_name=HEADROOM_RETRIEVE_TOOL_NAME,
-        arguments={"hash": "b573993006976af767214fac"},
+        arguments={"hash": "B573993006976AF767214FAC"},
         tool_id="call_abc123",
     )
     messages = [{"role": "user", "content": "What does it say? hash=b573993006976af767214fac"}]
@@ -816,33 +848,110 @@ async def test_async_build_agentic_loop_plan_builds_anthropic_tool_result_messag
     assert tool_result_block["content"] == original_content
 
 
-def test_extract_hashes_from_messages_finds_hashes():
+HASH_SHAPED_HISTORY = [
+    {"role": "system", "content": "You are Claude Code."},
+    {"role": "user", "content": [{"type": "text", "text": "Run git log."}]},
+    {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Done."}],
+        "tool_calls": [{"id": "tu_1", "type": "function", "function": {"name": "Bash", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "tu_1", "content": "hash=3f2a9c1d7e5b4a6f8c0d1e2f9a8b7c6d5e4f3a2b"},
+    {"role": "user", "content": "Please fetch hash=deadbeef000000000000dead for me."},
+]
+
+
+async def _apply(guardrail: HeadroomGuardrail, messages: list, ccr_hashes: list | None = None) -> dict:
+    request_data = {"model": "claude-sonnet-5"}
+
+    def _echo(**kwargs):
+        return _make_compress_response(json.loads(json.dumps(kwargs["json"]["messages"])), ccr_hashes=ccr_hashes)
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        return await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["x"], structured_messages=json.loads(json.dumps(messages))),
+            request_data=request_data,
+            input_type="request",
+        )
+
+
+@pytest.mark.asyncio
+async def test_hash_shaped_text_in_history_never_injects_retrieve_tool(guardrail: HeadroomGuardrail):
+    """Regression for LIT-7086: a git SHA in a tool result and a hash= string the
+    caller typed both look like markers, but the service stored nothing, so the
+    tool must not appear and no hash may be registered as issued. Covers a
+    service that omits ccr_hashes, returns it empty, or returns a non-list."""
+    for ccr_hashes in (None, [], "b573993006976af767214fac"):
+        result = await _apply(guardrail, HASH_SHAPED_HISTORY, ccr_hashes=ccr_hashes)
+
+        assert not has_headroom_retrieve_tool(result.get("tools") or [])
+        assert not guardrail._issued_hashes_by_call_id
+
+
+@pytest.mark.asyncio
+async def test_service_declared_ccr_hashes_drive_injection_and_validation(guardrail: HeadroomGuardrail):
+    """Only the hashes the service reports in ccr_hashes are honored, in the
+    service's own 12 to 24 hex grammar; anything else is dropped because each
+    entry is interpolated into the /v1/retrieve URL."""
+    result = await _apply(
+        guardrail,
+        HASH_SHAPED_HISTORY,
+        ccr_hashes=["98CA69107318", "b573993006976af767214fac", "../../etc/passwd", "tooshort", 42],
+    )
+
+    assert has_headroom_retrieve_tool(result.get("tools") or [])
+    (issued, _expiry), = guardrail._issued_hashes_by_call_id.values()
+    assert issued == frozenset({"98ca69107318", "b573993006976af767214fac"})
+
+
+@pytest.mark.asyncio
+async def test_ccr_retrieval_disabled_ignores_service_declared_hashes(monkeypatch: pytest.MonkeyPatch):
+    """`ccr_retrieval: false` in config.yaml compresses without any retrieval
+    round trip, so it has to reach the instance through the initializer."""
+    from litellm.proxy.guardrails.guardrail_hooks.headroom import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda callback: None)
+    params = LitellmParams(guardrail="headroom", mode="pre_call", api_base=FAKE_API_BASE, ccr_retrieval=False)
+    guardrail = initialize_guardrail(params, {"guardrail_name": "headroom", "litellm_params": params})
+
+    result = await _apply(guardrail, HASH_SHAPED_HISTORY, ccr_hashes=["b573993006976af767214fac"])
+
+    assert result["structured_messages"][-1] == HASH_SHAPED_HISTORY[-1]
+    assert not has_headroom_retrieve_tool(result.get("tools") or [])
+    assert not guardrail._issued_hashes_by_call_id
+
+
+@pytest.mark.asyncio
+async def test_anthropic_assistant_history_never_reaches_compression_service(guardrail: HeadroomGuardrail):
+    """The public Anthropic handler translates assistant content blocks to a
+    string before Headroom sees them, so model-authored rows must be excluded
+    from the compression payload rather than protected by their content shape."""
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    table = "| Guardrail | Model |\n|---|---|\n" + "\n".join(f"| gr-{i} | model-{i} |" for i in range(40))
     messages = [
-        {"role": "user", "content": "Retrieve more: hash=b573993006976af767214fac"},
-        {"role": "assistant", "content": "Also: hash=aabbccdd001122334455aabb"},
+        {"role": "user", "content": [{"type": "text", "text": "List the guardrails."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": table}]},
+        {"role": "user", "content": [{"type": "text", "text": "Earlier follow-up. " + "B" * 5000}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Noted."}]},
+        {"role": "user", "content": "Re-print the table."},
     ]
-    hashes = extract_hashes_from_messages(messages)
-    assert "b573993006976af767214fac" in hashes
-    assert "aabbccdd001122334455aabb" in hashes
+    sent: dict = {}
 
+    def _echo(**kwargs):
+        sent["messages"] = kwargs["json"]["messages"]
+        return _make_compress_response(json.loads(json.dumps(sent["messages"])))
 
-def test_extract_hashes_from_messages_ignores_short_hashes():
-    messages = [{"role": "user", "content": "hash=tooshort"}]
-    hashes = extract_hashes_from_messages(messages)
-    assert not hashes
+    data = {"model": "claude-sonnet-5", "messages": json.loads(json.dumps(messages))}
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        result = await AnthropicMessagesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
 
+    assert [row["role"] for row in sent["messages"]] == ["user", "user"]
+    assert sent["messages"][1]["content"] == "Earlier follow-up. " + "B" * 5000
+    assert table not in json.dumps(sent["messages"])
+    assert result["messages"][1]["content"] == [{"type": "text", "text": table}]
 
-def test_extract_hashes_from_list_content_blocks():
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "hash=b573993006976af767214fac found here"},
-            ],
-        }
-    ]
-    hashes = extract_hashes_from_messages(messages)
-    assert "b573993006976af767214fac" in hashes
 
 
 def test_has_headroom_retrieve_tool_recognizes_anthropic_native_shape():
@@ -952,6 +1061,40 @@ async def test_passthrough_handler_does_not_log_headroom_as_run(
 
     assert _recorded_guardrail_entries(data) == []
     assert "headroom" not in _applied_guardrails(data)
+
+
+@pytest.mark.asyncio
+async def test_responses_request_sends_compressed_input_and_retrieve_tool_upstream(
+    guardrail: HeadroomGuardrail,
+):
+    """Regression for LIT-6494: on /v1/responses the compressed messages must be
+    written back into `input`, not only the retrieve tool into `tools`, or the
+    model keeps reading the full document and never calls headroom_retrieve."""
+    from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+
+    data = {
+        "model": "gpt-5.6",
+        "instructions": ORIGINAL_MESSAGES[0]["content"],
+        "input": [{"role": m["role"], "content": m["content"]} for m in ORIGINAL_MESSAGES[1:]],
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}],
+    }
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH, ccr_hashes=["b573993006976af767214fac"]),
+    ):
+        result = await OpenAIResponsesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    assert result["instructions"] == ORIGINAL_MESSAGES[0]["content"]
+    assert [item["content"] for item in result["input"]] == [
+        COMPRESSED_MESSAGES_WITH_HASH[0]["content"],
+        ORIGINAL_MESSAGES[2]["content"],
+        ORIGINAL_MESSAGES[3]["content"],
+    ]
+    assert "A" * 5000 not in json.dumps(result["input"])
+    assert [tool["name"] for tool in result["tools"]] == ["get_weather", HEADROOM_RETRIEVE_TOOL_NAME]
 
 
 @pytest.mark.asyncio
@@ -1633,8 +1776,6 @@ async def test_apply_guardrail_litellm_timeout_fail_open_forwards_uncompressed()
     assert result["structured_messages"] == ORIGINAL_MESSAGES
 
 
-
-
 # ---------------------------------------------------------------------------
 # Content-parts flattening (LIT-4795)
 #
@@ -1734,7 +1875,7 @@ async def test_apply_guardrail_restores_rewritten_all_text_row(
     )
     compressed = _echo_wire_view()
     compressed[0]["content"] = "compressed history. Retrieve more: hash=b573993006976af767214fac"
-    mock_response = _make_compress_response(compressed)
+    mock_response = _make_compress_response(compressed, ccr_hashes=["b573993006976af767214fac"])
 
     with patch.object(
         guardrail.async_handler,
@@ -1760,7 +1901,7 @@ async def test_apply_guardrail_restores_rewritten_all_text_row(
     assert history_content[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     # Mixed row passes through byte-identical.
     assert messages[2]["content"] == PARTS_MESSAGES[2]["content"]
-    # Hashes inside restored parts still drive retrieve-tool injection.
+    # The service-declared hash still drives retrieve-tool injection on a restored row.
     assert has_headroom_retrieve_tool(result.get("tools") or [])
 
 
@@ -1950,6 +2091,58 @@ def _openai_text_payload(content: str) -> dict:
     return _openai_completion_payload({"role": "assistant", "content": content}, "stop")
 
 
+def _responses_retrieve_tool_definition() -> dict:
+    return {"type": "function", **_retrieve_tool_definition()["function"]}
+
+
+def _openai_responses_payload(output_item: dict) -> dict:
+    return {
+        "id": "resp_ccr",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-4o",
+        "output": [output_item],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": {},
+        "temperature": 1.0,
+        "top_p": 1.0,
+        "text": {"format": {"type": "text"}},
+        "truncation": "disabled",
+    }
+
+
+def _openai_responses_retrieve_call_payload() -> dict:
+    return _openai_responses_payload(
+        {
+            "type": "function_call",
+            "id": "fc_ccr",
+            "call_id": "call_ccr",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "arguments": json.dumps({"hash": CCR_HASH}),
+            "status": "completed",
+        }
+    )
+
+
+def _openai_responses_text_payload(text: str) -> dict:
+    return _openai_responses_payload(
+        {
+            "type": "message",
+            "id": "msg_ccr",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "call_type, stream, tools, expect_conversion",
     [
@@ -1958,12 +2151,14 @@ def _openai_text_payload(content: str) -> dict:
         (CallTypes.acompletion, False, [_retrieve_tool_definition()], False),
         (CallTypes.acompletion, True, [{"type": "function", "function": {"name": "get_weather"}}], False),
         (CallTypes.acompletion, True, None, False),
-        (CallTypes.aresponses, True, [_retrieve_tool_definition()], False),
+        (CallTypes.aresponses, True, [_retrieve_tool_definition()], True),
+        (CallTypes.responses, True, [_responses_retrieve_tool_definition()], True),
+        (CallTypes.aresponses, False, [_retrieve_tool_definition()], False),
         (CallTypes.anthropic_messages, True, [_retrieve_tool_definition()], False),
     ],
 )
 @pytest.mark.asyncio
-async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_completions(
+async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_completions_and_responses(
     guardrail: HeadroomGuardrail,
     call_type: CallTypes,
     stream: bool,
@@ -1983,6 +2178,22 @@ async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_comple
     assert result is not None
     assert result["stream"] is False
     assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
+    assert kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_pre_call_deployment_hook_leaves_background_streams_alone(guardrail: HeadroomGuardrail):
+    kwargs = {
+        "model": "gpt-4o",
+        "stream": True,
+        "background": True,
+        "tools": [_responses_retrieve_tool_definition()],
+    }
+
+    result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.aresponses)
+
+    assert result is kwargs
+    assert HEADROOM_CONVERTED_STREAM_KEY not in kwargs
     assert kwargs["stream"] is True
 
 
@@ -2030,7 +2241,7 @@ async def test_pre_call_deployment_hook_converts_stream_after_deployment_level_c
         guardrail.async_handler,
         "post",
         new_callable=AsyncMock,
-        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH),
+        return_value=_make_compress_response(COMPRESSED_MESSAGES_WITH_HASH, ccr_hashes=["b573993006976af767214fac"]),
     ):
         result = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=CallTypes.acompletion)
 
@@ -2094,6 +2305,117 @@ async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
     assert not any(key.startswith("_headroom_interception") for key in followup_body)
 
 
+@pytest.mark.asyncio
+async def test_streaming_responses_resolves_ccr_retrieval_end_to_end(
+    guardrail: HeadroomGuardrail,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Regression test for LIT-6481: streaming /v1/responses must resolve the
+    retrieve tool call server-side exactly like streaming /chat/completions does,
+    instead of streaming a headroom_retrieve function_call to the client."""
+    original_content = "the full uncompressed document"
+    final_answer = "the document says hello"
+    guardrail._issued_hashes_by_call_id["ccr-call-id"] = (
+        frozenset({CCR_HASH}),
+        time.monotonic() + 999,
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_responses_retrieve_call_payload()),
+            httpx.Response(200, json=_openai_responses_text_payload(final_answer)),
+        ]
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response(original_content),
+    ) as mock_get:
+        response = await litellm.aresponses(
+            model="openai/gpt-4o",
+            input=[{"role": "user", "content": f"summarize hash={CCR_HASH}"}],
+            tools=[_responses_retrieve_tool_definition()],
+            stream=True,
+            litellm_call_id="ccr-call-id",
+        )
+        events = [event async for event in response]
+
+    streamed_text = "".join(
+        getattr(event, "delta", "") for event in events if getattr(event, "type", None) == "response.output_text.delta"
+    )
+    assert streamed_text == final_answer
+    assert not any("function_call" in str(getattr(event, "type", "")) for event in events)
+    assert not any(
+        getattr(getattr(event, "item", None), "type", None) == "function_call" for event in events
+    )
+    mock_get.assert_called_once()
+    assert CCR_HASH in (mock_get.call_args.kwargs.get("url") or mock_get.call_args.args[0])
+
+    assert len(upstream.calls) == 2
+    followup_body = json.loads(upstream.calls[1].request.content)
+    assert not followup_body.get("stream")
+    assert original_content in json.dumps(followup_body["input"])
+    assert not any(key.startswith("_headroom_interception") for key in followup_body)
+
+
+def test_sync_streaming_responses_resolves_ccr_retrieval_end_to_end(
+    guardrail: HeadroomGuardrail,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The synchronous responses() path converts the stream the same way, so it
+    must hand back a stream iterator with the resolved answer rather than the
+    completed response object."""
+    original_content = "the full uncompressed document"
+    final_answer = "the document says hello"
+    guardrail._issued_hashes_by_call_id["ccr-call-id"] = (
+        frozenset({CCR_HASH}),
+        time.monotonic() + 999,
+    )
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    upstream = respx_mock.post("https://api.openai.com/v1/responses").mock(
+        side_effect=[
+            httpx.Response(200, json=_openai_responses_retrieve_call_payload()),
+            httpx.Response(200, json=_openai_responses_text_payload(final_answer)),
+        ]
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response(original_content),
+    ) as mock_get:
+        response = litellm.responses(
+            model="openai/gpt-4o",
+            input=[{"role": "user", "content": f"summarize hash={CCR_HASH}"}],
+            tools=[_responses_retrieve_tool_definition()],
+            stream=True,
+            litellm_call_id="ccr-call-id",
+        )
+        events = list(response)
+
+    streamed_text = "".join(
+        getattr(event, "delta", "") for event in events if getattr(event, "type", None) == "response.output_text.delta"
+    )
+    assert streamed_text == final_answer
+    assert not any(
+        getattr(getattr(event, "item", None), "type", None) == "function_call" for event in events
+    )
+    mock_get.assert_called_once()
+    assert len(upstream.calls) == 2
+    assert not json.loads(upstream.calls[1].request.content).get("stream")
+
+
 # ---------------------------------------------------------------------------
 # LIT-5018: the turn the model is being asked to act on is never compressed.
 #
@@ -2105,7 +2427,11 @@ async def test_streaming_chat_completion_resolves_ccr_retrieval_end_to_end(
 AGENTIC_MESSAGES = [
     {"role": "system", "content": "You are Claude Code. " + "S" * 5000},
     {"role": "user", "content": "H" * 5000},
-    {"role": "assistant", "content": "Older answer. " + "O" * 5000},
+    {
+        "role": "assistant",
+        "content": "Older answer. " + "O" * 5000,
+        "tool_calls": [{"id": "old_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+    },
     {"role": "tool", "tool_call_id": "old_1", "content": "older tool output " + "T" * 5000},
     {
         "role": "assistant",
@@ -2180,23 +2506,21 @@ async def test_history_is_still_compressed(guardrail: HeadroomGuardrail):
     """Negative control: protection must not turn compression into a no-op."""
     compressed_history = [
         {"role": "user", "content": "hist. hash=b573993006976af767214fac"},
-        {"role": "assistant", "content": "older. hash=a73993006976af767214fac1"},
         {"role": "tool", "tool_call_id": "old_1", "content": "older tool. hash=c73993006976af767214fac2"},
     ]
     wire, result = await _wire_and_result(guardrail, AGENTIC_MESSAGES, returned=compressed_history)
 
-    # Exactly the three history rows go to the service, in order.
-    assert [row["role"] for row in wire] == ["user", "assistant", "tool"]
+    # Older user and tool rows go to the service, in order. Every assistant row
+    # stays out, but the tool results those turns asked for remain compressible.
+    assert [row["role"] for row in wire] == ["user", "tool"]
     assert wire[0]["content"] == "H" * 5000
-    assert wire[2]["tool_call_id"] == "old_1"
+    assert wire[1]["tool_call_id"] == "old_1"
 
     messages = result["structured_messages"]
     assert len(messages) == len(AGENTIC_MESSAGES)
     assert messages[1] == compressed_history[0]
-    assert messages[2] == compressed_history[1]
-    assert messages[3] == compressed_history[2]
-    # Hashes in the compressed history still drive retrieve-tool injection.
-    assert has_headroom_retrieve_tool(result.get("tools") or [])
+    assert messages[2] == AGENTIC_MESSAGES[2]
+    assert messages[3] == compressed_history[1]
 
 
 # ---------------------------------------------------------------------------
@@ -2427,7 +2751,9 @@ async def _plan_for(guardrail: HeadroomGuardrail, response, messages: list):
         return_value=_make_retrieve_response("ORIGINAL CONTENT"),
     ):
         return await guardrail.async_build_agentic_loop_plan(
-            tools={"tool_calls": [{"id": "call_1", "name": HEADROOM_RETRIEVE_TOOL_NAME, "arguments": {"hash": "h" * 24}}]},
+            tools={
+                "tool_calls": [{"id": "call_1", "name": HEADROOM_RETRIEVE_TOOL_NAME, "arguments": {"hash": "h" * 24}}]
+            },
             model="claude-sonnet-4-5-20250929",
             messages=messages,
             response=response,
@@ -2490,3 +2816,153 @@ async def test_chat_followup_echoes_only_the_retrieve_call(guardrail: HeadroomGu
     assert assistant["content"] == "Getting the original first."
     assert [tc["id"] for tc in assistant["tool_calls"]] == ["call_1"]
     assert [m["tool_call_id"] for m in messages[2:]] == ["call_1"]
+
+
+# --- LIT-5881: the calls to the compression service must be time-bounded ---
+
+
+def _timeout_of(mock_call) -> httpx.Timeout:
+    timeout = mock_call.kwargs["timeout"]
+    assert isinstance(timeout, httpx.Timeout), timeout
+    return timeout
+
+
+@pytest.mark.asyncio
+async def test_compress_call_passes_bounded_timeout(guardrail: HeadroomGuardrail):
+    """Without an explicit timeout the call inherits the shared client's 600s read leg."""
+    inputs = GenericGuardrailAPIInputs(texts=["A" * 5000], structured_messages=ORIGINAL_MESSAGES)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ) as mock_post:
+        await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    timeout = _timeout_of(mock_post.call_args)
+    assert timeout.read == 60.0
+    assert timeout.write == 60.0
+    assert timeout.pool == 60.0
+    assert timeout.connect == 5.0
+
+
+@pytest.mark.asyncio
+async def test_retrieve_call_passes_bounded_timeout(guardrail: HeadroomGuardrail):
+    """The retrieval leg runs on the same request and needs the same bound."""
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response("original"),
+    ) as mock_get:
+        result = await guardrail._call_retrieve("a" * 24)
+
+    assert result == "original"
+    timeout = _timeout_of(mock_get.call_args)
+    assert timeout.read == 60.0
+    assert timeout.connect == 5.0
+
+
+@pytest.mark.asyncio
+async def test_configured_timeout_overrides_the_default():
+    """Headroom accepted litellm_params.timeout and ignored it."""
+    guardrail = _make_guardrail(timeout=3.5)
+    inputs = GenericGuardrailAPIInputs(texts=["A" * 5000], structured_messages=ORIGINAL_MESSAGES)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ) as mock_post:
+        await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    timeout = _timeout_of(mock_post.call_args)
+    assert timeout.read == 3.5
+    assert timeout.connect == 3.5
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_is_surfaced_as_unreachable_under_fail_closed():
+    """A stalled service must reach the fail policy, not escape as a 500."""
+    guardrail = _make_guardrail()
+    inputs = GenericGuardrailAPIInputs(texts=["hello"], structured_messages=ORIGINAL_MESSAGES)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ReadTimeout("timed out"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    assert exc_info.value.status_code == 502
+    assert "unreachable" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_read_timeout_forwards_uncompressed_under_fail_open():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open")
+    inputs = GenericGuardrailAPIInputs(texts=["hello"], structured_messages=ORIGINAL_MESSAGES)
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ReadTimeout("timed out"),
+    ):
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    assert result.get("structured_messages") == ORIGINAL_MESSAGES
+
+
+def test_initializer_forwards_configured_timeout(monkeypatch: pytest.MonkeyPatch):
+    """Wiring it only in __init__ leaves `timeout:` in config.yaml silently ignored."""
+    from litellm.proxy.guardrails.guardrail_hooks.headroom import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.setattr(
+        litellm.logging_callback_manager,
+        "add_litellm_callback",
+        lambda callback: None,
+    )
+    params = LitellmParams(
+        guardrail="headroom",
+        mode="pre_call",
+        api_base=FAKE_API_BASE,
+        api_key=FAKE_API_KEY,
+        timeout=7.0,
+    )
+    callback = initialize_guardrail(params, {"guardrail_name": "headroom"})  # type: ignore[arg-type]
+
+    assert callback.timeout.read == 7.0
+
+
+def test_in_place_update_keeps_the_timeout_resolved():
+    """The base implementation copies every attribute over, nulling an unset timeout."""
+    from litellm.types.guardrails import LitellmParams
+
+    guardrail = _make_guardrail(timeout=5.0)
+    assert guardrail.timeout.read == 5.0
+
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="headroom", mode="pre_call", api_base=FAKE_API_BASE)
+    )
+    assert isinstance(guardrail.timeout, httpx.Timeout)
+    assert guardrail.timeout.read == 60.0
+
+    guardrail.update_in_memory_litellm_params(
+        LitellmParams(guardrail="headroom", mode="pre_call", api_base=FAKE_API_BASE, timeout=7.0)
+    )
+    assert guardrail.timeout.read == 7.0
+
+
+@pytest.mark.parametrize("configured", [0, 0.0, -1, -30.0, float("inf"), float("-inf"), float("nan")])
+def test_unusable_timeout_falls_back_to_the_default(configured: float):
+    """0 and inf read as no deadline at all, a negative one as a deadline already past."""
+    guardrail = _make_guardrail(timeout=configured)
+
+    assert guardrail.timeout.read == 60.0
+    assert guardrail.timeout.connect == 5.0

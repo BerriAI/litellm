@@ -16,22 +16,31 @@ import asyncio
 import os
 import time
 import traceback
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import Final, TypeVar
 from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
+from litellm.integrations.batch_utils import (
+    BatchSendCancelled,
+    send_batch_with_413_split,
+    undelivered_after_http_error,
+)
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
+    MaskedHTTPStatusError,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.integrations.azure_sentinel import AZURE_SENTINEL_MAX_PAYLOAD_SIZE_BYTES
 from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 DEFAULT_AZURE_AUTHORITY_HOST: Final = "https://login.microsoftonline.com"
 DEFAULT_AZURE_MONITOR_SCOPE: Final = "https://monitor.azure.com/.default"
+
+_QueuedPayload = TypeVar("_QueuedPayload", StandardLoggingPayload, StandardAuditLogPayload)
 
 MONITOR_SCOPE_BY_AUTHORITY_HOST: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -153,6 +162,8 @@ class AzureSentinelLogger(CustomBatchLogger):
         asyncio.create_task(self.periodic_flush())
         self.log_queue: list[StandardLoggingPayload] = []
         self.audit_log_queue: list[StandardAuditLogPayload] = []
+        self.logs_awaiting_retry = False
+        self.audit_logs_awaiting_retry = False
 
     @staticmethod
     def _normalize_authority_host(authority_host: str) -> str:
@@ -245,8 +256,8 @@ class AzureSentinelLogger(CustomBatchLogger):
 
             self.log_queue.append(standard_logging_payload)
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            if len(self.log_queue) >= self.batch_size and not self.logs_awaiting_retry:
+                await self._threshold_send_logs()
 
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
@@ -275,8 +286,8 @@ class AzureSentinelLogger(CustomBatchLogger):
 
             self.log_queue.append(standard_logging_payload)
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            if len(self.log_queue) >= self.batch_size and not self.logs_awaiting_retry:
+                await self._threshold_send_logs()
 
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Layer Error - %s\n%s", e, traceback.format_exc())
@@ -298,11 +309,23 @@ class AzureSentinelLogger(CustomBatchLogger):
 
             self.audit_log_queue.append(audit_log)
 
-            if len(self.audit_log_queue) >= self.batch_size:
-                await self.async_send_audit_batch()
+            if len(self.audit_log_queue) >= self.batch_size and not self.audit_logs_awaiting_retry:
+                await self._threshold_send_audit_logs()
 
         except Exception as e:
             verbose_logger.exception("Azure Sentinel Audit Log Layer Error - %s\n%s", e, traceback.format_exc())
+
+    async def _threshold_send_logs(self) -> None:
+        async with self.flush_lock:
+            if self.logs_awaiting_retry or len(self.log_queue) < self.batch_size:
+                return
+            await self.async_send_batch()
+
+    async def _threshold_send_audit_logs(self) -> None:
+        async with self.flush_lock:
+            if self.audit_logs_awaiting_retry or len(self.audit_log_queue) < self.batch_size:
+                return
+            await self.async_send_audit_batch()
 
     async def async_send_batch(self):
         """
@@ -311,67 +334,110 @@ class AzureSentinelLogger(CustomBatchLogger):
         Raises:
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
-        await self._async_send_batch_to_api(
-            log_queue=self.log_queue,
-            api_endpoint=self.api_endpoint,
-            log_type="logs",
-        )
+        batch_to_send: Final = tuple(self.log_queue)
+        self.log_queue = []  # mutable-ok: queue ownership is detached before the async send
+        try:
+            undelivered: Final = await self._async_send_batch_to_api(
+                log_queue=batch_to_send,
+                api_endpoint=self.api_endpoint,
+                log_type="logs",
+            )
+        except BatchSendCancelled as cancelled:
+            self.log_queue = self._requeue(cancelled.undelivered, self.log_queue, "logs")
+            self.logs_awaiting_retry = bool(self.log_queue)
+            raise asyncio.CancelledError() from cancelled
+        except asyncio.CancelledError:
+            self.log_queue = self._requeue(batch_to_send, self.log_queue, "logs")
+            self.logs_awaiting_retry = bool(self.log_queue)
+            raise
+        self.log_queue = self._requeue(undelivered, self.log_queue, "logs")
+        self.logs_awaiting_retry = bool(undelivered) and bool(self.log_queue)
 
     async def async_send_audit_batch(self):
         """
         Sends the batch of audit logs to Azure Monitor Logs Ingestion API
         """
-        await self._async_send_batch_to_api(
-            log_queue=self.audit_log_queue,
-            api_endpoint=self.audit_api_endpoint,
-            log_type="audit logs",
+        batch_to_send: Final = tuple(self.audit_log_queue)
+        self.audit_log_queue = []  # mutable-ok: queue ownership is detached before the async send
+        try:
+            undelivered: Final = await self._async_send_batch_to_api(
+                log_queue=batch_to_send,
+                api_endpoint=self.audit_api_endpoint,
+                log_type="audit logs",
+            )
+        except BatchSendCancelled as cancelled:
+            self.audit_log_queue = self._requeue(cancelled.undelivered, self.audit_log_queue, "audit logs")
+            self.audit_logs_awaiting_retry = bool(self.audit_log_queue)
+            raise asyncio.CancelledError() from cancelled
+        except asyncio.CancelledError:
+            self.audit_log_queue = self._requeue(batch_to_send, self.audit_log_queue, "audit logs")
+            self.audit_logs_awaiting_retry = bool(self.audit_log_queue)
+            raise
+        self.audit_log_queue = self._requeue(undelivered, self.audit_log_queue, "audit logs")
+        self.audit_logs_awaiting_retry = bool(undelivered) and bool(self.audit_log_queue)
+
+    def _requeue(
+        self,
+        undelivered: tuple[_QueuedPayload, ...],
+        queue: list[_QueuedPayload],
+        log_type: str,
+    ) -> list[_QueuedPayload]:
+        merged: Final = [*undelivered, *queue]  # mutable-ok: queue trimming returns a mutable logger queue
+        overflow: Final = len(merged) - self.max_queue_size
+        if overflow <= 0:
+            return merged
+
+        verbose_logger.warning(
+            "Azure Sentinel: %s queue exceeded max_queue_size=%s, dropped %s oldest records",
+            log_type,
+            self.max_queue_size,
+            overflow,
         )
+        return merged[overflow:]
 
     async def _async_send_batch_to_api(
         self,
-        log_queue: list[StandardLoggingPayload | StandardAuditLogPayload],
+        log_queue: tuple[_QueuedPayload, ...],
         api_endpoint: str,
         log_type: str,
-    ) -> None:
+    ) -> tuple[_QueuedPayload, ...]:
+        if not log_queue:
+            return ()
+
+        verbose_logger.debug("Azure Sentinel - about to flush %s %s", len(log_queue), log_type)
         try:
-            if not log_queue:
-                return
-
-            verbose_logger.debug("Azure Sentinel - about to flush %s %s", len(log_queue), log_type)
-
-            # Get OAuth2 token
             bearer_token: Final = await self._get_oauth_token()
+        except MaskedHTTPStatusError as e:
+            return undelivered_after_http_error(log_queue, e.status_code, "Azure Sentinel OAuth token", str(e))
+        except Exception as e:
+            verbose_logger.exception("Azure Sentinel Error getting OAuth token - %s", e)
+            return tuple(log_queue)
 
-            # Convert log queue to JSON array format expected by Logs Ingestion API
-            # Each log entry should be a JSON object in the array
-            body: Final = safe_dumps(log_queue)
+        headers: Final = {
+            "Authorization": f"Bearer {bearer_token}",
+            "Content-Type": "application/json",
+        }
 
-            # Set headers for Logs Ingestion API
-            headers: Final = {
-                "Authorization": f"Bearer {bearer_token}",
-                "Content-Type": "application/json",
-            }
-
-            # Send the request
-            response = await self.async_httpx_client.post(url=api_endpoint, data=body.encode("utf-8"), headers=headers)
-
-            if response.status_code not in [200, 204]:
-                verbose_logger.error(
-                    "Azure Sentinel API error: status_code=%s, response=%s",
-                    response.status_code,
-                    response.text,
-                )
-                raise Exception(f"Failed to send logs to Azure Sentinel: {response.status_code} - {response.text}")
-
-            verbose_logger.debug(
-                "Azure Sentinel: Response from API status_code: %s",
-                response.status_code,
+        async def _send_batch(batch: Sequence[_QueuedPayload]):
+            body: Final = safe_dumps(batch)
+            return await self.async_httpx_client.post(
+                url=api_endpoint,
+                data=body.encode("utf-8"),
+                headers=headers,
             )
 
-        except Exception as e:
-            verbose_logger.exception("Azure Sentinel Error sending batch API - %s\n%s", e, traceback.format_exc())
-        finally:
-            log_queue.clear()
+        return await send_batch_with_413_split(
+            batch=log_queue,
+            send_batch=_send_batch,
+            exceeds_limits=lambda batch: (
+                len(batch) > self.batch_size
+                or len(safe_dumps(batch).encode("utf-8")) > AZURE_SENTINEL_MAX_PAYLOAD_SIZE_BYTES
+            ),
+            success_status_codes=frozenset({200, 204}),
+            integration_name="Azure Sentinel",
+            drop_error_message="Azure Sentinel API Error - Payload too large for a single record",
+            non_success_handler=undelivered_after_http_error,
+        )
 
     async def flush_queue(self):
         if self.flush_lock is None:

@@ -1,7 +1,7 @@
 import base64
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Final, Optional, Union, cast, get_type_hints, overload
+from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
@@ -25,7 +25,13 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     SpecialEnums,
     Usage,
+    text_tokens_without_nested_reasoning,
 )
+
+
+def _output_token_detail(details: object, field: str) -> int | None:
+    value: Final = getattr(details, field, None)
+    return value if isinstance(value, int) else None
 
 
 def _is_object_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a list is a Sequence of anything
@@ -57,6 +63,9 @@ def _as_input_text_part(part: object) -> object:
     if isinstance(part, dict) and part.get("type") == "text":
         return {**part, "type": "input_text"}  # mutable-ok: fresh part so the caller's block keeps its chat type
     return part
+
+
+_RequestInputT: Final = TypeVar("_RequestInputT")
 
 
 class ResponsesAPIRequestUtils:
@@ -502,7 +511,7 @@ class ResponsesAPIRequestUtils:
         return response
 
     @staticmethod
-    def _restore_encrypted_content_item_ids_in_input(request_input: object) -> Any:
+    def _restore_encrypted_content_item_ids_in_input(request_input: _RequestInputT) -> _RequestInputT:
         """Decode litellm-encoded item IDs in request input back to original IDs.
 
         Called before forwarding the request to the upstream provider so the
@@ -1134,11 +1143,22 @@ class ResponseAPILoggingUtils:
             response_api_usage, "output_tokens_details", None
         )
         if output_tokens_details:
+            reasoning_tokens: Final = _output_token_detail(output_tokens_details, "reasoning_tokens")
+            image_tokens: Final = _output_token_detail(output_tokens_details, "image_tokens")
+            audio_tokens: Final = _output_token_detail(output_tokens_details, "audio_tokens")
+            reported_text_tokens: Final = _output_token_detail(output_tokens_details, "text_tokens")
             completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None),
-                image_tokens=getattr(output_tokens_details, "image_tokens", None),
-                text_tokens=getattr(output_tokens_details, "text_tokens", None),
-                audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
+                reasoning_tokens=reasoning_tokens,
+                image_tokens=image_tokens,
+                text_tokens=None
+                if reported_text_tokens is None
+                else text_tokens_without_nested_reasoning(
+                    completion_tokens=completion_tokens,
+                    text_tokens=reported_text_tokens,
+                    reasoning_tokens=reasoning_tokens or 0,
+                    other_modality_tokens=(audio_tokens or 0) + (image_tokens or 0),
+                ),
+                audio_tokens=audio_tokens,
             )
 
         extra_usage_fields: Final = {

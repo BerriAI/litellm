@@ -187,7 +187,37 @@ model_list:
 
         # Replace a routed model that cannot take image input (default: false)
         modality_routing: true
+
+        # Let that replacement also override a kept session pin, for image turns only (default: false)
+        modality_pin_override: true
+
+        # Refreshes on every pin reuse, so this is idle time rather than total session length (default: 3600)
+        session_affinity_ttl_seconds: 300
 ```
+
+## Custom dimensions
+
+Add `custom_dimensions` under `complexity_router_config` to give domain keywords or regex patterns their own weighted signal
+
+```yaml
+custom_dimensions:
+  - name: internalFrameworks
+    weight: 0.9
+    keywords: [orbitmesh, fluxgate]
+  - name: sqlMigration
+    weight: 0.7
+    patterns: ['\b(create|alter|drop)\s{1,4}table\b']
+```
+
+Each dimension contributes its weight once when any matcher hits the current ask. Repeated matches do not increase it. The built-in score and tier boundaries are unchanged, and the total score is not renormalized. Keywords use the existing case-insensitive word-boundary and CJK rules. Regexes search the first 2048 characters case-insensitively and compile during configuration validation and router initialization, never per request
+
+Only `heuristic`, `heuristic_first` and `hybrid` accept custom dimensions. Each name must be a unique ASCII identifier starting with a letter, at most 64 characters, and cannot reuse a built-in dimension name or a key in `dimension_weights`. Set its weight inline, greater than zero and at most one
+
+Patterns are checked at configuration time against a grammar whose worst case stays a few milliseconds on 2048 characters. Every quantifier needs an explicit upper bound of at most 64 and must repeat a single character or character class, so `\s{1,4}` is accepted while `\s+`, `(a|aa){0,12}` and `(?:ab){0,64}` are refused. Backreferences, lookarounds, atomic groups and possessive quantifiers are refused as well. Each pattern is then costed: alternation branches and repeat lengths multiply the ways the engine can retry, and every later piece of the pattern is charged once per path that can reach it, so `a?a?a?a?a?a?a?a?` followed by a long fixed tail is refused even though each quantifier is small. The budget is 2048 work units per pattern and 8192 across the router. An invalid or over-budget pattern fails the write with a message naming the pattern and the rule it broke
+
+Limits are 16 dimensions, 32 combined keywords/patterns per dimension, 256 characters per matcher and 4096 matcher characters per dimension. Matching runs inline on the request path with no timeout and no worker thread, because the grammar is what bounds the cost. These are routing hints, not security enforcement rules
+
+The existing heuristic-v1 tuning quota covers custom dimensions and their weights: one changed router without an auto-router license, unlimited with the entitlement. Omitting `custom_dimensions` preserves existing scoring. Routing decisions and spend logs include signals such as `custom (sqlMigration)` without recording the configured pattern or matched text. The field is configured through YAML or the model API; this change adds no dashboard editor
 
 ## Usage
 
@@ -227,8 +257,71 @@ vision model sits below the decided tier gets the 400 and an actionable message 
 A same-tier re-pick keeps the decision's cause and adds `modality:image` to `signals`; a tier
 change or default takeover records `cause: modality_escalation` with the displaced placement
 (`modality_escalated_from:<TIER>` or `modality_displaced_default_model`). Escalations are never
-pinned by session affinity, and a KEPT session pin bypasses the gate entirely: a session pinned
+pinned by session affinity, and by default a KEPT session pin bypasses the gate: a session pinned
 to a text-only model keeps it even when an image arrives.
+
+Add `modality_pin_override: true` to lift that last exemption. The image turn is then re-placed
+the same way every other decision is, and records `cause: modality_pin_override` whether or not
+the tier moved, since the model left the pin either way. The pin itself is untouched: the session
+affinity write happens upstream of the gate and stores the session's own model, so the next text
+turn replays the original pin and the override is never pinned in its place. It does nothing
+unless `modality_routing` is also on.
+
+### Session pin retention
+
+`session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
+
+### Mid-task stall escalation
+
+A weak model working an agentic task can get stuck: it keeps calling the same tool with the
+same arguments, or the same call keeps erroring, when a stronger model would have broken the
+loop. `stall_escalation_enabled: true` catches this and bumps the request one tier higher, the
+automatic counterpart to a user typing an escalation keyword:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        stall_escalation_enabled: true
+        stall_escalation_window: 6
+        stall_escalation_repeat_threshold: 3
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet-4
+          REASONING: o1-preview
+```
+
+Detection looks at the assistant's own tool calls, not the human's messages. The task counts as
+stalled when the NEWEST tool call is still part of a stuck pattern: it repeats, or it errored, at
+least `stall_escalation_repeat_threshold` times across the last `stall_escalation_window` calls.
+The tier is then bumped one step by the same `_escalate_tier` ladder `escalation_keywords` uses,
+capped at the highest configured tier. It reads both tool-call shapes: Anthropic Messages
+`tool_use`/`tool_result` blocks (including `is_error`) and chat-completions `tool_calls`/`tool`
+messages (which carry no standard error flag, so those calls are judged on repetition alone).
+
+Anchoring on the newest call is what keeps a recovered task from being escalated on stale
+evidence. A model that tried the same command three times and then moved on still has those
+three calls sitting in the window for a few turns, and counting whichever pattern is most common
+in the window would escalate a request that is already making progress again. Anchoring still
+leaves room between the matches, so a retry loop broken up by an unrelated lookup counts.
+
+There is no state to expire or leak: detection reruns on every classified turn from that
+request's own message list, so the bump lasts only as long as the recent tool calls still look
+stuck and lifts on its own the moment they don't. This also means it reads the whole
+conversation rather than only the turns since the newest human ask, so a plain follow-up like
+"try again" does not discard evidence from before it. Escalation records `stall_escalation` in
+`routing_decision.signals`; unlike `escalation_keywords`, it does not set the
+`escalated`/`escalation_keyword` pair, which is reserved for the keyword mechanism specifically.
+
+`stall_escalation_enabled` cannot be combined with `session_affinity` or
+`classification_mode: user_turn`: both replay a held routing decision on most turns instead of
+classifying, so detection would never see the tool calls it needs to look at. It is also
+rejected together with `tier_definitions`, for the same reason `escalation_keywords` is: both
+rely on the built-in tier severity order, which a custom tier set does not define. Off by
+default.
 
 ### Heuristic-first chaining
 
@@ -245,13 +338,27 @@ model_list:
         classifier_type: heuristic_first
         heuristic_first_max_tier: SIMPLE
         classifier_llm_config:
-          model: gpt-4o-mini
+          model: gpt-5-mini
+          reasoning_effort: low
         tiers:
           SIMPLE: gpt-4o-mini
           MEDIUM: gpt-4o
           COMPLEX: claude-sonnet-4
           REASONING: o1-preview
 ```
+
+`classifier_llm_config.reasoning_effort` applies only to the internal classifier call. Omit it to
+keep the classifier deployment or provider default, or set a supported value such as `none` or
+`low` to override that call.
+
+Classifier calls have a one-attempt hard deadline. After a timeout, the router opens a process-local
+circuit for that classifier and sends every session through `classifier_fallback` for
+`classifier_llm_config.circuit_breaker_cooldown_seconds` (30 seconds by default). When the cooldown
+expires, one request probes the classifier while concurrent requests continue through the fallback.
+A successful probe closes the circuit; a failed probe restarts the cooldown. The circuit breaker is
+on by default; set `classifier_llm_config.circuit_breaker_enabled: false` to disable it. The default
+fallback is the local heuristic scorer, so a classifier outage does not repeat its timeout across
+every turn or session handled by the router process.
 
 A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least

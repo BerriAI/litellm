@@ -168,6 +168,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
+    supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
+    vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
 
@@ -222,7 +224,9 @@ class OffPeakPricing(TypedDict, total=False):
     weekday_timezone: ReadOnly[str]
     input_cost_per_token: ReadOnly[float]
     output_cost_per_token: ReadOnly[float]
+    output_cost_per_reasoning_token: ReadOnly[float]
     cache_read_input_token_cost: ReadOnly[float]
+    cache_creation_input_token_cost: ReadOnly[float]
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -333,6 +337,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "image_generation",
             "chat",
             "audio_transcription",
+            "audio_speech",
             "responses",
             "ocr",
             "realtime",
@@ -952,6 +957,14 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
         CallTypes.agenerate_content_stream,
         CallTypes.generate_content_stream,
     ],
+    "/v1beta/models/{model}:generateContent": (
+        CallTypes.agenerate_content,
+        CallTypes.generate_content,
+    ),
+    "/v1beta/models/{model}:streamGenerateContent": (
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ),
     # MCP (Model Context Protocol)
     "/mcp/call_tool": [CallTypes.call_mcp_tool],
     # A2A (Agent-to-Agent)
@@ -959,12 +972,12 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
-        CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
+        CallTypes.llm_passthrough_route,
     ],
     "/v1/llm_passthrough": [
-        CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
+        CallTypes.llm_passthrough_route,
     ],
     "/v1/messages": [CallTypes.anthropic_messages],
     # OCR
@@ -1618,6 +1631,17 @@ class Choices(SafeAttributeModel, OpenAIObject):
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+def text_tokens_without_nested_reasoning(
+    completion_tokens: int,
+    text_tokens: int,
+    reasoning_tokens: int,
+    other_modality_tokens: int,
+) -> int:
+    reported_total: Final = text_tokens + reasoning_tokens + other_modality_tokens
+    nested_reasoning_tokens: Final = min(reasoning_tokens, text_tokens, max(reported_total - completion_tokens, 0))
+    return text_tokens - nested_reasoning_tokens
 
 
 class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for older openai versions
@@ -2543,6 +2567,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         )
         super().__init__(created=created, data=_data, usage=_usage)
 
+        self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
         self.size = kwargs.get("size", None)
@@ -2879,6 +2904,14 @@ RoutingDecisionCause = Literal[
     # routed model does not accept image input, so the nearest higher capable tier or
     # default_model served instead. The displaced placement rides in signals.
     "modality_escalation",
+    # modality_pin_override replaced a KEPT session-affinity pin for this request only: the turn
+    # carries an image the pinned model cannot accept. The stored pin is untouched, so the next
+    # text turn replays it. Distinct from "modality_escalation", which never displaces a pin.
+    "modality_pin_override",
+    # Every deployment behind the decided model group was in cooldown, so a healthy peer in the
+    # same tier served instead. The displaced group rides in signals. Reported even on a kept
+    # session pin, since the pinned model did not serve the request.
+    "health_failover",
     "session_affinity_pin",
     "session_affinity_escalation",
     # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
@@ -3039,6 +3072,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     llm_provider: str | None
     traceback: str | None
     error_message: str | None
+    error_provider_request_id: ReadOnly[str | None]
     # error_rate_limit_category:
     #   For 429 / rate-limit errors, the source of the rate limit. One of the
     #   string values defined by `litellm.exceptions.RateLimitErrorCategory`
@@ -3067,7 +3101,54 @@ class GuardrailMode(TypedDict, total=False):
     default: str | list[str] | None
 
 
-GuardrailStatus = Literal["success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"]
+GuardrailStatus = Literal[
+    "success", "guardrail_flagged", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"
+]
+
+# Fields on a guardrail record whose values can quote the caller's prompt: the payload sent to the
+# guardrail, the provider response that echoes it back, and the two first-party hooks that inline
+# prompt substrings (``block_code_execution`` and ``litellm_content_filter``). Every other field
+# reports what the guardrail decided without reproducing the prompt, so redaction replaces these
+# four and keeps the rest of the record.
+PROMPT_CARRYING_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_request",
+        "guardrail_response",
+        "match_details",
+        "classification",
+    }
+)
+
+# The rest of the record: what the guardrail is, what it decided, how long it took and what it cost.
+# None of these reproduce the prompt, so a redacted record keeps them and stays explainable.
+# `test_a_redacted_span_carries_every_declared_guardrail_field` fails if a field is added to the record without being
+# placed in one set or the other, so a new field is dropped from redacted records rather than
+# shipped unexamined.
+AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_name",
+        "guardrail_provider",
+        "guardrail_mode",
+        "guardrail_status",
+        "start_time",
+        "end_time",
+        "duration",
+        "masked_entity_count",
+        "guardrail_id",
+        "policy_template",
+        "detection_method",
+        "confidence_score",
+        "patterns_checked",
+        "alert_recipients",
+        "risk_score",
+        "violation_categories",
+        "guardrail_action",
+        "guardrail_usage",
+        "guardrail_cost",
+        "guardrail_cost_by_unit",
+        "guardrail_cost_in_spend",
+    }
+)
 
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
@@ -3144,6 +3225,12 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     provider hook. Summed into the request's ``response_cost`` so it counts against
     spend and budgets like token cost, unless ``guardrail_cost_in_spend`` is False."""
 
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
+    """``guardrail_cost`` split per ``guardrail_usage`` counter, so the daily
+    per-counter usage rollup can carry cost at its own grain. Absent when the
+    hook had no pricing for the invocation; a counter is None when the pricing
+    entry has no price for it, which the rollup stores as unknown rather than $0."""
+
     guardrail_cost_in_spend: ReadOnly[bool | None]
     """Whether ``guardrail_cost`` participates in the request's ``response_cost`` and
     the spend/budget aggregates built from it. Absent, None, or True keeps the default
@@ -3195,6 +3282,7 @@ class GuardrailTracingDetail(TypedDict, total=False):
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
     guardrail_cost_in_spend: ReadOnly[bool | None]
 
 
@@ -3257,6 +3345,7 @@ class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """
     Status of guardrail execution:
     - 'success': Guardrail ran and allowed content through
+    - 'guardrail_flagged': Guardrail allowed content through but recorded a non-blocking violation
     - 'guardrail_intervened': Guardrail blocked or modified content
     - 'guardrail_failed_to_respond': Guardrail had technical failure
     - 'not_run': No guardrail was run
@@ -3607,6 +3696,7 @@ all_litellm_params = (
         "litellm_system_prompt",
         "provider_specific_header",
         "prompt_version",
+        "prompt_environment",
         "api_base",
         "force_timeout",
         "logger_fn",
@@ -3705,6 +3795,8 @@ all_litellm_params = (
         "auto_router_default_model",
         "auto_router_embedding_model",
         "auto_router_max_input_chars",
+        "auto_router_routing_compression",
+        "auto_router_model_compression",
         "complexity_router_config",
         "complexity_router_default_model",
         "adaptive_router_config",
@@ -3869,6 +3961,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
+    MONGODB = "mongodb"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
