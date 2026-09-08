@@ -203,10 +203,22 @@ logging.<integration>.<event>.<assertion>
 
 guardrail.<provider>.<hook_point>.<assertion>
   provider   : presidio | lakera | bedrock | aporia | ...
-  hook_point : pre_call | post_call | during | logging_only
-  assertion  : blocks | masks | allows
+  hook_point : pre_call | post_call | during | logging_only | apply_endpoint
+  assertion  : <verdict>     blocks | masks | allows
+               <fidelity>    masks_only_configured_entities | masks_each_entity_in_place
+                             | restores_masked_values
+               <bookkeeping> logs_masked_entities
+               <failure>     fails_closed_when_unreachable
   e.g.  guardrail.presidio.pre_call.masks                          exercised_on=[chat_completions]
+        guardrail.presidio.pre_call.fails_closed_when_unreachable  exercised_on=[chat_completions]
 ```
+
+The verdict names say what the guardrail decided, and are the only ones a new
+provider normally needs. The rest exist because a guardrail that talks to an
+outside service has a contract with it beyond the verdict: which entity types it
+asked for, where the spans it got back were applied, what it recorded for an
+operator, and what it does when that service is unreachable. Reach for one of
+those only when the case pins that contract rather than the decision
 
 Other - holding pen (endpoint or behavior)
 

@@ -24,6 +24,7 @@ as secrets; see presidio_env.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from typing import Final, Literal
@@ -53,9 +54,15 @@ RAW_PHONE = "+1 415-555-0134"
 RAW_CARD = "4111 1111 1111 1111"
 PII_SENTENCE = f"Reach Dana at {RAW_EMAIL} or on {RAW_PHONE} about card {RAW_CARD} today."
 
-UNREACHABLE_BASE = "http://127.0.0.1:9/"
+UNREACHABLE_BASE = "http://presidio-unreachable.invalid/"
+_UNREACHABLE_HOST: Final = "presidio-unreachable.invalid"
 
 MAX_ECHO_TOKENS = 128
+
+_NUMBERED_TOKEN: Final = re.compile(r"<[A-Z_]+_\d+>")
+_ECHOED_THE_LINE: Final = re.compile(
+    rf"{re.escape(RAW_EMAIL)}|{re.escape(RAW_PHONE)}|<(?:EMAIL_ADDRESS|PHONE_NUMBER)_\d+>"
+)
 
 
 def _register(
@@ -267,11 +274,11 @@ class TestPresidioOutputParseContract:
         )
 
         restored: Final = _poll_until_restored(client, scoped_key, name, _echo_prompt(unique_marker()))
-        assert RAW_EMAIL in restored, (
-            "the caller must get the real address back, not the placeholder the model saw; a token left "
-            f"in the answer means the mapping was lost between the two hooks: {scrub(restored)!r}"
+        assert RAW_EMAIL in restored and RAW_PHONE in restored, (
+            "the caller must get every masked value back, not the placeholders the model saw; a token "
+            f"left in the answer means the mapping was lost between the two hooks: {scrub(restored)!r}"
         )
-        assert "EMAIL_ADDRESS_1" not in restored, (
+        assert not _NUMBERED_TOKEN.search(restored), (
             f"no numbered token may survive into the caller's response: {scrub(restored)!r}"
         )
 
@@ -297,6 +304,11 @@ def _poll_until_restored(client: GuardrailsClient, key: str, name: str, prompt: 
     The applied-guardrails header is the liveness gate: without it a response
     carrying the raw address would be indistinguishable from one the guardrail
     never touched, and the restore assertion would pass vacuously.
+
+    Polling stops as soon as the model has echoed the line in either form,
+    restored or still carrying a token, because the restore runs per request and
+    a token that survived it is a verdict rather than something a retry fixes.
+    Only a model that never echoed at all is worth waiting out.
     """
     deadline: Final = time.monotonic() + POLL_TIMEOUT
     last = "<no successful response yet>"  # rebind-ok: last-observation accumulator for the failure message
@@ -304,7 +316,7 @@ def _poll_until_restored(client: GuardrailsClient, key: str, name: str, prompt: 
         outcome = client.chat_raw(key, MODEL, prompt, guardrails=[name], max_tokens=MAX_ECHO_TOKENS)
         if outcome.ok and name in outcome.headers.get("x-litellm-applied-guardrails", ""):
             last = _first_content(ChatResponse.model_validate_json(outcome.body))
-            if RAW_EMAIL in last or "EMAIL_ADDRESS" in last:
+            if _ECHOED_THE_LINE.search(last):
                 return last
         else:
             last = f"<guardrail not applied: HTTP {outcome.status_code}>"
@@ -326,11 +338,17 @@ class TestPresidioUnreachableContract:
     ) -> None:
         """A Presidio outage must not degrade into "no masking today".
 
-        The guardrail is pointed at a closed local port so the analyzer call
-        cannot connect. With PII entities configured the guardrail fails closed
-        and the prompt never reaches the model with the address still in it. The
-        error goes straight back to the caller, so it is also asserted to carry
-        neither the raw address nor the endpoint it failed to reach.
+        The guardrail is pointed at a host in the reserved .invalid domain, so
+        the analyzer call fails to resolve immediately. With PII entities
+        configured the guardrail fails closed and the prompt never reaches the
+        model with the address still in it.
+
+        The error goes straight back to the caller, so it is also asserted to
+        carry neither the raw address nor the endpoint it failed to reach. That
+        second assertion is why the unreachable base is a hostname rather than a
+        loopback address: the proxy already rewrites IPs out of error messages,
+        which would make an endpoint-disclosure assertion pass no matter what,
+        and a real deployment is addressed by hostname anyway.
         """
         name: Final = f"e2e-presidio-unreachable-{unique_marker()}"
         _register(
@@ -353,7 +371,11 @@ class TestPresidioUnreachableContract:
         )
         body: Final = scrub(str(outcome))
         assert RAW_EMAIL not in body, f"the failure must not echo the prompt's PII back to the caller: {body}"
+        assert UNREACHABLE_BASE not in body and _UNREACHABLE_HOST not in body, (
+            "the failure must not name the endpoint the guardrail could not reach; on a real deployment "
+            f"that address is a secret and this body is rendered straight back to the caller: {body}"
+        )
         assert "Presidio" in body, (
-            f"the refusal must say the guardrail could not run, or an operator cannot tell an outage "
+            "the refusal must say the guardrail could not run, or an operator cannot tell an outage "
             f"from a model error: {body}"
         )

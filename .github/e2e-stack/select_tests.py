@@ -7,7 +7,8 @@ UNSUPPORTED: Final = re.compile(
     r"^tests/e2e/(ui|claude_code|load)/"
     r"|^tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e\.py$"
     r"|^tests/e2e/batches/test_managed_files_enforcement_e2e\.py$"
-    r"|^tests/e2e/guardrails/test_presidio_.*_e2e\.py$"
+    r"|^tests/e2e/guardrails/test_presidio_masking_e2e\.py$"
+    r"|^tests/e2e/guardrails/test_presidio_contract_e2e\.py$"
 )
 HARNESS: Final = re.compile(
     r"^tests/e2e/[A-Za-z0-9_.-]+\.(py|ini)$"
