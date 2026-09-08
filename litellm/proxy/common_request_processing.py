@@ -2715,7 +2715,7 @@ class ProxyBaseLLMRequestProcessing:
         )
         llm_cost_for_headers: Final = (
             0.0
-            if is_unbilled_non_inference_call_from_params(logging_obj.call_type, logging_obj.litellm_params, response)
+            if is_unbilled_non_inference_call_from_params(logging_obj.call_type, logging_obj.litellm_params)
             else computed_cost_for_headers
         )
         _, request_metadata_bucket = get_or_create_metadata_bucket(self.data)

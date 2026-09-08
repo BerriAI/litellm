@@ -5539,15 +5539,14 @@ class TestNonInferenceCallTypesAreNotBilled:
         assert payload is not None
         assert payload["total_tokens"] == 6000
 
-    def test_reading_a_background_response_is_still_priced(self):
-        """A background create answers queued with no usage at all, so whoever reads the finished
-        job is the first and only caller to see its tokens. Zeroing that read bills the job nothing."""
+    def test_reading_a_background_response_is_free(self):
+        """A completed background response read is free because the cost poller owns its billing."""
         cost = self._logging_obj("aget_responses")._response_cost_calculator(
             result=self._retrieved_response(background=True)
         )
-        assert cost is not None and cost > 0
+        assert cost == 0.0
 
-    def test_reading_a_background_response_reports_usage_in_standard_logging_payload(self):
+    def test_reading_a_background_response_does_not_report_usage_in_standard_logging_payload(self):
         from datetime import datetime
 
         from litellm.litellm_core_utils.litellm_logging import (
@@ -5570,7 +5569,7 @@ class TestNonInferenceCallTypesAreNotBilled:
         )
 
         assert payload is not None
-        assert payload["total_tokens"] == 6000
+        assert payload["total_tokens"] == 0
 
     def test_reading_a_foreground_response_is_still_free(self):
         """Guards the test above against a blanket exemption: an explicit background=false read was

@@ -294,11 +294,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> None:
         """Persist a managed object row, caching it and upserting it in the DB.
 
-        persist_attribution is set only by the batch create, which is the one caller
-        that can speak for the creator; it gates the api_key and request_tags columns
-        that CheckBatchCost bills against, so a later poll or retrieve of the same
-        batch cannot record itself as the paying key. Like created_by and team_id,
-        both are written only in the upsert create branch, never on update.
+        persist_attribution is set by creates that can speak for the creator; it gates
+        the api_key and request_tags columns that cost pollers bill against, so a later
+        poll or retrieve of the same object cannot record itself as the paying key.
+        Like created_by and team_id, both are written only in the upsert create branch,
+        never on update.
 
         create_if_missing is cleared by callers that observe a batch they did not
         create, such as a poll. They still refresh status and file_object, but a

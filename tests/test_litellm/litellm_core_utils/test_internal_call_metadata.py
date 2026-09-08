@@ -3,9 +3,10 @@
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.internal_call_metadata import (
     forwarded_internal_call_metadata,
+    is_unbilled_non_inference_call,
     sanitized_forwardable_call_metadata,
 )
-from litellm.types.utils import SHADOW_EVAL_ROUTER_CALL_ORIGIN
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
 PARENT = {
     "user_api_key": "sk-hash",
@@ -47,6 +48,17 @@ def test_sanitized_forwardable_metadata_keeps_only_identity_and_always_stamps():
     assert sanitized_forwardable_call_metadata({}, SHADOW_EVAL_ROUTER_CALL_ORIGIN) == {
         INTERNAL_CALL_ORIGIN_METADATA_KEY: SHADOW_EVAL_ROUTER_CALL_ORIGIN
     }
+
+
+def test_background_response_reads_are_free_but_cost_poller_reads_are_billed():
+    assert is_unbilled_non_inference_call("aget_responses", {}) is True
+    assert (
+        is_unbilled_non_inference_call(
+            "aget_responses",
+            {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN},
+        )
+        is False
+    )
 
 
 class TestSubCallMetadataSanitization:
