@@ -6,6 +6,7 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    drop_params_env_flag,
     drop_params_flag,
     get_or_create_metadata_bucket,
     map_finish_reason,
@@ -299,6 +300,33 @@ def test_drop_params_flag_treats_non_flag_values_as_off_with_a_warning(value, ca
     with caplog.at_level(logging.WARNING, logger="drop-params-test"):
         assert drop_params_flag(value, "LITELLM_DROP_PARAMS", logging.getLogger("drop-params-test")) is False
     assert f"LITELLM_DROP_PARAMS={value!r} is not a flag value, treating it as off" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "environ, expected",
+    [
+        ({}, False),
+        ({"LITELLM_DROP_PARAMS": ""}, False),
+        ({"LITELLM_DROP_PARAMS": "   "}, False),
+        ({"LITELLM_DROP_PARAMS": "true"}, True),
+        ({"LITELLM_DROP_PARAMS": " False "}, False),
+        ({"LITELLM_DROP_PARAMS": "0"}, False),
+    ],
+)
+def test_drop_params_env_flag_reads_a_flag_without_a_warning(environ, expected, caplog):
+    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
+        assert drop_params_env_flag(environ, logging.getLogger("drop-params-test")) is expected
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize("configured", ["temperature", "temperature,top_p", "enabled"])
+def test_drop_params_env_flag_keeps_a_non_flag_value_on_with_a_warning(configured, caplog):
+    with caplog.at_level(logging.WARNING, logger="drop-params-test"):
+        assert drop_params_env_flag({"LITELLM_DROP_PARAMS": configured}, logging.getLogger("drop-params-test")) is True
+    assert (
+        f"LITELLM_DROP_PARAMS={configured!r} is not a flag value, treating it as on. Set it to true or false"
+        in caplog.text
+    )
 
 
 class TestIsExpectedClientError:

@@ -47,7 +47,7 @@ from typing import (
 )
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm.types.integrations.newrelic import NewRelicInitParams
-from litellm.litellm_core_utils.core_helpers import drop_params_flag
+from litellm.litellm_core_utils.core_helpers import drop_params_env_flag
 from litellm._logging import (
     set_verbose,
     _turn_on_debug,
@@ -239,7 +239,7 @@ token: Optional[str] = (
 )
 telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
-drop_params = drop_params_flag(os.getenv("LITELLM_DROP_PARAMS"), "LITELLM_DROP_PARAMS", verbose_logger)
+drop_params = drop_params_env_flag(os.environ, verbose_logger)
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)

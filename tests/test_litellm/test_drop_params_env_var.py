@@ -15,7 +15,7 @@ def _import_litellm_with(configured: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize("configured, expected", [("false", "False"), ("true", "True")])
+@pytest.mark.parametrize("configured, expected", [("false", "False"), ("true", "True"), ("", "False")])
 def test_litellm_drop_params_env_var_is_parsed_as_a_flag(configured, expected):
     result = _import_litellm_with(configured)
 
@@ -23,8 +23,11 @@ def test_litellm_drop_params_env_var_is_parsed_as_a_flag(configured, expected):
     assert "is not a flag value" not in result.stderr
 
 
-def test_litellm_drop_params_env_var_non_flag_value_is_off_with_a_warning():
+def test_litellm_drop_params_env_var_non_flag_value_stays_on_with_a_warning():
     result = _import_litellm_with("temperature")
 
-    assert result.stdout.strip() == "False"
-    assert "LITELLM_DROP_PARAMS='temperature' is not a flag value, treating it as off" in result.stderr
+    assert result.stdout.strip() == "True"
+    assert (
+        "LITELLM_DROP_PARAMS='temperature' is not a flag value, treating it as on. Set it to true or false"
+        in result.stderr
+    )
