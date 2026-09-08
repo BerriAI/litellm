@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from litellm.exceptions import APIError
+from litellm.exceptions import APIError, InternalServerError
 from litellm.rust_bridge import bindings, runtime
 
 
@@ -62,6 +62,22 @@ def test_invoke_translates_upstream_without_fallback() -> None:
         )
 
     assert caught.value.status_code == 429
+
+
+def test_invoke_translates_internal_server_error_without_fallback() -> None:
+    def fail() -> object:
+        raise RustUpstreamError(500, "provider unavailable")
+
+    with pytest.raises(InternalServerError, match="provider unavailable") as caught:
+        runtime.invoke(
+            native_call=fail,
+            fallback=lambda: pytest.fail("fallback must not run"),
+            adapt=str,
+            mode=runtime.FallbackMode.PYTHON,
+            context=context(),
+        )
+
+    assert caught.value.status_code == 500
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Final, Generic, NoReturn, TypeAlias, TypeVar
 
-from litellm.exceptions import APIError
+from litellm.exceptions import APIError, InternalServerError
 from litellm.rust_bridge.bindings import native_exception_types
 
 NativeT = TypeVar("NativeT")
@@ -142,6 +142,12 @@ def raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoRetur
     message_value: Final = args[1] if len(args) > 1 else str(error)
     status: Final = status_value if isinstance(status_value, int) else 0
     message: Final = message_value if isinstance(message_value, str) else str(message_value)
+    if status == 500:
+        raise InternalServerError(
+            message=f"litellm rust {context.route}: {message}",
+            llm_provider=context.provider,
+            model=context.model,
+        ) from error
     raise APIError(
         status_code=status or 500,
         message=f"litellm rust {context.route}: {message}",

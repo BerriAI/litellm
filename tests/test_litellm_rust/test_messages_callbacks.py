@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import json
 import threading
 from typing import Final
 
@@ -171,7 +170,6 @@ async def test_messages_logging_drain_waits_for_suspended_callback(messages_serv
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="accepted native Messages errors are replayed through the Python transport")
 async def test_messages_failure_callbacks_receive_original_provider_error(messages_server: RecordingServer) -> None:
     messages_server.default_response = ResponseSpec(body={"error": {"message": "provider unavailable"}}, status=500)
     messages_server.expected_requests = None

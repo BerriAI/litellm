@@ -62,14 +62,7 @@ async def test_generic_api_logger_exports_success_over_http(route: Route, provid
     "route",
     (
         OCR_ASYNC,
-        pytest.param(
-            MESSAGES_ROUTE,
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=pytest.fail.Exception,
-                reason="Native Messages provider failure raises TypeError and falls back to a second Python request",
-            ),
-        ),
+        MESSAGES_ROUTE,
     ),
     ids=route_id,
 )
