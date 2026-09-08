@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use litellm_core::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
+use litellm_core::lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use serde_json::{Map, Value};
 
 use litellm_core::integrations::custom_guardrail::CustomGuardrail;

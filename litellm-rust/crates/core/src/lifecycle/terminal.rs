@@ -39,6 +39,16 @@ impl RouteProjection {
             | Self::ResponsesWs { value } => value,
         }
     }
+
+    fn logging_input(&self) -> Option<Value> {
+        match self {
+            Self::Messages { value } | Self::ChatCompletions { value } => Some(value.clone()),
+            Self::Ocr { .. }
+            | Self::Audio { .. }
+            | Self::Realtime { .. }
+            | Self::ResponsesWs { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -59,10 +69,7 @@ pub struct TerminalRecord {
 impl From<&TerminalRecord> for StandardLoggingPayload {
     fn from(record: &TerminalRecord) -> Self {
         Self {
-            id: record
-                .trace_id
-                .clone()
-                .unwrap_or_else(|| record.call_id.clone()),
+            id: record.call_id.clone(),
             litellm_call_id: record.call_id.clone(),
             call_type: record.call_type.clone(),
             model: record.model.clone(),
@@ -78,7 +85,7 @@ impl From<&TerminalRecord> for StandardLoggingPayload {
                 RouteProjection::Realtime { .. } | RouteProjection::ResponsesWs { .. }
             ),
             metadata: record.cost_inputs.metadata.clone(),
-            messages: Some(record.projection.value().clone()),
+            messages: record.projection.logging_input(),
         }
     }
 }
@@ -143,11 +150,11 @@ mod tests {
         let payload = StandardLoggingPayload::from(&record);
         let details = ModelCallDetails::from(&record);
 
-        assert_eq!(payload.id, "trace-1");
+        assert_eq!(payload.id, "call-1");
         assert_eq!(payload.litellm_call_id, "call-1");
         assert_eq!(payload.prompt_tokens, 3);
         assert_eq!(payload.response_cost, 0.25);
-        assert_eq!(payload.messages, Some(record.projection.value().clone()));
+        assert_eq!(payload.messages, None);
         assert_eq!(
             details.standard_logging_payload.unwrap().litellm_call_id,
             "call-1"

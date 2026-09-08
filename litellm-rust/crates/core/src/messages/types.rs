@@ -5,12 +5,12 @@ use serde_json::{Map, Value};
 
 use super::transformation::AnthropicMessagesProviderConfig;
 
-pub struct MessagesRequest<'a> {
-    pub model: &'a str,
+pub struct MessagesRequest {
+    pub model: String,
     pub body: Value,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
-    pub custom_llm_provider: Option<&'a str>,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub custom_llm_provider: Option<String>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
 }

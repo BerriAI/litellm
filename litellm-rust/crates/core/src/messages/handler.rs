@@ -9,7 +9,7 @@ use super::types::{AnthropicMessagesResponse, MessagesRequest};
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub(super) async fn execute_messages_provider_call(
-    request: MessagesRequest<'_>,
+    request: MessagesRequest,
 ) -> Result<AnthropicMessagesResponse, Error> {
     let request = prepare_provider_request(request)?;
     let mut request_builder = http_client().post(&request.url).json(&request.body);
@@ -43,7 +43,7 @@ pub(super) async fn execute_messages_provider_call(
 }
 
 pub(super) async fn execute_messages_provider_stream(
-    request: MessagesRequest<'_>,
+    request: MessagesRequest,
 ) -> Result<reqwest::Response, Error> {
     let request = prepare_provider_request(request)?;
     if request.provider != ANTHROPIC_MESSAGES_PROVIDER {

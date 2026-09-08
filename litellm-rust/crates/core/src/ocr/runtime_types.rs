@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleRequest};
+use crate::lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use crate::ocr::transformation::OcrProviderConfig;
 use serde_json::{Map, Value};
 

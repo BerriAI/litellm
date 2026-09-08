@@ -1,5 +1,7 @@
-use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
 use crate::error::Error;
+use crate::lifecycle::{
+    ActionResult, CallLifecycleContext, RequestPolicy, TerminalDispatcher, TerminalRecord,
+};
 use crate::providers::reducto::ocr::transformation::{
     build_upload_request, extract_document_source, extract_upload_file_id,
 };
@@ -13,12 +15,8 @@ use super::runtime_types::{PreparedOcrRequest, ProviderOcrRequest};
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{
-    CallType, CallbackTiming, CallbackValue, CustomLoggerRunner, LoggingError, ModelCallDetails,
-};
-use crate::integrations::types::{
-    RequestMetadata, StandardLoggingMetadata, StandardLoggingPayload,
-};
+use crate::integrations::custom_logger::{CallType, CustomLoggerRunner, LogFuture};
+use crate::integrations::types::RequestMetadata;
 
 pub(crate) struct OcrLifecycleHooks {
     logger_runner: CustomLoggerRunner,
@@ -26,8 +24,7 @@ pub(crate) struct OcrLifecycleHooks {
     request_metadata: RequestMetadata,
 }
 
-type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
-type OcrLogFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = ActionResult<T, Error>> + Send + 'a>>;
 
 impl OcrLifecycleHooks {
     pub(crate) fn new(
@@ -157,33 +154,6 @@ impl OcrLifecycleHooks {
         parse_ocr_during_call_guardrail_request(guardrail_request)
     }
 
-    fn standard_logging_payload(
-        &self,
-        context: &CallLifecycleContext,
-        timing: &CallLifecycleTiming,
-    ) -> StandardLoggingPayload {
-        StandardLoggingPayload {
-            id: context.litellm_call_id.clone(),
-            litellm_call_id: context.litellm_call_id.clone(),
-            call_type: context.call_type.clone(),
-            model: context.model.clone(),
-            custom_llm_provider: context.custom_llm_provider.clone(),
-            response_cost: 0.0,
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            total_tokens: 0,
-            start_time: timing.start_time,
-            end_time: timing.end_time,
-            stream: false,
-            metadata: StandardLoggingMetadata {
-                user_api_key_hash: self.request_metadata.user_api_key_hash.clone(),
-                user_api_key_user_id: self.request_metadata.user_api_key_user_id.clone(),
-                user_api_key_team_id: self.request_metadata.user_api_key_team_id.clone(),
-                ..Default::default()
-            },
-            messages: None,
-        }
-    }
 }
 
 async fn upload_reducto_document(
@@ -243,18 +213,21 @@ async fn upload_reducto_document(
     Ok(json!({"type": "document_url", "document_url": file_id}))
 }
 
-impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLifecycleHooks {
+impl RequestPolicy<PreparedOcrRequest, PreparedOcrRequest> for OcrLifecycleHooks {
     type PreCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
     type DuringCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
-    type SuccessFuture<'a> = OcrLogFuture<'a>;
-    type FailureFuture<'a> = OcrLogFuture<'a>;
 
     fn async_pre_call_hook<'a>(
         &'a self,
         _context: &'a CallLifecycleContext,
         request: PreparedOcrRequest,
     ) -> Self::PreCallFuture<'a> {
-        Box::pin(async move { self.run_pre_call_guardrails(request).await })
+        Box::pin(async move {
+            match self.run_pre_call_guardrails(request).await {
+                Ok(request) => ActionResult::Replace(request),
+                Err(error) => ActionResult::Reject(error),
+            }
+        })
     }
 
     fn async_during_call_hook<'a>(
@@ -262,76 +235,24 @@ impl CallLifecycleHooks<PreparedOcrRequest, PreparedOcrRequest, Value> for OcrLi
         _context: &'a CallLifecycleContext,
         request: PreparedOcrRequest,
     ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
+        Box::pin(async move { ActionResult::Continue(request) })
     }
+}
 
-    #[tracing::instrument(
-        name = "success_callback",
-        target = "litellm::function_trace",
-        level = "trace",
-        skip_all
-    )]
-    fn async_log_success_event<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        response: &'a Value,
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::SuccessFuture<'a> {
-        Box::pin(async move {
-            if self.logger_runner.is_empty() {
-                return;
-            }
-            let response_obj = CallbackValue::new("ocr", response.clone());
-            self.logger_runner
-                .async_log_success_event(
-                    &ModelCallDetails::from_standard_logging_payload(
-                        self.standard_logging_payload(context, timing),
-                    ),
-                    &response_obj,
-                    CallbackTiming::new(timing.start_time, timing.end_time),
-                )
-                .await;
-        })
+impl TerminalDispatcher for OcrLifecycleHooks {
+    fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
+        let mut terminal = terminal.clone();
+        terminal.cost_inputs.metadata = request_metadata(&self.request_metadata);
+        Box::pin(async move { self.logger_runner.dispatch(&terminal).await })
     }
+}
 
-    #[tracing::instrument(
-        name = "failure_callback",
-        target = "litellm::function_trace",
-        level = "trace",
-        skip_all
-    )]
-    fn async_log_failure_event<'a>(
-        &'a self,
-        context: &'a CallLifecycleContext,
-        error: &'a Error,
-        timing: &'a CallLifecycleTiming,
-    ) -> Self::FailureFuture<'a> {
-        Box::pin(async move {
-            if self.logger_runner.is_empty() {
-                return;
-            }
-            let logging_error = LoggingError {
-                message: error.to_string(),
-                kind: core_error_kind(error).to_string(),
-            };
-            let response_obj = CallbackValue::new(
-                "error",
-                json!({
-                    "message": logging_error.message,
-                    "kind": logging_error.kind,
-                }),
-            );
-            self.logger_runner
-                .async_log_failure_event(
-                    &ModelCallDetails::from_standard_logging_payload(
-                        self.standard_logging_payload(context, timing),
-                    )
-                    .with_failure_error(logging_error),
-                    Some(&response_obj),
-                    CallbackTiming::new(timing.start_time, timing.end_time),
-                )
-                .await;
-        })
+fn request_metadata(metadata: &RequestMetadata) -> crate::integrations::types::StandardLoggingMetadata {
+    crate::integrations::types::StandardLoggingMetadata {
+        user_api_key_hash: metadata.user_api_key_hash.clone(),
+        user_api_key_user_id: metadata.user_api_key_user_id.clone(),
+        user_api_key_team_id: metadata.user_api_key_team_id.clone(),
+        ..Default::default()
     }
 }
 

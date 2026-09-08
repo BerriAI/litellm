@@ -34,7 +34,7 @@ async fn handle(
     Json(body): Json<Value>,
 ) -> Result<Response, MessagesRouteError> {
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run(&state.router, body, extra_headers)
+    match service::run(&state.router, state.loggers, body, extra_headers)
         .await
         .map_err(MessagesRouteError::from)?
     {

@@ -228,11 +228,7 @@ mod tests {
                     "atranscription",
                     "(model, audio, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
                 ),
-                (
-                    "messages",
-                    "amessages",
-                    "(model, body, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None)",
-                ),
+                ("messages", "amessages", "(arguments)"),
                 (
                     "chat_completions",
                     "achat_completions",
@@ -277,23 +273,30 @@ mod tests {
 
             assert_eq!(
                 sync_chat_error.to_string(),
-                "ValueError: messages must be a list"
+                "TypeError: messages must be a list"
             );
             assert_eq!(async_chat_error.to_string(), sync_chat_error.to_string());
 
             let invalid_body = PyList::empty(py);
+            let invalid_arguments = PyDict::new(py);
+            invalid_arguments
+                .set_item("model", "model")
+                .expect("arguments should accept model");
+            invalid_arguments
+                .set_item("body", &invalid_body)
+                .expect("arguments should accept body");
             let sync_messages_error = module
                 .getattr("messages")
-                .and_then(|function| function.call1(("model", &invalid_body)))
+                .and_then(|function| function.call1((&invalid_arguments,)))
                 .expect_err("sync Messages should reject a non-dict body");
             let async_messages_error = module
                 .getattr("amessages")
-                .and_then(|function| function.call1(("model", &invalid_body)))
+                .and_then(|function| function.call1((&invalid_arguments,)))
                 .expect_err("async Messages should reject a non-dict body");
 
             assert_eq!(
                 sync_messages_error.to_string(),
-                "ValueError: body must be a dict"
+                "TypeError: body must be a dict"
             );
             assert_eq!(
                 async_messages_error.to_string(),
@@ -320,7 +323,7 @@ mod tests {
 
                 assert_eq!(
                     sync_error.to_string(),
-                    "ValueError: extra_headers must be a dict"
+                    "TypeError: extra_headers must be a dict"
                 );
                 assert_eq!(async_error.to_string(), sync_error.to_string());
             }
@@ -349,7 +352,7 @@ mod tests {
                     function.call(("model", &invalid_messages), Some(&chat_kwargs))
                 })
                 .expect_err("messages should be validated first");
-            assert_eq!(error.to_string(), "ValueError: messages must be a list");
+            assert_eq!(error.to_string(), "TypeError: messages must be a list");
 
             let valid_messages = PyList::empty(py);
             let error = module
@@ -358,7 +361,7 @@ mod tests {
                 .expect_err("optional_params should be validated before headers");
             assert_eq!(
                 error.to_string(),
-                "ValueError: optional_params must be a dict"
+                "TypeError: optional_params must be a dict"
             );
 
             let headers_kwargs = PyDict::new(py);
@@ -366,11 +369,21 @@ mod tests {
                 .set_item("extra_headers", &invalid)
                 .expect("kwargs should accept extra_headers");
             let invalid_body = PyList::empty(py);
+            let invalid_arguments = PyDict::new(py);
+            invalid_arguments
+                .set_item("model", "model")
+                .expect("arguments should accept model");
+            invalid_arguments
+                .set_item("body", &invalid_body)
+                .expect("arguments should accept body");
+            invalid_arguments
+                .set_item("extra_headers", &invalid)
+                .expect("arguments should accept extra_headers");
             let error = module
                 .getattr("messages")
-                .and_then(|function| function.call(("model", &invalid_body), Some(&headers_kwargs)))
+                .and_then(|function| function.call1((&invalid_arguments,)))
                 .expect_err("body should be validated before headers");
-            assert_eq!(error.to_string(), "ValueError: body must be a dict");
+            assert_eq!(error.to_string(), "TypeError: body must be a dict");
 
             let invalid_payload =
                 PyModule::new(py, "invalid_payload").expect("invalid payload should be created");

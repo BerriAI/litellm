@@ -55,7 +55,7 @@ async def aocr(arguments: dict[str, object]) -> OCRResponse:
     return await implementation(arguments)
 
 
-def initialize_logging(arguments: dict[str, object], asynchronous: bool) -> object:
+def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: str = "ocr") -> object:
     import litellm
     from litellm import utils
     from litellm.integrations.custom_logger import CustomLogger
@@ -155,7 +155,7 @@ def initialize_logging(arguments: dict[str, object], asynchronous: bool) -> obje
         model=str(arguments["model"]),
         messages="default-message-value",
         stream=False,
-        call_type="aocr" if asynchronous else "ocr",
+        call_type=f"a{route}" if asynchronous else route,
         start_time=datetime.now(),  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
         litellm_call_id=call_id,
         function_id=str(arguments.get("id") or ""),

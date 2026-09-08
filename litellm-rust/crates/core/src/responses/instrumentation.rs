@@ -6,7 +6,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::Error;
-use crate::call_lifecycle::{CallLifecycleContext, CallLifecycleHooks, CallLifecycleTiming};
+use crate::integrations::custom_logger::{LogError, LogFuture};
+use crate::lifecycle::{
+    ActionResult, CallLifecycleContext, RequestPolicy, TerminalDispatcher, TerminalRecord,
+};
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -205,20 +208,18 @@ impl ResponsesWsInstrumentation {
     }
 }
 
-type LifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
+type LifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = ActionResult<T, Error>> + Send + 'a>>;
 
-impl CallLifecycleHooks<(), (), ()> for ResponsesWsInstrumentation {
+impl RequestPolicy<(), ()> for ResponsesWsInstrumentation {
     type PreCallFuture<'a> = LifecycleFuture<'a, ()>;
     type DuringCallFuture<'a> = LifecycleFuture<'a, ()>;
-    type SuccessFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
-    type FailureFuture<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 
     fn async_pre_call_hook<'a>(
         &'a self,
         _context: &'a CallLifecycleContext,
         request: (),
     ) -> Self::PreCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
+        Box::pin(async move { ActionResult::Continue(request) })
     }
 
     fn async_during_call_hook<'a>(
@@ -226,34 +227,21 @@ impl CallLifecycleHooks<(), (), ()> for ResponsesWsInstrumentation {
         _context: &'a CallLifecycleContext,
         request: (),
     ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { Ok(request) })
+        Box::pin(async move { ActionResult::Continue(request) })
     }
+}
 
-    fn async_log_success_event<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        _response: &'a (),
-        _timing: &'a CallLifecycleTiming,
-    ) -> Self::SuccessFuture<'a> {
+impl TerminalDispatcher for ResponsesWsInstrumentation {
+    fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
         Box::pin(async move {
-            let outcome = self.success_outcome();
+            let outcome = match terminal.classification {
+                crate::lifecycle::TerminalClassification::Success => self.success_outcome(),
+                crate::lifecycle::TerminalClassification::Failure { .. } => self.failure_outcome(),
+            };
             if let Ok(mut state) = self.state.lock() {
                 state.outcome = Some(outcome);
             }
-        })
-    }
-
-    fn async_log_failure_event<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        _error: &'a Error,
-        _timing: &'a CallLifecycleTiming,
-    ) -> Self::FailureFuture<'a> {
-        Box::pin(async move {
-            let outcome = self.failure_outcome();
-            if let Ok(mut state) = self.state.lock() {
-                state.outcome = Some(outcome);
-            }
+            Ok::<(), LogError>(())
         })
     }
 }
@@ -332,9 +320,9 @@ mod tests {
     async fn lifecycle_records_success_outcome_for_provider_completion() {
         let instrumentation =
             ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
-        let result = crate::call_lifecycle::CallLifecycle::default()
+        let result = crate::lifecycle::CallLifecycle
             .run(
-                crate::call_lifecycle::CallLifecycleContext::new(
+                crate::lifecycle::CallLifecycleContext::new(
                     "responses_websocket",
                     "gpt-5",
                     "openai",
@@ -346,7 +334,10 @@ mod tests {
             )
             .await;
 
-        assert!(result.is_ok());
+        assert!(matches!(
+            result,
+            crate::lifecycle::ExecutedCall::Success { .. }
+        ));
         assert!(matches!(
             instrumentation.take_outcome(),
             Some(ResponsesWsLogOutcome::Success { .. })

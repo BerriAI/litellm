@@ -132,7 +132,7 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
     });
 
     let response = messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-5".into(),
         body: json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 1024,
@@ -145,9 +145,9 @@ async fn messages_round_trip_builds_azure_request_and_passes_response_through() 
                 }]
             }]
         }),
-        api_key: Some("sk-azure"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
+        api_key: Some("sk-azure".into()),
+        api_base: Some(format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai".into()),
         extra_headers: None,
         timeout: Some(Duration::from_secs(5)),
     })
@@ -195,15 +195,15 @@ async fn messages_round_trip_builds_native_anthropic_request() {
     });
 
     let response = messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-5".into(),
         body: json!({
             "model": "claude-sonnet-4-5",
             "max_tokens": 1024,
             "messages": [{"role": "user", "content": "hi"}]
         }),
-        api_key: Some("sk-ant"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("anthropic"),
+        api_key: Some("sk-ant".into()),
+        api_base: Some(format!("http://{addr}")),
+        custom_llm_provider: Some("anthropic".into()),
         extra_headers: None,
         timeout: Some(Duration::from_secs(5)),
     })
@@ -252,11 +252,11 @@ async fn messages_does_not_duplicate_auth_when_x_api_key_supplied() {
     );
 
     messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-5".into(),
         body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
-        api_key: Some("rust-fallback-key"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
+        api_key: Some("rust-fallback-key".into()),
+        api_base: Some(format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai".into()),
         extra_headers: Some(headers),
         timeout: Some(Duration::from_secs(5)),
     })
@@ -306,11 +306,11 @@ async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
     );
 
     messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-5".into(),
         body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
         api_key: None,
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
+        api_base: Some(format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai".into()),
         extra_headers: Some(headers),
         timeout: Some(Duration::from_secs(5)),
     })
@@ -330,11 +330,11 @@ async fn messages_forwards_entra_id_bearer_without_requiring_api_key() {
 #[tokio::test]
 async fn messages_requires_auth_when_no_key_and_no_header() {
     let err = messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-5".into(),
         body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
         api_key: None,
-        api_base: Some("http://127.0.0.1:1"),
-        custom_llm_provider: Some("azure_ai"),
+        api_base: Some("http://127.0.0.1:1".into()),
+        custom_llm_provider: Some("azure_ai".into()),
         extra_headers: None,
         timeout: Some(Duration::from_millis(50)),
     })
@@ -368,11 +368,11 @@ async fn messages_ignores_malformed_authorization_and_uses_api_key() {
     );
 
     messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-5".into(),
         body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
-        api_key: Some("sk-azure"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
+        api_key: Some("sk-azure".into()),
+        api_base: Some(format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai".into()),
         extra_headers: Some(headers),
         timeout: Some(Duration::from_secs(5)),
     })
@@ -409,11 +409,11 @@ async fn messages_maps_provider_error_status_to_http_error() {
     });
 
     let err = messages(MessagesRequest {
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-5".into(),
         body: json!({"model": "claude-sonnet-4-5", "max_tokens": 8, "messages": []}),
-        api_key: Some("sk-azure"),
-        api_base: Some(&format!("http://{addr}")),
-        custom_llm_provider: Some("azure_ai"),
+        api_key: Some("sk-azure".into()),
+        api_base: Some(format!("http://{addr}")),
+        custom_llm_provider: Some("azure_ai".into()),
         extra_headers: None,
         timeout: Some(Duration::from_secs(5)),
     })
@@ -426,11 +426,11 @@ async fn messages_maps_provider_error_status_to_http_error() {
 #[tokio::test]
 async fn messages_rejects_unsupported_provider() {
     let err = messages(MessagesRequest {
-        model: "claude-3-5-sonnet",
+        model: "claude-3-5-sonnet".into(),
         body: json!({"model": "claude-3-5-sonnet", "max_tokens": 8, "messages": []}),
-        api_key: Some("sk"),
-        api_base: Some("http://127.0.0.1:1"),
-        custom_llm_provider: Some("openai"),
+        api_key: Some("sk".into()),
+        api_base: Some("http://127.0.0.1:1".into()),
+        custom_llm_provider: Some("openai".into()),
         extra_headers: None,
         timeout: Some(Duration::from_millis(50)),
     })

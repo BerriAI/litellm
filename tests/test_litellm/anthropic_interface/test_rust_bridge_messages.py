@@ -40,25 +40,9 @@ class RecordingMessages:
 
     def __call__(
         self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
+        arguments: dict[str, object],
     ) -> dict[str, object]:
-        self.calls.append(
-            {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
-            }
-        )
+        self.calls.append(arguments)
         return dict(FAKE_MESSAGES_RESPONSE)
 
 
@@ -68,25 +52,9 @@ class RecordingAsyncMessages:
 
     async def __call__(
         self,
-        model: str,
-        body: dict[str, object],
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: dict[str, object] | None,
-        timeout_seconds: float | None,
+        arguments: dict[str, object],
     ) -> dict[str, object]:
-        self.calls.append(
-            {
-                "model": model,
-                "body": body,
-                "api_key": api_key,
-                "api_base": api_base,
-                "custom_llm_provider": custom_llm_provider,
-                "extra_headers": extra_headers,
-                "timeout_seconds": timeout_seconds,
-            }
-        )
+        self.calls.append(arguments)
         return dict(FAKE_MESSAGES_RESPONSE)
 
 

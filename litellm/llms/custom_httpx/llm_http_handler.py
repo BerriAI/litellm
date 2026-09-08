@@ -2243,16 +2243,6 @@ class BaseLLMHTTPHandler:
         # internally -- this only deduplicates the success path.
         request_body_json: Final = json.dumps(request_body)
 
-        logging_obj.pre_call(
-            input=[{"role": "user", "content": request_body_json}],
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": str(request_url),
-                "headers": headers,
-            },
-        )
-
         rust_messages_response: Final = await self._maybe_rust_anthropic_messages(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
@@ -2267,6 +2257,12 @@ class BaseLLMHTTPHandler:
                 stream=stream or False,
                 custom_llm_provider=custom_llm_provider,
             ),
+            arguments={
+                **kwargs,
+                "messages": messages,
+                "litellm_logging_obj": logging_obj,
+                "litellm_params": litellm_params,
+            },
         )
         if rust_messages_response is not None:
             if stream:
@@ -2282,6 +2278,16 @@ class BaseLLMHTTPHandler:
                 api_key=api_key,
                 kwargs=kwargs,
             )
+
+        logging_obj.pre_call(
+            input=[{"role": "user", "content": request_body_json}],
+            api_key="",
+            additional_args={
+                "complete_input_dict": request_body,
+                "api_base": str(request_url),
+                "headers": headers,
+            },
+        )
 
         response: Final = await self._async_post_anthropic_messages_with_http_error_retry(
             async_httpx_client=async_httpx_client,
@@ -2423,6 +2429,7 @@ class BaseLLMHTTPHandler:
         headers: dict,
         request_body: dict,
         timeout: float | httpx.Timeout | None,
+        arguments: dict[str, object] | None = None,
     ) -> AnthropicMessagesResponse | None:
         if custom_llm_provider not in ("azure_ai", "anthropic"):
             return None
@@ -2438,6 +2445,7 @@ class BaseLLMHTTPHandler:
         upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
         try:
             rust_response: Final = await rust_messages_bridge.amessages(
+                arguments=arguments or {},
                 model=model,
                 body=upstream_body,
                 api_key=api_key,

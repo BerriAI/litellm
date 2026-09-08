@@ -78,6 +78,19 @@ where
     })
 }
 
+pub fn run_async_py<T, F>(py: Python<'_>, future: F) -> PyResult<Bound<'_, PyAny>>
+where
+    T: for<'py> IntoPyObject<'py> + Send + 'static,
+    F: Future<Output = PyResult<T>> + Send + 'static,
+{
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        AssertUnwindSafe(future)
+            .catch_unwind()
+            .await
+            .map_err(panic_to_pyerr)?
+    })
+}
+
 pub async fn run_async_value<T, E, F>(future: F, map_error: fn(E) -> PyErr) -> PyResult<T>
 where
     T: Send + 'static,
@@ -190,6 +203,15 @@ mod tests {
             },
             runtime_error,
         )
+    }
+
+    #[pyfunction]
+    fn async_py_panic(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+        run_async_py(py, async move {
+            panic!("ordinary async future panicked");
+            #[allow(unreachable_code)]
+            Ok(true)
+        })
     }
 
     #[pyfunction]
@@ -453,6 +475,40 @@ asyncio.run(exercise())
             .expect("Python source should not contain null bytes");
             py.run(&code, Some(&locals), Some(&locals))
                 .expect("result delivery should leave Tokio workers responsive");
+        });
+    }
+
+    #[test]
+    fn ordinary_async_runner_maps_panics() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "runtime").expect("module should be created");
+            module
+                .add_function(
+                    wrap_pyfunction!(async_py_panic, &module).expect("function should wrap"),
+                )
+                .expect("function should register");
+            let locals = PyDict::new(py);
+            locals.set_item("runtime", &module).unwrap();
+            py.run(
+                c"
+import asyncio
+
+async def exercise():
+    try:
+        await runtime.async_py_panic()
+    except BaseException as error:
+        assert type(error).__name__ == 'PanicException'
+        assert str(error) == 'ordinary async future panicked'
+    else:
+        raise AssertionError('panic was not raised')
+
+asyncio.run(exercise())
+",
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
         });
     }
 }

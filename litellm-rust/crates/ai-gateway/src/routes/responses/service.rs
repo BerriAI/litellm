@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use futures_util::{Sink, Stream};
 use litellm_core::Error;
-use litellm_core::call_lifecycle::{CallLifecycle, CallLifecycleContext};
+use litellm_core::lifecycle::{CallLifecycle, CallLifecycleContext};
 use litellm_core::responses::instrumentation::{
     ResponsesWsCallbackPayload, ResponsesWsInstrumentation, ResponsesWsLogOutcome,
     ResponsesWsMetadata,
@@ -57,7 +57,7 @@ where
     let observer_instrumentation = Arc::clone(&instrumentation);
     let context = CallLifecycleContext::new("responses_websocket", model, "openai", call_id);
     let result = CallLifecycle::default()
-        .run(context, (), instrumentation.as_ref(), |_| async move {
+        .run_result(context, (), instrumentation.as_ref(), |_| async move {
             crate::io::responses_ws::async_responses_websocket(
                 provider_model,
                 params.api_key.as_deref(),

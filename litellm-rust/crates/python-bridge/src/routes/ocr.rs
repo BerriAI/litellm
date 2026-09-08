@@ -330,9 +330,11 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
     let request = decode_request(py, bag)?;
     let model = request.model.clone();
     let custom_llm_provider = request.custom_llm_provider.clone();
-    let prepared = litellm_core::ocr::prepare::prepare(request).map_err(|error| {
-        request_error_to_pyerr(py, error, &model, custom_llm_provider.as_deref())
-    })?;
+    let prepared = py
+        .detach(|| litellm_core::ocr::prepare::prepare(request))
+        .map_err(|error| {
+            request_error_to_pyerr(py, error, &model, custom_llm_provider.as_deref())
+        })?;
     let document = bag
         .get_item("document")?
         .ok_or_else(|| PyValueError::new_err("OCR requires document"))?
@@ -341,9 +343,11 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
         .into_bound(py)
         .cast_into::<PyDict>()?;
     match prepared.document_projection {
-        OcrDocumentProjection::RetainedDocument => body.set_item("document", &document)?,
+        OcrDocumentProjection::RetainedDocument => {
+            body.set_item(pyo3::intern!(py, "document"), &document)?
+        }
         OcrDocumentProjection::ShallowCopyDocument => {
-            body.set_item("document", document.copy()?)?
+            body.set_item(pyo3::intern!(py, "document"), document.copy()?)?
         }
         OcrDocumentProjection::Transformed => {}
     }
@@ -364,7 +368,10 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
         .call1((bag, asynchronous))?;
     let litellm_params = PyDict::new(py);
     litellm_params.set_item("litellm_call_id", bag.get_item("litellm_call_id")?)?;
-    litellm_params.set_item("api_base", bag.get_item("api_base")?)?;
+    litellm_params.set_item(
+        pyo3::intern!(py, "api_base"),
+        bag.get_item(pyo3::intern!(py, "api_base"))?,
+    )?;
     let update = PyDict::new(py);
     update.set_item("kwargs", bag)?;
     update.set_item("model", &prepared.model)?;
@@ -375,13 +382,13 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
 
     let additional_args = PyDict::new(py);
     additional_args.set_item("complete_input_dict", &body)?;
-    additional_args.set_item("api_base", &prepared.url)?;
-    additional_args.set_item("headers", &headers)?;
+    additional_args.set_item(pyo3::intern!(py, "api_base"), &prepared.url)?;
+    additional_args.set_item(pyo3::intern!(py, "headers"), &headers)?;
     let pre_call = PyDict::new(py);
     pre_call.set_item("input", "OCR document processing")?;
     pre_call.set_item("api_key", bag.get_item("api_key")?)?;
     pre_call.set_item("additional_args", additional_args)?;
-    logging.call_method("pre_call", (), Some(&pre_call))?;
+    logging.call_method(pyo3::intern!(py, "pre_call"), (), Some(&pre_call))?;
 
     let logging = logging.unbind();
     Py::new(
@@ -427,7 +434,7 @@ fn request(py: Python<'_>, state: &Py<OcrState>) -> PyResult<OcrWireRequest> {
 #[pyfunction]
 fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
     let (prepared, headers, body) = request(py, &state)?;
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+    litellm_python_interop::run_async_py(py, async move {
         let _state = state;
         let model = prepared.model.clone();
         let provider = prepared.custom_llm_provider.clone();
@@ -443,17 +450,20 @@ fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
 
 #[pyfunction]
 fn finish(py: Python<'_>, response: Py<PyDict>) -> PyResult<Py<PyAny>> {
-    let fields = response.bind(py);
-    let native_response = fields.get_item("provider_native_response")?;
+    let fields = response.bind(py).copy()?;
+    let native_response = fields.get_item(pyo3::intern!(py, "provider_native_response"))?;
     if native_response.is_some() {
-        fields.del_item("provider_native_response")?;
+        fields.del_item(pyo3::intern!(py, "provider_native_response"))?;
     }
     let response = py
         .import("litellm.llms.base_llm.ocr.transformation")?
         .getattr("OCRResponse")?
-        .call((), Some(fields))?;
+        .call((), Some(&fields))?;
     if let Some(native_response) = native_response.filter(|value| !value.is_none()) {
-        response.call_method1("set_provider_native_response", (native_response,))?;
+        response.call_method1(
+            pyo3::intern!(py, "set_provider_native_response"),
+            (native_response,),
+        )?;
     }
     Ok(response.unbind())
 }
@@ -484,7 +494,7 @@ fn ocr(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
 
 #[pyfunction]
 fn aocr(py: Python<'_>, arguments: Py<PyDict>) -> PyResult<Bound<'_, PyAny>> {
-    driver(py)?.getattr("drive")?.call1((arguments,))
+    driver(py)?.getattr("drive_async")?.call1((arguments,))
 }
 
 // Compilation can re-enter through audit hooks; publish only a finished module.
@@ -493,9 +503,10 @@ fn driver(py: Python<'_>) -> PyResult<&Bound<'_, PyModule>> {
     if let Some(module) = DRIVER.get(py) {
         return Ok(module.bind(py));
     }
-    let module = PyModule::from_code(
+    let module = crate::driver::compile(
         py,
-        c"from datetime import datetime
+        "ocr",
+        "from datetime import datetime
 from litellm import utils
 from litellm.types.utils import CallTypes
 from litellm.rust_bridge.ocr import initialize_logging, invoke_terminal
@@ -581,36 +592,7 @@ class Host:
             return self.response
         raise self.error
 
-def drive_sync(arguments):
-    host = Host(arguments, False)
-    while host.machine.complete() is None:
-        try:
-            _invoke(host.machine, host)
-        except Exception as error:
-            host.advance(1, error)
-        except BaseException as error:
-            host.advance(2, error)
-        else:
-            host.advance(0)
-    return host.result()
-
-async def drive(arguments):
-    host = Host(arguments, True)
-    while host.machine.complete() is None:
-        try:
-            awaiting, value = _invoke(host.machine, host)
-            if awaiting:
-                await value
-        except Exception as error:
-            host.advance(1, error)
-        except BaseException as error:
-            host.advance(2, error)
-        else:
-            host.advance(0)
-    return host.result()
 ",
-        c"ocr_driver.py",
-        c"_ocr_driver",
     )?;
     module.add("_Lifecycle", py.get_type::<OcrLifecycle>())?;
     module.add("_invoke", wrap_pyfunction!(invoke, &module)?)?;
@@ -721,6 +703,30 @@ mod tests {
                 assert!(error.is_instance_of::<PyRuntimeError>(py));
                 assert!(!error.to_string().contains("secret"));
             }
+        });
+    }
+
+    #[test]
+    fn finish_does_not_modify_the_input_dictionary() {
+        Python::initialize();
+        Python::attach(|py| {
+            let fields = PyDict::new(py);
+            fields
+                .set_item("provider_native_response", "native")
+                .unwrap();
+            fields.set_item("model", "model").unwrap();
+
+            let _ = finish(py, fields.clone().unbind());
+
+            assert_eq!(
+                fields
+                    .get_item("provider_native_response")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "native"
+            );
         });
     }
 

@@ -1,4 +1,5 @@
 mod diagnostics;
+mod driver;
 mod errors;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
@@ -30,8 +31,8 @@ impl ResponsesWebSocketConnection {
         timeout_seconds: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;
-        let timeout = optional_timeout(timeout_seconds);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let timeout = optional_timeout(timeout_seconds)?;
+        litellm_python_interop::run_async_py(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
                 .map_err(core_error_to_pyerr)?;
@@ -41,27 +42,27 @@ impl ResponsesWebSocketConnection {
 
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        litellm_python_interop::run_async_py(py, async move {
             inner.send_text(text).await.map_err(core_error_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        litellm_python_interop::run_async_py(py, async move {
             inner.recv_text().await.map_err(core_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        litellm_python_interop::run_async_py(py, async move {
             inner.close().await.map_err(core_error_to_pyerr)
         })
     }
 }
 
-#[pymodule(gil_used = false)]
+#[pymodule(gil_used = true)]
 mod _native {
     use pyo3::prelude::*;
 

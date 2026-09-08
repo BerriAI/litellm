@@ -18,12 +18,21 @@ pyo3::create_exception!(
 
 pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        Error::Auth(message) => PyValueError::new_err(message),
-        Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_) => PyValueError::new_err(err.to_string()),
-        other => PyRuntimeError::new_err(other.to_string()),
+        Error::InvalidProvider(_) => PyValueError::new_err("Invalid provider configuration"),
+        Error::InvalidRequest(_) => PyValueError::new_err("Invalid provider request"),
+        Error::InvalidType { .. } | Error::MissingField(_) => {
+            PyValueError::new_err(err.to_string())
+        }
+        Error::Auth(_) => PyValueError::new_err("Provider authentication failed"),
+        Error::Http { status, .. } => {
+            PyRuntimeError::new_err(format!("Provider request failed (HTTP {status})"))
+        }
+        Error::Network(_) | Error::Connect(_) => {
+            PyRuntimeError::new_err("Provider transport failed")
+        }
+        Error::InvalidResponse(_) => PyRuntimeError::new_err("Invalid provider response"),
+        Error::Routing(_) => PyRuntimeError::new_err("Provider routing failed"),
+        Error::Unsupported(_) => PyRuntimeError::new_err("Operation is not supported"),
     }
 }
 
@@ -35,22 +44,65 @@ pub(crate) fn core_error_to_pyerr(err: Error) -> PyErr {
 /// done the work and billed for it.
 pub(crate) fn chat_completions_error_to_pyerr(err: Error) -> PyErr {
     match err {
-        Error::Unsupported(_)
-        | Error::Auth(_)
-        | Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_)
-        | Error::Routing(_)
-        // Nothing reached the provider, so serving it on Python cannot double
-        // bill and is the only way the caller gets an answer at all.
-        | Error::Connect(_) => RustBridgeDeclined::new_err(err.to_string()),
-        Error::Http { status, body } => {
-            RustUpstreamError::new_err((status, format!("{status}: {body}")))
+        Error::Unsupported(_) => RustBridgeDeclined::new_err("Operation is not supported"),
+        Error::Auth(_) => RustBridgeDeclined::new_err("Provider authentication failed"),
+        Error::InvalidProvider(_) => RustBridgeDeclined::new_err("Invalid provider configuration"),
+        Error::InvalidRequest(_) => RustBridgeDeclined::new_err("Invalid provider request"),
+        Error::InvalidType { .. } | Error::MissingField(_) => {
+            RustBridgeDeclined::new_err(err.to_string())
         }
-        Error::Network(message) | Error::InvalidResponse(message) => {
-            RustUpstreamError::new_err((0u16, message))
+        Error::Routing(_) => RustBridgeDeclined::new_err("Provider routing failed"),
+        Error::Connect(_) => RustBridgeDeclined::new_err("Could not reach provider"),
+        Error::Http { status, .. } => {
+            RustUpstreamError::new_err((status, format!("Provider request failed (HTTP {status})")))
         }
+        Error::Network(_) => RustUpstreamError::new_err((0u16, "Provider transport failed")),
+        Error::InvalidResponse(_) => {
+            RustUpstreamError::new_err((0u16, "Invalid provider response"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_error_mappers_do_not_expose_private_details() {
+        Python::initialize();
+        Python::attach(|_| {
+            for error in [
+                Error::Auth("credential secret".into()),
+                Error::Http {
+                    status: 500,
+                    body: "response secret".into(),
+                },
+                Error::Network("network secret".into()),
+                Error::Connect("connection secret".into()),
+                Error::InvalidResponse("parse secret".into()),
+                Error::Routing("routing secret".into()),
+            ] {
+                assert!(!core_error_to_pyerr(error).to_string().contains("secret"));
+            }
+
+            for error in [
+                Error::Auth("credential secret".into()),
+                Error::Http {
+                    status: 500,
+                    body: "response secret".into(),
+                },
+                Error::Network("network secret".into()),
+                Error::Connect("connection secret".into()),
+                Error::InvalidResponse("parse secret".into()),
+                Error::Routing("routing secret".into()),
+            ] {
+                assert!(
+                    !chat_completions_error_to_pyerr(error)
+                        .to_string()
+                        .contains("secret")
+                );
+            }
+        });
     }
 }
 

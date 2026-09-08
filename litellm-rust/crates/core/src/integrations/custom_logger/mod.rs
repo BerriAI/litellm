@@ -96,18 +96,23 @@ impl CustomLoggerRunner {
     }
 }
 
-impl crate::call_lifecycle::TerminalDispatcher for CustomLoggerRunner {
+impl crate::lifecycle::TerminalDispatcher for CustomLoggerRunner {
     fn dispatch<'a>(&'a self, terminal: &'a crate::lifecycle::TerminalRecord) -> LogFuture<'a> {
         Box::pin(async move {
             let details = ModelCallDetails::from(terminal);
             let response = CallbackValue::new(
-                match &terminal.projection {
-                    crate::lifecycle::RouteProjection::Ocr { .. } => "ocr",
-                    crate::lifecycle::RouteProjection::Messages { .. } => "messages",
-                    crate::lifecycle::RouteProjection::ChatCompletions { .. } => "chat_completion",
-                    crate::lifecycle::RouteProjection::Audio { .. } => "audio",
-                    crate::lifecycle::RouteProjection::Realtime { .. } => "realtime",
-                    crate::lifecycle::RouteProjection::ResponsesWs { .. } => "responses_websocket",
+                match (&terminal.classification, &terminal.projection) {
+                    (crate::lifecycle::TerminalClassification::Failure { .. }, _) => "error",
+                    (_, crate::lifecycle::RouteProjection::Ocr { .. }) => "ocr",
+                    (_, crate::lifecycle::RouteProjection::Messages { .. }) => "messages",
+                    (_, crate::lifecycle::RouteProjection::ChatCompletions { .. }) => {
+                        "chat_completion"
+                    }
+                    (_, crate::lifecycle::RouteProjection::Audio { .. }) => "audio_transcription",
+                    (_, crate::lifecycle::RouteProjection::Realtime { .. }) => "realtime",
+                    (_, crate::lifecycle::RouteProjection::ResponsesWs { .. }) => {
+                        "responses_websocket"
+                    }
                 },
                 terminal.projection.value().clone(),
             );
@@ -335,8 +340,8 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_dispatcher_fans_out_shared_record() {
-        use crate::call_lifecycle::TerminalDispatcher;
         use crate::integrations::types::Usage;
+        use crate::lifecycle::TerminalDispatcher;
         use crate::lifecycle::terminal::CostInputs;
         use crate::lifecycle::{RouteProjection, TerminalClassification, TerminalRecord};
 
