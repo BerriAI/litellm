@@ -8841,7 +8841,8 @@ async def async_data_generator(
                     fallback_metadata_event_sent = True
                 continue
 
-            responses_event: Final = error_state.observe_chunk(chunk) if error_state is not None else None
+            if error_state is not None:
+                error_state.observe_chunk(cast(object, chunk))  # cast-ok: the helper validates legacy untyped chunks
             raw_passthrough = False
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
@@ -8876,10 +8877,10 @@ async def async_data_generator(
 
             if not raw_passthrough:
                 try:
-                    formatted_chunk: Final = _format_streaming_sse_chunk(chunk=chunk)
                     if error_state is not None:
-                        error_state.mark_emitted(responses_event)
-                    yield formatted_chunk
+                        yield error_state.mark_emitted(_format_streaming_sse_chunk(chunk=chunk))
+                    else:
+                        yield _format_streaming_sse_chunk(chunk=chunk)
                 except Exception as e:
                     if error_state is not None:
                         raise

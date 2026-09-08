@@ -1,9 +1,10 @@
 import time
 from collections.abc import Mapping
+from http import HTTPStatus
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
@@ -35,6 +36,16 @@ class _FailureDetails(BaseModel):
     type: str | None = None
     status_code: int | None = None
 
+    @field_validator("code", mode="before")
+    @classmethod
+    def normalize_code(cls, value: object) -> str | int | None:
+        return value if isinstance(value, (str, int)) and not isinstance(value, bool) else None
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, value: object) -> str | None:
+        return value if isinstance(value, str) else None
+
 
 def _original_failure(exception: Exception) -> Exception:
     if isinstance(exception, MidStreamFallbackError) and exception.original_exception is not None:
@@ -50,9 +61,21 @@ def _response_error_code(details: _FailureDetails) -> str:
             return "rate_limit_exceeded"
     if isinstance(details.code, str) and details.code and not details.code.isdecimal():
         return details.code
-    if details.status_code == 429:
-        return "rate_limit_exceeded"
-    return "server_error"
+    match details.status_code:
+        case HTTPStatus.UNAUTHORIZED:
+            return "authentication_error"
+        case HTTPStatus.FORBIDDEN:
+            return "permission_error"
+        case HTTPStatus.NOT_FOUND:
+            return "not_found_error"
+        case HTTPStatus.REQUEST_TIMEOUT:
+            return "request_timeout"
+        case HTTPStatus.TOO_MANY_REQUESTS:
+            return "rate_limit_exceeded"
+        case int(status) if HTTPStatus.BAD_REQUEST <= status < HTTPStatus.INTERNAL_SERVER_ERROR:
+            return "invalid_request_error"
+        case _:
+            return "server_error"
 
 
 class ResponsesStreamErrorState:
@@ -62,16 +85,15 @@ class ResponsesStreamErrorState:
         self.created_at: int | None = None
         self.sequence_number = -1
         self.terminal_emitted = False
+        self._pending_event: _StreamEvent | None = None
 
-    @staticmethod
-    def observe_chunk(chunk: object) -> _StreamEvent | None:
-        if not isinstance(chunk, (BaseModel, Mapping)):
-            return None
-        return _StreamEvent.model_validate(chunk)
+    def observe_chunk(self, chunk: object) -> None:
+        self._pending_event = _StreamEvent.model_validate(chunk) if isinstance(chunk, (BaseModel, Mapping)) else None
 
-    def mark_emitted(self, event: _StreamEvent | None) -> None:
+    def mark_emitted(self, frame: str | bytes) -> str | bytes:
+        event: Final = self._pending_event
         if event is None:
-            return
+            return frame
         if event.sequence_number is not None:
             self.sequence_number = max(self.sequence_number, event.sequence_number)
         if event.response is not None:
@@ -81,6 +103,7 @@ class ResponsesStreamErrorState:
                 self.created_at = event.response.created_at
         if event.type in ("response.completed", "response.failed", "response.incomplete"):
             self.terminal_emitted = True
+        return frame
 
     def format_failure(self, exception: Exception) -> str | None:
         if self.terminal_emitted:
