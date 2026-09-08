@@ -5030,6 +5030,100 @@ async def test_websocket_passthrough_rewrites_gateway_alias_setup_model():
     assert sent_setup["model"] == "projects/proj-db/locations/global/publishers/google/models/gemini-live-2.5-flash"
 
 
+@pytest.mark.parametrize(
+    "setup_model",
+    ["gemini-live-2.5-flash", "models/gemini-live-2.5-flash", "publishers/google/models/gemini-live-2.5-flash"],
+)
+def test_vertex_live_setup_model_resolves_before_extraction(setup_model):
+    """A bare gateway alias left the session logged as ``unknown`` at zero cost.
+
+    The model was read off the raw client frame, and the extractor only yields a name when the string
+    already contains ``/models/``. The rewriter qualifies it a few lines later for the upstream, so a
+    client that addressed the gateway the documented way, by alias, logged no model and therefore
+    resolved no cost-map entry. Resolving first is what puts the real name on the logging object.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_setup_model_rewriter,
+    )
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _extract_model_from_vertex_ai_setup,
+        _resolved_vertex_live_setup,
+    )
+
+    rewriter = _build_vertex_live_setup_model_rewriter(
+        vertex_project="proj-db", vertex_location="global", llm_router=None
+    )
+    setup_data = {"model": setup_model}
+
+    resolved = _extract_model_from_vertex_ai_setup(_resolved_vertex_live_setup(setup_data, rewriter))
+
+    assert resolved == "gemini-live-2.5-flash", "an unresolved setup model logs the session as 'unknown'"
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_logs_a_bare_alias_setup_model():
+    """End to end through the relay: a bare alias must reach the logging object as a real model name.
+
+    This is the call-site half of the fix. The helper tests above pass even if extraction moves back
+    before the rewrite, so this one drives the real websocket relay and asserts on what got logged,
+    which is the name the cost map is looked up by. An unbilled session logs ``unknown``.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _build_vertex_live_setup_model_rewriter,
+    )
+
+    upstream_ws = RecordingUpstreamWebSocket()
+    setup_frame = json.dumps({"setup": {"model": "gemini-live-2.5-flash"}})
+    websocket = _client_websocket(
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "text": setup_frame},
+                {"type": "websocket.disconnect"},
+            ]
+        )
+    )
+    built = []
+    real_logging = litellm.litellm_core_utils.litellm_logging.Logging
+
+    def _capture(*args, **kwargs):
+        obj = real_logging(*args, **kwargs)
+        built.append(obj)
+        return obj
+
+    with _patched_websocket_passthrough_environment(upstream_ws):
+        with patch("litellm.litellm_core_utils.litellm_logging.Logging", side_effect=_capture):
+            await websocket_passthrough_request(
+                websocket=websocket,
+                target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+                custom_headers={"Authorization": "Bearer token"},
+                user_api_key_dict=UserAPIKeyAuth(),
+                forward_headers=False,
+                endpoint="/vertex_ai/live",
+                accept_websocket=False,
+                setup_model_rewriter=_build_vertex_live_setup_model_rewriter(
+                    vertex_project="proj-db", vertex_location="global", llm_router=None
+                ),
+            )
+
+    assert built, "the relay should have built a logging object"
+    assert built[0].model == "gemini-live-2.5-flash", "a bare alias must not log as 'unknown'"
+
+
+def test_vertex_live_setup_resolution_is_inert_without_a_rewriter():
+    """Non-Live passthrough routes pass no rewriter, so the frame must be handed over untouched."""
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _extract_model_from_vertex_ai_setup,
+        _resolved_vertex_live_setup,
+    )
+
+    setup_data = {"model": "projects/p/locations/global/publishers/google/models/gemini-live-2.5-flash"}
+
+    assert _resolved_vertex_live_setup(setup_data, None) is setup_data
+    assert _extract_model_from_vertex_ai_setup(_resolved_vertex_live_setup(setup_data, None)) == (
+        "gemini-live-2.5-flash"
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rcvd_close", [None, "abnormal", "no_status"])
 async def test_websocket_passthrough_does_not_relay_unsendable_upstream_close(rcvd_close):
