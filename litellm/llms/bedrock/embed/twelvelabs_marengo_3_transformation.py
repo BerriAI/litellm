@@ -7,9 +7,10 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-mar
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, assert_never
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.llms.bedrock import (
