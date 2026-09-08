@@ -11,6 +11,9 @@ the question neither covers: whether the job that globs a file then deselects it
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Final
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / ".github" / "scripts" / "assert_ci_coverage.py"
@@ -299,8 +302,20 @@ def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
     )
 
 
-def test_a_file_no_workflow_names_is_still_reported_when_every_slice_drops_it():
-    named = coverage._workflow_named_tokens()
+@pytest.mark.parametrize("selector", ("test_selected.py", "test_selected.py::test_redis_auth"))
+def test_a_workflow_does_not_credit_a_file_it_never_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selector: str
+) -> None:
+    workflows: Final = tmp_path / "workflows"
+    workflows.mkdir()
+    (workflows / "test.yml").write_text(
+        f"jobs:\n  test:\n    steps:\n      - run: uv run pytest tests/local_testing/{selector}\n"
+    )
+    monkeypatch.setattr(coverage, "WORKFLOW_DIR", workflows)
+    monkeypatch.setattr(coverage, "CIRCLECI_CONFIG", tmp_path / "circleci.yml")
+
+    named: Final = coverage._workflow_named_tokens()
+    assert named == frozenset({"tests/local_testing/test_selected.py"})
     assert not any(
-        coverage._token_covers(token, "tests/local_testing/test_caching.py") for token in named
-    ), "test_caching.py is allowlisted, not run; crediting it would hide a real gap"
+        coverage._token_covers(token, "tests/local_testing/test_unrun.py") for token in named
+    )
