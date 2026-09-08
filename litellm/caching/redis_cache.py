@@ -1799,16 +1799,11 @@ class RedisCache(BaseCache):
 
     @_redis_circuit_breaker_guard
     async def async_refresh_ttl(self, key: str, ttl: int | None = None) -> bool:
-        """EXPIRE an existing key without touching its value. False when the key is absent or Redis failed."""
+        """EXPIRE an existing key without touching its value. False when the key is absent."""
         _used_ttl: Final = self.get_ttl(ttl=ttl)
         if _used_ttl is None:
             return False
-        try:
-            return await self._async_commands().expire(self.check_and_fix_namespace(key=key), _used_ttl)
-        except Exception as e:
-            verbose_logger.debug("Redis EXPIRE Error: %s", e)
-            _record_swallowed_redis_failure(self._circuit_breaker, e)
-            return False
+        return await self._async_commands().expire(self.check_and_fix_namespace(key=key), _used_ttl)
 
     @_redis_circuit_breaker_guard
     async def async_rpush(

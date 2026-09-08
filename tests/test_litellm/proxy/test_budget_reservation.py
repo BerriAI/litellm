@@ -2202,11 +2202,13 @@ async def test_release_non_numeric_counter_reseeds_from_db(spend_counter_state):
 class _ExpiringRedisCache:
     """In-memory stand-in for RedisCache with real wall-clock key expiry."""
 
-    def __init__(self, default_ttl: float = 60.0) -> None:
+    def __init__(self, default_ttl: float = 60.0, fail_first_refresh: bool = False) -> None:
         self.default_ttl = default_ttl
         self.store: dict[str, float] = {}
         self.expires_at: dict[str, float] = {}
+        self.refresh_attempts = 0
         self.refresh_count = 0
+        self.fail_first_refresh = fail_first_refresh
 
     def _evict_expired(self, key: str) -> None:
         if self.expires_at.get(key, float("inf")) <= time.monotonic():
@@ -2239,6 +2241,9 @@ class _ExpiringRedisCache:
         self.expires_at.pop(key, None)
 
     async def async_refresh_ttl(self, key: str, ttl: int | None = None) -> bool:
+        self.refresh_attempts += 1
+        if self.fail_first_refresh and self.refresh_attempts == 1:
+            raise ConnectionError("Redis circuit breaker is open")
         self._evict_expired(key)
         if key not in self.store:
             return False
@@ -2277,6 +2282,26 @@ async def test_reservation_survives_redis_counter_ttl_while_request_in_flight(
     await asyncio.sleep(0.35)
     assert redis_cache.refresh_count == refreshes_after_release
     assert await redis_cache.async_get_cache(key=counter_key) is None
+
+
+@pytest.mark.asyncio
+async def test_reservation_lease_keeps_renewing_after_transient_redis_failure(
+    spend_counter_state,
+):
+    """One failed EXPIRE (Redis blip, open circuit breaker) must not end renewal for the
+    rest of the request."""
+    counter_cache, key_cache = spend_counter_state
+    redis_cache = _ExpiringRedisCache(default_ttl=0.2, fail_first_refresh=True)
+    counter_cache.redis_cache = redis_cache
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-lease-blip", spend=0.0, max_budget=1.0)
+
+    reservation = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+    assert reservation is not None
+
+    await asyncio.sleep(0.5)
+    assert redis_cache.refresh_attempts >= 3
+    await release_budget_reservation(reservation)
 
 
 @pytest.mark.asyncio
