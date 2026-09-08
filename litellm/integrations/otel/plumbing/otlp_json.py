@@ -7,6 +7,7 @@ retry loop and swaps the payload for OTLP/JSON (enums as integers, ids as hex).
 import base64
 import json
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, TypeAlias
 
 from google.protobuf.json_format import MessageToDict
@@ -17,23 +18,47 @@ from opentelemetry.sdk.trace import ReadableSpan
 JSON_CONTENT_TYPE: Final = "application/json"
 _HEX_ID_KEYS: Final = frozenset({"traceId", "spanId", "parentSpanId"})
 
-_Json: TypeAlias = "Mapping[str, _Json] | Sequence[_Json] | str | int | float | bool | None"
+_JsonValue: TypeAlias = "Mapping[str, _JsonValue] | Sequence[_JsonValue] | str | int | float | bool | None"
+_JsonObject: TypeAlias = Mapping[str, "_JsonValue"]
 
 
-def _hex_ids(value: _Json) -> _Json:
-    if isinstance(value, dict):
-        return {  # mutable-ok: json.dumps rejects MappingProxyType, so the payload must stay a real dict
-            key: base64.b64decode(item).hex() if key in _HEX_ID_KEYS and isinstance(item, str) else _hex_ids(item)
-            for key, item in value.items()
+def _objects(node: _JsonObject, key: str) -> tuple[_JsonObject, ...]:
+    items: Final = node.get(key)
+    if isinstance(items, str) or not isinstance(items, Sequence):
+        return ()
+    return tuple(item for item in items if isinstance(item, Mapping))
+
+
+def _hex_ids(node: _JsonObject) -> _JsonObject:
+    return MappingProxyType(
+        {
+            key: base64.b64decode(item).hex() if key in _HEX_ID_KEYS and isinstance(item, str) else item
+            for key, item in node.items()
         }
-    if isinstance(value, list):
-        return tuple(_hex_ids(item) for item in value)
-    return value
+    )
+
+
+def _hex_span(span: _JsonObject) -> _JsonObject:
+    links: Final = _objects(span, "links")
+    if not links:
+        return _hex_ids(span)
+    return MappingProxyType({**_hex_ids(span), "links": tuple(_hex_ids(link) for link in links)})
+
+
+def _hex_scope_spans(scope: _JsonObject) -> _JsonObject:
+    return MappingProxyType({**scope, "spans": tuple(_hex_span(span) for span in _objects(scope, "spans"))})
+
+
+def _hex_resource_spans(resource: _JsonObject) -> _JsonObject:
+    scope_spans: Final = tuple(_hex_scope_spans(scope) for scope in _objects(resource, "scopeSpans"))
+    return MappingProxyType({**resource, "scopeSpans": scope_spans})
 
 
 def encode_spans_json(spans: Sequence[ReadableSpan]) -> bytes:
-    payload: Final[Mapping[str, _Json]] = MessageToDict(encode_spans(spans), use_integers_for_enums=True)
-    return json.dumps(_hex_ids(payload), separators=(",", ":")).encode()
+    payload: Final[_JsonObject] = MessageToDict(encode_spans(spans), use_integers_for_enums=True)
+    resource_spans: Final = tuple(_hex_resource_spans(resource) for resource in _objects(payload, "resourceSpans"))
+    hexed: Final[_JsonObject] = MappingProxyType({**payload, "resourceSpans": resource_spans})
+    return json.dumps(hexed, default=dict, separators=(",", ":")).encode()
 
 
 class OTLPJsonSpanExporter(OTLPSpanExporter):
