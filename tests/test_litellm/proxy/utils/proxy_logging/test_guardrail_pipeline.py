@@ -1621,6 +1621,42 @@ async def test_streaming_iterator_hook_releases_stream_when_pipeline_guardrail_l
 
 
 @pytest.mark.asyncio
+async def test_streaming_iterator_hook_runs_iterator_hook_guardrail_whose_pipeline_cannot_stream(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
+):
+    seen: Dict[str, Any] = {}
+
+    class IteratorHookGuardrail(CustomGuardrail):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            seen["count"] = seen.get("count", 0) + 1
+            async for item in response:
+                item.choices[0].delta.content = f"[governed] {item.choices[0].delta.content}"
+                yield item
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [IteratorHookGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=True)],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+                response=_async_chunk_iter(_stream_chunks()),
+                request_data=data,
+            )
+        ]
+
+    assert seen["count"] == 1
+    assert [item.choices[0].delta.content for item in delivered] == ["[governed] hello ", "[governed] world"]
+    assert any("'response-governance'" in message and "gr-post" in message for message in _warnings(caplog))
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "rewrite_attribute, value",
     [

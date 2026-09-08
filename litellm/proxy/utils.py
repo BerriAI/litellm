@@ -447,14 +447,15 @@ def _policy_pipelines(data: Mapping[str, object]) -> tuple[tuple[str, "Guardrail
     )
 
 
+def _pipeline_step_guardrail_names(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> frozenset[str]:
+    return frozenset(step.guardrail for _policy_name, pipeline in pipelines for step in pipeline.steps)
+
+
 def _pipeline_managed_guardrail_names(
     data: Mapping[str, object], mode: Literal["pre_call", "post_call"]
 ) -> frozenset[str]:
-    return frozenset(
-        step.guardrail
-        for _policy_name, pipeline in _policy_pipelines(data)
-        if pipeline.mode == mode
-        for step in pipeline.steps
+    return _pipeline_step_guardrail_names(
+        tuple((policy_name, pipeline) for policy_name, pipeline in _policy_pipelines(data) if pipeline.mode == mode)
     )
 
 
@@ -547,7 +548,7 @@ def _pipeline_is_streamable(policy_name: str, pipeline: "GuardrailPipeline") -> 
         return True
     verbose_proxy_logger.warning(
         "Policy '%s' has post_call pipeline guardrails without the unified apply_guardrail interface, "
-        "which streaming pipelines need; the stream is released ungoverned by it: %s",
+        "which streaming pipelines need; the stream skips the pipeline and its guardrails run on their own: %s",
         policy_name,
         ", ".join(unsupported),
     )
@@ -563,9 +564,9 @@ def _streamable_post_call_pipelines(
     Streaming pipelines scan the buffered stream through the endpoint guardrail
     translation of the request route, so every step's guardrail needs the
     unified apply_guardrail interface and the route needs a translation. A
-    pipeline that cannot be run that way yet is left out and the stream is
-    released the way it was before pipelines ran on streams at all, with a
-    warning naming what went ungoverned.
+    pipeline that cannot be run that way yet is left out and its guardrails
+    run on the stream on their own, the way they did before pipelines ran on
+    streams at all, with a warning naming the pipeline.
     """
     post_call_pipelines: Final = _post_call_pipelines(request_data)
     if not post_call_pipelines:
@@ -574,7 +575,8 @@ def _streamable_post_call_pipelines(
     if route and resolve_endpoint_translation(user_api_key_dict, None) is None:
         verbose_proxy_logger.warning(
             "Policies with post_call guardrail pipelines cannot scan streaming responses on route %s yet "
-            "(no endpoint guardrail translation); the stream is released ungoverned by them: %s",
+            "(no endpoint guardrail translation); the stream skips the pipelines and their guardrails run "
+            "on their own: %s",
             route,
             ", ".join(policy_name for policy_name, _pipeline in post_call_pipelines),
         )
@@ -3361,10 +3363,10 @@ class ProxyLogging:
         current_response = response
         stream_needs_translation: Final = ProxyLogging._stream_requires_guardrail_translation(user_api_key_dict)
 
-        pipeline_managed_names: Final = _pipeline_managed_guardrail_names(request_data, "post_call")
+        pipeline_gated_names: Final = _pipeline_step_guardrail_names(post_call_pipelines)
         for resolved_callback, kind in caps.iterator_overrides:
             if isinstance(resolved_callback, CustomGuardrail):
-                if resolved_callback.guardrail_name in pipeline_managed_names:
+                if resolved_callback.guardrail_name in pipeline_gated_names:
                     continue
                 if (
                     resolved_callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call)
