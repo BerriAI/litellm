@@ -9,7 +9,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.constants import SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS, SPEND_LOG_KEY_METADATA_CACHE_TTL
+from litellm.constants import (
+    SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
+    SPEND_LOG_KEY_METADATA_CACHE_TTL,
+    SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
+)
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.user_repository import UserRepository
@@ -230,6 +234,17 @@ async def _query_spend_log_metadata(
     )
 
 
+def _remember_spend_log_metadata(
+    cache: InMemoryCache, digest: str, window: tuple[datetime, datetime], meta: KeyMetadataDict | None
+) -> None:
+    if meta is None:
+        cache.set_cache(
+            _spend_log_cache_key(digest, window), KeyMetadataDict(), ttl=SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL
+        )
+        return
+    cache.set_cache(_spend_log_cache_key(digest, window), meta)
+
+
 async def recover_key_metadata_from_spend_logs(
     prisma_client: PrismaClient,
     missing_keys: AbstractSet[str],
@@ -251,7 +266,7 @@ async def recover_key_metadata_from_spend_logs(
     fresh: Final = await _query_spend_log_metadata(prisma_client, uncached, window) if uncached else _EMPTY_KEY_METADATA
     if fresh is not None:
         for digest in uncached:
-            cache.set_cache(_spend_log_cache_key(digest, window), fresh.get(digest, KeyMetadataDict()))
+            _remember_spend_log_metadata(cache, digest, window, fresh.get(digest))
     return MappingProxyType(
         {digest: meta for digest, meta in (*cached.items(), *(fresh or _EMPTY_KEY_METADATA).items()) if meta}
     )

@@ -1,3 +1,4 @@
+import time
 from collections.abc import Sequence
 from datetime import datetime
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ import pytest
 from prisma.errors import PrismaError
 
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import SPEND_LOG_KEY_METADATA_CACHE_TTL, SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     fill_missing_api_key_aliases,
     recover_double_hashed_key_metadata,
@@ -395,3 +397,21 @@ async def test_recover_key_metadata_from_spend_logs_does_not_cache_a_failed_quer
     result = await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache)
 
     assert result[digest]["key_alias"] == "back-online"
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_forgets_a_miss_long_before_a_hit():
+    found = hash_token("cli-session-found")
+    unknown = hash_token("cli-session-unknown")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = _query_raw_spend_logs([_digest_row(found, "found-alias", None, None)])
+    started = time.time()
+
+    await recover_key_metadata_from_spend_logs(mock_prisma, {found, unknown}, window, cache=cache)
+
+    hit_expires = next(deadline for key, deadline in cache.ttl_dict.items() if found in key)
+    miss_expires = next(deadline for key, deadline in cache.ttl_dict.items() if unknown in key)
+    assert miss_expires - started <= SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL + 1
+    assert hit_expires - started >= SPEND_LOG_KEY_METADATA_CACHE_TTL - 1
