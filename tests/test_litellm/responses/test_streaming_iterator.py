@@ -26,6 +26,7 @@ from litellm.responses.streaming_iterator import (
     _safe_str,
 )
 from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -1081,7 +1082,18 @@ def test_safe_int_narrows_dynamic_values() -> None:
     assert _safe_int(1.5, 4) == 4
 
 
-def test_gap_filler_passes_unknown_event_through() -> None:
+@pytest.mark.parametrize("event_type", ("response.some_unhandled_event", "response.reasoning_summary_text.delta"))
+def test_gap_filler_passes_events_without_items_through(event_type: str) -> None:
     gap_filler: Final = _ResponsesLifecycleGapFiller(model="m", response_id="resp_x")
-    event: Final = MappingProxyType({"type": "response.some_unhandled_event"})
+    event: Final = BaseLiteLLMOpenAIResponseObject.model_validate(
+        MappingProxyType(
+            {
+                "type": event_type,
+                "item_id": "rs_orphan",
+                "output_index": 0,
+                "summary_index": 0,
+                "delta": "Thinking",
+            }
+        )
+    )
     assert gap_filler.expand(event) == (event,)
