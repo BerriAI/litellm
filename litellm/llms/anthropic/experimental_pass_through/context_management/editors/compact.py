@@ -435,7 +435,7 @@ async def _check_summary_model_rate_limit(
     try:
         metadata: Final = getattr(user_api_key_auth, "metadata", None) or {}
         data: Final = {"model": summary_model}
-        descriptors: Final = limiter._create_rate_limit_descriptors(
+        assembled_descriptors: Final = limiter._create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_auth,
             data=data,
             rpm_limit_type=metadata.get("rpm_limit_type"),
@@ -445,14 +445,25 @@ async def _check_summary_model_rate_limit(
         limiter._add_team_model_rate_limit_descriptor_from_metadata(
             user_api_key_dict=user_api_key_auth,
             requested_model=summary_model,
-            descriptors=descriptors,
+            descriptors=assembled_descriptors,
         )
         limiter._add_project_model_rate_limit_descriptor_from_metadata(
             user_api_key_dict=user_api_key_auth,
             requested_model=summary_model,
-            descriptors=descriptors,
+            descriptors=assembled_descriptors,
         )
-        descriptors.extend(limiter.create_organization_rate_limit_descriptor(user_api_key_auth, summary_model))
+        assembled_descriptors.extend(
+            limiter.create_organization_rate_limit_descriptor(user_api_key_auth, summary_model)
+        )
+        # Same collapse the proxy's pre-call hook applies: team and project
+        # model limits are appended by two assembly sites each, and a repeated
+        # (key, value) pair is one counter charged twice. Harmless while this
+        # check stays ``read_only=True`` -- the repeated pair is read, never
+        # incremented -- but the population handed to the limiter should be the
+        # same one the pre-call hook would build, so this cannot start
+        # double-charging if the check ever reserves.
+        deduplicate: Final = getattr(limiter, "_deduplicate_descriptors", None)
+        descriptors: Final = deduplicate(assembled_descriptors) if callable(deduplicate) else assembled_descriptors
         if not descriptors:
             return True
         response: Final = await limiter.should_rate_limit(

@@ -12,7 +12,6 @@ from collections.abc import Callable, Mapping, Sequence, Set
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
-from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -2818,8 +2817,30 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         the request once per descriptor it is given. A repeat therefore
         increments the sliding window twice and reserves TPM tokens twice
         against that same counter, halving the limit the operator configured.
+
+        The first occurrence wins, so which limit survives is fixed by the
+        descriptor list rather than by whichever assembly site happened to
+        append last. Repeats carry identical limits today (every site reads the
+        same team/project metadata); if two ever disagree, dropping one
+        silently would under-count -- the opposite and quieter failure of the
+        double-charge this collapses -- so the disagreement is logged.
         """
-        by_identity: Final = MappingProxyType({(d["key"], d["value"]): d for d in descriptors})
+        by_identity: Final[dict[tuple[str, str], RateLimitDescriptor]] = {}  # mutable-ok: returned as a tuple
+        for descriptor in descriptors:
+            identity = (descriptor["key"], descriptor["value"])
+            kept = by_identity.setdefault(identity, descriptor)
+            # ``or None`` so a missing and an empty rate_limit read as the same
+            # absence of a limit rather than as two sites disagreeing.
+            if kept is not descriptor and (kept.get("rate_limit") or None) != (descriptor.get("rate_limit") or None):
+                verbose_proxy_logger.warning(
+                    "Rate limit descriptor %s:%s was assembled more than once with different limits "
+                    "(keeping %s, discarding %s). One of the descriptor assembly sites is reading a "
+                    "different limit source than the others.",
+                    descriptor["key"],
+                    descriptor["value"],
+                    kept.get("rate_limit"),
+                    descriptor.get("rate_limit"),
+                )
         return tuple(by_identity.values())
 
     async def _check_model_has_recent_failures(

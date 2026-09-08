@@ -13,6 +13,7 @@ Coverage:
 """
 
 import json
+from collections import Counter
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -34,6 +35,9 @@ from litellm.llms.anthropic.experimental_pass_through.context_management.editors
 )
 from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
     PolyfillResult,
+)
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _PROXY_MaxParallelRequestsHandler_v3,
 )
 
 MODEL = "openai/gpt-4o"
@@ -1715,11 +1719,29 @@ async def test_summary_model_allowed_when_within_model_budget():
 
 class _FakeRateLimiter:
     """Minimal stand-in for ``_PROXY_MaxParallelRequestsHandler_v3`` exposing
-    just the descriptor-build + read-only check surface the editor consults."""
+    just the descriptor-build + read-only check surface the editor consults.
+
+    Mirrors the real limiter's two-site assembly of the team per-model
+    descriptor (once in ``_create_rate_limit_descriptors``, once in
+    ``_add_team_model_rate_limit_descriptor_from_metadata`` from the same
+    metadata) and borrows the real dedup, so the editor's wiring is exercised
+    rather than a shape that cannot repeat.
+    """
+
+    _TEAM_MODEL_DESCRIPTOR = {
+        "key": "model_per_team",
+        "value": "team-id:claude-haiku-4-5",
+        "rate_limit": {"requests_per_unit": 10},
+    }
+
+    _deduplicate_descriptors = staticmethod(
+        _PROXY_MaxParallelRequestsHandler_v3._deduplicate_descriptors
+    )
 
     def __init__(self, overall_code: str):
         self._overall_code = overall_code
         self.read_only_checked = False
+        self.descriptors_checked: List[Dict[str, Any]] = []
 
     def _create_rate_limit_descriptors(self, **kwargs):
         return [
@@ -1727,11 +1749,12 @@ class _FakeRateLimiter:
                 "key": "api_key",
                 "value": "hashed-token",
                 "rate_limit": {"requests_per_unit": 10},
-            }
+            },
+            dict(self._TEAM_MODEL_DESCRIPTOR),
         ]
 
     def _add_team_model_rate_limit_descriptor_from_metadata(self, **kwargs):
-        return None
+        kwargs["descriptors"].append(dict(self._TEAM_MODEL_DESCRIPTOR))
 
     def _add_project_model_rate_limit_descriptor_from_metadata(self, **kwargs):
         return None
@@ -1741,6 +1764,7 @@ class _FakeRateLimiter:
 
     async def should_rate_limit(self, **kwargs):
         self.read_only_checked = kwargs.get("read_only") is True
+        self.descriptors_checked = list(kwargs.get("descriptors") or ())
         return {"overall_code": self._overall_code}
 
 
@@ -1817,6 +1841,57 @@ async def test_summary_model_allowed_when_within_rate_limit():
     assert limiter.read_only_checked is True
     assert result.compaction_block is not None
     assert not result.applied_edits[0].get("error")
+
+
+async def test_summary_model_rate_limit_check_names_each_counter_once():
+    """The summary-model check must hand the limiter the same descriptor
+    population the proxy's pre-call hook would build: one entry per counter.
+
+    This path assembles descriptors from the same two team/project sites as
+    ``async_pre_call_hook``, so without the collapse it names the team
+    per-model counter twice. It reads without incrementing today
+    (``read_only=True``), so a repeat only evaluates the same verdict twice --
+    but the repeat is what turns into a double charge the moment this check
+    reserves, which is how the halved team per-model limits (#34140) reached
+    the pre-call path.
+    """
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+
+    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
+    limiter = _FakeRateLimiter("OK")
+    proxy_logging = MagicMock()
+    proxy_logging.max_parallel_request_limiter = limiter
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+    ):
+        await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    assert limiter.read_only_checked is True
+    population = Counter((d["key"], d["value"]) for d in limiter.descriptors_checked)
+    assert population == Counter(
+        {
+            ("api_key", "hashed-token"): 1,
+            ("model_per_team", "team-id:claude-haiku-4-5"): 1,
+        }
+    ), f"descriptor population handed to the limiter: {population}"
 
 
 async def test_summary_model_rate_limit_skipped_for_legacy_limiter():
