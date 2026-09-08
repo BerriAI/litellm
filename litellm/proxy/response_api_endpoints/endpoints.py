@@ -3,6 +3,7 @@ import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Mapping
 from enum import Enum
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, cast, get_args
 from uuid import uuid4
@@ -243,6 +244,7 @@ async def responses_api(
         version,
     )
 
+    native_data_generator: Final = partial(select_data_generator, responses_stream_errors=True)
     data = await _read_request_body(request=request)
 
     # Check if polling via cache should be used for this request
@@ -329,7 +331,7 @@ async def responses_api(
                 llm_router=llm_router,
                 proxy_config=proxy_config,
                 proxy_logging_obj=proxy_logging_obj,
-                select_data_generator=select_data_generator,
+                select_data_generator=native_data_generator,
                 user_model=user_model,
                 user_temperature=user_temperature,
                 user_request_timeout=user_request_timeout,
@@ -355,7 +357,7 @@ async def responses_api(
             llm_router=llm_router,
             general_settings=general_settings,
             proxy_config=proxy_config,
-            select_data_generator=select_data_generator,
+            select_data_generator=native_data_generator,
             model=None,
             user_model=user_model,
             user_temperature=user_temperature,

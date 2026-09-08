@@ -385,6 +385,7 @@ from litellm.proxy.common_utils.periodic_reload_schedule import (
 )
 from litellm.proxy.common_utils.proxy_state import ProxyState
 from litellm.proxy.common_utils.reset_budget_job import ResetBudgetJob
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.proxy.common_utils.scheduled_job_stagger import (
     apply_scheduled_job_stagger,
     attach_job_timing_logger,
@@ -8723,10 +8724,13 @@ async def async_data_generator(
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict,
     request: Request | None = None,
+    *,
+    responses_stream_errors: bool = False,
 ):
     verbose_proxy_logger.debug("inside generator")
     stream_completed = False
     client_disconnected = False
+    error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
     try:
         error_message: str | None = None
         requested_model_from_client: Final = _get_client_requested_model_for_streaming(request_data=request_data)
@@ -8837,6 +8841,7 @@ async def async_data_generator(
                     fallback_metadata_event_sent = True
                 continue
 
+            responses_event: Final = error_state.observe_chunk(chunk) if error_state is not None else None
             raw_passthrough = False
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
@@ -8871,8 +8876,13 @@ async def async_data_generator(
 
             if not raw_passthrough:
                 try:
-                    yield _format_streaming_sse_chunk(chunk=chunk)
+                    formatted_chunk: Final = _format_streaming_sse_chunk(chunk=chunk)
+                    if error_state is not None:
+                        error_state.mark_emitted(responses_event)
+                    yield formatted_chunk
                 except Exception as e:
+                    if error_state is not None:
+                        raise
                     yield f"data: {e}\n\n"
 
             if pending_fallback_event:
@@ -8922,6 +8932,12 @@ async def async_data_generator(
             e,
         )
 
+        if error_state is not None:
+            stream_completed = True
+            error_frame: Final = error_state.format_failure(e)
+            if error_frame is not None:
+                yield error_frame
+            return
         if isinstance(e, HTTPException):
             raise e
         elif isinstance(e, StreamingCallbackError):
@@ -8958,12 +8974,15 @@ def select_data_generator(
     user_api_key_dict: UserAPIKeyAuth,
     request_data: dict,
     request: Request | None = None,
+    *,
+    responses_stream_errors: bool = False,
 ):
     return async_data_generator(
         response=response,
         user_api_key_dict=user_api_key_dict,
         request_data=request_data,
         request=request,
+        responses_stream_errors=responses_stream_errors,
     )
 
 
