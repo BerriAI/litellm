@@ -871,3 +871,30 @@ def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
 
 def test_bedrock_get_error_class_audit_covers_every_surface():
     assert len(_bedrock_configs_with_get_error_class()) >= 30
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/global.openai.gpt-5.6-sol",
+        "bedrock/global.openai.gpt-5.6-terra",
+        "bedrock/global.openai.gpt-5.6-luna",
+        "bedrock/eu.openai.gpt-5.6-sol",
+        "bedrock/apac.openai.gpt-5.6-sol",
+        "bedrock/us.openai.gpt-5.6-sol",
+    ],
+)
+def test_bedrock_cross_region_openai_routing(model: str):
+    """
+    Ensure cross-region OpenAI inference profiles on Bedrock route to the
+    OpenAI-compatible config instead of falling back to Bedrock Converse.
+    """
+    import litellm
+    from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
+    
+    # 1. Verify route identification
+    assert BedrockModelInfo.get_bedrock_route(model) == "openai"
+    assert BedrockModelInfo._explicit_openai_route(model) is True
+
+    # 2. Verify config mapping
+    config = get_bedrock_chat_config(model)
+    assert isinstance(config, litellm.AmazonBedrockOpenAIConfig)
