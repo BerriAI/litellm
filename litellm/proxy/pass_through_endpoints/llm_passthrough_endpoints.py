@@ -33,6 +33,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -121,16 +122,6 @@ def is_passthrough_request_using_router_model(request_body: dict, llm_router: li
         return False
 
 
-def azure_router_model_in_endpoint(endpoint: str, llm_router: litellm.Router | None) -> str | None:
-    parts: Final = endpoint.split("/")
-    if len(parts) < 2:
-        return None
-    return next((part for part in parts if is_known_model(part, llm_router)), None)
-
-
-AZURE_DEPLOYMENT_SEGMENT: Final = re.compile(r"(?<![^/])openai/deployments/([^/]+)")
-
-
 def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
     model: Final = litellm_params.get("model", "")
     try:
@@ -139,17 +130,10 @@ def _deployment_model_name(litellm_params: LiteLLMParamsTypedDict) -> str:
         return model
 
 
-def foreign_azure_deployment(endpoint: str, model_group: str, llm_router: litellm.Router) -> str | None:
-    match: Final = AZURE_DEPLOYMENT_SEGMENT.search(endpoint)
-    if match is None:
-        return None
-    deployment: Final = match.group(1)
-    if deployment == model_group:
-        return None
-    served: Final = frozenset(
+def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> frozenset[str]:
+    return frozenset(
         _deployment_model_name(row["litellm_params"]) for row in llm_router.get_model_list(model_name=model_group) or ()
     )
-    return None if deployment in served else deployment
 
 
 def is_passthrough_request_streaming(request_body: object) -> bool:
@@ -1555,7 +1539,9 @@ async def _relay_azure_router_model(
     is_streaming_request: bool,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Response:
-    foreign_deployment: Final = foreign_azure_deployment(endpoint, model, llm_router)
+    foreign_deployment: Final = foreign_azure_deployment(
+        endpoint, model, lambda: _models_served_by_group(llm_router, model)
+    )
     if foreign_deployment is not None:
         raise HTTPException(
             status_code=400,

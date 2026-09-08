@@ -1,4 +1,5 @@
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
 import httpx
@@ -63,6 +64,26 @@ def logged_responses_stream(all_chunks: Sequence[str], logging_obj: Logging) -> 
         RESPONSES_RELAY_SHAPE.call_type.value
     )  # rebind-ok: routes cost calculation to the relayed shape's pricing path
     return terminal_event
+
+
+AZURE_DEPLOYMENT_SEGMENT: Final = re.compile(r"(?<![^/])openai/deployments/([^/]+)")
+
+
+def azure_router_model_in_endpoint(endpoint: str, router_models: Collection[str]) -> str | None:
+    parts: Final = endpoint.split("/")
+    if len(parts) < 2:
+        return None
+    return next((part for part in parts if part in router_models), None)
+
+
+def foreign_azure_deployment(
+    endpoint: str, model_group: str, served_models: Callable[[], Collection[str]]
+) -> str | None:
+    match: Final = AZURE_DEPLOYMENT_SEGMENT.search(endpoint)
+    if match is None:
+        return None
+    deployment: Final = match.group(1)
+    return None if deployment == model_group or deployment in served_models() else deployment
 
 
 def without_api_version(api_base: str) -> str:
