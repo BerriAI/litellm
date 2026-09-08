@@ -5,6 +5,7 @@ Uses mock guardrails to validate pipeline execution without external services.
 """
 
 import copy
+from typing import Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -173,12 +174,16 @@ class RecordingGuardrail(CustomGuardrail):
         )
         self.block = block
 
-    def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool:
+    def should_run_guardrail(self, data: dict[str, object], event_type: GuardrailEventHooks) -> bool:
         return True
 
     async def async_pre_call_hook(
-        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
-    ) -> dict:
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict[str, object],
+        call_type: CallTypesLiteral,
+    ) -> dict[str, object]:
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_json_response={"detected": ["aws_access_key"]},
             request_data=data,
@@ -198,7 +203,9 @@ class RecordingGuardrail(CustomGuardrail):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scan_raw_request", [False, True])
 @pytest.mark.parametrize("on_fail", ["block", "modify_response"])
-async def test_terminal_block_carries_guardrail_information_to_request(monkeypatch, scan_raw_request, on_fail):
+async def test_terminal_block_carries_guardrail_information_to_request(
+    monkeypatch: pytest.MonkeyPatch, scan_raw_request: bool, on_fail: Literal["block", "modify_response"]
+):
     """
     Spend logging and the Guardrails Monitor read standard_logging_guardrail_information
     off the caller's request dict. A blocking step records it on the executor's
@@ -232,7 +239,7 @@ async def test_terminal_block_carries_guardrail_information_to_request(monkeypat
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_terminal_block_merges_guardrail_information_without_duplicates(monkeypatch):
+async def test_terminal_block_merges_guardrail_information_without_duplicates(monkeypatch: pytest.MonkeyPatch):
     """A pass_data step that returns a rewritten copy of the request, and a scan_raw_request step
     that evaluates a deep copy taken before the pipeline ran, both leave earlier entries in two
     dicts at once. Those must be carried back once while every step's own entry is kept."""
@@ -266,7 +273,7 @@ async def test_terminal_block_merges_guardrail_information_without_duplicates(mo
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_repeated_scan_raw_request_step_is_counted_once_per_evaluation(monkeypatch):
+async def test_repeated_scan_raw_request_step_is_counted_once_per_evaluation(monkeypatch: pytest.MonkeyPatch):
     """Running the same raw-scan guardrail twice yields two identical entries; both must reach the caller,
     while the entries the raw snapshot already held before the pipeline ran are not copied again."""
     guard = RecordingGuardrail(guardrail_name="credentials-raw", scan_raw_request=True, block=False)
