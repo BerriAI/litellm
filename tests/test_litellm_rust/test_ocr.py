@@ -15,7 +15,16 @@ def ocr_server():
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
-            requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            requests.append(
+                {
+                    "headers": {name.lower(): value for name, value in self.headers.items()},
+                    "body": json.loads(self.rfile.read(int(self.headers["Content-Length"]))),
+                }
+            )
+            if self.headers.get("User-Agent", "").startswith("python-httpx"):
+                self.send_response(418)
+                self.end_headers()
+                return
             response = json.dumps(
                 {
                     "pages": [{"index": 0, "markdown": "native OCR response", "images": [], "dimensions": None}],
@@ -43,13 +52,7 @@ def ocr_server():
         thread.join()
 
 
-def test_ocr_with_rust_extension(ocr_server, monkeypatch):
-    from litellm.ocr import main as ocr_main
-
-    def reject_python_transport(**kwargs):
-        pytest.fail("OCR used the Python transport instead of the Rust extension")
-
-    monkeypatch.setattr(ocr_main.base_llm_http_handler, "ocr", reject_python_transport)
+def test_ocr_with_rust_extension(ocr_server):
     server, requests = ocr_server
     host, port = server.server_address
 
@@ -61,9 +64,9 @@ def test_ocr_with_rust_extension(ocr_server, monkeypatch):
     )
 
     assert response.pages[0].markdown == "native OCR response"
-    assert requests == [
-        {
+    assert len(requests) == 1
+    assert not requests[0]["headers"].get("user-agent", "").startswith("python-httpx")
+    assert requests[0]["body"] == {
             "model": "mistral-ocr-latest",
             "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
-        }
-    ]
+    }
