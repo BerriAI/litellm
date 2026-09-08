@@ -48,9 +48,10 @@ class _FailureDetails(BaseModel):
 
 
 def _original_failure(exception: Exception) -> Exception:
-    if isinstance(exception, MidStreamFallbackError) and exception.original_exception is not None:
-        return _original_failure(exception.original_exception)
-    return exception
+    current = exception  # rebind-ok: the recursion gate requires iterative wrapper traversal
+    while isinstance(current, MidStreamFallbackError) and current.original_exception is not None:
+        current = current.original_exception
+    return current
 
 
 def _response_error_code(details: _FailureDetails) -> str:
