@@ -106,7 +106,7 @@ pub struct SettledOcrRequest {
     pub(super) body: Value,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct OcrTransportRequest {
     pub url: String,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,

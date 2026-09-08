@@ -4,6 +4,7 @@ pub mod types;
 
 use serde_json::Value;
 use std::future::Future;
+use std::pin::Pin;
 
 use crate::Error;
 use crate::error::json_type_name;
@@ -20,11 +21,10 @@ use crate::lifecycle::{
 };
 
 pub trait OcrTransport {
-    type SendFuture<'a>: Future<Output = Result<OcrTransportResponse, Error>>
-    where
-        Self: 'a;
-
-    fn send(&self, request: OcrTransportRequest) -> Self::SendFuture<'_>;
+    fn send(
+        &self,
+        request: OcrTransportRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<OcrTransportResponse, Error>> + Send + '_>>;
 }
 
 pub trait OcrServices: TerminalDispatcher + Clock + OcrTransport {}
@@ -55,10 +55,11 @@ impl TerminalDispatcher for DefaultOcrServices {
 }
 
 impl OcrTransport for DefaultOcrServices {
-    type SendFuture<'a> = impl Future<Output = Result<OcrTransportResponse, Error>> + 'a;
-
-    fn send(&self, request: OcrTransportRequest) -> Self::SendFuture<'_> {
-        async move {
+    fn send(
+        &self,
+        request: OcrTransportRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<OcrTransportResponse, Error>> + Send + '_>> {
+        Box::pin(async move {
             let response = buffered_post::send(buffered_post::Request {
                 url: request.url,
                 headers: request.headers,
@@ -71,7 +72,7 @@ impl OcrTransport for DefaultOcrServices {
                 headers: response.headers,
                 content: response.content,
             })
-        }
+        })
     }
 }
 
@@ -174,10 +175,10 @@ pub(crate) async fn send<S: OcrTransport>(
         .map_err(|_| Error::InvalidRequest("could not encode OCR request".into()))?;
     let response = transport
         .send(OcrTransportRequest {
-        url: endpoint.url,
-        headers,
-        body,
-        timeout_seconds: endpoint.timeout_seconds,
+            url: endpoint.url,
+            headers,
+            body,
+            timeout_seconds: endpoint.timeout_seconds,
         })
         .await?;
     if !(200..300).contains(&response.status) {
@@ -197,4 +198,77 @@ pub(crate) async fn send<S: OcrTransport>(
     let response_json = serde_json::from_slice(&response.content)
         .map_err(|_| Error::InvalidResponse("invalid OCR JSON response".into()))?;
     config.transform_ocr_response(&endpoint.model, response_json)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use serde_json::json;
+
+    use super::*;
+
+    struct RecordingTransport {
+        request: Mutex<Option<OcrTransportRequest>>,
+    }
+
+    impl OcrTransport for RecordingTransport {
+        fn send(
+            &self,
+            request: OcrTransportRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<OcrTransportResponse, Error>> + Send + '_>>
+        {
+            Box::pin(async move {
+                *self.request.lock().unwrap() = Some(request);
+                Ok(OcrTransportResponse {
+                    status: 200,
+                    headers: vec![],
+                    content: serde_json::to_vec(&json!({
+                        "pages": [],
+                        "model": "mistral-ocr-latest"
+                    }))
+                    .unwrap(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn delegates_provider_io_to_transport() {
+        let transport = RecordingTransport {
+            request: Mutex::new(None),
+        };
+        let request = SettledOcrRequest {
+            endpoint: OcrEndpoint {
+                model: "mistral-ocr-latest".into(),
+                custom_llm_provider: "mistral".into(),
+                url: "https://ocr.example/v1/ocr".into(),
+                timeout_seconds: 3.0,
+            },
+            headers: vec![("Authorization".into(), "Bearer test-key".into())],
+            body: json!({
+                "model": "mistral-ocr-latest",
+                "document": {
+                    "type": "document_url",
+                    "document_url": "data:application/pdf;base64,cGRm"
+                }
+            }),
+        };
+
+        let response = send(&transport, request).await.unwrap();
+        let recorded = transport.request.into_inner().unwrap().unwrap();
+
+        assert_eq!(response.model, "mistral-ocr-latest");
+        assert_eq!(recorded.url, "https://ocr.example/v1/ocr");
+        assert_eq!(recorded.timeout_seconds, 3.0);
+        assert!(
+            recorded
+                .headers
+                .contains(&(b"Accept-Encoding".to_vec(), b"identity".to_vec()))
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&recorded.body).unwrap()["model"],
+            "mistral-ocr-latest"
+        );
+    }
 }
