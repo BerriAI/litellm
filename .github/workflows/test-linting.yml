@@ -19,9 +19,9 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # actions: read lets scripts/type_check_gate.py download the base-counts
-    # artifact published by publish-basedpyright-base-counts.yml instead of
-    # re-running basedpyright over the merge-base tree.
+    # actions: read lets the four lint gates download the base-counts artifacts
+    # published by publish-lint-base-counts.yml instead of re-scanning the
+    # merge-base tree in a throwaway worktree.
     permissions:
       contents: read
       pull-requests: read
@@ -142,18 +142,24 @@ jobs:
         run: |
           uv run --no-sync ruff check --config ruff-tests.toml tests
 
-      - name: Check strict-rule budget (delta vs base)
+      - name: Check strict ruff rules (delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           uv run --no-sync python scripts/ruff_strict_gate.py --base "$GATE_BASE_SHA"
 
-      - name: Check type-discipline budget (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs base)
+      - name: Check type discipline (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           uv run --no-sync python scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
 
-      - name: Check test-quality budget (zero-assert / mock-echo tests, sys.path.insert, raw env writes, litellm global mutation, credential-gated skips, conftest snapshot inventory, delta vs base)
+      - name: Check test quality (zero-assert / mock-echo tests, sys.path.insert, raw env writes, litellm global mutation, credential-gated skips, conftest snapshot inventory, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           uv run --no-sync python scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
 
@@ -162,7 +168,7 @@ jobs:
         run: |
           uv run --no-sync python -c "import openai; print(f'OpenAI version: {openai.__version__}')"
 
-      - name: Check basedpyright budget (delta vs base)
+      - name: Check basedpyright (delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -189,40 +195,6 @@ jobs:
         if: steps.changes.outputs.decision != 'skip'
         run: |
           uv run --no-sync python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
-
-  # Intentionally NON-GATING. This job turns red when a *-budget.json ceiling is
-  # raised (or a rule/budget is dropped) so a loosening is obvious in review, but it
-  # must be kept OUT of the branch-protection required-checks list so a justified
-  # bump can still be merged by a human who has seen and accepted the red.
-  budget-ratchet:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Fetch ratchet base
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          retry() { "$@" || { sleep 15; "$@"; } || { sleep 30; "$@"; }; }
-          retry git fetch --no-tags --depth=1 origin "$BASE_SHA"
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: "3.12"
-
-      - name: Ratchet check (budgets may only decrease; non-gating)
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          python scripts/budget_ratchet_check.py --base "$BASE_SHA"
 
   secret-scan:
     runs-on: ubuntu-latest

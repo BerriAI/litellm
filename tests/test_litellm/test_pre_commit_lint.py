@@ -12,9 +12,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "pre_commit_lint.sh"
 WHOLE_TREE_RUFF = "run --no-sync ruff check --config ruff-tests.toml tests"
-TEST_TREE_RAN = "ran:     test-tree lint (ruff-tests.toml + test-quality budget)"
+TEST_TREE_RAN = "ran:     test-tree lint (ruff-tests.toml + test-quality gate)"
 TEST_TREE_SKIPPED = (
-    "skipped: test-tree lint (ruff-tests.toml + test-quality budget) "
+    "skipped: test-tree lint (ruff-tests.toml + test-quality gate) "
     "(no tests/ Python files or test-tree lint inputs in scope)"
 )
 
@@ -475,7 +475,6 @@ def test_tests_only_change_runs_the_whole_test_tree_ruff_and_the_quality_gate(tm
     "changed",
     [
         "ruff-tests.toml",
-        "test-quality-budget.json",
         "scripts/check_test_quality.py",
         "scripts/test_quality_gate.py",
         "tests/e2e/test_x.py",
@@ -528,7 +527,7 @@ def test_a_failing_quality_gate_fails_a_tests_only_run(tmp_path: Path) -> None:
     _stage_file(repo, "tests/test_a.py", "def test_a() -> None: ...\n")
     proc = _run(repo, bin_dir, {"STUB_FAIL": "test-quality"})
     assert proc.returncode == 1
-    assert "Test-quality budget failed" in proc.stdout + proc.stderr
+    assert "Test-quality gate failed" in proc.stdout + proc.stderr
     assert "check: FAIL" in proc.stdout
 
 
@@ -571,7 +570,7 @@ def test_partial_staging_warns_when_test_files_are_left_unstaged(tmp_path: Path)
     (repo / "tests" / "test_a.py").write_text("def test_a() -> None:\n    assert True\n")
     proc = _run(repo, bin_dir, {"STUB_ARGS_DIR": str(args_dir)})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "SKIPPED test-tree lint (ruff-tests.toml + test-quality budget)" in proc.stdout
+    assert "SKIPPED test-tree lint (ruff-tests.toml + test-quality gate)" in proc.stdout
     assert "tests/test_a.py" in proc.stdout
     assert _recorded(args_dir, "ruff_tests.args") == []
     assert _recorded(args_dir, "make.args") == []

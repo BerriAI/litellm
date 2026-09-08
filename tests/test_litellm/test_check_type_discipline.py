@@ -7,7 +7,6 @@ a test fail. The comment-scanner cases are the regression for the readline path:
 """
 
 import importlib.util
-import json
 import os
 import re
 import subprocess
@@ -15,6 +14,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+import type_discipline_gate as gate
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "check_type_discipline.py"
@@ -688,17 +689,16 @@ def test_writable_ok_without_reason_is_lit005_and_does_not_suppress(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Budget integrity: every emittable LIT rule (bar the LIT000 read/parse error) is gated
+# Gate integrity: headroom only ever names rules the checker can emit
 # --------------------------------------------------------------------------- #
 
 
-def test_budget_covers_exactly_the_checker_rules():
-    budget = json.loads((_REPO_ROOT / "type-discipline-budget.json").read_text())
+def test_headroom_names_only_rules_the_checker_emits():
     emitted = set(re.findall(r"LIT\d{3}", _MODULE_PATH.read_text(encoding="utf-8"))) - {"LIT000"}
-    assert set(budget) == emitted
-    for spec in budget.values():
-        assert isinstance(spec["limit"], int)
-        assert spec["limit"] >= 0
+    assert set(gate.HEADROOM) <= emitted
+    for value in gate.HEADROOM.values():
+        assert isinstance(value, int)
+        assert value > 0
 
 
 _FANS_OUT = checker._worker_count(checker.PARALLEL_MIN_PATHS) > 1

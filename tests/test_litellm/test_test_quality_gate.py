@@ -1,12 +1,12 @@
 """Tests for scripts/test_quality_gate.py.
 
-The gate's whole value is that it blames a change only for what it adds and that a
-limit can never rise. Both live in pure functions, so they are tested directly:
-`evaluate` for the blame rule, `ratcheted_budget` for the one-way ratchet, and
-`parse_changed_lines` for the diff scan that turns a breach into file:line.
+The gate's whole value is that it blames a change only for what it adds. That lives
+in pure functions, so they are tested directly: `lint_base_counts.evaluate` for the
+blame rule and `parse_changed_lines` for the diff scan that turns a breach into
+file:line. The base scan spawns a worktree and a checker subprocess, so its cleanup
+on termination is driven end to end.
 """
 
-import importlib.util
 import os
 import signal
 import subprocess
@@ -17,75 +17,48 @@ from contextlib import suppress
 from pathlib import Path
 from typing import NamedTuple
 
+import lint_base_counts
+import test_quality_gate as gate
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / "scripts" / "test_quality_gate.py"
-_spec = importlib.util.spec_from_file_location("test_quality_gate", _MODULE_PATH)
-gate = importlib.util.module_from_spec(_spec)
-# @dataclass(slots=True) rebuilds its class through sys.modules[__module__], so the
-# module has to be registered before exec_module runs or Scope fails to construct.
-sys.modules[_spec.name] = gate
-_spec.loader.exec_module(gate)
-
-_BUDGET = {"TQ001": {"limit": 10}, "TQ003": {"limit": 5}}
 
 _SCAN_BASE = (
-    "import importlib.util, pathlib, sys\n"
-    "spec = importlib.util.spec_from_file_location('test_quality_gate', sys.argv[1])\n"
-    "gate = importlib.util.module_from_spec(spec)\n"
-    "sys.modules[spec.name] = gate\n"
-    "spec.loader.exec_module(gate)\n"
-    "gate.base_counts('HEAD', repo_root=pathlib.Path(sys.argv[2]), checker=pathlib.Path(sys.argv[3]))\n"
+    "import pathlib, sys\n"
+    "import test_quality_gate as gate\n"
+    "gate.base_counts('HEAD', repo_root=pathlib.Path(sys.argv[1]), checker=pathlib.Path(sys.argv[2]))\n"
 )
 _SCAN_BASE_WITH_SIGHUP_IGNORED = "import signal\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\n" + _SCAN_BASE
 
 
-def test_a_rule_within_its_limit_is_not_a_breach():
-    assert gate.evaluate({"TQ001": 10}, {"TQ001": 10}, _BUDGET) == ()
+def test_a_rule_that_did_not_grow_is_not_a_breach():
+    assert lint_base_counts.evaluate({"TQ001": 10}, {"TQ001": 10}, {}) == ()
 
 
-def test_a_rule_over_its_limit_that_the_change_added_is_a_breach():
-    breaches = gate.evaluate({"TQ001": 12}, {"TQ001": 10}, _BUDGET)
+def test_a_rule_the_change_grew_is_a_breach_for_exactly_what_it_added():
+    breaches = lint_base_counts.evaluate({"TQ001": 12}, {"TQ001": 10}, {})
     assert [(b.rule, b.total, b.cap, b.added) for b in breaches] == [("TQ001", 12, 10, 2)]
 
 
 def test_drift_already_in_the_base_is_not_blamed_on_the_change():
-    assert gate.evaluate({"TQ001": 14}, {"TQ001": 14}, _BUDGET) == ()
+    assert lint_base_counts.evaluate({"TQ001": 14}, {"TQ001": 14}, {}) == ()
 
 
-def test_a_change_that_reduces_an_over_limit_rule_is_not_blamed():
-    assert gate.evaluate({"TQ001": 13}, {"TQ001": 14}, _BUDGET) == ()
+def test_a_change_that_reduces_a_rule_is_not_blamed():
+    assert lint_base_counts.evaluate({"TQ001": 13}, {"TQ001": 14}, {}) == ()
 
 
 def test_a_rule_absent_from_head_counts_as_zero():
-    assert gate.evaluate({}, {}, _BUDGET) == ()
+    assert lint_base_counts.evaluate({}, {}, {}) == ()
 
 
-def test_over_ceiling_names_only_the_rules_above_their_limit():
-    assert gate.over_ceiling({"TQ001": 11, "TQ003": 5}, _BUDGET) == frozenset({"TQ001"})
+def test_the_gate_grants_no_headroom_to_any_rule():
+    assert dict(gate.HEADROOM) == {}
 
 
-def test_over_ceiling_is_empty_when_everything_fits():
-    assert gate.over_ceiling({"TQ001": 10, "TQ003": 4}, _BUDGET) == frozenset()
-
-
-def test_ratchet_lowers_a_limit_by_what_the_branch_fixed():
-    updated = gate.ratcheted_budget(_BUDGET, {"TQ001": 6}, {"TQ001": 10})
-    assert updated["TQ001"]["limit"] == 6
-
-
-def test_ratchet_never_raises_a_limit_when_violations_grew():
-    updated = gate.ratcheted_budget(_BUDGET, {"TQ001": 20}, {"TQ001": 10})
-    assert updated["TQ001"]["limit"] == 10
-
-
-def test_ratchet_never_goes_below_zero():
-    updated = gate.ratcheted_budget({"TQ001": {"limit": 2}}, {"TQ001": 0}, {"TQ001": 100})
-    assert updated["TQ001"]["limit"] == 0
-
-
-def test_ratchet_lowers_a_rule_introduced_on_this_branch_like_any_other():
-    updated = gate.ratcheted_budget(_BUDGET, {"TQ001": 4}, {"TQ001": 10})
-    assert updated["TQ001"]["limit"] == 4
+def test_the_checker_identity_is_keyed_on_the_checker_source():
+    identity = gate.checker_identity()
+    assert identity == lint_base_counts.Checker("test-quality", (lint_base_counts.sha256_of(gate.CHECKER),))
 
 
 def test_parse_changed_lines_groups_hunks_under_their_own_file():
@@ -130,14 +103,6 @@ def test_introduced_keeps_only_violations_on_changed_lines():
     )
     kept = gate.introduced(violations, {"tests/a.py": frozenset({3})})
     assert kept == (gate.Violation("tests/a.py", 3, "TQ001"),)
-
-
-def test_the_shipped_budget_covers_every_rule_the_checker_can_emit():
-    import json
-
-    budget = json.loads((_REPO_ROOT / "test-quality-budget.json").read_text())
-    assert set(budget) == {"TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ008"}
-    assert all(spec["limit"] >= 0 for spec in budget.values())
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -202,7 +167,8 @@ def _base_scan_stalled_in_its_checker(tmp_path: Path, driver: str) -> _StalledSc
     temp_dir = tmp_path / "tmp"
     temp_dir.mkdir()
     scan = subprocess.Popen(
-        [sys.executable, "-c", driver, str(_MODULE_PATH), str(repo), str(slow_checker)],
+        [sys.executable, "-c", driver, str(repo), str(slow_checker)],
+        cwd=_MODULE_PATH.parent,
         env={**os.environ, "TMPDIR": str(temp_dir)},
     )
     if not _wait_until(scanning.exists, 30):

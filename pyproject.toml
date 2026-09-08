@@ -334,6 +334,7 @@ version_files = [
 ]
 
 [tool.pytest.ini_options]
+pythonpath = ["scripts"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 markers = [
