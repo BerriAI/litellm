@@ -1656,3 +1656,86 @@ async def test_model_group_encrypted_content_affinity_overrides_global_deploymen
         assert request_kwargs.get("_encrypted_content_affinity_pinned") is True
     finally:
         router.discard()
+
+
+@pytest.mark.asyncio
+async def test_complexity_router_encrypted_content_affinity_bypasses_tier_switch():
+    """
+    Issue #40237:
+    Verify that when encrypted content from a prior turn is present in the input,
+    the complexity router pre-routing hook keeps the request on the originating
+    model group rather than switching tiers based on prompt complexity.
+    """
+    from litellm.router import Router
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    model_list = [
+        {
+            "model_name": "auto-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_default_model": "simple-model",
+                "complexity_router_config": {
+                    "tiers": {
+                        "SIMPLE": "simple-model",
+                        "COMPLEX": "complex-model",
+                        "REASONING": "complex-model",
+                    }
+                },
+            },
+        },
+        {
+            "model_name": "simple-model",
+            "litellm_params": {
+                "model": "openai/gpt-simple",
+                "api_base": "https://base-a.example.com",
+                "api_key": "key-a",
+            },
+            "model_info": {"id": "dep-simple-1"},
+        },
+        {
+            "model_name": "complex-model",
+            "litellm_params": {
+                "model": "openai/gpt-complex",
+                "api_base": "https://base-b.example.com",
+                "api_key": "key-b",
+            },
+            "model_info": {"id": "dep-complex-1"},
+        },
+    ]
+
+    router = Router(
+        model_list=model_list,
+        routing_strategy="simple-shuffle",
+        optional_pre_call_checks=["encrypted_content_affinity"],
+    )
+
+    try:
+        # Wrap encrypted content pointing to the simple model deployment
+        wrapped_encrypted = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+            "dummy_ciphertext", "dep-simple-1"
+        )
+
+        # Complex prompt that would trigger COMPLEX tier, but has simple-1 encrypted content
+        request_input = [
+            {
+                "type": "reasoning",
+                "encrypted_content": wrapped_encrypted,
+            },
+            {
+                "role": "user",
+                "content": "Provide a rigorous multi-step analysis of the architectural tradeoffs and mathematical proofs",
+            },
+        ]
+
+        deployment = await router.async_get_available_deployment(
+            model="auto-router",
+            input=request_input,
+            request_kwargs={"input": request_input},
+        )
+
+        assert deployment is not None
+        assert deployment.get("model_name") == "simple-model"
+        assert deployment.get("model_info", {}).get("id") == "dep-simple-1"
+    finally:
+        router.discard()

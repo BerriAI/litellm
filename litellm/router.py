@@ -13037,6 +13037,43 @@ class Router:
             )
             return None
 
+        # Encrypted content affinity check (Issue #40237):
+        optional_checks = getattr(self, "optional_pre_call_checks", None) or []
+        affinity_enabled = (
+            "encrypted_content_affinity" in optional_checks
+            or getattr(self, "enable_encrypted_content_affinity", False)
+            or any(
+                getattr(c, "__class__", None).__name__ == "EncryptedContentAffinityCheck"
+                for c in getattr(self, "pre_call_checks", [])
+            )
+        )
+        if affinity_enabled:
+            from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+                EncryptedContentAffinityCheck,
+            )
+
+            raw_input = (
+                input
+                if input is not None
+                else (
+                    messages
+                    if messages is not None
+                    else (request_kwargs.get("input") or request_kwargs.get("messages"))
+                )
+            )
+            extracted_model_id = EncryptedContentAffinityCheck._extract_model_id_from_input(
+                raw_input
+            )
+            if extracted_model_id:
+                originating_deployment = self.get_deployment(model_id=extracted_model_id)
+                if originating_deployment and originating_deployment.model_name:
+                    from litellm.types.router import PreRoutingHookResponse
+
+                    return PreRoutingHookResponse(
+                        model=originating_deployment.model_name,
+                        messages=messages if isinstance(messages, list) else None,
+                    )
+
         pre_routing_hook_response: Final = await selected_strategy.strategy.async_pre_routing_hook(
             model=registered_model_name,
             request_kwargs=request_kwargs,
