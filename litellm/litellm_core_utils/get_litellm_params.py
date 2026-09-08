@@ -68,6 +68,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "otpm",
             "use_xai_oauth",
             PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+            "xai_oauth_token_file",
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
