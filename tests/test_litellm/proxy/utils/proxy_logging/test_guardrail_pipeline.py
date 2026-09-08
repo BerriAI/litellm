@@ -1836,7 +1836,7 @@ def _echoed_tool_call_dicts(arguments: str) -> List[Dict[str, Any]]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("on_fail, on_error", [("block", None), ("next", "next")])
-async def test_streaming_iterator_hook_pipeline_releases_originals_on_runtime_tool_call_rewrite(
+async def test_streaming_iterator_hook_pipeline_delivers_runtime_tool_call_rewrite(
     proxy_logging, make_user_api_key_auth, monkeypatch, on_fail, on_error, caplog
 ):
     transform = lambda inputs: {"tool_calls": _echoed_tool_call_dicts('{"ssn": "[MASKED]"}')}  # noqa: E731
@@ -1855,9 +1855,12 @@ async def test_streaming_iterator_hook_pipeline_releases_originals_on_runtime_to
             delivered.append(item)
 
     assert len(delivered) == 2
-    assert delivered[0].choices[0].delta.tool_calls[0].function.arguments == '{"ssn": "123"}'
+    delivered_tool_call = delivered[0].choices[0].delta.tool_calls[0]
+    assert delivered_tool_call.function.arguments == '{"ssn": "[MASKED]"}'
+    assert delivered_tool_call.function.name == "lookup"
+    assert delivered_tool_call.id == "call_1"
     assert delivered[1].choices[0].finish_reason == "tool_calls"
-    assert any("'gr-post'" in message and "discarded" in message for message in _warnings(caplog))
+    assert not any("discarded" in message for message in _warnings(caplog))
 
 
 @pytest.mark.asyncio

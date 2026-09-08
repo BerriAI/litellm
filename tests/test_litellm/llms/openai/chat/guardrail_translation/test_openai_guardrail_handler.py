@@ -1113,6 +1113,79 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         assert chunks[1].choices[0].delta.content in (None, "")
         assert chunks[1].choices[0].finish_reason == "stop"
 
+    @staticmethod
+    def _ended_tool_call_stream_chunks() -> list:
+        from litellm.types.utils import (
+            ChatCompletionDeltaToolCall,
+            Delta,
+            Function,
+            ModelResponseStream,
+            StreamingChoices,
+        )
+
+        def chunk(tool_call: ChatCompletionDeltaToolCall | None, finish_reason: Optional[str] = None):
+            return ModelResponseStream(
+                id="chatcmpl-123",
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(tool_calls=[tool_call] if tool_call else None),
+                        finish_reason=finish_reason,
+                    )
+                ],
+            )
+
+        def fragment(arguments: str, name: Optional[str] = None, call_id: Optional[str] = None):
+            return ChatCompletionDeltaToolCall(
+                id=call_id, index=0, type="function", function=Function(name=name, arguments=arguments)
+            )
+
+        return [
+            chunk(fragment("", name="lookup_fruit", call_id="call_1")),
+            chunk(fragment('{"fruit":')),
+            chunk(fragment(' "persimmon"}')),
+            chunk(None, finish_reason="tool_calls"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_tool_call_arguments_back_into_chunks(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        chunks = self._ended_tool_call_stream_chunks()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        fragments = [chunk.choices[0].delta.tool_calls for chunk in chunks[:3]]
+        assert [fragment[0].function.arguments for fragment in fragments] == ['{"fruit": "PERSIMMON"}', "", ""]
+        assert fragments[0][0].function.name == "lookup_fruit"
+        assert fragments[0][0].id == "call_1"
+        assert chunks[3].choices[0].delta.tool_calls is None
+        assert chunks[3].choices[0].finish_reason == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_tool_call_rewrite_leaves_chunks_untouched_by_default(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        chunks = self._ended_tool_call_stream_chunks()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        fragments = [chunk.choices[0].delta.tool_calls for chunk in chunks[:3]]
+        assert [fragment[0].function.arguments for fragment in fragments] == ["", '{"fruit":', ' "persimmon"}']
+
     @pytest.mark.asyncio
     async def test_ended_stream_rewrite_leaves_chunks_untouched_by_default(self):
         handler = OpenAIChatCompletionsHandler()

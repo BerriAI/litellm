@@ -1195,6 +1195,94 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[4]["item"]["content"][0]["text"] == "hello [MASKED]"
         assert events[5]["response"]["output"][0]["content"][0]["text"] == "hello [MASKED]"
 
+    @staticmethod
+    def _ended_function_call_stream_events() -> List[dict]:
+        def item(arguments: str, status: str) -> dict:
+            return {
+                "type": "function_call",
+                "id": "fc_123",
+                "call_id": "call_123",
+                "name": "lookup_fruit",
+                "arguments": arguments,
+                "status": status,
+            }
+
+        return [
+            {"type": "response.output_item.added", "output_index": 0, "item": item("", "in_progress")},
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_123", "output_index": 0, "delta": '{"fruit":'},
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_123", "output_index": 0, "delta": ' "persimmon"}'},
+            {
+                "type": "response.function_call_arguments.done",
+                "item_id": "fc_123",
+                "output_index": 0,
+                "arguments": '{"fruit": "persimmon"}',
+            },
+            {"type": "response.output_item.done", "output_index": 0, "item": item('{"fruit": "persimmon"}', "completed")},
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "model": "gpt-4o",
+                    "output": [item('{"fruit": "persimmon"}', "completed")],
+                    "status": "completed",
+                },
+            },
+        ]
+
+    @staticmethod
+    def _argument_masking_guardrail() -> CustomGuardrail:
+        class MaskArguments(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                tool_calls = [
+                    {**tool_call, "function": {**tool_call["function"], "arguments": '{"fruit": "[MASKED]"}'}}
+                    for tool_call in inputs.get("tool_calls", [])
+                ]
+                return {**inputs, "tool_calls": tool_calls}
+
+        return MaskArguments(guardrail_name="test-mask-arguments")
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_syncs_function_call_events(self):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_function_call_stream_events()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert events[0]["item"]["arguments"] == ""
+        assert events[1]["delta"] == '{"fruit": "[MASKED]"}'
+        assert events[2]["delta"] == ""
+        assert events[3]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[4]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[5]["response"]["output"][0]["arguments"] == '{"fruit": "[MASKED]"}'
+        assert events[5]["response"]["output"][0]["name"] == "lookup_fruit"
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_function_call_rewrite_leaves_events_untouched_by_default(self):
+        handler = OpenAIResponsesHandler()
+        events = self._ended_function_call_stream_events()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=None,
+        )
+
+        assert events[1]["delta"] == '{"fruit":'
+        assert events[3]["arguments"] == '{"fruit": "persimmon"}'
+        assert events[5]["response"]["output"][0]["arguments"] == '{"fruit": "persimmon"}'
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("terminal_type", ["response.incomplete", "response.failed"])
     async def test_deliver_ended_stream_rewrites_syncs_non_completed_terminals(self, terminal_type):
