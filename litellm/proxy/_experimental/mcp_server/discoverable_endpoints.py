@@ -430,7 +430,7 @@ def _clear_oauth_state_cookie(response: Response, request: Request, state: str) 
     )
 
 
-def _get_validated_client_redirect_uri(request: Request, state_data: dict[str, Any]) -> str:
+def _get_validated_client_redirect_uri(request: Request, state_data: Mapping[str, object]) -> str:
     """Return a trusted (same-origin, loopback, or ops-allowlisted)
     client redirect URI from OAuth state.
     """
@@ -480,7 +480,7 @@ def _resolve_oauth2_server_for_root_endpoints(
     return None
 
 
-def _normalize_for_token_comparison(value: Any) -> str:
+def _normalize_for_token_comparison(value: object) -> str:
     """Stringify ``value`` for token-rule comparison.
 
     Booleans are lower-cased so Python's ``True`` / ``False`` line up with
@@ -492,8 +492,8 @@ def _normalize_for_token_comparison(value: Any) -> str:
 
 
 def _validate_token_response(
-    token_response: dict[str, Any],
-    validation_rules: dict[str, Any],
+    token_response: Mapping[str, object],
+    validation_rules: Mapping[str, object],
     server_id: str,
 ) -> None:
     """Raise HTTPException 403 if any validation rule doesn't match the token response.
@@ -507,10 +507,10 @@ def _validate_token_response(
     responses of ``{"verified": true}``.
     """
     for key, expected in validation_rules.items():
-        actual: Any = token_response.get(key)
+        actual: object | None = token_response.get(key)
         # Try dot-notation traversal when top-level lookup returns None
         if actual is None and "." in key:
-            obj: Any = token_response
+            obj: object = token_response
             for part in key.split("."):
                 if isinstance(obj, dict):
                     obj = obj.get(part)
@@ -1481,11 +1481,19 @@ async def _persist_dcr_client_registration(
         )
         updated_row: Final = await update_mcp_server(
             prisma_client=prisma_client,
-            data=UpdateMCPServerRequest(
-                server_id=mcp_server.server_id,
-                credentials=credentials,
-                oauth2_flow="authorization_code",
-                **({"token_url": mcp_server.token_url} if mcp_server.token_url else {}),
+            data=(
+                UpdateMCPServerRequest(
+                    server_id=mcp_server.server_id,
+                    credentials=credentials,
+                    oauth2_flow="authorization_code",
+                    token_url=mcp_server.token_url,
+                )
+                if mcp_server.token_url
+                else UpdateMCPServerRequest(
+                    server_id=mcp_server.server_id,
+                    credentials=credentials,
+                    oauth2_flow="authorization_code",
+                )
             ),
             touched_by="mcp_oauth_dcr",
         )
@@ -2367,7 +2375,7 @@ async def _build_oauth_protected_resource_response(
     if mcp_server is None or mcp_server.auth_type != MCPAuth.oauth2_token_exchange:
         _raise_unless_oauth2_discovery_server(mcp_server, mcp_server_name, "not an OAuth-protected resource")
 
-    if explicitly_named and mcp_server is not None and mcp_server.is_gateway_managed_oauth2:
+    if explicitly_named and mcp_server is not None and mcp_server.advertises_gateway_authorization_server:
         return {
             "authorization_servers": [f"{request_base_url}/mcp"],
             "resource": resource_url,

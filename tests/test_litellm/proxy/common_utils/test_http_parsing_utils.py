@@ -1053,12 +1053,30 @@ class TestNumericFormFields:
             read_only: ReadOnly[int | None]
             not_required: NotRequired[ReadOnly[int]]
             required: Required[ReadOnly[Annotated[float, "meta"]]]
+            read_only_not_required: ReadOnly[NotRequired[int]]
+            read_only_required: ReadOnly[Required[float]]
 
         assert dict(numeric_form_fields(get_type_hints(Schema))) == {
             "plain": int,
             "optional": int,
             "piped": int,
             "read_only": int,
+            "not_required": int,
+            "required": float,
+            "read_only_not_required": int,
+            "read_only_required": float,
+        }
+
+    def test_qualifiers_are_unwrapped_when_get_type_hints_keeps_extras(self):
+        from typing_extensions import Annotated, NotRequired, ReadOnly, Required, TypedDict
+
+        class Schema(TypedDict, total=False):
+            annotated: ReadOnly[Annotated[int, "meta"]]
+            not_required: NotRequired[ReadOnly[int]]
+            required: Required[ReadOnly[Annotated[float, "meta"]]]
+
+        assert dict(numeric_form_fields(get_type_hints(Schema, include_extras=True))) == {
+            "annotated": int,
             "not_required": int,
             "required": float,
         }

@@ -3343,6 +3343,62 @@ def test_add_litellm_metadata_groups_codex_turns_into_one_session():
         assert turn["litellm_metadata"]["session_id"] == CODEX_SESSION_UUID
 
 
+OPENCODE_SESSION_ID = "ses_f91e6e825ffeuhlu5EbglxjAN2"
+OPENCODE_HEADERS = {
+    "x-session-affinity": OPENCODE_SESSION_ID,
+    "X-Session-Id": OPENCODE_SESSION_ID,
+    "User-Agent": "opencode/1.18.28",
+}
+
+
+def test_add_litellm_metadata_groups_opencode_turns_into_one_session():
+    """Every turn of an opencode session must land on metadata.session_id, which is what
+    DeploymentAffinityCheck reads for session pinning, instead of a fresh per-call id."""
+    turns = [{"metadata": {}}, {"metadata": {}}]
+    for turn in turns:
+        LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+            headers=OPENCODE_HEADERS, data=turn, _metadata_variable_name="metadata"
+        )
+
+    for turn in turns:
+        assert turn["metadata"]["session_id"] == OPENCODE_SESSION_ID
+        assert turn["metadata"]["trace_id"] == OPENCODE_SESSION_ID
+        assert turn["litellm_session_id"] == OPENCODE_SESSION_ID
+        assert turn["litellm_trace_id"] == OPENCODE_SESSION_ID
+
+
+@pytest.mark.parametrize("value", ["short", "has spaces!!", ""])
+def test_get_chain_id_from_headers_bare_session_id_ignores_implausible_value(value: str):
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"x-session-id": value}) is None
+
+
+@pytest.mark.parametrize(
+    "other_header",
+    [
+        "x-litellm-trace-id",
+        "x-litellm-session-id",
+        "x-claude-code-session-id",
+        "x-parent-session-id",
+    ],
+)
+def test_get_chain_id_from_headers_bare_session_id_loses_to_more_specific_header(other_header: str):
+    """opencode subagent calls carry x-parent-session-id next to X-Session-Id; explicit and
+    vendor-scoped headers must keep winning over the bare header."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-session-id": OPENCODE_SESSION_ID,
+                other_header: "e96634a3-fa28-4083-b354-55542e2dca01",
+            }
+        )
+        == "e96634a3-fa28-4083-b354-55542e2dca01"
+    )
+
+
 def test_trace_id_from_traceparent_valid():
     from litellm.proxy.litellm_pre_call_utils import _trace_id_from_traceparent
 

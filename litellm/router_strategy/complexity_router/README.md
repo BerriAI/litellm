@@ -247,6 +247,58 @@ unless `modality_routing` is also on.
 
 `session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
 
+### Mid-task stall escalation
+
+A weak model working an agentic task can get stuck: it keeps calling the same tool with the
+same arguments, or the same call keeps erroring, when a stronger model would have broken the
+loop. `stall_escalation_enabled: true` catches this and bumps the request one tier higher, the
+automatic counterpart to a user typing an escalation keyword:
+
+```yaml
+model_list:
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        stall_escalation_enabled: true
+        stall_escalation_window: 6
+        stall_escalation_repeat_threshold: 3
+        tiers:
+          SIMPLE: gpt-4o-mini
+          MEDIUM: gpt-4o
+          COMPLEX: claude-sonnet-4
+          REASONING: o1-preview
+```
+
+Detection looks at the assistant's own tool calls, not the human's messages. The task counts as
+stalled when the NEWEST tool call is still part of a stuck pattern: it repeats, or it errored, at
+least `stall_escalation_repeat_threshold` times across the last `stall_escalation_window` calls.
+The tier is then bumped one step by the same `_escalate_tier` ladder `escalation_keywords` uses,
+capped at the highest configured tier. It reads both tool-call shapes: Anthropic Messages
+`tool_use`/`tool_result` blocks (including `is_error`) and chat-completions `tool_calls`/`tool`
+messages (which carry no standard error flag, so those calls are judged on repetition alone).
+
+Anchoring on the newest call is what keeps a recovered task from being escalated on stale
+evidence. A model that tried the same command three times and then moved on still has those
+three calls sitting in the window for a few turns, and counting whichever pattern is most common
+in the window would escalate a request that is already making progress again. Anchoring still
+leaves room between the matches, so a retry loop broken up by an unrelated lookup counts.
+
+There is no state to expire or leak: detection reruns on every classified turn from that
+request's own message list, so the bump lasts only as long as the recent tool calls still look
+stuck and lifts on its own the moment they don't. This also means it reads the whole
+conversation rather than only the turns since the newest human ask, so a plain follow-up like
+"try again" does not discard evidence from before it. Escalation records `stall_escalation` in
+`routing_decision.signals`; unlike `escalation_keywords`, it does not set the
+`escalated`/`escalation_keyword` pair, which is reserved for the keyword mechanism specifically.
+
+`stall_escalation_enabled` cannot be combined with `session_affinity` or
+`classification_mode: user_turn`: both replay a held routing decision on most turns instead of
+classifying, so detection would never see the tool calls it needs to look at. It is also
+rejected together with `tier_definitions`, for the same reason `escalation_keywords` is: both
+rely on the built-in tier severity order, which a custom tier set does not define. Off by
+default.
+
 ### Heuristic-first chaining
 
 `classifier_type: heuristic_first` runs the local scorer on every request and only calls the LLM

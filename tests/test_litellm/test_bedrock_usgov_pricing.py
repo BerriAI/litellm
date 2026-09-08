@@ -132,6 +132,20 @@ CLAUDE_GOV_EXPECTED = {
         "cache_creation_input_token_cost_above_1hr": 1.2e-05,
         "cache_read_input_token_cost": 6e-07,
     },
+    "anthropic.claude-opus-5": {
+        "input_cost_per_token": 6e-06,
+        "output_cost_per_token": 3e-05,
+        "cache_creation_input_token_cost": 7.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.2e-05,
+        "cache_read_input_token_cost": 6e-07,
+    },
+    "anthropic.claude-fable-5-1": {
+        "input_cost_per_token": 1.2e-05,
+        "output_cost_per_token": 6e-05,
+        "cache_creation_input_token_cost": 1.5e-05,
+        "cache_creation_input_token_cost_above_1hr": 2.4e-05,
+        "cache_read_input_token_cost": 3e-07,
+    },
 }
 
 
@@ -144,15 +158,18 @@ USGOV_CLAUDE_KEY_TEMPLATES = {
 
 @pytest.mark.parametrize("base_key", CLAUDE_GOV_EXPECTED)
 @pytest.mark.parametrize("key_template,expected_provider", USGOV_CLAUDE_KEY_TEMPLATES.items())
-def test_usgov_claude_sonnet5_opus48_pricing(model_data, key_template, expected_provider, base_key):
-    """Sonnet 5 and Opus 4.8 gov entries, both in-region keys and the us-gov.
-    geo inference profile the model cards list for GovCloud, must match the
-    rates AWS publishes on the Bedrock pricing page (1.2x global).
+def test_usgov_claude_pricing(model_data, key_template, expected_provider, base_key):
+    """Sonnet 5, Opus 4.8, Opus 5, and Fable 5.1 gov entries, both in-region keys
+    and the us-gov. geo inference profile the model cards list for GovCloud, must
+    carry the 1.2x GovCloud premium over the global anthropic.* rates. No public
+    AWS source (offer files, pricing page) lists Claude GovCloud rows; the premium
+    is the one AWS quotes for Opus 4.8 in GovCloud ($6/$30 per million).
     """
     gov_key = key_template.format(base_key=base_key)
     assert gov_key in model_data, f"Missing model entry: {gov_key}"
     info = model_data[gov_key]
     assert info["litellm_provider"] == expected_provider
+    assert "search_context_cost_per_query" not in info
     for field, expected in CLAUDE_GOV_EXPECTED[base_key].items():
         assert info[field] == expected, f"{gov_key}: {field} should be {expected} (got {info[field]})"
         ratio = info[field] / model_data[base_key][field]
@@ -161,6 +178,7 @@ def test_usgov_claude_sonnet5_opus48_pricing(model_data, key_template, expected_
 
 CONVERSE_GOV_EXPECTED = {
     "nvidia.nemotron-nano-3-30b": (7.2e-08, 2.88e-07),
+    "nvidia.nemotron-nano-9b-v2": (7.2e-08, 2.76e-07),
     "nvidia.nemotron-nano-12b-v2": (2.4e-07, 7.2e-07),
     "nvidia.nemotron-super-3-120b": (1.8e-07, 7.8e-07),
     "openai.gpt-oss-20b-1:0": (8.4e-08, 3.6e-07),
@@ -169,18 +187,19 @@ CONVERSE_GOV_EXPECTED = {
 
 
 @pytest.mark.parametrize("base_key", CONVERSE_GOV_EXPECTED)
-@pytest.mark.parametrize("region", ["us-gov-east-1", "us-gov-west-1"])
-def test_usgov_converse_model_pricing(model_data, region, base_key):
-    """Nemotron and gpt-oss gov entries must match the AWS Bedrock offer file,
-    which prices both GovCloud regions identically at 1.2x commercial.
+@pytest.mark.parametrize("key_template,expected_provider", USGOV_CLAUDE_KEY_TEMPLATES.items())
+def test_usgov_converse_model_pricing(model_data, key_template, expected_provider, base_key):
+    """Nemotron and gpt-oss gov entries, in-region and the us-gov. geo inference
+    profile both GovCloud regions list as ACTIVE, must match the AWS Bedrock
+    offer file, which prices both regions identically at 1.2x commercial.
     """
-    gov_key = f"bedrock/{region}/{base_key}"
+    gov_key = key_template.format(base_key=base_key)
     assert gov_key in model_data, f"Missing model entry: {gov_key}"
     info = model_data[gov_key]
     expected_input, expected_output = CONVERSE_GOV_EXPECTED[base_key]
     assert info["input_cost_per_token"] == expected_input
     assert info["output_cost_per_token"] == expected_output
-    assert info["litellm_provider"] == "bedrock"
+    assert info["litellm_provider"] == expected_provider
     base = model_data[base_key]
     assert abs(info["input_cost_per_token"] / base["input_cost_per_token"] - 1.2) < 1e-9
     assert abs(info["output_cost_per_token"] / base["output_cost_per_token"] - 1.2) < 1e-9
@@ -257,6 +276,147 @@ def test_usgov_mantle_grok_4_3_west_only(model_data):
     assert info["output_cost_per_token"] == 3e-06
     assert info["cache_read_input_token_cost"] == 2.4e-07
     assert "bedrock_mantle/us-gov-east-1/xai.grok-4.3" not in model_data
+
+
+def test_usgov_east_haiku_profile_mirrors_in_region_row(model_data):
+    """us-gov-east-1 serves claude-3-haiku through the us-gov. inference profile
+    only, so the profile row must bill exactly like the in-region gov row.
+    """
+    profile = model_data["us-gov.anthropic.claude-3-haiku-20240307-v1:0"]
+    in_region = model_data["bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0"]
+    assert profile["litellm_provider"] == "bedrock_converse"
+    assert {k: v for k, v in profile.items() if k != "litellm_provider"} == {
+        k: v for k, v in in_region.items() if k != "litellm_provider"
+    }
+
+
+GROK_4_6_GOV_KEYS = {
+    "us-gov.xai.grok-4.6": ("us.xai.grok-4.6", "bedrock_converse"),
+    "bedrock_mantle/us-gov-west-1/xai.grok-4.6": ("bedrock_mantle/xai.grok-4.6", "bedrock_mantle"),
+    "bedrock_mantle/us-gov-east-1/xai.grok-4.6": ("bedrock_mantle/xai.grok-4.6", "bedrock_mantle"),
+}
+
+
+@pytest.mark.parametrize("gov_key", GROK_4_6_GOV_KEYS)
+def test_usgov_grok_4_6_pricing(model_data, gov_key):
+    """Both GovCloud regions serve grok-4.6 through the us-gov. profile only, and
+    both offer files price its standard SKU at 1.2x the commercial US rate.
+    """
+    base_key, expected_provider = GROK_4_6_GOV_KEYS[gov_key]
+    assert gov_key in model_data, f"Missing model entry: {gov_key}"
+    info = model_data[gov_key]
+    assert info["litellm_provider"] == expected_provider
+    assert info["input_cost_per_token"] == 2.64e-06
+    assert info["output_cost_per_token"] == 7.92e-06
+    assert info["cache_read_input_token_cost"] == 6.6e-07
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost"):
+        assert abs(info[field] / model_data[base_key][field] - 1.2) < 1e-9
+
+
+NOVA_GOV_WEST_EXPECTED = {
+    "amazon.nova-lite-v1:0": (7.2e-08, 2.88e-07),
+    "amazon.nova-micro-v1:0": (4.2e-08, 1.68e-07),
+}
+
+
+@pytest.mark.parametrize("base_key", NOVA_GOV_WEST_EXPECTED)
+def test_usgov_west_nova_lite_micro_pricing(model_data, base_key):
+    """Nova Lite and Micro are on-demand in us-gov-west-1 only; the offer file
+    prices them at 1.2x commercial, like the Nova Pro row that was already there.
+    """
+    gov_key = f"bedrock/us-gov-west-1/{base_key}"
+    assert gov_key in model_data, f"Missing model entry: {gov_key}"
+    info = model_data[gov_key]
+    expected_input, expected_output = NOVA_GOV_WEST_EXPECTED[base_key]
+    assert info["litellm_provider"] == "bedrock"
+    assert info["input_cost_per_token"] == expected_input
+    assert info["output_cost_per_token"] == expected_output
+    assert abs(info["input_cost_per_token"] / model_data[base_key]["input_cost_per_token"] - 1.2) < 1e-9
+    assert abs(info["output_cost_per_token"] / model_data[base_key]["output_cost_per_token"] - 1.2) < 1e-9
+    assert f"bedrock/us-gov-east-1/{base_key}" not in model_data
+
+
+def test_usgov_west_nova_2_multimodal_embeddings_pricing(model_data):
+    """Every meter of the multimodal embedding model (tokens, images, audio and
+    video seconds) carries the 1.2x uplift the us-gov-west-1 offer file lists.
+    """
+    gov_key = "bedrock/us-gov-west-1/amazon.nova-2-multimodal-embeddings-v1:0"
+    assert gov_key in model_data, f"Missing model entry: {gov_key}"
+    info = model_data[gov_key]
+    assert info["litellm_provider"] == "bedrock"
+    assert info["mode"] == "embedding"
+    assert info["input_cost_per_token"] == 1.62e-07
+    assert info["input_cost_per_image"] == 7.2e-05
+    assert info["input_cost_per_audio_per_second"] == 0.000168
+    assert info["input_cost_per_video_per_second"] == 0.00084
+    assert "bedrock/us-gov-east-1/amazon.nova-2-multimodal-embeddings-v1:0" not in model_data
+
+
+MANTLE_GOV_FLAT_EXPECTED = {
+    "google.gemma-4-e2b": (4.8e-08, 9.6e-08, ("us-gov-west-1",)),
+    "google.gemma-4-26b-a4b": (1.56e-07, 4.8e-07, ("us-gov-west-1",)),
+    "google.gemma-4-31b": (1.68e-07, 4.8e-07, ("us-gov-west-1",)),
+    "openai.gpt-oss-20b": (8.4e-08, 3.6e-07, ("us-gov-west-1", "us-gov-east-1")),
+    "openai.gpt-oss-120b": (1.8e-07, 7.2e-07, ("us-gov-west-1", "us-gov-east-1")),
+}
+
+
+@pytest.mark.parametrize("model", MANTLE_GOV_FLAT_EXPECTED)
+def test_usgov_mantle_gemma_and_gpt_oss_pricing(model_data, model):
+    """Gemma 4 is priced in the us-gov-west-1 offer file only and gpt-oss in both;
+    each Mantle gov row carries the offer file's standard SKU, and no row exists
+    for a region whose offer file has no SKU.
+    """
+    expected_input, expected_output, regions = MANTLE_GOV_FLAT_EXPECTED[model]
+    for region in ("us-gov-west-1", "us-gov-east-1"):
+        gov_key = f"bedrock_mantle/{region}/{model}"
+        if region not in regions:
+            assert gov_key not in model_data
+            continue
+        assert gov_key in model_data, f"Missing model entry: {gov_key}"
+        info = model_data[gov_key]
+        assert info["litellm_provider"] == "bedrock_mantle"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+
+
+GOV_ROW_SOURCES = {
+    "us-gov.anthropic.claude-fable-5-1": "anthropic.claude-fable-5-1",
+    "bedrock/us-gov-west-1/anthropic.claude-fable-5-1": "anthropic.claude-fable-5-1",
+    "bedrock/us-gov-east-1/anthropic.claude-fable-5-1": "anthropic.claude-fable-5-1",
+    "us-gov.nvidia.nemotron-nano-9b-v2": "nvidia.nemotron-nano-9b-v2",
+    "bedrock/us-gov-west-1/nvidia.nemotron-nano-9b-v2": "nvidia.nemotron-nano-9b-v2",
+    "bedrock/us-gov-east-1/nvidia.nemotron-nano-9b-v2": "nvidia.nemotron-nano-9b-v2",
+    "us-gov.xai.grok-4.6": "us.xai.grok-4.6",
+    "bedrock_mantle/us-gov-west-1/xai.grok-4.6": "bedrock_mantle/xai.grok-4.6",
+    "bedrock_mantle/us-gov-east-1/xai.grok-4.6": "bedrock_mantle/xai.grok-4.6",
+    "bedrock/us-gov-west-1/amazon.nova-2-multimodal-embeddings-v1:0": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "bedrock/us-gov-west-1/amazon.nova-lite-v1:0": "amazon.nova-lite-v1:0",
+    "bedrock/us-gov-west-1/amazon.nova-micro-v1:0": "amazon.nova-micro-v1:0",
+    "bedrock_mantle/us-gov-west-1/google.gemma-4-e2b": "bedrock_mantle/google.gemma-4-e2b",
+    "bedrock_mantle/us-gov-west-1/google.gemma-4-26b-a4b": "bedrock_mantle/google.gemma-4-26b-a4b",
+    "bedrock_mantle/us-gov-west-1/google.gemma-4-31b": "bedrock_mantle/google.gemma-4-31b",
+    "bedrock_mantle/us-gov-west-1/openai.gpt-oss-20b": "bedrock_mantle/openai.gpt-oss-20b",
+    "bedrock_mantle/us-gov-east-1/openai.gpt-oss-20b": "bedrock_mantle/openai.gpt-oss-20b",
+    "bedrock_mantle/us-gov-west-1/openai.gpt-oss-120b": "bedrock_mantle/openai.gpt-oss-120b",
+    "bedrock_mantle/us-gov-east-1/openai.gpt-oss-120b": "bedrock_mantle/openai.gpt-oss-120b",
+}
+
+
+def _non_pricing_fields(info):
+    return {k: v for k, v in info.items() if "cost" not in k and k not in ("litellm_provider", "source")}
+
+
+@pytest.mark.parametrize("gov_key", GOV_ROW_SOURCES)
+def test_usgov_rows_keep_commercial_limits_and_capabilities(model_data, gov_key):
+    """A gov row differs from the commercial row it mirrors only in price and
+    provider: context limits, mode, and capability flags stay identical, so a
+    hand-copied row cannot silently drop tool calling or shrink the context window.
+    """
+    gov = model_data[gov_key]
+    assert _non_pricing_fields(gov) == _non_pricing_fields(model_data[GOV_ROW_SOURCES[gov_key]])
+    assert "search_context_cost_per_query" not in gov
+    assert "source" not in gov
 
 
 AZURE_GOV_EXPECTED = {

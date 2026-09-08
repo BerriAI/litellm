@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 
 import ViewUserSpend from "@/components/view_user_spend";
-import { ProxySettings } from "@/components/user_dashboard";
+import { ProxySettings } from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
