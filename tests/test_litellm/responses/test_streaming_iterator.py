@@ -7,7 +7,7 @@ import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Dict, Final, List, Optional
+from typing import Final, Optional
 from unittest.mock import Mock, patch
 
 import httpx
@@ -23,12 +23,15 @@ from litellm.responses.streaming_iterator import (
     _obj_get,
     _ResponsesLifecycleGapFiller,
     _safe_int,
+    _safe_str,
 )
 from litellm.types.llms.openai import (
     ResponseCompletedEvent,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
+    ResponsesAPIStreamingResponse,
 )
+from litellm.types.utils import CallTypes
 
 EV = ResponsesAPIStreamEvents
 E = EV
@@ -549,14 +552,14 @@ async def test_streaming_logging_copy_fallback_leaves_caller_event_untouched():
     assert iterator.completed_response.response._hidden_params == {}
 
 
-def _response_body(status: str) -> Mapping[str, Any]:
+def _response_body(status: str, *, model: str = "gpt-5") -> Mapping[str, object]:
     return MappingProxyType(
         {
             "id": "resp_real_upstream",
             "object": "response",
             "created_at": 1700000000,
             "status": status,
-            "model": "gpt-5",
+            "model": model,
             "output": (
                 MappingProxyType(
                     {
@@ -581,52 +584,41 @@ def _sse_frames(events: Sequence[Mapping[str, object]]) -> tuple[bytes, ...]:
     return (*(f"data: {json.dumps(evt, default=dict)}\n\n".encode("utf-8") for evt in events), b"data: [DONE]\n\n")
 
 
-class _FakeStreamResponse:
-    def __init__(self, frames: tuple[bytes, ...]):
-        self.headers: Mapping[str, str] = MappingProxyType({})
-        self._frames = frames
-
-    async def aiter_bytes(self):
-        for frame in self._frames:
-            yield frame
-
-    def iter_bytes(self):
-        for frame in self._frames:
-            yield frame
-
-
-def _make_logging_obj() -> Any:
+def _make_logging_obj() -> Mock:
     logging_obj: Final = Mock(spec=LiteLLMLoggingObj)
     logging_obj.model_call_details = MappingProxyType({"litellm_params": MappingProxyType({})})
     logging_obj.completion_start_time = None
     return logging_obj
 
 
-def _iterator(events: tuple[Mapping[str, Any], ...], *, sync: bool, model: str = "gpt-5") -> Any:
-    response: Final = _FakeStreamResponse(_sse_frames(events))
+def _iterator(
+    events: Sequence[Mapping[str, object]], *, sync: bool, model: str = "gpt-5"
+) -> ResponsesAPIStreamingIterator | SyncResponsesAPIStreamingIterator:
+    response: Final = httpx.Response(200, content=b"".join(_sse_frames(events)))
     cls: Final = SyncResponsesAPIStreamingIterator if sync else ResponsesAPIStreamingIterator
     return cls(
         response=response,
         model=model,
         responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=_make_logging_obj(),
-        litellm_metadata=MappingProxyType({"model_info": MappingProxyType({"id": "model_123"})}),
         custom_llm_provider="openai",
     )
 
 
-async def _drive(events: Sequence[Mapping[str, object]], *, sync: bool, model: str = "gpt-5") -> tuple[Any, ...]:
+async def _drive(
+    events: Sequence[Mapping[str, object]], *, sync: bool, model: str = "gpt-5"
+) -> tuple[ResponsesAPIStreamingResponse, ...]:
     iterator: Final = _iterator(events, sync=sync, model=model)
-    if sync:
+    if isinstance(iterator, SyncResponsesAPIStreamingIterator):
         return tuple(iterator)
     return tuple([chunk async for chunk in iterator])
 
 
-def _types(events: tuple[Any, ...]) -> tuple[Any, ...]:
-    return tuple((getattr(e, "type", None) for e in events))
+def _types(events: Sequence[ResponsesAPIStreamingResponse]) -> tuple[str, ...]:
+    return tuple(_safe_str(_obj_get(event, "type"), "") for event in events)
 
 
-_TRUNCATED_TEXT_EVENTS: Final[tuple[Mapping[str, Any], ...]] = (
+_TRUNCATED_TEXT_EVENTS: Final[tuple[Mapping[str, object], ...]] = (
     MappingProxyType(
         {
             "type": "response.output_text.delta",
@@ -647,7 +639,7 @@ _TRUNCATED_TEXT_EVENTS: Final[tuple[Mapping[str, Any], ...]] = (
     ),
     MappingProxyType({"type": "response.completed", "response": _response_body("completed")}),
 )
-_FULL_TEXT_EVENTS: Final[tuple[Mapping[str, Any], ...]] = (
+_FULL_TEXT_EVENTS: Final[tuple[Mapping[str, object], ...]] = (
     MappingProxyType({"type": "response.created", "response": _response_body("in_progress")}),
     MappingProxyType({"type": "response.in_progress", "response": _response_body("in_progress")}),
     MappingProxyType(
@@ -716,7 +708,7 @@ _FULL_TEXT_EVENTS: Final[tuple[Mapping[str, Any], ...]] = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
-async def test_truncated_text_stream_synthesizes_full_lifecycle(sync):
+async def test_truncated_text_stream_synthesizes_full_lifecycle(sync: bool) -> None:
     collected: Final = await _drive(_TRUNCATED_TEXT_EVENTS, sync=sync)
     types: Final = _types(collected)
     assert types == (
@@ -743,7 +735,7 @@ async def test_truncated_text_stream_synthesizes_full_lifecycle(sync):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
-async def test_complete_stream_passes_through_without_duplication(sync):
+async def test_complete_stream_passes_through_without_duplication(sync: bool) -> None:
     collected: Final = await _drive(_FULL_TEXT_EVENTS, sync=sync)
     types: Final = _types(collected)
     assert types == tuple((evt["type"] for evt in _FULL_TEXT_EVENTS)), types
@@ -755,7 +747,7 @@ async def test_complete_stream_passes_through_without_duplication(sync):
 
 
 @pytest.mark.asyncio
-async def test_truncated_function_call_stream_synthesizes_item_lifecycle():
+async def test_truncated_function_call_stream_synthesizes_item_lifecycle() -> None:
     events: Final = (
         MappingProxyType(
             {
@@ -853,7 +845,14 @@ async def test_gpt_5_6_reasoning_stream_preserves_item_lifecycle(sync: bool, com
                 {
                     **event,
                     **(
-                        MappingProxyType({"response": MappingProxyType({**event["response"], "model": "gpt-5.6"})})
+                        MappingProxyType(
+                            {
+                                "response": _response_body(
+                                    "completed" if event["type"] == E.RESPONSE_COMPLETED else "in_progress",
+                                    model="gpt-5.6",
+                                )
+                            }
+                        )
                         if "response" in event
                         else MappingProxyType({})
                     ),
@@ -897,7 +896,7 @@ async def test_gpt_5_6_reasoning_stream_preserves_item_lifecycle(sync: bool, com
 @pytest.mark.parametrize("has_summary_deltas", (False, True))
 async def test_reasoning_teardown_preserves_summary_indices_and_encrypted_content(
     sync: bool, terminal_has_item: bool, has_summary_deltas: bool
-):
+) -> None:
     opening_item: Final = MappingProxyType(
         {"id": "rs_1", "type": "reasoning", "summary": (), "encrypted_content": "opening-encrypted"}
     )
@@ -956,7 +955,7 @@ async def test_stream_without_item_events_preserves_response_status_events(sync:
 
 
 @pytest.mark.asyncio
-async def test_synthesized_events_survive_proxy_serialization():
+async def test_synthesized_events_survive_proxy_serialization() -> None:
     collected: Final = await _drive(_TRUNCATED_TEXT_EVENTS, sync=False)
     required_by_type: Final = MappingProxyType(
         {
@@ -980,14 +979,20 @@ async def test_synthesized_events_survive_proxy_serialization():
 class _RedactingDeploymentHook:
     REDACTION: Final = "[REDACTED]"
 
-    async def async_post_call_streaming_deployment_hook(self, *, request_data, response_chunk, call_type):
+    async def async_post_call_streaming_deployment_hook(
+        self,
+        *,
+        request_data: Mapping[str, object],
+        response_chunk: ResponsesAPIStreamingResponse,
+        call_type: CallTypes | None,
+    ) -> ResponsesAPIStreamingResponse:
         if getattr(response_chunk, "type", None) == E.OUTPUT_TEXT_DELTA:
             return response_chunk.model_copy(update=MappingProxyType({"delta": self.REDACTION}))
         return response_chunk
 
 
 @pytest.fixture
-def redacting_deployment_hook(monkeypatch):
+def redacting_deployment_hook(monkeypatch: pytest.MonkeyPatch) -> _RedactingDeploymentHook:
     hook: Final = _RedactingDeploymentHook()
     monkeypatch.setattr(litellm, "callbacks", (*litellm.callbacks, hook))
     return hook
@@ -995,7 +1000,9 @@ def redacting_deployment_hook(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
-async def test_streaming_hook_governs_synthesized_teardown(sync, redacting_deployment_hook):
+async def test_streaming_hook_governs_synthesized_teardown(
+    sync: bool, redacting_deployment_hook: _RedactingDeploymentHook
+) -> None:
     redacted: Final = _RedactingDeploymentHook.REDACTION * 2
     collected: Final = await _drive(_TRUNCATED_TEXT_EVENTS, sync=sync)
     by_type: Final = MappingProxyType(
@@ -1014,7 +1021,7 @@ async def test_streaming_hook_governs_synthesized_teardown(sync, redacting_deplo
     assert all((getattr(e, "text", None) != "Hello world" for e in collected))
 
 
-_TRUNCATED_REFUSAL_EVENTS: Final[tuple[Mapping[str, Any], ...]] = (
+_TRUNCATED_REFUSAL_EVENTS: Final[tuple[Mapping[str, object], ...]] = (
     MappingProxyType(
         {"type": "response.refusal.delta", "item_id": "msg_r", "output_index": 0, "content_index": 0, "delta": "I can"}
     ),
@@ -1033,7 +1040,7 @@ _TRUNCATED_REFUSAL_EVENTS: Final[tuple[Mapping[str, Any], ...]] = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
-async def test_truncated_refusal_stream_synthesizes_lifecycle(sync):
+async def test_truncated_refusal_stream_synthesizes_lifecycle(sync: bool) -> None:
     collected: Final = await _drive(_TRUNCATED_REFUSAL_EVENTS, sync=sync)
     types: Final = _types(collected)
     assert types == (
@@ -1054,7 +1061,7 @@ async def test_truncated_refusal_stream_synthesizes_lifecycle(sync):
     assert collected[8].item.content[0].refusal == "I cannot help"
 
 
-def test_obj_get_handles_dict_object_and_none():
+def test_obj_get_handles_dict_object_and_none() -> None:
     assert _obj_get(MappingProxyType({"a": 1}), "a") == 1
     assert _obj_get(MappingProxyType({"a": 1}), "missing", "d") == "d"
     assert _obj_get(None, "a", "d") == "d"
@@ -1066,7 +1073,7 @@ def test_obj_get_handles_dict_object_and_none():
     assert _obj_get(_Obj(), "y", "fallback") == "fallback"
 
 
-def test_safe_int_narrows_dynamic_values():
+def test_safe_int_narrows_dynamic_values() -> None:
     assert _safe_int(3, 0) == 3
     assert _safe_int(True, 9) == 9
     assert _safe_int("5", 0) == 5
@@ -1074,7 +1081,7 @@ def test_safe_int_narrows_dynamic_values():
     assert _safe_int(1.5, 4) == 4
 
 
-def test_gap_filler_passes_unknown_event_through():
+def test_gap_filler_passes_unknown_event_through() -> None:
     gap_filler: Final = _ResponsesLifecycleGapFiller(model="m", response_id="resp_x")
     event: Final = MappingProxyType({"type": "response.some_unhandled_event"})
     assert gap_filler.expand(event) == (event,)
