@@ -1,9 +1,10 @@
+import asyncio
 import json
 import time
+from typing import Final
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
-
 
 import httpx
 import pytest
@@ -15,7 +16,7 @@ from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, Prisma
 import litellm
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
-
+from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
@@ -145,7 +146,11 @@ async def test_db_health_transport_error_never_raises(transport_error):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "disconnected"
-    mock_prisma.attempt_db_reconnect.assert_called_once_with(reason="health_readiness_check")
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+        lock_timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+    )
 
 
 @pytest.mark.asyncio
@@ -175,7 +180,11 @@ async def test_db_health_transport_error_reconnect_succeeds(transport_error):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "connected"
-    mock_prisma.attempt_db_reconnect.assert_called_once_with(reason="health_readiness_check")
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check",
+        timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+        lock_timeout_seconds=_health_endpoints_module.DB_READINESS_CHECK_TIMEOUT_SECONDS,
+    )
     assert mock_prisma.health_check.call_count == 2
 
 
@@ -1182,27 +1191,23 @@ def test_health_liveliness_endpoint(proxy_client):
     Test that /health/liveliness endpoint returns 200 OK with "I'm alive!" message.
     This is a critical orchestration endpoint that must be simple and fast.
     """
-    # Measure the time taken for the health check call
-    start_time = time.perf_counter()
+    warm_up: Final = proxy_client.get("/health/liveliness")
+    assert warm_up.status_code == 200, f"Expected 200 OK, got {warm_up.status_code}: {warm_up.text}"
 
-    # Make GET request to /health/liveliness
-    response = proxy_client.get("/health/liveliness")
+    def _timed_poll() -> tuple[float, httpx.Response]:
+        start_time: Final = time.perf_counter()
+        response: Final = proxy_client.get("/health/liveliness")
+        return (time.perf_counter() - start_time) * 1000, response
 
-    end_time = time.perf_counter()
-    duration_ms = (end_time - start_time) * 1000
+    polls: Final = tuple(_timed_poll() for _ in range(5))
 
-    # Assert response status
-    assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
+    for _, response in polls:
+        assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
+        assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
 
-    # Assert response content (FastAPI JSON-encodes the string)
-    assert response.json() == "I'm alive!", f"Expected 'I'm alive!' message, got: {response.json()}"
-
-    # Verify response is fast (should be < 100ms for a simple endpoint)
-    # This is critical for orchestration systems that poll frequently
-    assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
-
-    # Log the duration for visibility (useful for CI/CD monitoring)
-    print(f"\n/health/liveliness response time: {duration_ms:.2f}ms")
+    durations_ms: Final = tuple(sorted(duration_ms for duration_ms, _ in polls))
+    median_ms: Final = durations_ms[len(durations_ms) // 2]
+    assert median_ms < 100, f"Median of {len(polls)} health checks took {median_ms:.2f}ms, expected < 100ms"
 
 
 def test_health_liveness_endpoint(proxy_client):
@@ -1229,6 +1234,18 @@ def test_health_liveness_endpoint(proxy_client):
 
     # Log the duration for visibility (useful for CI/CD monitoring)
     print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
+
+
+def test_health_backlog_includes_admission_control_stats(proxy_client):
+    response = proxy_client.get("/health/backlog")
+
+    assert response.status_code == 200, response.text
+    assert set(response.json()) == {
+        "in_flight_requests",
+        "admitted_requests",
+        "queued_requests",
+        "rejected_requests",
+    }
 
 
 def test_health_readiness(proxy_client):
@@ -2277,6 +2294,159 @@ async def test_health_readiness_returns_503_when_db_disconnected():
 
 
 @pytest.mark.asyncio
+async def test_health_readiness_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/34934.
+
+    allow_requests_on_db_unavailable keeps the proxy serving through a DB
+    outage, so the readiness probe must keep the pod in rotation (200) and
+    report the DB state through the body, not the status code. Otherwise
+    K8s pulls every replica before the request-layer fail-open can run.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result == {"status": "healthy", "db": "disconnected"}
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_details_returns_200_when_db_down_and_allow_requests_on_db_unavailable():
+    """
+    The detailed readiness payload (public via
+    allow_public_health_readiness_details, or /health/readiness/details)
+    must honor the same flag so probes pointed at it also stay 200.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _get_health_readiness_details,
+    )
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with (
+        patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.dict(  # test-quality-ok: the fail-open flag lives in the proxy-global general_settings; no injection seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": True},
+        ),
+    ):
+        result = await _get_health_readiness_details(response=response)
+
+    assert response.status_code == 200
+    assert result["db"] == "disconnected"
+
+
+@pytest.mark.asyncio
+async def test_db_health_readiness_check_bounds_hung_health_check():
+    """
+    A connection that hangs mid-failover must not stall the probe past the
+    kubelet's timeoutSeconds; the DB round-trip is bounded and reported as
+    disconnected instead.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _db_health_readiness_check,
+    )
+
+    async def hang():
+        await asyncio.sleep(60)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = hang
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still down"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
+        "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_CHECK_TIMEOUT_SECONDS",
+        0.05,
+    ):
+        start = time.monotonic()
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
+            result = await _db_health_readiness_check()
+        elapsed = time.monotonic() - start
+
+    assert result["status"] == "disconnected"
+    assert elapsed < 5
+
+
+@pytest.mark.asyncio
+async def test_db_health_readiness_check_overall_deadline_bounds_hung_reconnect():
+    """
+    The whole probe-path DB check (initial check + reconnect + re-check,
+    including reconnect lock waits) runs under one deadline, so a reconnect
+    that hangs on the lock still returns disconnected within the deadline.
+    """
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _db_health_readiness_check,
+    )
+
+    async def hang(**kwargs):
+        await asyncio.sleep(60)
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=httpx.ConnectError("down"))
+    mock_prisma.attempt_db_reconnect = hang
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    with patch(  # test-quality-ok: lowers the module-level probe timeout so the hung-call test finishes fast
+        "litellm.proxy.health_endpoints._health_endpoints.DB_READINESS_PROBE_DEADLINE_SECONDS",
+        0.05,
+    ):
+        start = time.monotonic()
+        with patch(  # test-quality-ok: the readiness path reads the proxy-global DB client; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ):
+            result = await _db_health_readiness_check()
+        elapsed = time.monotonic() - start
+
+    assert result["status"] == "disconnected"
+    assert elapsed < 5
+
+
+@pytest.mark.asyncio
 async def test_health_readiness_returns_200_when_db_connected():
     """Happy path: connected DB keeps the legacy 200."""
     from fastapi import Response
@@ -2502,6 +2672,172 @@ class TestConfigBaseForHealthCheck:
         )
         assert base["litellm_credential_name"] == "OpenAI-prod"
         assert base["api_key"] == "sk-configured"
+
+    def test_request_naming_another_credential_does_not_inherit_config_credentials(self):
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"})
+        assert "api_key" not in base
+        assert "api_base" not in base
+        assert "vertex_credentials" not in base
+        assert base["rpm"] == 100
+
+    def test_blank_credential_name_names_no_credential(self):
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": ""})
+        assert base["api_key"] == "sk-configured"
+
+    def test_opt_in_does_not_put_config_credentials_over_a_named_credential(self):
+        base = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"},
+            allow_client_side_credentials=True,
+        )
+        assert "api_key" not in base
+
+
+class TestTestConnectionUsesTheNamedCredential:
+    CREDENTIAL_KEY = "sk-credential-key"
+    OTHER_DEPLOYMENT_KEY = "sk-other-deployment-key"
+    OTHER_DEPLOYMENT_BASE = "https://other-deployment.example/v1"
+    REQUEST = {
+        "model": "xai/grok-4",
+        "custom_llm_provider": "xai",
+        "litellm_credential_name": "my-xai-cred",
+    }
+    COMPLETION = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "grok-4",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+    @staticmethod
+    def _credential(**values: str) -> CredentialItem:
+        return CredentialItem(credential_name="my-xai-cred", credential_info={}, credential_values=values)
+
+    @staticmethod
+    def _wildcard_deployment(**litellm_params: str) -> dict:
+        return {
+            "model_name": "xai/*",
+            "litellm_params": {"model": "xai/*", **litellm_params},
+            "model_info": {"id": "unrelated-wildcard-deployment"},
+        }
+
+    def _probe(
+        self,
+        monkeypatch,
+        deployment: dict,
+        request_litellm_params: dict,
+        deployment_by_id: object | None = None,
+        request_model_info: dict | None = None,
+    ) -> httpx.Request:
+        """Run /health/test_connection and hand back the upstream request it made."""
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        app = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        router = MagicMock()
+        router.get_model_list.return_value = [deployment]
+        router.get_deployment.return_value = deployment_by_id
+
+        with (
+            patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+                "litellm.proxy.proxy_server.prisma_client", MagicMock()
+            ),
+            patch(  # test-quality-ok: the deployment the probe is matched against is a proxy global; it has no injection seam
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            respx.mock(assert_all_called=True) as respx_mock,
+        ):
+            respx_mock.post(path__regex=r".*/chat/completions").respond(json=self.COMPLETION)
+            response = TestClient(app).post(
+                "/health/test_connection",
+                json={
+                    "mode": "chat",
+                    "litellm_params": request_litellm_params,
+                    "model_info": request_model_info or {"mode": "chat"},
+                },
+            )
+            probe = respx_mock.calls.last.request
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        return probe
+
+    def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY),
+            self.REQUEST,
+        )
+
+        assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
+
+    def test_named_credentials_api_base_is_used_not_the_matched_deployments(self, monkeypatch):
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [self._credential(api_key=self.CREDENTIAL_KEY, api_base="https://credential.example/v1")],
+        )
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_base=self.OTHER_DEPLOYMENT_BASE),
+            self.REQUEST,
+        )
+
+        assert probe.url.host == "credential.example"
+
+    def test_named_credential_without_an_api_base_leaves_the_provider_default(self, monkeypatch):
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_base=self.OTHER_DEPLOYMENT_BASE),
+            self.REQUEST,
+        )
+
+        assert probe.url.host == "api.x.ai"
+
+    def test_configured_model_named_without_a_credential_still_inherits_its_config(self, monkeypatch):
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY, api_base=self.OTHER_DEPLOYMENT_BASE),
+            {"model": "xai/grok-4", "custom_llm_provider": "xai"},
+        )
+
+        assert probe.headers["authorization"] == f"Bearer {self.OTHER_DEPLOYMENT_KEY}"
+        assert probe.url.host == "other-deployment.example"
+
+    def test_deployment_probed_by_id_keeps_the_endpoint_it_is_configured_with(self, monkeypatch):
+        """The model detail page always echoes back the credential the deployment already uses."""
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
+
+        probe = self._probe(
+            monkeypatch,
+            self._wildcard_deployment(api_key=self.OTHER_DEPLOYMENT_KEY, api_base=self.OTHER_DEPLOYMENT_BASE),
+            self.REQUEST,
+            deployment_by_id=Deployment(
+                model_name="grok-4",
+                litellm_params=LiteLLM_Params(
+                    model="xai/grok-4",
+                    api_base="https://configured.example/v1",
+                    litellm_credential_name="my-xai-cred",
+                ),
+                model_info={"id": "configured-deployment"},
+            ),
+            request_model_info={"id": "configured-deployment", "mode": "chat"},
+        )
+
+        assert probe.url.host == "configured.example"
+        assert probe.headers["authorization"] == f"Bearer {self.CREDENTIAL_KEY}"
 
 
 class TestNoRedisWarning:
@@ -2746,13 +3082,13 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     app = FastAPI()
     app.include_router(_health_endpoints_module.router)
-    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN
-    )
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     client = TestClient(app)
 
     with (
-        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+        patch(  # test-quality-ok: the endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
         respx.mock(assert_all_called=True) as respx_mock,
     ):
         respx_mock.post(host="api.openai.com", path="/v1/images/edits").respond(

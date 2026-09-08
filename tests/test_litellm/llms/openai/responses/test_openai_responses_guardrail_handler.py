@@ -5,6 +5,8 @@ Tests the handler's ability to process input/output for the Responses API
 with guardrail transformations.
 """
 
+import copy
+from collections.abc import Callable
 from typing import Any, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,6 +20,10 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
+)
+from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.responses.litellm_completion_transformation.transformation import (
+    LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
@@ -828,6 +834,24 @@ class MockPassThroughGuardrail(CustomGuardrail):
         return inputs
 
 
+class MockRecordingGuardrail(MockPassThroughGuardrail):
+    """Pass-through guardrail that records every apply_guardrail inputs payload"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.seen_inputs: List[GenericGuardrailAPIInputs] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_inputs.append(inputs)
+        return inputs
+
+
 class TestOpenAIResponsesHandlerStreamingOutputProcessing:
     """Test streaming output processing functionality"""
 
@@ -1104,6 +1128,80 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         output_text = result[-1]["response"]["output"][0]["content"][0]["text"]
         assert output_text == original_text
 
+    @pytest.mark.asyncio
+    async def test_failed_stream_scans_delta_text(self):
+        """A stream ending in response.failed has text only in delta events; the
+        fallback scan must assemble and scan it instead of skipping on an empty string."""
+        handler = OpenAIResponsesHandler()
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+
+        responses_so_far = [
+            {"type": "response.created", "response": {"id": "resp_123"}},
+            {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_123"}},
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_123",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_123",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": " world",
+            },
+            {"type": "response.failed", "response": {"id": "resp_123", "status": "failed"}},
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert result == responses_so_far
+        assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["Hello world"]]
+
+    def test_get_streaming_string_so_far_prefers_done_text_over_deltas(self):
+        """The done event repeats the whole part, so deltas must not be double counted;
+        a part with no done event yet still contributes its joined deltas."""
+        handler = OpenAIResponsesHandler()
+
+        events = [
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "Hello",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": " world",
+            },
+            {
+                "type": "response.output_text.done",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "text": "Hello world",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_2",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "; unfinished",
+            },
+        ]
+
+        assert handler.get_streaming_string_so_far(events) == "Hello world; unfinished"
+
 
 class TestGetStructuredMessages:
     """Test the get_structured_messages method for Responses API handler."""
@@ -1195,14 +1293,14 @@ class TestOpenAIResponsesHandlerToolInjection:
     """A tool a guardrail injects must survive the write-back to Responses format."""
 
     def test_merge_keeps_guardrail_appended_tool(self):
-        """_merge_tools_after_guardrail must not drop the extra appended tool."""
-        handler = OpenAIResponsesHandler()
+        """merge_guardrailed_tools must not drop the extra appended tool."""
         original = [{"type": "function", "name": "a"}]
-        remapped = [
-            {"type": "function", "name": "a"},
-            {"type": "function", "name": "b"},
+        groups = [form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original)]
+        guardrailed = [
+            *groups[0],
+            {"type": "function", "function": {"name": "b", "description": "", "parameters": {"type": "object"}}},
         ]
-        merged = handler._merge_tools_after_guardrail(original, remapped)
+        merged = merge_guardrailed_tools(original, groups, guardrailed)
         assert [t["name"] for t in merged] == ["a", "b"]
 
     @pytest.mark.asyncio
@@ -1229,3 +1327,1014 @@ class TestOpenAIResponsesHandlerToolInjection:
         names = [t.get("name") for t in result["tools"]]
         assert "get_weather" in names
         assert "injected_tool" in names
+
+
+COMPRESSED_MARKER = "[compressed document; retrieve the full text with hash=b573993006976af767214fac]"
+
+
+class StructuredRewriteGuardrail(CustomGuardrail):
+    """Guardrail that rewrites whole messages via structured_messages and leaves
+    texts untouched, the way message-compressing guardrails do."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        first_user = next(i for i, m in enumerate(messages) if m.get("role") == "user")
+        rewritten = [
+            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
+        ]
+        return {**inputs, "structured_messages": rewritten}
+
+
+class ToolOutputRewriteGuardrail(CustomGuardrail):
+    """Guardrail that compresses the first tool-result row, the way Headroom does."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        first_tool = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "tool")
+        rewritten = [
+            {**m, "content": COMPRESSED_MARKER} if i == first_tool else m for i, m in enumerate(messages)
+        ]
+        return {**inputs, "structured_messages": rewritten}
+
+
+class DroppingRewriteGuardrail(CustomGuardrail):
+    """Guardrail that rewrites the first user row and drops the last row, so the
+    rewrite can only land through the full-conversion fallback."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        first_user = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "user")
+        rewritten = [
+            {**m, "content": COMPRESSED_MARKER} if i == first_user else m for i, m in enumerate(messages)
+        ]
+        return {**inputs, "structured_messages": rewritten[:-1]}
+
+
+def _texts(item: dict) -> list[str]:
+    content = item.get("content")
+    if isinstance(content, str):
+        return [content]
+    return [part["text"] for part in content]
+
+
+class TestStructuredMessagesWriteBack:
+    """A guardrail's structured_messages rewrite must land in the Responses request,
+    not only the per-text mapping the chat handler shares with it."""
+
+    @pytest.mark.asyncio
+    async def test_list_input_gets_rewritten_messages_and_keeps_instructions(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Answer from the memo only.",
+            "input": [
+                {"role": "user", "content": "memo " * 400},
+                {"role": "assistant", "content": "Understood."},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert result["instructions"] == "Answer from the memo only."
+        user_items = [item for item in result["input"] if item.get("role") == "user"]
+        assert [_texts(item) for item in user_items] == [[COMPRESSED_MARKER], ["What is the codename?"]]
+        assert not any(item.get("role") == "system" for item in result["input"])
+        assert _texts(next(item for item in result["input"] if item.get("role") == "assistant")) == ["Understood."]
+
+    @pytest.mark.asyncio
+    async def test_string_input_becomes_rewritten_message_list(self):
+        handler = OpenAIResponsesHandler()
+        data = {"model": "gpt-5.6", "input": "memo " * 400}
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert [_texts(item) for item in result["input"]] == [[COMPRESSED_MARKER]]
+        assert "instructions" not in result
+
+    @pytest.mark.asyncio
+    async def test_developer_item_preserved_verbatim_by_row_patch(self):
+        handler = OpenAIResponsesHandler()
+        developer_item = {"role": "developer", "content": "Always answer in French."}
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                developer_item,
+                {"role": "user", "content": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert result["input"][0] is developer_item
+        assert developer_item["content"] == "Always answer in French."
+        assert _texts(result["input"][1]) == [COMPRESSED_MARKER]
+        assert _texts(result["input"][2]) == ["What is the codename?"]
+
+    @pytest.mark.asyncio
+    async def test_reasoning_and_function_call_items_survive_tool_output_compression(self):
+        handler = OpenAIResponsesHandler()
+        reasoning_item = {
+            "id": "rs_123",
+            "type": "reasoning",
+            "summary": [],
+            "encrypted_content": "gAAAAA-signed-reasoning",
+        }
+        function_call_item = {
+            "id": "fc_123",
+            "type": "function_call",
+            "call_id": "call_abc",
+            "name": "read_document",
+            "arguments": '{"path": "memo.txt"}',
+            "status": "completed",
+        }
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Answer from the memo only.",
+            "input": [
+                reasoning_item,
+                function_call_item,
+                {"type": "function_call_output", "call_id": "call_abc", "output": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, ToolOutputRewriteGuardrail())
+
+        assert result["instructions"] == "Answer from the memo only."
+        assert result["input"][0] is reasoning_item
+        assert reasoning_item["encrypted_content"] == "gAAAAA-signed-reasoning"
+        assert result["input"][1] is function_call_item
+        assert function_call_item["id"] == "fc_123"
+        assert result["input"][2] == {
+            "type": "function_call_output",
+            "call_id": "call_abc",
+            "output": COMPRESSED_MARKER,
+        }
+        assert result["input"][3] == {"role": "user", "content": "What is the codename?"}
+
+    @pytest.mark.asyncio
+    async def test_web_search_call_item_preserved_verbatim(self):
+        handler = OpenAIResponsesHandler()
+        web_search_item = {
+            "id": "ws_123",
+            "type": "web_search_call",
+            "status": "completed",
+            "action": {"type": "search", "query": "codename memo"},
+        }
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                web_search_item,
+                {"role": "user", "content": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert result["input"][0] is web_search_item
+        assert _texts(result["input"][1]) == [COMPRESSED_MARKER]
+        assert _texts(result["input"][2]) == ["What is the codename?"]
+
+    @pytest.mark.asyncio
+    async def test_row_count_change_falls_back_to_full_conversion(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                {"role": "developer", "content": "Always answer in French."},
+                {"role": "user", "content": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, DroppingRewriteGuardrail())
+
+        assert len(result["input"]) == 2
+        developer = next(item for item in result["input"] if item.get("role") == "developer")
+        assert developer["content"] == [{"type": "input_text", "text": "Always answer in French."}]
+        assert _texts(next(item for item in result["input"] if item.get("role") == "user")) == [COMPRESSED_MARKER]
+
+    @pytest.mark.asyncio
+    async def test_same_inputs_object_back_keeps_the_text_mapping(self):
+        handler = OpenAIResponsesHandler()
+        original_input = [
+            {"role": "user", "content": "Hello"},
+            {"role": "user", "content": [{"type": "input_text", "text": "Again"}]},
+        ]
+        data = {"model": "gpt-5.6", "input": original_input}
+
+        result = await handler.process_input_messages(data, MockGuardrail())
+
+        assert result["input"] is original_input
+        assert [_texts(item) for item in result["input"]] == [["Hello [GUARDRAILED]"], ["Again [GUARDRAILED]"]]
+
+
+class AllToolOutputsRewriteGuardrail(CustomGuardrail):
+    """Guardrail that compresses every tool-result row."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        rewritten = [
+            {**m, "content": COMPRESSED_MARKER} if isinstance(m, dict) and m.get("role") == "tool" else m
+            for m in messages
+        ]
+        return {**inputs, "structured_messages": rewritten}
+
+
+class AssistantRewriteGuardrail(CustomGuardrail):
+    """Guardrail that rewrites the first assistant row's content."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        first = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "assistant")
+        rewritten = [{**m, "content": COMPRESSED_MARKER} if i == first else m for i, m in enumerate(messages)]
+        return {**inputs, "structured_messages": rewritten}
+
+
+class DictStructuredMessagesGuardrail(CustomGuardrail):
+    """Guardrail that hands back a raw evaluation dict instead of a message list,
+    the way HiddenLayer v2 does."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "structured_messages": {"evaluation": "allowed", "messages": []}}
+
+
+def _parallel_tool_call_input() -> list:
+    return [
+        {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "read_a", "arguments": "{}"},
+        {"id": "fc_2", "type": "function_call", "call_id": "call_2", "name": "read_b", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "memo " * 400},
+        {"type": "function_call_output", "call_id": "call_2", "output": "note " * 400},
+        {"role": "user", "content": "What is the codename?"},
+    ]
+
+
+class TestProvenancePatching:
+    """The O(n) provenance pass must keep patching rewritten rows in place for the
+    shapes real agent loops produce, and fall back safely everywhere else."""
+
+    @pytest.mark.asyncio
+    async def test_parallel_tool_call_outputs_both_patched(self):
+        handler = OpenAIResponsesHandler()
+        raw_input = _parallel_tool_call_input()
+        fc_1, fc_2 = raw_input[0], raw_input[1]
+        data = {"model": "gpt-5.6", "input": raw_input}
+
+        result = await handler.process_input_messages(data, AllToolOutputsRewriteGuardrail())
+
+        assert result["input"][0] is fc_1
+        assert result["input"][1] is fc_2
+        assert result["input"][2] == {"type": "function_call_output", "call_id": "call_1", "output": COMPRESSED_MARKER}
+        assert result["input"][3] == {"type": "function_call_output", "call_id": "call_2", "output": COMPRESSED_MARKER}
+        assert result["input"][4] == {"role": "user", "content": "What is the codename?"}
+
+    @pytest.mark.asyncio
+    async def test_assistant_turn_with_tool_call_keeps_items_verbatim(self):
+        handler = OpenAIResponsesHandler()
+        assistant_item = {"role": "assistant", "content": "Let me read the memo."}
+        function_call_item = {
+            "id": "fc_9",
+            "type": "function_call",
+            "call_id": "call_9",
+            "name": "read_document",
+            "arguments": '{"path": "memo.txt"}',
+        }
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                assistant_item,
+                function_call_item,
+                {"type": "function_call_output", "call_id": "call_9", "output": "memo " * 400},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, ToolOutputRewriteGuardrail())
+
+        assert result["input"][0] is assistant_item
+        assert result["input"][1] is function_call_item
+        assert result["input"][2] == {"type": "function_call_output", "call_id": "call_9", "output": COMPRESSED_MARKER}
+
+    @pytest.mark.asyncio
+    async def test_rewrite_of_merged_tool_call_message_falls_back(self):
+        handler = OpenAIResponsesHandler()
+        raw_input = _parallel_tool_call_input()
+        data = {"model": "gpt-5.6", "input": raw_input}
+
+        result = await handler.process_input_messages(data, AssistantRewriteGuardrail())
+
+        assert not any(item is original for item in result["input"] for original in raw_input)
+        assistant_items = [item for item in result["input"] if item.get("role") == "assistant"]
+        assert [_texts(item) for item in assistant_items] == [[COMPRESSED_MARKER]]
+
+    @pytest.mark.asyncio
+    async def test_rewrite_of_lone_function_call_message_falls_back(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "read_a", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "memo memo"},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        raw_input = data["input"]
+        result = await handler.process_input_messages(data, AssistantRewriteGuardrail())
+
+        assert not any(item is original for item in result["input"] for original in raw_input)
+        assistant_items = [item for item in result["input"] if item.get("role") == "assistant"]
+        assert [_texts(item) for item in assistant_items] == [[COMPRESSED_MARKER]]
+
+    def test_provenance_bails_on_non_mapping_item(self):
+        from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
+
+        assert _input_item_provenance(["not a mapping"], []) is None
+
+    def test_provenance_bails_when_expected_messages_disagree(self):
+        from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
+
+        assert _input_item_provenance([{"role": "user", "content": "hi"}], [{"role": "user", "content": "bye"}]) is None
+
+    def test_provenance_bails_on_unpredicted_merge(self):
+        from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        raw_input = [
+            {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "read_a", "arguments": "{}"},
+            {"role": "assistant", "content": "Reading the memo now."},
+        ]
+        expected = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=raw_input, responses_api_request={}
+        )
+        assert len(expected) == 1
+        assert _input_item_provenance(raw_input, expected) is None
+
+    def test_provenance_maps_and_taints_parallel_tool_calls(self):
+        from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        raw_input = _parallel_tool_call_input()
+        expected = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=raw_input, responses_api_request={}
+        )
+        provenance = _input_item_provenance(raw_input, expected)
+        assert provenance is not None
+        item_for_message, tainted = provenance
+        assert tainted == {0}
+        assert dict(item_for_message) == {1: 2, 2: 3, 3: 4}
+
+
+class TestDictStructuredMessagesGuard:
+    """A guardrail handing back a non-list structured_messages payload must not
+    blow up the request; the write-back is skipped instead."""
+
+    @pytest.mark.asyncio
+    async def test_list_input_survives_dict_structured_messages(self):
+        handler = OpenAIResponsesHandler()
+        original_input = [{"role": "user", "content": "Hello"}]
+        data = {"model": "gpt-5.6", "input": original_input}
+
+        result = await handler.process_input_messages(data, DictStructuredMessagesGuardrail())
+
+        assert result["input"] is original_input
+        assert result["input"] == [{"role": "user", "content": "Hello"}]
+
+    @pytest.mark.asyncio
+    async def test_string_input_survives_dict_structured_messages(self):
+        handler = OpenAIResponsesHandler()
+        data = {"model": "gpt-5.6", "input": "Hello there"}
+
+        result = await handler.process_input_messages(data, DictStructuredMessagesGuardrail())
+
+        assert result["input"] == "Hello there"
+
+
+class SystemRewriteGuardrail(CustomGuardrail):
+    """Guardrail that rewrites the system row, the way prompt-hardening guardrails do."""
+
+    def __init__(self, rewritten_content: Any = COMPRESSED_MARKER):
+        super().__init__()
+        self.rewritten_content = rewritten_content
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages = list(inputs.get("structured_messages") or [])
+        first = next(i for i, m in enumerate(messages) if isinstance(m, dict) and m.get("role") == "system")
+        rewritten = [
+            {**m, "content": self.rewritten_content} if i == first else m for i, m in enumerate(messages)
+        ]
+        return {**inputs, "structured_messages": rewritten}
+
+
+class TestPatchEdgeBranches:
+    @pytest.mark.asyncio
+    async def test_multimodal_user_item_rewritten_through_conversion(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                {"role": "user", "content": [{"type": "input_text", "text": "memo " * 400}]},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert _texts(result["input"][0]) == [COMPRESSED_MARKER]
+        assert result["input"][1] == {"role": "user", "content": "What is the codename?"}
+
+    @pytest.mark.asyncio
+    async def test_instructions_rewrite_lands_in_instructions_field(self):
+        handler = OpenAIResponsesHandler()
+        user_item = {"role": "user", "content": "What is the codename?"}
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Answer from the memo only.",
+            "input": [user_item],
+        }
+
+        result = await handler.process_input_messages(data, SystemRewriteGuardrail())
+
+        assert result["instructions"] == COMPRESSED_MARKER
+        assert result["input"][0] is user_item
+
+    @pytest.mark.asyncio
+    async def test_non_string_instructions_rewrite_falls_back(self):
+        handler = OpenAIResponsesHandler()
+        user_item = {"role": "user", "content": "What is the codename?"}
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Answer from the memo only.",
+            "input": [user_item],
+        }
+
+        result = await handler.process_input_messages(
+            data, SystemRewriteGuardrail(rewritten_content=[{"type": "text", "text": COMPRESSED_MARKER}])
+        )
+
+        assert result["input"][0] is not user_item
+
+    @pytest.mark.asyncio
+    async def test_unpredicted_merge_falls_back_through_patch(self):
+        handler = OpenAIResponsesHandler()
+        raw_input = [
+            {"id": "fc_1", "type": "function_call", "call_id": "call_1", "name": "read_a", "arguments": "{}"},
+            {"role": "assistant", "content": "Reading the memo now."},
+            {"type": "function_call_output", "call_id": "call_1", "output": "memo memo"},
+            {"role": "user", "content": "memo " * 400},
+        ]
+        data = {"model": "gpt-5.6", "input": raw_input}
+
+        result = await handler.process_input_messages(data, StructuredRewriteGuardrail())
+
+        assert not any(item is original for item in result["input"] for original in raw_input)
+        user_items = [item for item in result["input"] if item.get("role") == "user"]
+        assert _texts(user_items[0]) == [COMPRESSED_MARKER]
+
+    def test_item_rewrite_field_ignores_non_string_type(self):
+        from litellm.llms.openai.responses.guardrail_translation.handler import _item_rewrite_field
+
+        assert _item_rewrite_field({"type": 123, "content": "hello"}) is None
+
+
+class ToolEditingGuardrail(CustomGuardrail):
+    """Guardrail that rewrites the flattened chat tools it was handed through ``edit``"""
+
+    def __init__(self, edit: Callable[[list[dict]], list[dict]], **kwargs):
+        super().__init__(**kwargs)
+        self.edit = edit
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        inputs["tools"] = self.edit(list(inputs.get("tools") or []))
+        return inputs
+
+
+def _codex_request(input_value):
+    """A Responses API request shaped like what the Codex CLI sends when an MCP server is configured"""
+    return {
+        "model": "gpt-5.3-codex",
+        "input": input_value,
+        "tools": [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Weather lookup",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "strict": False,
+            },
+            {
+                "type": "namespace",
+                "name": "mcp__confluence",
+                "description": "Confluence tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "confluence_get_page",
+                        "description": "Get a page",
+                        "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+                        "strict": False,
+                    },
+                    {
+                        "type": "function",
+                        "name": "confluence_search",
+                        "description": "Search pages",
+                        "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+                        "strict": False,
+                    },
+                ],
+            },
+            {
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "Apply a patch",
+                "format": {"type": "grammar", "syntax": "lark", "definition": 'start: "x"'},
+            },
+            {"type": "web_search"},
+        ],
+    }
+
+
+def _tool_named(tools, name):
+    return next(tool for tool in tools if tool.get("name") == name)
+
+
+class TestOpenAIResponsesHandlerNamespaceTools:
+    """Codex sends MCP tools as ``namespace`` tools; a guardrail must never flatten them (GH #39183)"""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "input_value",
+        ["hi", [{"role": "user", "content": "hi", "type": "message"}]],
+        ids=["string_input", "list_input"],
+    )
+    async def test_pass_through_guardrail_leaves_tools_untouched(self, input_value):
+        data = _codex_request(input_value)
+        expected_tools = copy.deepcopy(data["tools"])
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, MockPassThroughGuardrail(guardrail_name="test")
+        )
+
+        assert result["tools"] == expected_tools
+
+    @pytest.mark.asyncio
+    async def test_appending_guardrail_keeps_namespace_and_adds_tool(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolAppendingGuardrail(guardrail_name="test")
+        )
+
+        assert result["tools"][:-1] == expected_tools
+        assert result["tools"][-1]["type"] == "function"
+        assert result["tools"][-1]["name"] == "injected_tool"
+
+    @pytest.mark.asyncio
+    async def test_dropping_one_member_prunes_only_that_member(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+        guardrail = ToolEditingGuardrail(
+            edit=lambda tools: [t for t in tools if t["function"]["name"] != "mcp__confluence__confluence_search"],
+            guardrail_name="test",
+        )
+
+        result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        namespace = _tool_named(result["tools"], "mcp__confluence")
+        assert [member["name"] for member in namespace["tools"]] == ["confluence_get_page"]
+        assert namespace["tools"][0] == expected_tools[1]["tools"][0]
+        assert [t for t in result["tools"] if t is not namespace] == [expected_tools[0], *expected_tools[2:]]
+
+    @pytest.mark.asyncio
+    async def test_editing_a_member_lands_on_that_member_without_the_namespace_prefix(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+
+        def redact_search(tools):
+            for tool in tools:
+                if tool["function"]["name"] == "mcp__confluence__confluence_search":
+                    tool["function"]["description"] = "Confluence tools\n\nREDACTED"
+            return tools
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolEditingGuardrail(edit=redact_search, guardrail_name="test")
+        )
+
+        namespace = _tool_named(result["tools"], "mcp__confluence")
+        assert namespace["tools"][0] == expected_tools[1]["tools"][0]
+        assert namespace["tools"][1] == {**expected_tools[1]["tools"][1], "description": "REDACTED"}
+        assert {k: v for k, v in namespace.items() if k != "tools"} == {
+            k: v for k, v in expected_tools[1].items() if k != "tools"
+        }
+
+    @pytest.mark.asyncio
+    async def test_dropping_every_member_drops_the_namespace(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+        guardrail = ToolEditingGuardrail(
+            edit=lambda tools: [t for t in tools if not t["function"]["name"].startswith("mcp__confluence__")],
+            guardrail_name="test",
+        )
+
+        result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["tools"] == [expected_tools[0], *expected_tools[2:]]
+
+    @pytest.mark.asyncio
+    async def test_edited_top_level_function_is_rewritten_in_place(self):
+        data = _codex_request("hi")
+        expected_tools = copy.deepcopy(data["tools"])
+
+        def rename_weather(tools):
+            for tool in tools:
+                if tool["function"]["name"] == "get_weather":
+                    tool["function"]["description"] = "Weather lookup (guarded)"
+            return tools
+
+        result = await OpenAIResponsesHandler().process_input_messages(
+            data, ToolEditingGuardrail(edit=rename_weather, guardrail_name="test")
+        )
+
+        assert result["tools"][0] == {**expected_tools[0], "description": "Weather lookup (guarded)"}
+        assert result["tools"][1:] == expected_tools[1:]
+
+
+class TestOpenAIResponsesHandlerMalformedTools:
+    @pytest.mark.asyncio
+    async def test_request_tools_that_are_not_a_list_never_reach_the_guardrail(self):
+        handler = OpenAIResponsesHandler()
+        seen: list[list[dict]] = []
+
+        def record(tools):
+            seen.append(tools)
+            return tools
+
+        guardrail = ToolEditingGuardrail(edit=record, guardrail_name="test")
+        data = {"input": "hi", "tools": {"type": "function", "name": "get_weather"}}
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert seen == [[]]
+        assert result["input"] == "hi"
+
+
+class TestBuildBlockSseChunks:
+    """build_block_sse_chunks turns a streaming ModifyResponseException into 200 SSE events"""
+
+    def _exc(self, original_response=None):
+        from litellm.exceptions import ModifyResponseException
+
+        return ModifyResponseException(
+            message="Blocked by policy.",
+            model="gpt-5.4-mini",
+            request_data={},
+            guardrail_name="test",
+            original_response=original_response,
+        )
+
+    def _payloads(self, chunks):
+        import json
+
+        return [json.loads(chunk.decode().removeprefix("data: ").strip()) for chunk in chunks]
+
+    def test_standalone_block_emits_complete_synthetic_stream(self):
+        handler = OpenAIResponsesHandler()
+        payloads = self._payloads(handler.build_block_sse_chunks(self._exc(), stream_started=False))
+        types = [payload["type"] for payload in payloads]
+        assert types[0] == "response.created"
+        assert types[-1] == "response.completed"
+        completed = payloads[-1]["response"]
+        assert completed["id"].startswith("resp_")
+        assert completed["model"] == "gpt-5.4-mini"
+        assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
+
+    def test_continuation_appends_item_at_next_output_index_with_real_usage(self):
+        handler = OpenAIResponsesHandler()
+        yielded = [
+            {"type": "response.created", "response": {"id": "resp_live", "model": "gpt-5.4-mini-2026-01-01"}},
+            {"type": "response.output_item.added", "output_index": 2, "item": {"id": "msg_orig"}},
+        ]
+        original = yielded + [
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_live",
+                    "model": "gpt-5.4-mini-2026-01-01",
+                    "output": [],
+                    "usage": {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28},
+                },
+            }
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=original), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert "response.created" not in types
+        assert types[0] == "response.output_item.done"
+        assert payloads[0]["output_index"] == 2
+        assert payloads[0]["item"]["id"] == "msg_orig"
+        assert payloads[0]["item"]["status"] == "completed"
+        assert types[1] == "response.output_item.added"
+        assert payloads[1]["output_index"] == 3
+        completed = payloads[-1]["response"]
+        assert completed["id"] == "resp_live"
+        assert completed["model"] == "gpt-5.4-mini-2026-01-01"
+        assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
+        assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
+
+    def test_continuation_reads_usage_from_typed_completed_event(self):
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponsesAPIResponse,
+            ResponsesAPIStreamEvents,
+        )
+
+        handler = OpenAIResponsesHandler()
+        original = [
+            ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=ResponsesAPIResponse.model_validate(
+                    {
+                        "id": "resp_live",
+                        "created_at": 1,
+                        "model": "gpt-5.4-mini",
+                        "output": [],
+                        "usage": {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28},
+                    }
+                ),
+            )
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=original), stream_started=True, responses_so_far=[]
+            )
+        )
+        completed = payloads[-1]["response"]
+        assert completed["usage"]["input_tokens"] == 7
+        assert completed["usage"]["output_tokens"] == 21
+        assert completed["usage"]["total_tokens"] == 28
+
+    def test_continuation_closes_open_item_given_pydantic_events_with_enum_types(self):
+        from litellm.types.llms.openai import (
+            BaseLiteLLMOpenAIResponseObject,
+            ContentPartAddedEvent,
+            OutputItemAddedEvent,
+            OutputTextDeltaEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        handler = OpenAIResponsesHandler()
+        open_item = GenericResponseOutputItem.model_validate(
+            {"type": "message", "id": "msg_live", "status": "in_progress", "role": "assistant", "content": []}
+        )
+        yielded = [
+            OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=open_item
+            ),
+            ContentPartAddedEvent(
+                type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+                item_id="msg_live",
+                output_index=0,
+                content_index=0,
+                part=BaseLiteLLMOpenAIResponseObject.model_validate(
+                    {"type": "output_text", "text": "", "annotations": []}
+                ),
+            ),
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_live",
+                output_index=0,
+                content_index=0,
+                delta="partial ",
+            ),
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id="msg_live",
+                output_index=0,
+                content_index=0,
+                delta="text",
+            ),
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert types[:3] == [
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+        ]
+        assert payloads[0]["text"] == "partial text"
+        assert payloads[2]["item"]["id"] == "msg_live"
+        assert payloads[2]["item"]["status"] == "completed"
+        assert payloads[2]["item"]["content"][0]["text"] == "partial text"
+        assert types[3] == "response.output_item.added"
+        assert payloads[3]["output_index"] == 1
+
+    def test_continuation_closes_open_function_call_as_incomplete(self):
+        handler = OpenAIResponsesHandler()
+        yielded = [
+            {"type": "response.created", "response": {"id": "resp_live", "model": "gpt-5.4-mini"}},
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "id": "fc_live",
+                    "type": "function_call",
+                    "status": "in_progress",
+                    "call_id": "call_1",
+                    "name": "run_payment",
+                    "arguments": "",
+                },
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_live",
+                "output_index": 0,
+                "delta": '{"amount": 100}',
+            },
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert types[0] == "response.output_item.done"
+        closed = payloads[0]["item"]
+        assert closed["id"] == "fc_live"
+        assert closed["type"] == "function_call"
+        assert closed["status"] == "incomplete"
+        assert closed["name"] == "run_payment"
+        assert "content" not in closed
+        assert types[1] == "response.output_item.added"
+        assert payloads[1]["output_index"] == 1
+        assert types[-1] == "response.completed"
+
+    def test_continuation_without_open_item_emits_no_closing_events(self):
+        handler = OpenAIResponsesHandler()
+        yielded = [
+            {"type": "response.created", "response": {"id": "resp_live", "model": "gpt-5.4-mini"}},
+            {"type": "response.in_progress", "response": {"id": "resp_live"}},
+        ]
+        payloads = self._payloads(
+            handler.build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+        types = [payload["type"] for payload in payloads]
+        assert types[0] == "response.output_item.added"
+        assert types[-1] == "response.completed"
+        dones = [payload for payload in payloads if payload["type"] == "response.output_item.done"]
+        assert len(dones) == 1
+        assert dones[0]["item"]["content"][0]["text"] == "Blocked by policy."
+
+
+class TestOpenAIResponsesHandlerStreamingScanKey:
+    """get_streaming_scan_key mirrors what process_output_streaming_response would scan"""
+
+    @staticmethod
+    def _delta(sequence_number, text):
+        return {
+            "type": "response.output_text.delta",
+            "sequence_number": sequence_number,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text,
+        }
+
+    def test_no_events_yields_no_key(self):
+        assert OpenAIResponsesHandler().get_streaming_scan_key([]) is None
+
+    def test_key_accumulates_deltas_while_the_stream_is_open(self):
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
+
+        key = OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hel"), self._delta(1, "lo")])
+        assert key == StreamingScanKey(texts=("hello",))
+
+    def test_typed_delta_events_accumulate_like_dicts(self):
+        from litellm.types.llms.openai import OutputTextDeltaEvent
+
+        events = [
+            OutputTextDeltaEvent(
+                type="response.output_text.delta",
+                item_id="msg_1",
+                output_index=0,
+                content_index=0,
+                delta=text,
+                sequence_number=i,
+            )
+            for i, text in enumerate(("hel", "lo"))
+        ]
+        key = OpenAIResponsesHandler().get_streaming_scan_key(events)
+        assert key.texts == ("hello",)
+        assert key.stream_ended is False
+
+    def test_events_without_text_leave_the_key_unchanged(self):
+        handler = OpenAIResponsesHandler()
+        events = [self._delta(0, "hi")]
+        quiet = events + [{"type": "response.in_progress", "sequence_number": 1}]
+        assert handler.get_streaming_scan_key(quiet) == handler.get_streaming_scan_key(events)
+
+    @staticmethod
+    def _completed(sequence_number, output):
+        return {"type": "response.completed", "sequence_number": sequence_number, "response": {"output": output}}
+
+    def test_completed_event_keys_on_the_final_output_text(self):
+        handler = OpenAIResponsesHandler()
+        message = {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
+        open_key = handler.get_streaming_scan_key([self._delta(0, "hi")])
+        ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), self._completed(1, [message])])
+        assert ended_key.stream_ended is True
+        assert ended_key == open_key
+
+    def test_completed_event_with_a_function_call_changes_the_key(self):
+        handler = OpenAIResponsesHandler()
+        message = {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
+        function_call = {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": "{}"}
+        open_key = handler.get_streaming_scan_key([self._delta(0, "hi")])
+        ended_key = handler.get_streaming_scan_key([self._delta(0, "hi"), self._completed(1, [message, function_call])])
+        assert ended_key.texts == ("hi",)
+        assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
+        assert ended_key != open_key
+
+    def test_completed_event_reads_every_output_text_part(self):
+        from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+        item = GenericResponseOutputItem(
+            type="message",
+            id="msg_1",
+            status="completed",
+            role="assistant",
+            content=[
+                OutputText(type="output_text", text="one", annotations=[]),
+                OutputText(type="output_text", text="two", annotations=[]),
+            ],
+        )
+        key = OpenAIResponsesHandler().get_streaming_scan_key([self._completed(0, [item])])
+        assert key.texts == ("one", "two")
+
+    def test_output_item_done_round_is_never_deduped(self):
+        done = {"type": "response.output_item.done", "sequence_number": 1, "item": {"type": "function_call"}}
+        assert OpenAIResponsesHandler().get_streaming_scan_key([self._delta(0, "hi"), done]) is None

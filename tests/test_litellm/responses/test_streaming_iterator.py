@@ -6,7 +6,7 @@ completion_start_time = end_time."""
 import json
 from datetime import datetime
 from typing import Optional
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -305,3 +305,235 @@ def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypat
     asyncio.run(_short_lived_script())
 
     assert len(writes) == 1
+
+
+def test_run_post_success_hooks_does_not_report_generation_time_as_overhead():
+    """LIT-5466: the provider call is timed to first byte, so at stream completion the total minus
+    that duration is token generation, not LiteLLM overhead."""
+    logging_obj = _logging_obj_stub()
+    logging_obj.model_call_details = {"litellm_params": {}, "llm_api_duration_ms": 200.0}
+    logging_obj.caching_details = None
+
+    class _CompletedEvent:
+        def __init__(self) -> None:
+            self._hidden_params: dict = {}
+
+    iterator = _make_iterator(sse_events=[], logging_obj=logging_obj)
+    iterator.completed_response = _CompletedEvent()
+    iterator.start_time = datetime(2025, 1, 1, 0, 0, 0)
+
+    iterator._run_post_success_hooks(datetime(2025, 1, 1, 0, 0, 10))
+
+    assert iterator.completed_response._hidden_params["_response_ms"] == 10000.0
+    assert "litellm_overhead_time_ms" not in iterator.completed_response._hidden_params
+
+
+def _responses_api_response_with_usage() -> ResponsesAPIResponse:
+    from litellm.types.llms.openai import ResponseAPIUsage
+
+    return ResponsesAPIResponse(
+        id="resp_lit6427",
+        created_at=int(datetime(2025, 1, 1).timestamp()),
+        status="completed",
+        model="mantle-claude",
+        object="response",
+        output=[],
+        usage=ResponseAPIUsage(input_tokens=20, output_tokens=60, total_tokens=80),
+    )
+
+
+def test_stamp_responses_usage_cost_stamps_computed_cost():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj._response_cost_calculator.return_value = 0.000704
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.000704)
+    logging_obj._response_cost_calculator.assert_called_once_with(result=response)
+
+
+def test_stamp_responses_usage_cost_keeps_provider_reported_cost():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    setattr(response.usage, "cost", 0.5)
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) == pytest.approx(0.5)
+    logging_obj._response_cost_calculator.assert_not_called()
+
+
+def test_stamp_responses_usage_cost_survives_calculator_failure():
+    from litellm.responses.streaming_iterator import _stamp_responses_usage_cost
+
+    response = _responses_api_response_with_usage()
+    logging_obj = Mock(spec=LiteLLMLoggingObj)
+    logging_obj._response_cost_calculator.side_effect = RuntimeError("cost map unavailable")
+
+    _stamp_responses_usage_cost(response, logging_obj)
+
+    assert getattr(response.usage, "cost", None) is None
+
+
+def _capture_dispatch(logged: list):
+    """Record the object handed to the success handlers.
+
+    ``Mock(spec=LiteLLMLoggingObj).dispatch_success_handlers`` is an AsyncMock whose side effect
+    only runs when the coroutine is awaited, so capture with a plain function instead.
+    """
+
+    async def _noop() -> None:
+        return None
+
+    def _dispatch(result, **kwargs):
+        logged.append(result)
+        return _noop()
+
+    return _dispatch
+
+
+def _headers_config(*, transform_hidden_params: Optional[dict] = None) -> Mock:
+    """Config whose completed event carries a real ResponsesAPIResponse, so the logging copy
+    performs a genuine model_dump/model_validate round trip."""
+    mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+    def _transform(model, parsed_chunk, logging_obj):
+        evt_type = parsed_chunk.get("type")
+        if evt_type != "response.completed":
+            stub = Mock()
+            stub.type = evt_type
+            return stub
+        response = ResponsesAPIResponse(
+            id="resp_headers",
+            created_at=1,
+            output=[],
+            parallel_tool_calls=False,
+            tool_choice="auto",
+            tools=[],
+        )
+        if transform_hidden_params is not None:
+            response._hidden_params.update(transform_hidden_params)
+        return ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=response,
+        )
+
+    mock_config.transform_streaming_response.side_effect = _transform
+    return mock_config
+
+
+def _make_header_iterator(
+    *,
+    headers: dict,
+    config: Mock,
+    logging_obj: LiteLLMLoggingObj,
+) -> ResponsesAPIStreamingIterator:
+    async def aiter_bytes():
+        yield _sse_event({"type": "response.completed"})
+
+    mock_response = Mock()
+    mock_response.headers = headers
+    mock_response.aiter_bytes = aiter_bytes
+
+    return ResponsesAPIStreamingIterator(
+        response=mock_response,
+        model="gpt-4o-mini",
+        responses_api_provider_config=config,
+        logging_obj=logging_obj,
+        litellm_metadata={},
+        custom_llm_provider="azure",
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_logging_response_carries_provider_response_headers():
+    """LIT-6055: the provider headers the iterator captured must reach the logged response, so
+    custom loggers can read Azure's apim-request-id from the callback payload."""
+    logging_obj = _logging_obj_stub()
+    logged: list[object] = []
+    logging_obj.dispatch_success_handlers = _capture_dispatch(logged)
+
+    logging_obj._on_deferred_stream_complete = None
+
+    iterator = _make_header_iterator(
+        headers={"apim-request-id": "azure-correlation-1", "x-ms-region": "East US 2"},
+        config=_headers_config(),
+        logging_obj=logging_obj,
+    )
+    async for _ in iterator:
+        pass
+
+    assert len(logged) == 1
+    hidden_params = logged[0].response._hidden_params
+    assert hidden_params["additional_headers"]["llm_provider-apim-request-id"] == "azure-correlation-1"
+    assert hidden_params["additional_headers"]["llm_provider-x-ms-region"] == "East US 2"
+    assert hidden_params["headers"]["apim-request-id"] == "azure-correlation-1"
+    # the proxy builds the client's response headers from the iterator's own dict, so the logged
+    # response must hold copies rather than alias it
+    assert hidden_params["additional_headers"] is not iterator._hidden_params["additional_headers"]
+    assert hidden_params["headers"] is not iterator._raw_response_headers
+
+
+@pytest.mark.asyncio
+async def test_streaming_logging_copy_preserves_transform_hidden_params():
+    """LIT-6055: model_validate(model_dump()) drops pydantic private attributes, so headers a
+    provider transform already set on the response (fake_stream) must be re-applied."""
+    logging_obj = _logging_obj_stub()
+    logged: list[object] = []
+    logging_obj.dispatch_success_handlers = _capture_dispatch(logged)
+
+    logging_obj._on_deferred_stream_complete = None
+
+    iterator = _make_header_iterator(
+        headers={},
+        config=_headers_config(
+            transform_hidden_params={
+                "additional_headers": {"llm_provider-apim-request-id": "from-transform"},
+                "headers": {"apim-request-id": "from-transform"},
+                "response_cost": 0.5,
+            }
+        ),
+        logging_obj=logging_obj,
+    )
+    async for _ in iterator:
+        pass
+
+    assert len(logged) == 1
+    hidden_params = logged[0].response._hidden_params
+    assert hidden_params["additional_headers"]["llm_provider-apim-request-id"] == "from-transform"
+    assert hidden_params["headers"]["apim-request-id"] == "from-transform"
+    assert iterator.completed_response is not logged[0]
+    # only the header keys travel: response_cost would short-circuit the cost calculator
+    assert "response_cost" not in hidden_params
+
+
+@pytest.mark.asyncio
+async def test_streaming_logging_copy_fallback_leaves_caller_event_untouched():
+    """LIT-6055: when the logging copy falls back to the original event, the header restore must
+    not stamp logging-only state onto the object the caller is iterating."""
+    logging_obj = _logging_obj_stub()
+    logged: list[object] = []
+    logging_obj.dispatch_success_handlers = _capture_dispatch(logged)
+    logging_obj._on_deferred_stream_complete = None
+
+    iterator = _make_header_iterator(
+        headers={"apim-request-id": "azure-correlation-1"},
+        config=_headers_config(),
+        logging_obj=logging_obj,
+    )
+    async for _ in iterator:
+        pass
+
+    assert len(logged) == 1
+    iterator._completed_response_logged = False
+    logged.clear()
+    with patch.object(type(iterator.completed_response), "model_dump", side_effect=ValueError("cannot serialize")):
+        iterator._log_completed_response(is_async=True)
+
+    assert logged == [iterator.completed_response]
+    assert iterator.completed_response.response._hidden_params == {}

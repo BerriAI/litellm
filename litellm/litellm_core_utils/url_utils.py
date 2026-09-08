@@ -19,6 +19,7 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
   check but still resolve DNS and still rewrite HTTP to the resolved IP.
 """
 
+import asyncio
 import socket
 from ipaddress import ip_address, ip_network
 from typing import Any, Final, Protocol
@@ -417,7 +418,7 @@ def _extract_redirect_url(response: httpx.Response, request_url: str) -> str:
     return str(httpx.URL(request_url).join(location))
 
 
-def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
+def safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     """
     Fetch a user-supplied URL with SSRF protection on every redirect hop.
 
@@ -460,7 +461,7 @@ def safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     raise SSRFError("Too many redirects")
 
 
-async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
+async def async_safe_get(client: Any, url: str, **kwargs: Any) -> httpx.Response:
     """Async version of safe_get."""
     if not getattr(litellm, "user_url_validation", True):
         kwargs.setdefault("follow_redirects", True)
@@ -471,7 +472,7 @@ async def async_safe_get(client: Any, url: str, **kwargs: Any) -> Any:
     kwargs.pop("follow_redirects", None)
     headers_view: Final[_CallerHeadersView] = {"headers": kwargs.pop("headers", {})}
     for _ in range(_MAX_REDIRECTS):
-        validated_url, original_host = validate_url(url)
+        validated_url, original_host = await asyncio.to_thread(validate_url, url)
         response = await fetcher.get(
             validated_url,
             headers={**headers_view["headers"], "Host": original_host},

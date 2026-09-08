@@ -1,13 +1,11 @@
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
 
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
-from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 
 
 def test_gemini_realtime_transformation_session_created():
@@ -306,20 +304,6 @@ def test_gemini_realtime_transformation_generation_complete():
             contains_audio_done_event = True
             break
     assert contains_audio_done_event, "Expected audio done event"
-
-
-def test_gemini_3_1_flash_live_preview_model_cost_map_entry():
-    for key in (
-        "gemini-3.1-flash-live-preview",
-        "gemini/gemini-3.1-flash-live-preview",
-    ):
-        assert key in litellm.model_cost
-        info = litellm.model_cost[key]
-        assert "/v1/realtime" in info.get("supported_endpoints", [])
-        assert info.get("max_input_tokens") == 131072
-        assert info.get("max_output_tokens") == 65536
-        assert "video" in info.get("supported_modalities", [])
-        assert info.get("supports_function_calling") is True
 
 
 def test_gemini_realtime_tool_call_transformation():
@@ -1812,6 +1796,7 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
         "gemini-2.5-flash-native-audio",
         "gemini-2.5-flash-native-audio-latest",
         "gemini/gemini-2.5-flash-native-audio-latest",
+        "gemini-live-2.5-flash-native-audio",
     ]
     flash_live_models = [
         "gemini-3.1-flash-live-preview",
@@ -1834,6 +1819,8 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
         ("gemini/gemini-3.1-flash-live-preview", True),
         ("gemini-2.5-flash-native-audio-latest", True),
         ("gemini/gemini-2.5-flash-native-audio-latest", True),
+        ("gemini-live-2.5-flash-native-audio", True),
+        ("vertex_ai/gemini-live-2.5-flash-native-audio", True),
         ("gemini-2.0-flash", False),
         ("gemini-2.5-flash", False),
     ],

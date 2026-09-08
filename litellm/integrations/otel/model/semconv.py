@@ -110,6 +110,8 @@ class GenAI:
     # usage
     USAGE_INPUT_TOKENS: Final = "gen_ai.usage.input_tokens"
     USAGE_OUTPUT_TOKENS: Final = "gen_ai.usage.output_tokens"
+    USAGE_CACHE_CREATION_INPUT_TOKENS: Final = "gen_ai.usage.cache_creation.input_tokens"
+    USAGE_CACHE_READ_INPUT_TOKENS: Final = "gen_ai.usage.cache_read.input_tokens"
     # content (opt-in, gated by capture mode)
     INPUT_MESSAGES: Final = "gen_ai.input.messages"
     OUTPUT_MESSAGES: Final = "gen_ai.output.messages"
@@ -293,6 +295,7 @@ class LiteLLM:
     # ``litellm_params.model``), distinct from the user-facing ``gen_ai.request.model``.
     PROVIDER_MODEL: Final = "litellm.provider.model"
     REQUEST_STREAMING: Final = "litellm.request.streaming"
+    REQUEST_ROUTE: Final = "litellm.request.route"
     TOOLS_DECLARED: Final = "litellm.request.tools.declared"
     GUARDRAIL_NAME: Final = "litellm.guardrail.name"
     GUARDRAIL_MODE: Final = "litellm.guardrail.mode"

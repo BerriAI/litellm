@@ -138,13 +138,25 @@ def _soniox_token_to_subtitle_token(token: SonioxToken) -> SubtitleToken:
     )
 
 
+def _subtitle_tokens(tokens: Sequence[SonioxToken]) -> tuple[SubtitleToken, ...]:
+    """
+    Convert Soniox tokens for subtitle rendering, excluding translation tokens
+    (``translation_status == "translation"``): Soniox does not timestamp them,
+    so they cannot be aligned to the audio and would otherwise mix translated
+    text into original-language cues.
+    """
+    return tuple(
+        _soniox_token_to_subtitle_token(token) for token in tokens if token.get("translation_status") != "translation"
+    )
+
+
 def render_soniox_tokens_as_srt(tokens: Sequence[SonioxToken]) -> str:
     """
     Render Soniox tokens as SRT (SubRip) subtitle format.
 
     Returns an empty string if no tokens have timestamp data.
     """
-    return render_subtitle_tokens_as_srt(tuple(_soniox_token_to_subtitle_token(token) for token in tokens))
+    return render_subtitle_tokens_as_srt(_subtitle_tokens(tokens))
 
 
 def render_soniox_tokens_as_vtt(tokens: Sequence[SonioxToken]) -> str:
@@ -153,4 +165,4 @@ def render_soniox_tokens_as_vtt(tokens: Sequence[SonioxToken]) -> str:
 
     Returns the VTT header even if no cues are present.
     """
-    return render_subtitle_tokens_as_vtt(tuple(_soniox_token_to_subtitle_token(token) for token in tokens))
+    return render_subtitle_tokens_as_vtt(_subtitle_tokens(tokens))

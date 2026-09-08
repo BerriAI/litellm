@@ -93,13 +93,13 @@ describe("ChatMessageBubble", () => {
   ])("should paint the $role surface from theme tokens, not fixed colours", ({ role, bubble, avatar }) => {
     render(<ChatMessageBubble {...defaultProps} message={{ role, content: "Hello" }} />);
 
-    const header = screen.getByText(role).closest("div") as HTMLElement;
-    const surface = header.parentElement as HTMLElement;
+    const surface = screen.getByTestId("message-surface");
+    const avatarEl = screen.getByTestId("message-avatar");
 
     expect(surface).toHaveClass(...bubble);
     expect(surface).not.toHaveAttribute("style");
-    expect(header.firstElementChild).toHaveClass(avatar);
-    expect(header.firstElementChild).not.toHaveAttribute("style");
+    expect(avatarEl).toHaveClass(avatar);
+    expect(avatarEl).not.toHaveAttribute("style");
   });
 
   it("should show model badge for assistant messages when model is provided", () => {

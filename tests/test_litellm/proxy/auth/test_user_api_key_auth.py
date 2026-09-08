@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -143,6 +144,35 @@ async def test_disable_budget_reservation_skips_reservation():
         )
 
     mock_reserve.assert_not_called()
+    assert user_api_key_auth_obj.budget_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_disable_budget_reservation_does_not_log_per_request(caplog):
+    user_api_key_auth_obj = UserAPIKeyAuth(token="test_token")
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        for _ in range(3):
+            await _reserve_budget_after_common_checks(
+                user_api_key_auth_obj=user_api_key_auth_obj,
+                request_data={"model": "gpt-4o"},
+                route="/v1/chat/completions",
+                llm_router=None,
+                team_object=None,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+                skip_budget_checks=False,
+                general_settings={"disable_budget_reservation": True},
+            )
+
+    records = [
+        record
+        for record in caplog.records
+        if "disable_budget_reservation is enabled" in record.message
+    ]
+    assert records == []
     assert user_api_key_auth_obj.budget_reservation is None
 
 
