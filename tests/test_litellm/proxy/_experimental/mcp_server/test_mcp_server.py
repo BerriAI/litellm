@@ -2,6 +2,7 @@ import asyncio
 import contextvars
 import os
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1366,6 +1367,295 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
 
             # Verify total logging
             mock_logger.info.assert_any_call("Successfully fetched %s tools total from all MCP servers", 0)
+
+
+def _denied_scope_manager(known_server_names_to_ids: dict[str, str]) -> MagicMock:
+    servers = {name: MagicMock(server_id=server_id) for name, server_id in known_server_names_to_ids.items()}
+    manager = MagicMock()
+    manager.get_mcp_server_by_name = lambda name, client_ip=None: servers.get(name)
+    return manager
+
+
+def _scope_resolver(resolved_without_agent: dict[str, str], access_groups: tuple[str, ...] = ()) -> AsyncMock:
+    async def resolve(user_api_key_auth, mcp_servers, client_ip=None):
+        if user_api_key_auth is not None and user_api_key_auth.agent_id:
+            return []
+        return [
+            SimpleNamespace(
+                server_id=server_id,
+                server_name=server_name,
+                alias=None,
+                short_prefix=None,
+                access_groups=list(access_groups),
+            )
+            for server_name, server_id in resolved_without_agent.items()
+        ]
+
+    return AsyncMock(side_effect=resolve)
+
+
+async def _denied_scoped_list(
+    user_api_key_auth: UserAPIKeyAuth,
+    mcp_servers: list[str],
+    mock_manager: MagicMock,
+    resolver: AsyncMock,
+) -> HTTPException:
+    from litellm.proxy._experimental.mcp_server.server import _get_tools_from_mcp_servers
+
+    with (
+        patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            resolver,
+        ),
+        patch(  # test-quality-ok: the server registry is a module-level singleton; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            mock_manager,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=None,
+                mcp_servers=mcp_servers,
+            )
+    return exc_info.value
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_denied_by_agent_binding_raises_403_naming_agent():
+    """The agent-binding veto must raise a 403 naming the agent, never a silent 200 with no tools."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+    resolver = _scope_resolver(resolved_without_agent={"github": "srv-github"})
+
+    denial = await _denied_scoped_list(
+        user_api_key_auth, ["github"], _denied_scope_manager({"github": "srv-github"}), resolver
+    )
+
+    assert denial.status_code == 403
+    message = denial.detail["error"]
+    assert "MCP server 'github'" in message
+    assert "agent 'agent-123'" in message
+    assert "mcp_servers" in message
+    rerun_auth = resolver.await_args_list[1].kwargs["user_api_key_auth"]
+    assert rerun_auth.agent_id is None
+    assert rerun_auth.user_id == "test_user"
+    assert resolver.await_args_list[1].kwargs["mcp_servers"] == ["github"]
+
+
+@pytest.mark.asyncio
+async def test_empty_scope_lists_nothing_instead_of_raising_a_nameless_denial():
+    """An empty ``x-mcp-servers`` header scopes to no servers; that is an empty listing, not a 403."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+    from litellm.proxy._experimental.mcp_server.server import _get_tools_from_mcp_servers
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    resolver = AsyncMock(return_value=[])
+
+    with (
+        patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            resolver,
+        ),
+        patch(  # test-quality-ok: the server registry is a module-level singleton; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            _denied_scope_manager({"github": "srv-github"}),
+        ),
+    ):
+        listing = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth, mcp_auth_header=None, mcp_servers=[]
+        )
+
+    assert listing.tools == []
+    resolver.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_denied_for_non_agent_key_raises_generic_403():
+    """A denial for a key with no agent binding stays generic and skips the agent-stripped rerun."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    resolver = AsyncMock(return_value=[])
+
+    denial = await _denied_scoped_list(
+        user_api_key_auth, ["github"], _denied_scope_manager({"github": "srv-github"}), resolver
+    )
+
+    assert denial.status_code == 403
+    message = denial.detail["error"]
+    assert "github" in message
+    assert "agent" not in message
+    resolver.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_unknown_name_raises_same_generic_403_as_unauthorized():
+    """Unknown and registered-but-unauthorized names raise byte-identical generic 403s, so a
+    caller cannot probe which server names exist."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+
+    unknown = await _denied_scoped_list(
+        user_api_key_auth, ["github"], _denied_scope_manager({}), _scope_resolver(resolved_without_agent={})
+    )
+    unauthorized = await _denied_scoped_list(
+        user_api_key_auth,
+        ["github"],
+        _denied_scope_manager({"github": "srv-github"}),
+        _scope_resolver(resolved_without_agent={}),
+    )
+
+    assert unknown.status_code == unauthorized.status_code == 403
+    assert unknown.detail["error"] == unauthorized.detail["error"]
+    assert "github" in unknown.detail["error"]
+    assert "agent" not in unknown.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_access_group_vetoed_by_agent_names_agent_and_group():
+    """An access-group scope vetoed by the agent binding raises the 403 naming the agent and the
+    group instead of the silent empty list."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+
+    denial = await _denied_scoped_list(
+        user_api_key_auth,
+        ["prod-group"],
+        _denied_scope_manager({}),
+        _scope_resolver(resolved_without_agent={"github": "srv-github"}, access_groups=("prod-group",)),
+    )
+
+    assert denial.status_code == 403
+    message = denial.detail["error"]
+    assert "access group 'prod-group'" in message
+    assert "agent 'agent-123'" in message
+    assert "mcp_access_groups" in message
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_mixed_unknown_and_vetoed_group_names_the_group_that_resolved():
+    """With an unknown name ahead of the agent-vetoed group in the scope, the 403 must name the group
+    whose servers the key can reach, never the unknown name, or the admin is told to grant a group
+    that does not exist."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+
+    denial = await _denied_scoped_list(
+        user_api_key_auth,
+        ["no-such-group", "prod-group"],
+        _denied_scope_manager({}),
+        _scope_resolver(resolved_without_agent={"github": "srv-github"}, access_groups=("prod-group",)),
+    )
+
+    assert denial.status_code == 403
+    message = denial.detail["error"]
+    assert "access group 'prod-group'" in message
+    assert "no-such-group" not in message
+    assert "agent 'agent-123'" in message
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_agent_key_denied_by_key_grants_raises_generic_403():
+    """When the agent-stripped rerun still resolves nothing, the 403 stays generic instead of
+    blaming the agent binding."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+    resolver = _scope_resolver(resolved_without_agent={})
+
+    denial = await _denied_scoped_list(
+        user_api_key_auth, ["github"], _denied_scope_manager({"github": "srv-github"}), resolver
+    )
+
+    assert denial.status_code == 403
+    message = denial.detail["error"]
+    assert "github" in message
+    assert "agent" not in message
+    assert resolver.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scoped_list_agent_veto_attributed_for_differently_cased_server_name():
+    """The scope filter matches `/mcp/GitHub` to a server named `github` case-insensitively, so the
+    agent-attributed 403 must match the same way instead of falling back to the generic denial."""
+    pytest.importorskip("litellm.proxy._experimental.mcp_server.server")
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user", agent_id="agent-123")
+
+    denial = await _denied_scoped_list(
+        user_api_key_auth,
+        ["GitHub"],
+        _denied_scope_manager({"github": "srv-github"}),
+        _scope_resolver(resolved_without_agent={"github": "srv-github"}),
+    )
+
+    assert denial.status_code == 403
+    message = denial.detail["error"]
+    assert "MCP server 'GitHub'" in message
+    assert "agent 'agent-123'" in message
+
+
+@pytest.mark.asyncio
+async def test_handle_list_tools_converts_permission_httpexception_to_mcp_error():
+    """The MCP protocol handler surfaces a permission HTTPException as a clean JSON-RPC error
+    (McpError, INVALID_REQUEST) carrying the denial message, instead of a raw 500."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import handle_list_tools
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    from mcp.shared.exceptions import McpError
+    from mcp.types import INVALID_REQUEST
+
+    denial_message = "MCP server 'github' is not available to this key: the key is bound to agent 'agent-123'"
+    denial = HTTPException(status_code=403, detail={"error": denial_message})
+
+    with (
+        patch(  # test-quality-ok: the protocol handler reads auth from module context; no injection seam
+            "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
+            new=AsyncMock(return_value=(None, None, None, None, None, None, None)),
+        ),
+        patch(  # test-quality-ok: the listing helper is the handler's only collaborator; the suite's seam
+            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            new=AsyncMock(side_effect=denial),
+        ),
+    ):
+        with pytest.raises(McpError) as exc_info:
+            await handle_list_tools()
+
+    assert exc_info.value.error.code == INVALID_REQUEST
+    assert exc_info.value.error.message == denial_message
+
+
+@pytest.mark.asyncio
+async def test_mcp_server_tool_call_renders_denial_message_not_detail_dict():
+    try:
+        from litellm.proxy._experimental.mcp_server.server import mcp_server_tool_call
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    denial_message = "MCP server 'github' is not available to this key: the key is bound to agent 'agent-123'"
+    denial = HTTPException(status_code=403, detail={"error": denial_message})
+
+    with (
+        patch(  # test-quality-ok: the protocol handler reads auth from module context; no injection seam
+            "litellm.proxy._experimental.mcp_server.server.get_or_extract_auth_context",
+            new=AsyncMock(return_value=(None, None, None, None, None, None, None)),
+        ),
+        patch(  # test-quality-ok: the tool-call helper is the handler's only collaborator; the suite's seam
+            "litellm.proxy._experimental.mcp_server.server.call_mcp_tool",
+            new=AsyncMock(side_effect=denial),
+        ),
+    ):
+        result = await mcp_server_tool_call("github-search_issues", {})
+
+    assert result.isError is True
+    assert result.content[0].text == f"Error: {denial_message}"
 
 
 @pytest.mark.asyncio
@@ -3516,6 +3806,35 @@ async def test_call_mcp_tool_user_unauthorized_access():
         # Verify the exception details
         assert exc_info.value.status_code == 403
         assert "User not allowed to call this tool" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_call_mcp_tool_scoped_denial_names_the_binding_agent():
+    from litellm.proxy._experimental.mcp_server.server import call_mcp_tool
+
+    agent_bound_key = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="agent-123")
+
+    with (
+        patch(  # test-quality-ok: the server registry is a module-level singleton; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_allowed_mcp_servers",
+            AsyncMock(return_value=[]),
+        ),
+        patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            _scope_resolver({"github": "srv-github"}),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await call_mcp_tool(
+                name="github-search_issues",
+                arguments={},
+                user_api_key_auth=agent_bound_key,
+                mcp_servers=["github"],
+            )
+
+    assert exc_info.value.status_code == 403
+    assert "MCP server 'github'" in exc_info.value.detail["error"]
+    assert "agent 'agent-123'" in exc_info.value.detail["error"]
 
 
 @pytest.mark.asyncio
