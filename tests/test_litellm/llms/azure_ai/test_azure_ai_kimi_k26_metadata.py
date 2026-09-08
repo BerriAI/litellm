@@ -33,10 +33,6 @@ def use_local_model_cost_map():
         monkeypatch.undo()
 
 
-
-
-
-
 def test_azure_ai_kimi_k26_cost_per_token(use_local_model_cost_map):
     from litellm.llms.azure_ai.cost_calculator import cost_per_token
     from litellm.types.utils import Usage

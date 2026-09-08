@@ -20,8 +20,6 @@ def test_replicate_models_have_valid_key_prefix(model_cost: dict[str, Any]) -> N
     )
 
 
-
-
 def test_replicate_backup_matches_main() -> None:
     repo_root = Path(__file__).parents[2]
     main_path = repo_root / "model_prices_and_context_window.json"

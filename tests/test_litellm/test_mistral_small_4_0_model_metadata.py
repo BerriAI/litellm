@@ -18,8 +18,6 @@ def _load(path):
         return json.load(f)
 
 
-
-
 @pytest.mark.parametrize("model", SMALL_4_0_MODELS)
 def test_backup_matches_main(model):
     main_cost = _load(MAIN_PATH)

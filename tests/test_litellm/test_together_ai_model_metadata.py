@@ -76,14 +76,6 @@ def cost_map() -> CostMap:
         return COST_MAP_ADAPTER.validate_python(json.load(f))
 
 
-
-
-
-
-
-
-
-
 def test_together_chat_entries_never_carry_context_length_as_output_ceiling(cost_map: CostMap):
     inflated = sorted(
         model
@@ -94,10 +86,6 @@ def test_together_chat_entries_never_carry_context_length_as_output_ceiling(cost
         and info["max_output_tokens"] == info.get("max_input_tokens")
     )
     assert inflated == []
-
-
-
-
 
 
 @pytest.mark.parametrize("model", sorted(DEPRECATED_MODELS))
@@ -151,8 +139,6 @@ CACHED_INPUT_MODELS: Final = (
     "together_ai/nvidia/nemotron-3-ultra-550b-a55b",
     "together_ai/Qwen/Qwen3.7-Max",
 )
-
-
 
 
 def test_together_prompt_caching_flag_implies_cache_read_rate(cost_map: CostMap):

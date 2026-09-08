@@ -23,9 +23,6 @@ def _load_cost_map(filename: str = "model_prices_and_context_window.json") -> di
         return json.load(f)
 
 
-
-
-
 @pytest.mark.parametrize("model, input_cost, cached_cost, output_cost", PRICING)
 def test_muse_spark_1_2_cost_per_token(
     local_model_cost_map, model: str, input_cost: float, cached_cost: float, output_cost: float

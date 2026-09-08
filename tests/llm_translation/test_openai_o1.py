@@ -2,7 +2,6 @@ import os
 from unittest.mock import patch
 
 
-
 import pytest
 
 import litellm
@@ -180,8 +179,6 @@ class TestOpenAIO3(BaseOSeriesModelsTest, BaseLLMChatTest):
     def test_prompt_caching(self):
         """Override, as o3 prompt caching is flaky"""
         pass
-
-
 
 
 def test_o3_reasoning_effort():

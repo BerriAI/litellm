@@ -37,7 +37,6 @@ class TestAzureMAIImageGeneration:
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("flux.2-pro")
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-DS-R1")
 
-
     def test_get_mai_image_generation_url(self):
         url = AzureFoundryMAIImageGenerationConfig.get_mai_image_generation_url(
             api_base="https://my-resource.services.ai.azure.com",

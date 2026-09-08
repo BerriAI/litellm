@@ -31,10 +31,6 @@ def model_data():
         return json.load(f)
 
 
-
-
-
-
 def test_usgov_carries_20_percent_premium_over_global(model_data):
     """The us-gov rates must equal 1.2x the global anthropic.* rates,
     matching AWS's documented GovCloud uplift.
@@ -81,26 +77,6 @@ def test_usgov_cross_region_above_200k_ratio_to_global(model_data):
         assert abs(ratio - 1.2) < 1e-9, f"{field}: us-gov / global ratio is {ratio}, expected 1.2"
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_usgov_east_haiku_profile_mirrors_in_region_row(model_data):
     """us-gov-east-1 serves claude-3-haiku through the us-gov. inference profile
     only, so the profile row must bill exactly like the in-region gov row.
@@ -111,20 +87,6 @@ def test_usgov_east_haiku_profile_mirrors_in_region_row(model_data):
     assert {k: v for k, v in profile.items() if k != "litellm_provider"} == {
         k: v for k, v in in_region.items() if k != "litellm_provider"
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 GOV_ROW_SOURCES = {

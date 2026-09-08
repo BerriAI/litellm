@@ -55,11 +55,8 @@ def test_zai_in_provider_lists():
     assert "zai" in litellm.provider_list
 
 
-
-
 def test_zai_glm46_cost_calculation(local_model_cost_map):
     """Test the cost calculation for glm-4.6"""
-
 
     prompt_cost, completion_cost = cost_per_token(
         model="zai/glm-4.6",
@@ -70,10 +67,6 @@ def test_zai_glm46_cost_calculation(local_model_cost_map):
     # GLM-4.6: $0.6/M input, $2.2/M output
     assert math.isclose(prompt_cost, 0.6, rel_tol=1e-6)
     assert math.isclose(completion_cost, 2.2, rel_tol=1e-6)
-
-
-
-
 
 
 def test_glm47_cost_calculation(local_model_cost_map):

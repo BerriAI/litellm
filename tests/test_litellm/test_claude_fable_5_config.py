@@ -26,11 +26,6 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-
-
-
-
-
 def test_fable_5_geo_multiplier_without_fast_mode():
     """First-party ``inference_geo='us'`` carries the 1.1x premium, but unlike
     the Opus line there is no fast-mode variant for Fable 5; a ``fast`` key
@@ -63,8 +58,6 @@ def test_fable_5_present_in_bundled_backup():
 
 def test_fable_5_registered_for_bedrock_converse():
     assert "anthropic.claude-fable-5" in BEDROCK_CONVERSE_MODELS
-
-
 
 
 @pytest.mark.parametrize(
@@ -138,8 +131,6 @@ FABLE_5_1_VARIANTS = (
 )
 
 
-
-
 @pytest.mark.parametrize(
     "cost_map",
     [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
@@ -158,10 +149,6 @@ def test_fable_5_1_cache_reads_cost_a_quarter_of_fable_5(cost_map):
         ), model_name
 
 
-
-
-
-
 def test_fable_5_1_present_in_bundled_backup():
     backup = GetModelCostMap.load_local_model_cost_map()
     root = _load_root_cost_map()
@@ -172,8 +159,6 @@ def test_fable_5_1_present_in_bundled_backup():
 
 def test_fable_5_1_registered_for_bedrock_converse():
     assert "anthropic.claude-fable-5-1" in BEDROCK_CONVERSE_MODELS
-
-
 
 
 @pytest.mark.parametrize(

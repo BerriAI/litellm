@@ -56,8 +56,6 @@ def use_local_model_cost_map():
         monkeypatch.undo()
 
 
-
-
 @pytest.mark.parametrize("alias", KIMI_ALIASES)
 def test_fireworks_kimi_get_model_info_limits(use_local_model_cost_map, alias):
     model_info = use_local_model_cost_map.get_model_info(model=alias)

@@ -306,8 +306,6 @@ def test_gemini_realtime_transformation_generation_complete():
     assert contains_audio_done_event, "Expected audio done event"
 
 
-
-
 def test_gemini_realtime_tool_call_transformation():
     """Test transformation of Gemini toolCall to OpenAI function_call_arguments.done format."""
     config = GeminiRealtimeConfig()
@@ -1829,8 +1827,6 @@ def patch_gemini_audio_cost_map_entries(monkeypatch):
 )
 def test_is_audio_only_live_model_uses_cost_map(model, expected, patch_gemini_audio_cost_map_entries):
     assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
-
-
 
 
 def test_is_setup_message_and_is_content_message():

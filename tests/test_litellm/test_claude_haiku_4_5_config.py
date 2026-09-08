@@ -7,8 +7,6 @@ import json
 import os
 
 
-
-
 def test_bedrock_haiku_4_5_matches_sonnet_capabilities():
     """
     Test that Haiku 4.5 has same capabilities as Sonnet 4.5

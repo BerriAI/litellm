@@ -16,8 +16,6 @@ from litellm.types.utils import (
 )
 
 
-
-
 def test_validate_environment_sets_session_affinity_from_litellm_session_id():
     config = FireworksAIConfig()
 
@@ -393,8 +391,6 @@ def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
     assert "tools" in supported_params
     assert "parallel_tool_calls" in supported_params
     assert "tool_choice" not in supported_params
-
-
 
 
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):

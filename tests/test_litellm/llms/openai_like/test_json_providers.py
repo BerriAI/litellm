@@ -318,7 +318,6 @@ class TestDarkbloom:
         assert config.custom_llm_provider == "darkbloom"
 
 
-
 class TestPublicAIIntegration:
     """Integration tests for PublicAI provider"""
 

@@ -71,10 +71,6 @@ def test_claude_4_6_australia_region_uses_au_prefix_not_apac():
     ), "apac.anthropic.claude-sonnet-4-6 should not be in bedrock_converse_models"
 
 
-
-
-
-
 def test_opus_4_6_alias_and_dated_metadata_match():
     json_path = os.path.join(
         os.path.dirname(__file__), "../../model_prices_and_context_window.json"

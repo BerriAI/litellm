@@ -136,7 +136,6 @@ class TestVertexAIVideoConfig:
         # Should NOT include endpoint
         assert not url.endswith(":predictLongRunning")
 
-
     def test_veo_31_lite_provider_routing_from_local_model_map(
         self, monkeypatch: pytest.MonkeyPatch
     ):

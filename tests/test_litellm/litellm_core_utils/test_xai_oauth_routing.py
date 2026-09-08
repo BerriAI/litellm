@@ -45,8 +45,6 @@ def test_xai_openai_compatible_provider_info():
     assert dynamic_api_key == "api-key"
 
 
-
-
 def test_xai_validate_environment_reads_api_key(monkeypatch):
     monkeypatch.setenv("XAI_API_KEY", "api-key")
 

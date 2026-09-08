@@ -32,8 +32,6 @@ def _load(path):
         return json.load(f)
 
 
-
-
 def test_blue_alias_matches_its_snapshot_computer_use():
     cost_map = _load(MAIN_PATH)
 

@@ -41,17 +41,9 @@ REALTIME_ONLY_GPT_MODELS_WITHOUT_ENDPOINTS = (
 ALL_REALTIME_ONLY_GPT_MODELS = REALTIME_ONLY_GPT_MODELS + REALTIME_ONLY_GPT_MODELS_WITHOUT_ENDPOINTS
 
 
-
-
 def test_realtime_is_a_valid_mode_literal():
     hints = get_type_hints(ModelInfoBase, include_extras=False)
     assert "realtime" in get_args(hints["mode"])
-
-
-
-
-
-
 
 
 def test_backup_matches_main_for_realtime_models():

@@ -51,11 +51,6 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-
-
-
-
-
 @pytest.mark.parametrize("model_name", BEDROCK_OPUS_5_VARIANTS)
 def test_opus_5_bedrock_entries_declare_no_effort_ceiling(model_name):
     """Bedrock accepts every effort level for Opus 5, so no clamp belongs here.
@@ -133,8 +128,6 @@ def test_opus_5_present_in_bundled_backup():
 
 def test_opus_5_registered_for_bedrock_converse():
     assert "anthropic.claude-opus-5" in BEDROCK_CONVERSE_MODELS
-
-
 
 
 @pytest.mark.parametrize(

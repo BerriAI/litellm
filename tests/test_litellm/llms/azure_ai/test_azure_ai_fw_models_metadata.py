@@ -13,7 +13,6 @@ from importlib.resources import files
 import pytest
 
 
-
 @pytest.fixture(scope="module")
 def use_local_model_cost_map():
     monkeypatch = pytest.MonkeyPatch()
@@ -37,8 +36,6 @@ def use_local_model_cost_map():
         litellm.get_model_info.cache_clear()
         _invalidate_model_cost_lowercase_map()
         monkeypatch.undo()
-
-
 
 
 @pytest.mark.parametrize(
@@ -70,8 +67,6 @@ def test_azure_ai_fw_cost_per_token(
 
     assert prompt_cost == pytest.approx(expected_prompt)
     assert completion_cost == pytest.approx(expected_completion)
-
-
 
 
 def test_azure_ai_fw_nemotron_lightning_supports_tool_choice(use_local_model_cost_map):

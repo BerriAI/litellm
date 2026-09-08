@@ -231,8 +231,6 @@ def test_inception_in_provider_lists():
     assert "https://api.inceptionlabs.ai/v1" in litellm.openai_compatible_endpoints
 
 
-
-
 def test_inception_model_list_populated(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")

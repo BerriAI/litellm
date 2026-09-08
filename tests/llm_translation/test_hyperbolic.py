@@ -1,6 +1,5 @@
 
 
-
 import litellm
 from litellm import get_llm_provider
 
@@ -63,8 +62,6 @@ def test_hyperbolic_in_provider_lists():
     assert "hyperbolic" in openai_compatible_providers
     assert "hyperbolic" in openai_text_completion_compatible_providers
     assert "https://api.hyperbolic.xyz/v1" in openai_compatible_endpoints
-
-
 
 
 def test_hyperbolic_supported_params():

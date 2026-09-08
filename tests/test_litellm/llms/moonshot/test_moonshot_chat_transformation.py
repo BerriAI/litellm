@@ -709,11 +709,6 @@ class TestKimiK26ModelRegistry:
         return GetModelCostMap.load_local_model_cost_map()
 
 
-
-
-
-
-
 class TestMoonshotResponseSchemaSupport:
     """Every model currently live on api.moonshot.ai supports json_schema
     response_format, which gates discovery via litellm.responses(). The flag
@@ -734,7 +729,6 @@ class TestMoonshotResponseSchemaSupport:
     @pytest.fixture(autouse=True)
     def model_cost_map(self):
         return GetModelCostMap.load_local_model_cost_map()
-
 
     def test_supports_response_schema_utility_reports_true(self, model_cost_map, monkeypatch):
         monkeypatch.setattr(litellm, "model_cost", model_cost_map)

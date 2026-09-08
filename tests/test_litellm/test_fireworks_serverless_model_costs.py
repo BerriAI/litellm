@@ -17,8 +17,6 @@ import pytest
 from litellm.utils import get_model_info
 
 
-
-
 NEW_ENTRIES = {
     "fireworks_ai/accounts/fireworks/models/deepseek-v4-pro-0813": {
         "input_cost_per_token": 1.32e-06,
@@ -37,8 +35,6 @@ def model_data():
     )
     with open(json_path) as f:
         return json.load(f)
-
-
 
 
 def test_bare_fireworks_ids_resolve_through_prefixed_entries():

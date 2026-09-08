@@ -99,8 +99,6 @@ GPT_5_6_PROFILES = [
 ]
 
 
-
-
 def _bedrock_response(model, usage):
     return ModelResponse(
         id="test",
@@ -116,8 +114,6 @@ def _bedrock_response(model, usage):
         ],
         usage=usage,
     )
-
-
 
 
 def test_proxy_cost_calculation_scenario():
@@ -157,8 +153,6 @@ def test_proxy_cost_calculation_scenario():
 def test_bedrock_gpt_5_6_profiles_route_to_converse(profile, local_model_cost_map):
     """GPT-5.6 is served by Converse on bedrock-runtime, never by Invoke."""
     assert BedrockModelInfo.get_bedrock_route(f"bedrock/{profile.model_id}") == "converse"
-
-
 
 
 def test_bedrock_gpt_5_6_above_272k_tier_applies_to_cost(local_model_cost_map):
@@ -218,8 +212,6 @@ def test_bedrock_gpt_5_6_bills_cache_write_tokens(local_model_cost_map):
 
     expected = (2 * 4.4e-06) + (15609 * 5.5e-06) + (5 * 2.2e-05)
     assert cost == pytest.approx(expected, rel=1e-9)
-
-
 
 
 @pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)

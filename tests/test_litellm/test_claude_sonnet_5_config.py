@@ -40,11 +40,6 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-
-
-
-
-
 def test_sonnet_5_present_in_bundled_backup():
     """The bundled backup is the runtime fallback (and what tests load with
     ``LITELLM_LOCAL_MODEL_COST_MAP=True``); it must carry the same entries as the
@@ -56,8 +51,6 @@ def test_sonnet_5_present_in_bundled_backup():
 
 def test_sonnet_5_registered_for_bedrock_converse():
     assert "anthropic.claude-sonnet-5" in BEDROCK_CONVERSE_MODELS
-
-
 
 
 @pytest.mark.parametrize(

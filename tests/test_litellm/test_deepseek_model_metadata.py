@@ -39,10 +39,6 @@ class TestDeepSeekModelCostEntries:
     """Verify that provider-prefixed DeepSeek entries contain the same
     capability flags as their bare-name counterparts in the JSON files."""
 
-
-
-
-
     def test_deepseek_chat_max_input_tokens_matches_bare_in_backup(self):
         data = _load_backup_json()
         bare = data.get("deepseek-chat", {})
@@ -54,8 +50,6 @@ class TestDeepSeekModelCostEntries:
         bare = data.get("deepseek-reasoner", {})
         prefixed = data.get("deepseek/deepseek-reasoner", {})
         assert prefixed.get("max_output_tokens") == bare.get("max_output_tokens")
-
-
 
 
 # ---------------------------------------------------------------------------

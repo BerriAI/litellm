@@ -59,7 +59,6 @@ class TestLibertAIProviderConfig:
         assert api_base == "https://custom.example.com/v1"
         assert api_key == "sk-test"
 
-
     def test_libertai_router_config(self):
         """Test that libertai can be used in Router configuration"""
         from litellm import Router
@@ -78,7 +77,6 @@ class TestLibertAIProviderConfig:
 
         assert len(router.model_list) == 1
         assert router.model_list[0]["model_name"] == "libertai-chat"
-
 
     def test_libertai_supported_endpoints_matrix(self):
         """The runtime-served backup matrix (GET /public/supported_endpoints) lists libertai."""

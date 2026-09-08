@@ -2,10 +2,6 @@ import json
 from pathlib import Path
 
 
-
-
-
-
 def test_azure_ai_gpt_5_5_backup_matches_main():
     """Ensure the bundled model cost map stays in sync with the canonical file."""
     repo_root = Path(__file__).parents[2]

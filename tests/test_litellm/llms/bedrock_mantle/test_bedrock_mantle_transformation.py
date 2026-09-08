@@ -684,9 +684,6 @@ class TestBedrockMantleProviderResolution:
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
 
-
-
-
     def test_safeguard_models_have_larger_output_tokens(self, monkeypatch):
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
         litellm.add_known_models()
@@ -695,10 +692,6 @@ class TestBedrockMantlePricing:
             "bedrock_mantle/openai.gpt-oss-safeguard-120b"
         )
         assert info_safeguard["max_output_tokens"] > info_120b["max_output_tokens"]
-
-
-
-
 
 
 @pytest.mark.parametrize(

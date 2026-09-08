@@ -143,8 +143,6 @@ async def test_inception_fim_async():
     assert r.choices[0].text == "a + b"
 
 
-
-
 def test_inception_fim_targets_fim_endpoint():
     """
     End-to-end: a FIM request must hit `/v1/fim/completions` (NOT

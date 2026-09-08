@@ -27,8 +27,6 @@ BACKUP_MAP = os.path.join(
 )
 
 
-
-
 def _load(path: str) -> dict:
     with open(path, encoding="utf-8") as f:
         return json.load(f)
@@ -36,14 +34,6 @@ def _load(path: str) -> dict:
 
 def _cloudflare_keys(data: dict) -> set:
     return {k for k in data if k.startswith("cloudflare/")}
-
-
-
-
-
-
-
-
 
 
 def test_root_and_backup_have_identical_cloudflare_keys():

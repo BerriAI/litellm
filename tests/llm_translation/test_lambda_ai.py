@@ -102,8 +102,6 @@ async def test_lambda_ai_completion_call():
             raise
 
 
-
-
 def test_lambda_ai_model_list_populated():
     """Test that lambda_ai_models list is populated correctly"""
     # Ensure we're using local model cost map and repopulate models

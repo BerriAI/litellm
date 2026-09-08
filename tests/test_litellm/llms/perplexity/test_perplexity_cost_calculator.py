@@ -316,7 +316,6 @@ class TestPerplexityCostCalculator:
 
         assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
 
-
     @pytest.mark.parametrize("citation_tokens", [0, 10, 25, 100])
     @pytest.mark.parametrize("search_queries", [0, 1, 5, 10])
     @pytest.mark.parametrize("reasoning_tokens", [0, 15, 30])
@@ -461,7 +460,6 @@ class TestPerplexityCostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-9)
         assert math.isclose(completion_cost, expected_completion, rel_tol=1e-9)
-
 
     def test_agent_api_fallback_rates_price_a_response_without_metered_cost(self):
         """Perplexity meters cost on the response, but when `usage.cost` is absent the

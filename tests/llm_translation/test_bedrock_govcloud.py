@@ -40,7 +40,6 @@ class TestBedrockGovCloudSupport:
         assert "us-gov-east-1" in all_regions
         assert "us-gov-west-1" in all_regions
 
-
     def test_govcloud_model_routing(self):
         """Test that GovCloud models are routed correctly"""
         # Test Claude model routing
@@ -116,8 +115,6 @@ class TestBedrockGovCloudSupport:
         # They are only in model_cost for pricing purposes
         assert not any("us-gov-east-1" in model for model in litellm.bedrock_models)
         assert not any("us-gov-west-1" in model for model in litellm.bedrock_models)
-
-
 
     @patch("litellm.completion")
     def test_govcloud_completion_cost_calculation(self, mock_completion):

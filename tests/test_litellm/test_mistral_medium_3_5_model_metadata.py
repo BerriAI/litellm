@@ -25,13 +25,6 @@ def _load(path):
         return json.load(f)
 
 
-
-
-
-
-
-
-
 @pytest.mark.parametrize("model", SYNCED_MODELS)
 def test_backup_matches_main(model):
     """Ensure the bundled (backup) cost map stays in sync with the canonical file."""

@@ -47,14 +47,6 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     assert model_info["input_cost_per_token"] == 0.0
 
 
-
-
-
-
-
-
-
-
 def test_get_model_info_gemini_pro():
     info = litellm.get_model_info("gemini-2.0-flash")
     print("info", info)
