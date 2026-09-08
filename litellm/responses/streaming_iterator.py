@@ -235,7 +235,6 @@ def _status_code_for_error_fields(error_type: str | None, error_code: str | None
 
 
 def _obj_get(obj: object, key: str, default: object | None = None) -> object:
-    """Read ``key`` from a dict or a pydantic/attr object uniformly."""
     if obj is None:
         return default
     if isinstance(obj, Mapping):
@@ -245,7 +244,6 @@ def _obj_get(obj: object, key: str, default: object | None = None) -> object:
 
 
 def _safe_int(value: object, default: int) -> int:
-    """Narrow a dynamically-read value to int, falling back for missing/malformed input."""
     if isinstance(value, bool):
         return default
     if isinstance(value, int):
@@ -269,32 +267,22 @@ def _build_bag(
     model_cls: type[_ResponseModelT],
     **fields: object,  # kwargs-ok: generic forwarder for extra-allow Responses payload models
 ) -> _ResponseModelT:
-    """
-    Construct a Responses API pydantic payload from keyword fields.
-
-    ``BaseLiteLLMOpenAIResponseObject`` (and the loosely-typed content-part models)
-    accept extra fields but declare none, so direct ``Cls(id=..., type=...)`` calls
-    trip the type checker. Funnelling construction through this generic keeps callers
-    strongly typed while the ``**fields`` splat keeps the field kwargs valid.
-    """
     return model_cls(**fields)
 
 
 @dataclass(frozen=True, slots=True)
 class _ResponsesStreamItemState:
-    """Per-``output_index`` lifecycle bookkeeping for one streamed output item."""
-
     item_id: str
     output_index: int
     content_index: int = 0
     item_type: str = "message"
     item_snapshot: str = "{}"
     reasoning_summary: tuple[tuple[int, str], ...] = ()
-    part_kind: str = "output_text"  # "output_text" | "refusal"
+    part_kind: str = "output_text"
     accumulated_text: str = ""
     output_item_added_seen: bool = False
     content_part_added_seen: bool = False
-    leaf_done_seen: bool = False  # output_text.done / refusal.done / function_call_arguments.done
+    leaf_done_seen: bool = False
     content_part_done_seen: bool = False
     output_item_done_seen: bool = False
 
@@ -307,22 +295,6 @@ _ItemStateMap = Mapping[int, _ResponsesStreamItemState]
 
 
 class _ResponsesLifecycleGapFiller:
-    """
-    Guarantee the Responses API streaming lifecycle wrapper events are present.
-
-    Native providers whose upstream emits only ``response.output_text.delta`` +
-    ``response.completed`` (e.g. github_copilot, ollama cloud, Azure gpt-5) leave
-    strict clients (OpenAI Codex CLI) without an "active item", which they reject
-    with ``OutputTextDelta without active item``. Given the one event a provider
-    just produced, ``expand`` prepends any missing openers
-    (``response.created``/``response.in_progress`` before the first event;
-    ``output_item.added``/``content_part.added`` before the first delta of an
-    item) and, right before ``response.completed``, any missing teardown
-    (``*.done``). Every injection is gated on a not-already-seen flag, so a
-    provider that already emits the full sequence passes through unchanged and
-    is never double-wrapped.
-    """
-
     def __init__(self, *, model: str, response_id: str) -> None:
         self._model = model
         self._response_id = response_id
@@ -331,13 +303,6 @@ class _ResponsesLifecycleGapFiller:
         self._items: _ItemStateMap = MappingProxyType({})
 
     def expand(self, event: ResponsesAPIStreamingResponse) -> tuple[ResponsesAPIStreamingResponse, ...]:
-        """
-        Given the one event a provider just produced, return the ordered events to
-        emit: any missing openers, then the event itself (and, for a terminal
-        event, any missing teardown before it). Response-level openers are tied to
-        the first item/content event, so a stream with no output (e.g. a lone
-        ``response.completed``) passes through untouched.
-        """
         ev = ResponsesAPIStreamEvents
         etype = _obj_get(event, "type")
 
@@ -405,13 +370,7 @@ class _ResponsesLifecycleGapFiller:
         )
 
     def _status_event(self, *, is_created: bool) -> BaseLiteLLMOpenAIResponseObject:
-        # Known caveat: when these openers are synthesized (truncated upstream), the
-        # real response id only arrives on response.completed, so response.created /
-        # response.in_progress carry the placeholder _response_id and will not match
-        # completed's id. Clients must correlate synthesized events by output_index,
-        # not response.id. We do not rewrite completed's real id (clients store it for
-        # follow-up GETs). Providers that emit their own response.created are passed
-        # through untouched and keep their real id.
+        # Without an upstream opener, this ID is temporary; preserve the terminal ID for follow-up requests.
         response = _build_bag(
             ResponsesAPIResponse,
             id=self._response_id,
@@ -749,10 +708,6 @@ class BaseResponsesAPIStreamingIterator:
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
 
-        # Guarantee the Responses API streaming lifecycle wrapper events are present
-        # even when the upstream provider truncates them (issue #20975). Only the live
-        # __anext__/__next__ loops drain this; Mock/Cached iterators override the loop
-        # and build their own event list, so they never invoke it.
         self._pending_events: tuple[ResponsesAPIStreamingResponse, ...] = ()
         self._lifecycle_gap_filler = _ResponsesLifecycleGapFiller(
             model=model or "",
@@ -1375,8 +1330,6 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             self._check_max_streaming_duration()
             while True:
-                # Drain events the gap-filler already expanded (openers, the hooked
-                # provider chunk, teardown) before pulling the next SSE line.
                 if self._pending_events:
                     pending_event, self._pending_events = self._pending_events[0], self._pending_events[1:]
                     self._yielded_first_chunk = True
@@ -1396,13 +1349,10 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     raise StopAsyncIteration
                 elif result is not None:
                     self._maybe_raise_for_error_event(result)
-                    # Run the deployment hook on the real chunk before the gap-filler
-                    # accumulates it, so synthesized *.done events carry post-hook
-                    # (e.g. guardrail-redacted) text, not the raw provider delta.
+                    # Accumulate post-hook deltas so teardown cannot restore redacted text.
                     self._pending_events = self._lifecycle_gap_filler.expand(
                         await self._call_post_streaming_deployment_hook(chunk=result)
                     )
-                # Loop back to drain pending (or read the next chunk if none).
 
         except StopAsyncIteration:
             # Normal end of stream - don't log as failure
@@ -1463,8 +1413,6 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             self._check_max_streaming_duration()
             while True:
-                # Drain events the gap-filler already expanded before pulling the next
-                # SSE line (see the async path for the hook-ordering rationale).
                 if self._pending_events:
                     pending_event, self._pending_events = self._pending_events[0], self._pending_events[1:]
                     self._yielded_first_chunk = True
@@ -1484,13 +1432,13 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     raise StopIteration
                 elif result is not None:
                     self._maybe_raise_for_error_event(result)
+                    # Accumulate post-hook deltas so teardown cannot restore redacted text.
                     self._pending_events = self._lifecycle_gap_filler.expand(
                         run_async_function(
                             async_function=self._call_post_streaming_deployment_hook,
                             chunk=result,
                         )
                     )
-                # Loop back to drain pending (or read the next chunk if none).
 
         except StopIteration:
             # Normal end of stream - don't log as failure

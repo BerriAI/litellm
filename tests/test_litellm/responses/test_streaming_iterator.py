@@ -1,28 +1,7 @@
-"""Regression tests for litellm/responses/streaming_iterator.py.
-
-Two concerns live here:
-
-TTFT stamping (LIT-4185): /v1/responses streaming must stamp
+"""Regression tests for LIT-4185 — /v1/responses streaming must stamp
 completion_start_time on the first chunk so downstream TTFT consumers
 (Prometheus, OTEL, SpendLogs completionStartTime) do not fall back to
-completion_start_time = end_time.
-
-Lifecycle-event synthesis (issue #20975): native /responses providers whose
-upstream truncates the streaming lifecycle (emitting only
-response.output_text.delta ... response.completed) left strict clients like
-OpenAI Codex CLI without an "active item" ("OutputTextDelta without active
-item"). The live iterators must synthesize the missing setup (response.created,
-response.in_progress, response.output_item.added, response.content_part.added)
-and teardown (output_text.done, content_part.done, output_item.done) events,
-pass an already-complete sequence through unchanged (idempotency), and run the
-post-call streaming deployment hook BEFORE the gap filler accumulates deltas so
-a hook that redacts delta text is not bypassed on the synthesized *.done events.
-
-The #20975 tests drive the REAL ResponsesAPIStreamingIterator /
-SyncResponsesAPIStreamingIterator with the REAL OpenAIResponsesAPIConfig,
-feeding a dependency-injected fake SSE byte stream (no monkeypatching of the
-code under test).
-"""
+completion_start_time = end_time."""
 
 import json
 from collections.abc import Mapping, Sequence
@@ -52,12 +31,7 @@ from litellm.types.llms.openai import (
 )
 
 EV = ResponsesAPIStreamEvents
-E = EV  # shorthand
-
-
-# ---------------------------------------------------------------------------
-# TTFT stamping (LIT-4185)
-# ---------------------------------------------------------------------------
+E = EV
 
 
 def _sse_event(payload: dict) -> bytes:
@@ -575,11 +549,6 @@ async def test_streaming_logging_copy_fallback_leaves_caller_event_untouched():
     assert iterator.completed_response.response._hidden_params == {}
 
 
-# ---------------------------------------------------------------------------
-# Lifecycle-event synthesis (issue #20975)
-# ---------------------------------------------------------------------------
-
-
 def _response_body(status: str) -> Mapping[str, Any]:
     return MappingProxyType(
         {
@@ -609,13 +578,10 @@ def _response_body(status: str) -> Mapping[str, Any]:
 
 
 def _sse_frames(events: Sequence[Mapping[str, object]]) -> tuple[bytes, ...]:
-    """One `data: {...}\\n\\n` SSE frame per event, plus a terminating [DONE]."""
     return (*(f"data: {json.dumps(evt, default=dict)}\n\n".encode("utf-8") for evt in events), b"data: [DONE]\n\n")
 
 
 class _FakeStreamResponse:
-    """Minimal stand-in for httpx.Response exposing (a)iter_bytes over fixed frames."""
-
     def __init__(self, frames: tuple[bytes, ...]):
         self.headers: Mapping[str, str] = MappingProxyType({})
         self._frames = frames
@@ -991,11 +957,6 @@ async def test_stream_without_item_events_preserves_response_status_events(sync:
 
 @pytest.mark.asyncio
 async def test_synthesized_events_survive_proxy_serialization():
-    """
-    The proxy serializes each event with model_dump_json(exclude_none=True,
-    exclude_unset=True). Synthesized events must set their required fields
-    explicitly so nothing load-bearing is stripped off the wire.
-    """
     collected: Final = await _drive(_TRUNCATED_TEXT_EVENTS, sync=False)
     required_by_type: Final = MappingProxyType(
         {
@@ -1017,8 +978,6 @@ async def test_synthesized_events_survive_proxy_serialization():
 
 
 class _RedactingDeploymentHook:
-    """A streaming deployment hook that redacts output_text delta content."""
-
     REDACTION: Final = "[REDACTED]"
 
     async def async_post_call_streaming_deployment_hook(self, *, request_data, response_chunk, call_type):
@@ -1037,13 +996,6 @@ def redacting_deployment_hook(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
 async def test_streaming_hook_governs_synthesized_teardown(sync, redacting_deployment_hook):
-    """
-    A post-call streaming deployment hook that redacts response.output_text.delta
-    must also govern the SYNTHESIZED teardown. The gap filler accumulates the
-    post-hook delta, so output_text.done / content_part.done / output_item.done
-    carry the redacted text, never the raw provider text (issue #20975 review:
-    the pre-hook accumulation leaked redacted content through the done events).
-    """
     redacted: Final = _RedactingDeploymentHook.REDACTION * 2
     collected: Final = await _drive(_TRUNCATED_TEXT_EVENTS, sync=sync)
     by_type: Final = MappingProxyType(

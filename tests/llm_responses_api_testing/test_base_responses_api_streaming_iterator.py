@@ -429,9 +429,6 @@ class TestBaseResponsesAPIStreamingIterator:
         except StopAsyncIteration:
             pass  # This is expected
 
-        # The provider delta is delivered as the final event. Since #20975 the live
-        # iterator also synthesizes the missing lifecycle wrapper events ahead of a
-        # bare delta, so it is no longer necessarily the only chunk.
         assert mock_delta_event in chunks_received
         assert chunks_received[-1] is mock_delta_event
 
@@ -493,9 +490,6 @@ class TestBaseResponsesAPIStreamingIterator:
         except StopIteration:
             pass  # This is expected
 
-        # The provider delta is delivered as the final event. Since #20975 the live
-        # iterator also synthesizes the missing lifecycle wrapper events ahead of a
-        # bare delta, so it is no longer necessarily the only chunk.
         assert mock_delta_event in chunks_received
         assert chunks_received[-1] is mock_delta_event
 
