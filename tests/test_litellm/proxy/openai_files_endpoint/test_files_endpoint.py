@@ -2441,6 +2441,63 @@ def test_list_files_resolves_wildcard_deployment_credentials(
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
 
 
+def test_list_files_by_model_returns_an_openai_page_for_a_provider_listing(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.types.llms.openai import FileListPage
+
+    proxy_logging_obj = setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    proxy_logging_obj.update_request_status = mocker.AsyncMock()
+    proxy_logging_obj.post_call_success_hook = mocker.AsyncMock(return_value=None)
+    proxy_logging_obj.post_call_failure_hook = mocker.AsyncMock()
+
+    listed_files = [
+        OpenAIFileObject(
+            id=f"file-{index}",
+            bytes=index,
+            created_at=index,
+            filename=f"{index}.jsonl",
+            object="file",
+            purpose="batch",
+            status="uploaded",
+        )
+        for index in (1, 2)
+    ]
+
+    async def _mock_afile_list(**kwargs):
+        return list(listed_files)
+
+    monkeypatch.setattr(litellm, "afile_list", _mock_afile_list)
+
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="test-user",
+    )
+
+    try:
+        response = client.get(
+            "/v1/files?target_model_names=gpt-3.5-turbo",
+            headers={"Authorization": "Bearer test-key"},
+        )
+    finally:
+        app.dependency_overrides.pop(ps.user_api_key_auth, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["object"] == "list"
+    assert [listed["id"] for listed in body["data"]] == ["file-1", "file-2"]
+    assert (body["first_id"], body["last_id"], body["has_more"]) == ("file-1", "file-2", False)
+    hook_response = proxy_logging_obj.post_call_success_hook.call_args.kwargs["response"]
+    assert isinstance(hook_response, FileListPage)
+    assert [listed.id for listed in hook_response.data] == ["file-1", "file-2"]
+
+
 def test_list_files_model_routing_does_not_forward_custom_llm_provider_twice(
     mocker: MockerFixture, monkeypatch, llm_router: Router
 ):

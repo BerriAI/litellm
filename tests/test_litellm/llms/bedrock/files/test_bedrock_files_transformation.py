@@ -3024,20 +3024,13 @@ class TestBedrockFileListTransformation:
                 return_value=httpx.Response(200, content=self.LISTING)
             )
 
-            page = litellm.file_list(custom_llm_provider="bedrock", purpose="batch", **_bedrock_s3_params())
+            files = litellm.file_list(custom_llm_provider="bedrock", purpose="batch", **_bedrock_s3_params())
 
         assert route.called
         request = route.calls[0].request
         assert request.headers["Authorization"].startswith("AWS4-HMAC-SHA256")
         assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
-        assert [file.id for file in page.data] == list(self.BATCH_IDS)
-        assert (page.object, page.first_id, page.last_id, page.has_more) == (
-            "list",
-            self.BATCH_IDS[0],
-            self.BATCH_IDS[-1],
-            False,
-        )
-        assert page.model_dump()["object"] == "list"
+        assert [file.id for file in files] == list(self.BATCH_IDS)
 
     def test_file_list_uses_trusted_snapshot_bucket_without_env(self, monkeypatch):
         import httpx
@@ -3058,7 +3051,7 @@ class TestBedrockFileListTransformation:
             )
 
         assert route.called
-        assert [file.id for file in files.data] == [*self.BATCH_IDS, self.OUTPUT_ID]
+        assert [file.id for file in files] == [*self.BATCH_IDS, self.OUTPUT_ID]
 
     @pytest.mark.asyncio
     async def test_afile_list_end_to_end_sends_signed_listing(self, monkeypatch):
@@ -3083,8 +3076,7 @@ class TestBedrockFileListTransformation:
         assert route.called
         request = route.calls[0].request
         assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
-        assert [file.id for file in files.data] == [self.OUTPUT_ID]
-        assert (files.object, files.first_id, files.last_id, files.has_more) == ("list", self.OUTPUT_ID, self.OUTPUT_ID, False)
+        assert [file.id for file in files] == [self.OUTPUT_ID]
 
     def test_transform_list_files_request_narrows_prefix_to_requested_purpose(self, monkeypatch):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -3185,11 +3177,11 @@ class TestBedrockFileListTransformation:
                 return_value=httpx.Response(200, content=self.EMPTY_LISTING)
             )
 
-            page = litellm.file_list(custom_llm_provider="bedrock", purpose="user_data", **_bedrock_s3_params())
+            files = litellm.file_list(custom_llm_provider="bedrock", purpose="user_data", **_bedrock_s3_params())
 
         assert route.call_count == 1
         assert "prefix" not in route.calls[0].request.url.params
-        assert (page.data, page.has_more) == ([], False)
+        assert files == []
 
     def test_transform_list_files_request_lists_the_output_bucket_without_an_input_bucket(self, monkeypatch):
         from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
@@ -3253,7 +3245,7 @@ class TestBedrockFileListTransformation:
         assert route.called
         request = route.calls[0].request
         assert _sent_signature(request.headers) == _s3_signature_for("GET", str(request.url), request.headers)
-        assert [file.id for file in files.data] == [self.OUTPUT_BUCKET_ID]
+        assert [file.id for file in files] == [self.OUTPUT_BUCKET_ID]
 
     def test_transform_list_files_next_request_signs_the_continuation_page(self, monkeypatch):
         import httpx
@@ -3350,7 +3342,7 @@ class TestBedrockFileListTransformation:
                 **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
             )
 
-        self._assert_paged_listing(first_page, last_page, files.data)
+        self._assert_paged_listing(first_page, last_page, files)
 
     @pytest.mark.asyncio
     async def test_afile_list_follows_continuation_tokens_across_pages(self, monkeypatch):
@@ -3372,7 +3364,7 @@ class TestBedrockFileListTransformation:
                 **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
             )
 
-        self._assert_paged_listing(first_page, last_page, files.data)
+        self._assert_paged_listing(first_page, last_page, files)
 
     OVERSIZED_PAGE_SIZE = 3000
     OVERSIZED_PAGE_COUNT = 6
@@ -3429,7 +3421,7 @@ class TestBedrockFileListTransformation:
                 **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
             )
 
-        self._assert_capped_listing(route, files.data)
+        self._assert_capped_listing(route, files)
 
     @pytest.mark.asyncio
     async def test_afile_list_stops_at_the_openai_listing_ceiling(self, monkeypatch):
@@ -3450,7 +3442,7 @@ class TestBedrockFileListTransformation:
                 **_trusted_bucket_snapshot(s3_bucket_name="my-bucket"),
             )
 
-        self._assert_capped_listing(route, files.data)
+        self._assert_capped_listing(route, files)
 
     def test_file_list_end_to_end_surfaces_the_s3_error_body(self, monkeypatch):
         import httpx
