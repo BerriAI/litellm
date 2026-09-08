@@ -656,7 +656,10 @@ async def _update_database_and_spend_counters(
     return True
 
 
-async def _reconcile_budget_reservation_before_db_update(budget_reservation: dict, response_cost: float) -> None:
+async def _reconcile_budget_reservation_before_db_update(
+    budget_reservation: dict,  # mutable-ok: reconcile_budget_reservation stamps applied_adjustment on the caller's shared reservation dict
+    response_cost: float,
+) -> None:
     from litellm.proxy.spend_tracking.budget_reservation import reconcile_budget_reservation
 
     try:
