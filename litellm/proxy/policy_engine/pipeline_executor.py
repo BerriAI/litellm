@@ -128,7 +128,7 @@ class _StreamRewriteObserver(CustomGuardrail):
 class _ScannedTextRecorder(CustomGuardrail):
     def __init__(self, guardrail_name: str) -> None:
         super().__init__(guardrail_name=guardrail_name)
-        self.texts: tuple[str, ...] | None = None
+        self.inputs: GenericGuardrailAPIInputs | None = None
 
     @_logged_by_inner_guardrail
     async def apply_guardrail(
@@ -138,7 +138,7 @@ class _ScannedTextRecorder(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
-        self.texts = _text_snapshot(inputs.get("texts"))
+        self.inputs = inputs
         return inputs
 
 
@@ -183,12 +183,16 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         if replacement is None:
             return inputs
         scanned: Final = _text_snapshot(inputs.get("texts"))
-        rewritten: Final = await self._scanned_texts(replacement, logging_obj)
+        rescanned: Final = await self._rescan(replacement, logging_obj)
+        rewritten: Final = None if rescanned is None else rescanned.get("texts")
         if scanned is None or rewritten is None or len(rewritten) != len(scanned):
             raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
-        return {**inputs, "texts": list(rewritten)}
+        rewritten_inputs: Final[GenericGuardrailAPIInputs] = {**inputs, "texts": rewritten}
+        return rewritten_inputs
 
-    async def _scanned_texts(self, response: object, logging_obj: "LiteLLMLoggingObj | None") -> tuple[str, ...] | None:
+    async def _rescan(
+        self, response: object, logging_obj: "LiteLLMLoggingObj | None"
+    ) -> GenericGuardrailAPIInputs | None:
         recorder: Final = _ScannedTextRecorder(self.guardrail_name or "unknown")
         await self.endpoint_translation.process_output_response(
             response=response,
@@ -196,7 +200,7 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
             litellm_logging_obj=logging_obj,
             user_api_key_dict=self.user_api_key_dict,
         )
-        return recorder.texts
+        return recorder.inputs
 
 
 def _prepare_hook_input(
