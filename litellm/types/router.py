@@ -540,6 +540,14 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         default=None,
         description="Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.",
     )
+    xai_oauth_token_file: str | None = Field(
+        default=None,
+        description=(
+            "Per-deployment xAI OAuth token file path. When set with use_xai_oauth=True, "
+            "the request reads that account's OAuth credentials instead of the global "
+            "token file, enabling multi-account SuperGrok routing."
+        ),
+    )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
     model_info: dict | None = None
