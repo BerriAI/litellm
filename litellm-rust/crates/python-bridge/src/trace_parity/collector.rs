@@ -3,32 +3,42 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tracing::span::{Attributes, Id};
-use tracing::{Dispatch, Subscriber};
+use tracing::{Dispatch, Level, Metadata, Subscriber};
+use tracing_subscriber::filter::{FilterFn, LevelFilter, filter_fn};
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{Layer, Registry};
 
-use super::function_trace_filter;
+use litellm_core::constants::FUNCTION_TRACE_TARGET;
+
+fn function_trace_filter() -> FilterFn<impl Fn(&Metadata<'_>) -> bool> {
+    filter_fn(|metadata| {
+        metadata.is_span()
+            && metadata.target() == FUNCTION_TRACE_TARGET
+            && *metadata.level() == Level::TRACE
+    })
+    .with_max_level_hint(LevelFilter::TRACE)
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct FunctionTraceEvent {
-    pub id: usize,
-    pub parent_id: Option<usize>,
-    pub function: &'static str,
-    pub module_path: Option<&'static str>,
-    pub file: Option<&'static str>,
-    pub line: Option<u32>,
+pub(super) struct FunctionTraceEvent {
+    id: usize,
+    parent_id: Option<usize>,
+    function: &'static str,
+    module_path: Option<&'static str>,
+    file: Option<&'static str>,
+    line: Option<u32>,
 }
 
 #[derive(Clone, Default)]
-pub struct FunctionTrace {
+pub(super) struct FunctionTrace {
     events: Arc<Mutex<Vec<FunctionTraceEvent>>>,
     span_events: Arc<Mutex<HashMap<Id, usize>>>,
 }
 
 impl FunctionTrace {
-    pub fn dispatcher(&self) -> Dispatch {
+    pub(super) fn dispatcher(&self) -> Dispatch {
         Dispatch::new(
             Registry::default().with(
                 FunctionTraceLayer {
@@ -39,7 +49,7 @@ impl FunctionTrace {
         )
     }
 
-    pub fn events(&self) -> Vec<FunctionTraceEvent> {
+    pub(super) fn events(&self) -> Vec<FunctionTraceEvent> {
         self.events
             .lock()
             .unwrap_or_else(|error| error.into_inner())
@@ -90,9 +100,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::constants::FUNCTION_TRACE_TARGET;
-
     use super::*;
+    use tracing::instrument::WithSubscriber;
 
     fn event(
         id: usize,
@@ -129,8 +138,6 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_futures_keep_separate_traces_across_yields() {
-        use tracing::instrument::WithSubscriber;
-
         let first = FunctionTrace::default();
         let second = FunctionTrace::default();
         let outside = FunctionTrace::default();
@@ -161,8 +168,6 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_siblings_keep_the_same_parent() {
-        use tracing::instrument::WithSubscriber;
-
         let trace = FunctionTrace::default();
         concurrent_parent()
             .with_subscriber(trace.dispatcher())
@@ -211,5 +216,27 @@ mod tests {
             structural_events(&trace.events()),
             vec![event(0, None, "outer"), event(1, Some(0), "inner")]
         );
+    }
+
+    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+    async fn instrumented_with_literal_target() {}
+
+    #[tokio::test]
+    async fn literal_instrument_target_matches_filter_constant() {
+        assert_eq!(FUNCTION_TRACE_TARGET, "litellm::function_trace");
+
+        let trace = FunctionTrace::default();
+        instrumented_with_literal_target()
+            .with_subscriber(trace.dispatcher())
+            .await;
+
+        let events = trace.events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].id, 0);
+        assert_eq!(events[0].parent_id, None);
+        assert_eq!(events[0].function, "instrumented_with_literal_target");
+        assert_eq!(events[0].module_path, Some(module_path!()));
+        assert_eq!(events[0].file, Some(file!()));
+        assert!(events[0].line.is_some());
     }
 }

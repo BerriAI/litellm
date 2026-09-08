@@ -18,7 +18,8 @@ deployment, and adapts frames while core dials OpenAI and splices the session.
 
 Dependency direction is acyclic: config depends on core, the gateway depends on
 config and core, and the Python bridge depends on core and Python interop. Its
-optional `trace-parity` diagnostics also depend on the gateway.
+private `trace_parity` module owns trace collection and gateway fixtures, enabled
+by the bridge’s `trace-parity` feature and the gateway’s `server` feature
 
 - **Client endpoint:** `wss://<host>/v1/realtime?model=<model>` (WebSocket)
 - **Auth:** `Authorization: Bearer $LITELLM_MASTER_KEY` (fails closed if unset)

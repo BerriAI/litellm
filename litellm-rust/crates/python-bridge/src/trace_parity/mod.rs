@@ -1,9 +1,14 @@
+mod collector;
+mod gateway;
+
 use std::fmt::Display;
 use std::future::Future;
 
-use litellm_core::observability::{FunctionTrace, FunctionTraceEvent};
 use serde::Serialize;
 use tracing::instrument::WithSubscriber;
+
+use self::collector::{FunctionTrace, FunctionTraceEvent};
+pub(crate) use gateway::register_gateway;
 
 #[derive(Serialize)]
 pub(crate) struct TracedResponse<T> {

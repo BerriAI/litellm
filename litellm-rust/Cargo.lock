@@ -1466,7 +1466,6 @@ dependencies = [
  "tokio",
  "tokio-tungstenite 0.24.0",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1484,6 +1483,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "criterion",
  "litellm-ai-gateway",
  "litellm-core",
@@ -1493,7 +1493,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

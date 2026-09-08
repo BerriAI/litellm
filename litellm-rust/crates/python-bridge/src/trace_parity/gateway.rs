@@ -1,27 +1,28 @@
-//! Harness-only in-process adapters. Never mounted as production routes.
-
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{Request, StatusCode};
+use litellm_ai_gateway::io::realtime_pool::RealtimePool;
+use litellm_ai_gateway::routes;
+use litellm_ai_gateway::state::AppState;
 use litellm_core::Error;
 use litellm_core::router::{Deployment, LiteLLMParams, Router as ModelRouter};
+use litellm_python_interop::run_async;
+use pyo3::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
 use tower::ServiceExt;
 
-use crate::io::realtime_pool::RealtimePool;
-use crate::routes;
-use crate::state::AppState;
+use crate::errors::core_error_to_pyerr;
 
 #[derive(Debug, Serialize)]
-pub struct GatewayResponse {
-    pub status: u16,
-    pub body: Value,
+struct GatewayResponse {
+    status: u16,
+    body: Value,
 }
 
-pub async fn messages_request(
+async fn messages_request(
     model_alias: String,
     provider_model: String,
     api_base: String,
@@ -62,4 +63,20 @@ pub async fn messages_request(
         status: status.as_u16(),
         body,
     })
+}
+
+#[pyfunction]
+fn gateway_messages<'py>(
+    py: Python<'py>,
+    model_alias: String,
+    provider_model: String,
+    api_base: String,
+    #[pyo3(from_py_with = litellm_python_interop::from_py)] body: Value,
+) -> PyResult<Bound<'py, PyAny>> {
+    let future = messages_request(model_alias, provider_model, api_base, body);
+    run_async(py, super::capture(future), core_error_to_pyerr)
+}
+
+pub(crate) fn register_gateway(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(gateway_messages, module)?)
 }

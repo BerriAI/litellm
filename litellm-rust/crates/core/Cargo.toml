@@ -19,7 +19,6 @@ thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tokio-tungstenite.workspace = true
-tracing-subscriber = { workspace = true, optional = true }
 litellm-auth-aws = { workspace = true, optional = true }
 
 [features]
@@ -27,10 +26,8 @@ default = []
 bedrock-auth = [
     "dep:litellm-auth-aws",
 ]
-observability = ["dep:tracing-subscriber"]
 
 [dev-dependencies]
 futures-channel = "0.3"
 rstest.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }
-tracing-subscriber.workspace = true

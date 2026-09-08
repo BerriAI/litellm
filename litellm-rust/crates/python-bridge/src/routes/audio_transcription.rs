@@ -150,7 +150,7 @@ mod trace {
         })?;
         litellm_python_interop::run_sync(
             py,
-            crate::function_trace::capture(future),
+            crate::trace_parity::capture(future),
             core_error_to_pyerr,
         )
     }
@@ -181,7 +181,7 @@ mod trace {
         })?;
         litellm_python_interop::run_async(
             py,
-            crate::function_trace::capture(future),
+            crate::trace_parity::capture(future),
             core_error_to_pyerr,
         )
     }

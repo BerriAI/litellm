@@ -3,11 +3,11 @@
 mod diagnostics;
 mod driver;
 mod errors;
-#[cfg(feature = "trace-parity")]
-mod function_trace;
 mod marshal;
 mod retained;
 mod routes;
+#[cfg(feature = "trace-parity")]
+mod trace_parity;
 
 use pyo3::prelude::*;
 
@@ -88,6 +88,7 @@ mod tests {
                         "amessages",
                         "chat_completions",
                         "achat_completions",
+                        "chat_completions_decline",
                         "gateway_messages",
                     ]
                 );
