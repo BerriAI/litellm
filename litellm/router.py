@@ -978,7 +978,6 @@ class Router:
             DEFAULT_HEALTH_CHECK_INTERVAL * DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER
         )
         self.health_state_cache = DeploymentHealthCache(cache=self.cache, staleness_threshold=float(_staleness))
-        self.failed_calls = InMemoryCache()  # cache to track failed call per deployment, if num failed calls within 1 minute > allowed fails, then add it to cooldown
 
         if num_retries is not None:
             self.num_retries = num_retries
