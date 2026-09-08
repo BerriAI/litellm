@@ -1,9 +1,11 @@
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
 import litellm
+from litellm._internal_context import pinned_billing_time
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -3979,6 +3981,46 @@ def test_billed_token_rates_follow_the_token_tier_the_breakdown_bills_at(monkeyp
     assert breakdown.cache_read_cost == pytest.approx(200_000 * rates.cache_read_input_token_cost)
     assert breakdown.cache_creation_cost == pytest.approx(10_000 * rates.cache_creation_input_token_cost)
     assert breakdown.reasoning_cost == pytest.approx(200 * rates.output_cost_per_reasoning_token)
+
+
+def test_a_pinned_billing_time_prices_the_totals_and_the_reported_rates_at_one_moment(monkeypatch):
+    """Totals and reported rates resolve off-peak pricing on separate paths that each read the
+    clock, so a window opening between the two reads used to leave them describing one request
+    at two different prices. Pinned, both must answer for the pinned moment."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "off-peak-model",
+        {
+            "input_cost_per_token": 3e-6,
+            "output_cost_per_token": 15e-6,
+            "off_peak_pricing": {
+                "hours_utc": "02:00-03:00",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 5e-6,
+            },
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    with pinned_billing_time(datetime(2026, 1, 1, 2, 30, tzinfo=timezone.utc)):
+        off_peak_prompt_cost, off_peak_completion_cost = generic_cost_per_token(
+            model="off-peak-model", usage=usage, custom_llm_provider="openai"
+        )
+        off_peak_rates = get_billed_token_rates(model="off-peak-model", custom_llm_provider="openai", usage=usage)
+    with pinned_billing_time(datetime(2026, 1, 1, 12, 30, tzinfo=timezone.utc)):
+        peak_prompt_cost, peak_completion_cost = generic_cost_per_token(
+            model="off-peak-model", usage=usage, custom_llm_provider="openai"
+        )
+        peak_rates = get_billed_token_rates(model="off-peak-model", custom_llm_provider="openai", usage=usage)
+
+    assert off_peak_rates.input_cost_per_token == pytest.approx(1e-6)
+    assert peak_rates.input_cost_per_token == pytest.approx(3e-6)
+    assert off_peak_prompt_cost == pytest.approx(1000 * off_peak_rates.input_cost_per_token)
+    assert off_peak_completion_cost == pytest.approx(500 * off_peak_rates.output_cost_per_token)
+    assert peak_prompt_cost == pytest.approx(1000 * peak_rates.input_cost_per_token)
+    assert peak_completion_cost == pytest.approx(500 * peak_rates.output_cost_per_token)
 
 
 def test_billed_token_rates_are_none_for_an_unpriced_model():

@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import litellm
+from litellm._internal_context import current_billing_time, pinned_billing_time
 from litellm._logging import verbose_proxy_logger
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.llm_cost_calc.utils import get_billed_token_rates
@@ -631,33 +632,39 @@ async def estimate_cost(
         function_id="cost-estimate",
     )
 
-    # Use completion_cost which handles all the logic including margins/discounts
-    try:
-        cost_per_request: Final = completion_cost(
-            completion_response=mock_response,
+    # The totals, the per-token-type lines and the reported rates each resolve pricing on their
+    # own path. Pinning one moment keeps an off-peak window that opens mid-quote from splitting them.
+    billed_at: Final = current_billing_time()
+    with pinned_billing_time(billed_at):
+        # Use completion_cost which handles all the logic including margins/discounts
+        try:
+            cost_per_request: Final = completion_cost(
+                completion_response=mock_response,
+                model=resolved_model,
+                custom_llm_provider=resolved_provider,
+                custom_cost_per_token=resolved.custom_cost_per_token,
+                litellm_logging_obj=litellm_logging_obj,
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"Could not calculate cost for model '{request.model}' (resolved to '{resolved_model}'): {e}"
+                },
+            )
+
+        rates: Final = get_billed_token_rates(
             model=resolved_model,
             custom_llm_provider=resolved_provider,
+            usage=usage,
             custom_cost_per_token=resolved.custom_cost_per_token,
-            litellm_logging_obj=litellm_logging_obj,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": f"Could not calculate cost for model '{request.model}' (resolved to '{resolved_model}'): {e}"
-            },
+            current_time=billed_at,
         )
 
     per_request: Final = _cost_lines(cost_per_request, litellm_logging_obj.cost_breakdown)
     daily: Final = per_request.times(request.num_requests_per_day)
     monthly: Final = per_request.times(request.num_requests_per_month)
 
-    rates: Final = get_billed_token_rates(
-        model=resolved_model,
-        custom_llm_provider=resolved_provider,
-        usage=usage,
-        custom_cost_per_token=resolved.custom_cost_per_token,
-    )
     model_info: Final = _lookup_model_info(resolved_model)
     mapped_provider: Final = model_info.get("litellm_provider") if model_info is not None else None
     custom_llm_provider: Final = mapped_provider if mapped_provider is not None else resolved_provider
