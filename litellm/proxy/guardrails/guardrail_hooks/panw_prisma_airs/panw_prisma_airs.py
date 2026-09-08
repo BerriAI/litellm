@@ -205,6 +205,12 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 guardrail_name,
             )
 
+        if self.experimental_use_latest_role_message_only is True:
+            verbose_proxy_logger.warning(
+                "PANW Prisma AIRS Guardrail '%s': experimental_use_latest_role_message_only=true - only the latest user/developer message is scanned on the request side. Earlier turns in caller-supplied history are not rescanned before being forwarded to the model. Enable only where every turn is scanned while it is the latest message, or where conversation history is server-controlled.",
+                guardrail_name,
+            )
+
         verbose_proxy_logger.info(
             "Initialized PANW Prisma AIRS Guardrail: %s (profile=%s, mask_request=%s, mask_response=%s, fallback_on_error=%s, timeout=%s)",
             guardrail_name,

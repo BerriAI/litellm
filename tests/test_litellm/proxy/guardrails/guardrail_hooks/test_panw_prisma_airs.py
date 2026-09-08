@@ -5243,6 +5243,31 @@ class TestPanwAirsLatestRoleMessageOnlyOpenAIShape:
             assert mock_api.call_count == 2
 
 
+class TestPanwAirsLatestRoleMessageOnlyStartupWarning:
+    """Enabling latest-only scanning trusts caller-supplied history, so the operator
+    gets an explicit startup warning - same treatment as fallback_on_error='allow'."""
+
+    def test_warns_when_explicitly_enabled(self):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.verbose_proxy_logger"
+        ) as mock_logger:
+            make_handler(experimental_use_latest_role_message_only=True)
+
+        warned = " ".join(str(c) for c in mock_logger.warning.call_args_list)
+        assert "experimental_use_latest_role_message_only=true" in warned
+        assert "not rescanned" in warned
+
+    @pytest.mark.parametrize("flag", [None, False])
+    def test_no_warning_when_unset_or_disabled(self, flag):
+        with patch(
+            "litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs.verbose_proxy_logger"
+        ) as mock_logger:
+            make_handler(experimental_use_latest_role_message_only=flag)
+
+        warned = " ".join(str(c) for c in mock_logger.warning.call_args_list)
+        assert "experimental_use_latest_role_message_only" not in warned
+
+
 class TestPanwAirsMcpToolCallWithoutCallId:
     """Tests for MCP tool invocations flowing through apply_guardrail without
     litellm_call_id — the bug fix for _convert_mcp_to_llm_format synthetic data."""
