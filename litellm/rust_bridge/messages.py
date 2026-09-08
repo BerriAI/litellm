@@ -34,15 +34,21 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 
 
 class RustMessages(Protocol):
-    def __call__(self, arguments: dict[str, object]) -> AnthropicMessagesResponse: ...
+    def __call__(
+        self, arguments: dict[str, object]
+    ) -> AnthropicMessagesResponse: ...  # mutable-ok: native bridge retains and updates Python argument objects
 
 
 class RustAmessages(Protocol):
-    def __call__(self, arguments: dict[str, object]) -> Awaitable[AnthropicMessagesResponse]: ...
+    def __call__(
+        self, arguments: dict[str, object]
+    ) -> Awaitable[
+        AnthropicMessagesResponse
+    ]: ...  # mutable-ok: native bridge retains and updates Python argument objects
 
 
 class _MessagesLogging(Protocol):
-    model_call_details: dict[str, object]
+    model_call_details: dict[str, object]  # mutable-ok: native bridge retains and updates Python argument objects
 
     def _handle_anthropic_messages_response_logging(self, result: object) -> object: ...
 
@@ -98,11 +104,15 @@ def load_rust_amessages() -> RustAmessages | None:
     return _AMESSAGES.load()
 
 
-def initialize_logging(arguments: dict[str, object], asynchronous: bool) -> object:
+def initialize_logging(
+    arguments: dict[str, object], asynchronous: bool
+) -> object:  # mutable-ok: native bridge retains and updates Python argument objects
     return initialize_lifecycle_logging(arguments, asynchronous, "messages")
 
 
-class _RetainedMessagesResponse(dict[str, object]):
+class _RetainedMessagesResponse(
+    dict[str, object]
+):  # mutable-ok: native bridge retains and updates Python argument objects
     def __init__(
         self, response: AnthropicMessagesResponse, roots: object, logger: _MessagesLogging, start_time: datetime
     ) -> None:
@@ -158,15 +168,15 @@ def retain_stream_response(
 
 
 def _arguments(
-    arguments: dict[str, object],
+    arguments: dict[str, object],  # mutable-ok: native bridge retains and updates Python argument objects
     model: str,
-    body: dict[str, object],
+    body: dict[str, object],  # mutable-ok: native bridge retains and updates Python argument objects
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
+    extra_headers: dict[str, object] | None,  # mutable-ok: native bridge retains and updates Python argument objects
     timeout: float | httpx.Timeout | None,
-) -> dict[str, object]:
+) -> dict[str, object]:  # mutable-ok: native bridge retains and updates Python argument objects
     return {  # mutable-ok: the native bridge requires a concrete argument bag
         **arguments,
         "model": model,
@@ -182,13 +192,13 @@ def _arguments(
 def messages(
     *,
     model: str,
-    body: dict[str, object],
+    body: dict[str, object],  # mutable-ok: native bridge retains and updates Python argument objects
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
+    extra_headers: dict[str, object] | None,  # mutable-ok: native bridge retains and updates Python argument objects
     timeout: float | httpx.Timeout | None,
-    arguments: dict[str, object] | None = None,
+    arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
 ) -> AnthropicMessagesResponse | None:
     implementation: Final = load_rust_messages()
     if implementation is None:
@@ -203,13 +213,13 @@ def messages(
 async def amessages(
     *,
     model: str,
-    body: dict[str, object],
+    body: dict[str, object],  # mutable-ok: native bridge retains and updates Python argument objects
     api_key: str | None,
     api_base: str | None,
     custom_llm_provider: str | None,
-    extra_headers: dict[str, object] | None,
+    extra_headers: dict[str, object] | None,  # mutable-ok: native bridge retains and updates Python argument objects
     timeout: float | httpx.Timeout | None,
-    arguments: dict[str, object] | None = None,
+    arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
 ) -> AnthropicMessagesResponse | None:
     implementation: Final = load_rust_amessages()
     if implementation is None:
@@ -227,20 +237,28 @@ class _MessagesLifecycle(NativeLifecycle, Protocol):
 
 class _MessagesBindings(NativeLifecycleBindings, Protocol):
     Lifecycle: Callable[[bool, bool], _MessagesLifecycle]
-    prepare: Callable[[dict[str, object], object], object]
+    prepare: Callable[
+        [dict[str, object], object], object
+    ]  # mutable-ok: native bridge retains and updates Python argument objects
     send: Callable[[object], Awaitable[AnthropicMessagesResponse]]
     send_sync: Callable[[object], AnthropicMessagesResponse]
     committed_failure: Callable[[], None]
 
 
 class _MessagesHost:
-    def __init__(self, arguments: dict[str, object], asynchronous: bool, bindings: _MessagesBindings) -> None:
+    def __init__(
+        self, arguments: dict[str, object], asynchronous: bool, bindings: _MessagesBindings
+    ) -> None:  # mutable-ok: native bridge retains and updates Python argument objects
         from litellm import utils
 
         self.bindings: _MessagesBindings = bindings
         self.machine: _MessagesLifecycle = bindings.Lifecycle(asynchronous, utils.is_internal_call.get())
-        self.arguments: dict[str, object] = arguments
-        self.current: dict[str, object] = arguments
+        self.arguments: dict[str, object] = (
+            arguments  # mutable-ok: native bridge retains and updates Python argument objects
+        )
+        self.current: dict[str, object] = (
+            arguments  # mutable-ok: native bridge retains and updates Python argument objects
+        )
         self.asynchronous: bool = asynchronous
         self.logger: object | None = arguments.get(LOGGING_OBJECT_KEY)
         self.lifecycle_owned: bool = self.logger is None
@@ -345,13 +363,15 @@ class _MessagesHost:
 
 
 def _drive_sync(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
-    arguments: dict[str, object], bindings: _MessagesBindings
+    arguments: dict[str, object],
+    bindings: _MessagesBindings,  # mutable-ok: native bridge retains and updates Python argument objects
 ) -> AnthropicMessagesResponse:
     return cast(AnthropicMessagesResponse, drive_sync(_MessagesHost(arguments, False, bindings)))
 
 
 async def _drive_async(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
-    arguments: dict[str, object], bindings: _MessagesBindings
+    arguments: dict[str, object],
+    bindings: _MessagesBindings,  # mutable-ok: native bridge retains and updates Python argument objects
 ) -> AnthropicMessagesResponse:
     return cast(AnthropicMessagesResponse, await drive_async(_MessagesHost(arguments, True, bindings)))
 

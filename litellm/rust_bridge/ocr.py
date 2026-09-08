@@ -29,11 +29,15 @@ from litellm.rust_bridge.bindings import NativeBinding
 
 
 class RustOcr(Protocol):
-    def __call__(self, arguments: dict[str, object]) -> OCRResponse: ...
+    def __call__(
+        self, arguments: dict[str, object]
+    ) -> OCRResponse: ...  # mutable-ok: native bridge retains and updates Python argument objects
 
 
 class RustAocr(Protocol):
-    def __call__(self, arguments: dict[str, object]) -> Awaitable[OCRResponse]: ...
+    def __call__(
+        self, arguments: dict[str, object]
+    ) -> Awaitable[OCRResponse]: ...  # mutable-ok: native bridge retains and updates Python argument objects
 
 
 def _as_ocr(value: object) -> RustOcr | None:
@@ -56,21 +60,27 @@ def load_rust_aocr() -> RustAocr | None:
     return _AOCR.load()
 
 
-def ocr(arguments: dict[str, object]) -> OCRResponse:
+def ocr(
+    arguments: dict[str, object],
+) -> OCRResponse:  # mutable-ok: native bridge retains and updates Python argument objects
     implementation: Final = load_rust_ocr()
     if implementation is None:
         raise RuntimeError("Rust OCR is enabled but the native OCR extension is unavailable")
     return implementation(arguments)
 
 
-async def aocr(arguments: dict[str, object]) -> OCRResponse:
+async def aocr(
+    arguments: dict[str, object],
+) -> OCRResponse:  # mutable-ok: native bridge retains and updates Python argument objects
     implementation: Final = load_rust_aocr()
     if implementation is None:
         raise RuntimeError("Rust OCR is enabled but the native OCR extension is unavailable")
     return await implementation(arguments)
 
 
-def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: str = "ocr") -> object:
+def initialize_logging(
+    arguments: dict[str, object], asynchronous: bool, route: str = "ocr"
+) -> object:  # mutable-ok: native bridge retains and updates Python argument objects
     import litellm
     from litellm import utils
     from litellm.integrations.custom_logger import CustomLogger
@@ -277,22 +287,36 @@ class _OcrLifecycle(NativeLifecycle, Protocol):
 
 
 class _OcrBindings(NativeLifecycleBindings, Protocol):
-    Lifecycle: Callable[[dict[str, object], object | None, bool, bool], _OcrLifecycle]
-    prepare: Callable[[dict[str, object], object, bool], object]
+    Lifecycle: Callable[
+        [dict[str, object], object | None, bool, bool], _OcrLifecycle
+    ]  # mutable-ok: native bridge retains and updates Python argument objects
+    prepare: Callable[
+        [dict[str, object], object, bool], object
+    ]  # mutable-ok: native bridge retains and updates Python argument objects
     pre_call: Callable[[object], None]
-    send: Callable[[object], Awaitable[dict[str, object]]]
+    send: Callable[
+        [object], Awaitable[dict[str, object]]
+    ]  # mutable-ok: native bridge retains and updates Python argument objects
     send_sync: Callable[[object], OCRResponse]
-    finish: Callable[[dict[str, object]], OCRResponse]
+    finish: Callable[
+        [dict[str, object]], OCRResponse
+    ]  # mutable-ok: native bridge retains and updates Python argument objects
     terminal_record: Callable[[object], Mapping[str, object]]
 
 
 class _OcrHost:
-    def __init__(self, arguments: dict[str, object], asynchronous: bool, bindings: _OcrBindings) -> None:
+    def __init__(
+        self, arguments: dict[str, object], asynchronous: bool, bindings: _OcrBindings
+    ) -> None:  # mutable-ok: native bridge retains and updates Python argument objects
         from litellm import utils
 
         self.bindings: _OcrBindings = bindings
-        self.arguments: dict[str, object] = arguments
-        self.current: dict[str, object] = arguments
+        self.arguments: dict[str, object] = (
+            arguments  # mutable-ok: native bridge retains and updates Python argument objects
+        )
+        self.current: dict[str, object] = (
+            arguments  # mutable-ok: native bridge retains and updates Python argument objects
+        )
         self.asynchronous: bool = asynchronous
         self.logger: object | None = arguments.get(LOGGING_OBJECT_KEY)
         self.machine: _OcrLifecycle = bindings.Lifecycle(
@@ -385,12 +409,14 @@ class _OcrHost:
 
 
 def _drive_sync(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
-    arguments: dict[str, object], bindings: _OcrBindings
+    arguments: dict[str, object],
+    bindings: _OcrBindings,  # mutable-ok: native bridge retains and updates Python argument objects
 ) -> OCRResponse:
     return cast(OCRResponse, drive_sync(_OcrHost(arguments, False, bindings)))
 
 
 async def _drive_async(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
-    arguments: dict[str, object], bindings: _OcrBindings
+    arguments: dict[str, object],
+    bindings: _OcrBindings,  # mutable-ok: native bridge retains and updates Python argument objects
 ) -> OCRResponse:
     return cast(OCRResponse, await drive_async(_OcrHost(arguments, True, bindings)))

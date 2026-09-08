@@ -69,12 +69,16 @@ RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
 
 
 class RustChatCompletions(Protocol):
-    def __call__(self, arguments: dict[str, object]) -> ModelResponse:
+    def __call__(
+        self, arguments: dict[str, object]
+    ) -> ModelResponse:  # mutable-ok: native bridge retains and updates Python argument objects
         raise NotImplementedError
 
 
 class RustAchatCompletions(Protocol):
-    def __call__(self, arguments: dict[str, object]) -> Awaitable[ModelResponse]:
+    def __call__(
+        self, arguments: dict[str, object]
+    ) -> Awaitable[ModelResponse]:  # mutable-ok: native bridge retains and updates Python argument objects
         raise NotImplementedError
 
 
@@ -374,7 +378,7 @@ def chat_completions(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
-    arguments: dict[str, object] | None = None,
+    arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
     logging_api_key: str | None = None,
     on_response: ResponseObserver | None = None,
 ) -> ModelResponse | None:
@@ -452,7 +456,7 @@ async def achat_completions(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
-    arguments: dict[str, object] | None = None,
+    arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
     logging_api_key: str | None = None,
     on_response: ResponseObserver | None = None,
 ) -> ModelResponse | None:
@@ -533,7 +537,7 @@ async def achat_completions_or_fallback(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     python_fallback: Callable[[], Awaitable[object]],
-    arguments: dict[str, object] | None = None,
+    arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
     logging_api_key: str | None = None,
     on_response: ResponseObserver | None = None,
 ) -> object:
@@ -564,14 +568,16 @@ async def achat_completions_or_fallback(
     return await python_fallback()
 
 
-def initialize_logging(arguments: dict[str, object], asynchronous: bool) -> object:
+def initialize_logging(
+    arguments: dict[str, object], asynchronous: bool
+) -> object:  # mutable-ok: native bridge retains and updates Python argument objects
     from litellm.rust_bridge._lifecycle import initialize_logging as initialize_lifecycle_logging
 
     return initialize_lifecycle_logging(arguments, asynchronous, "completion")
 
 
 def _arguments(
-    arguments: dict[str, object] | None,
+    arguments: dict[str, object] | None,  # mutable-ok: native bridge retains and updates Python argument objects
     model: str,
     messages: Sequence[object],
     optional_params: Mapping[str, object],
@@ -582,7 +588,7 @@ def _arguments(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     logging_api_key: str | None,
-) -> dict[str, object]:
+) -> dict[str, object]:  # mutable-ok: native bridge retains and updates Python argument objects
     return {
         **(arguments or {}),
         "model": model,
@@ -599,8 +605,12 @@ def _arguments(
 
 
 class _ChatCompletionsBindings(NativeLifecycleBindings, Protocol):
-    Lifecycle: Callable[[dict[str, object], bool, bool], NativeLifecycle]
-    prepare: Callable[[dict[str, object], object], object]
+    Lifecycle: Callable[
+        [dict[str, object], bool, bool], NativeLifecycle
+    ]  # mutable-ok: native bridge retains and updates Python argument objects
+    prepare: Callable[
+        [dict[str, object], object], object
+    ]  # mutable-ok: native bridge retains and updates Python argument objects
     send: Callable[[object], Awaitable[Mapping[str, object]]]
     send_sync: Callable[[object], Mapping[str, object]]
     terminal_record: Callable[[object], Mapping[str, object]]
@@ -609,7 +619,7 @@ class _ChatCompletionsBindings(NativeLifecycleBindings, Protocol):
 class _ChatCompletionsHost:
     def __init__(
         self,
-        arguments: dict[str, object],
+        arguments: dict[str, object],  # mutable-ok: native bridge retains and updates Python argument objects
         asynchronous: bool,
         bindings: _ChatCompletionsBindings,
     ) -> None:
@@ -617,8 +627,12 @@ class _ChatCompletionsHost:
 
         self.bindings: _ChatCompletionsBindings = bindings
         self.machine: NativeLifecycle = bindings.Lifecycle(arguments, asynchronous, utils.is_internal_call.get())
-        self.arguments: dict[str, object] = arguments
-        self.current: dict[str, object] = arguments
+        self.arguments: dict[str, object] = (
+            arguments  # mutable-ok: native bridge retains and updates Python argument objects
+        )
+        self.current: dict[str, object] = (
+            arguments  # mutable-ok: native bridge retains and updates Python argument objects
+        )
         self.asynchronous: bool = asynchronous
         self.logger: object | None = arguments.get(LOGGING_OBJECT_KEY)
         self.state: object | None = None
@@ -705,7 +719,8 @@ class _ChatCompletionsHost:
 
 
 def _drive_sync(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
-    arguments: dict[str, object], bindings: _ChatCompletionsBindings
+    arguments: dict[str, object],
+    bindings: _ChatCompletionsBindings,  # mutable-ok: native bridge retains and updates Python argument objects
 ) -> ModelResponse:
     result: Final = drive_sync(_ChatCompletionsHost(arguments, False, bindings))
     if not isinstance(result, ModelResponse):
@@ -714,7 +729,8 @@ def _drive_sync(  # pyright: ignore[reportUnusedFunction]  # called by the nativ
 
 
 async def _drive_async(  # pyright: ignore[reportUnusedFunction]  # called by the native extension
-    arguments: dict[str, object], bindings: _ChatCompletionsBindings
+    arguments: dict[str, object],
+    bindings: _ChatCompletionsBindings,  # mutable-ok: native bridge retains and updates Python argument objects
 ) -> ModelResponse:
     result: Final = await drive_async(_ChatCompletionsHost(arguments, True, bindings))
     if not isinstance(result, ModelResponse):

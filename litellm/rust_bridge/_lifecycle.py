@@ -20,7 +20,9 @@ TerminalAction = Literal[
     "sync_failure",
     "async_failure",
 ]
-_OPTIONAL_ARGUMENTS_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(dict[str, object] | None)
+_OPTIONAL_ARGUMENTS_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(
+    dict[str, object] | None
+)  # mutable-ok: native bridge retains and updates Python argument objects
 
 
 class NativeOutcome(IntEnum):
@@ -51,8 +53,8 @@ class LifecycleHost(Protocol):
 
 
 class MutableLifecycleHost(LifecycleHost, Protocol):
-    arguments: dict[str, object]
-    current: dict[str, object]
+    arguments: dict[str, object]  # mutable-ok: native bridge retains and updates Python argument objects
+    current: dict[str, object]  # mutable-ok: native bridge retains and updates Python argument objects
     logger: object | None
     response: object
     error: BaseException | None
@@ -81,7 +83,9 @@ def host_result(host: MutableLifecycleHost) -> object:
     raise host.error
 
 
-async def deployment_pre(arguments: dict[str, object], call_type: str) -> dict[str, object]:
+async def deployment_pre(
+    arguments: dict[str, object], call_type: str
+) -> dict[str, object]:  # mutable-ok: native bridge retains and updates Python argument objects
     from litellm import utils
 
     modified: Final = _OPTIONAL_ARGUMENTS_ADAPTER.validate_python(
@@ -90,7 +94,9 @@ async def deployment_pre(arguments: dict[str, object], call_type: str) -> dict[s
     return arguments if modified is None else modified
 
 
-async def deployment_success(arguments: dict[str, object], response: object, call_type: CallTypes) -> object:
+async def deployment_success(
+    arguments: dict[str, object], response: object, call_type: CallTypes
+) -> object:  # mutable-ok: native bridge retains and updates Python argument objects
     from litellm import utils
 
     updated: object = await utils.async_post_call_success_deployment_hook(  # pyright: ignore[reportUnknownMemberType]  # legacy hook annotations expose an unknown return
@@ -99,7 +105,9 @@ async def deployment_success(arguments: dict[str, object], response: object, cal
     return updated
 
 
-async def deployment_failure(arguments: dict[str, object], error: BaseException | None, call_type: str) -> None:
+async def deployment_failure(
+    arguments: dict[str, object], error: BaseException | None, call_type: str
+) -> None:  # mutable-ok: native bridge retains and updates Python argument objects
     from litellm import utils
 
     if not isinstance(error, Exception):
@@ -152,7 +160,9 @@ async def drive_async(host: LifecycleHost) -> object:
     return host.result()
 
 
-def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: str) -> object:
+def initialize_logging(
+    arguments: dict[str, object], asynchronous: bool, route: str
+) -> object:  # mutable-ok: native bridge retains and updates Python argument objects
     from litellm.rust_bridge.ocr import initialize_logging as initialize_ocr_logging
 
     return initialize_ocr_logging(arguments, asynchronous, route)

@@ -2429,7 +2429,7 @@ class BaseLLMHTTPHandler:
         headers: dict,
         request_body: dict,
         timeout: float | httpx.Timeout | None,
-        arguments: dict[str, object] | None = None,
+        arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates the argument bag
     ) -> AnthropicMessagesResponse | None:
         if custom_llm_provider not in ("azure_ai", "anthropic"):
             return None
