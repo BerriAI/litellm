@@ -14,7 +14,7 @@ import ModelChoiceCombobox, { type ModelChoice } from "../add_model/ModelChoiceC
 import { modelAvailableCall, modelPatchUpdateCall, validateAutoRouterConfig } from "../networking";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 import RouterConfigBuilder from "../add_model/RouterConfigBuilder";
-import { hydrateTierModelParams, normalizeTierModels } from "../add_model/complexity_router_tiers";
+import { hydrateTierModelParams } from "../add_model/complexity_router_tiers";
 import {
   type ActiveTierSet,
   CUSTOM_TIER_OMITTED_KEYS,
@@ -34,6 +34,7 @@ import {
   getSemanticConfigError,
   getPlanModeTierError,
   getTierLabelsError,
+  hydrateBuiltInTiers,
   hydrateCustomTierSet,
   hydratePlanModeMinTier,
   hydrateTierLabels,
@@ -139,21 +140,10 @@ export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
   complexityRouterDefaultModel: string | null | undefined,
 ): ComplexityRouterConfigValue => {
-  // `tiers` is rewritten wholesale on save, so a stored tier this misses is deleted by any edit,
-  // including one made for an unrelated reason. Hence reading both back rather than assuming four.
-  const storedNonReasoning: string[] = normalizeTierModels(parsedConfig.tiers?.NON_REASONING);
-  const enable_non_reasoning_tier: boolean =
-    parsedConfig.enable_non_reasoning_tier === true || storedNonReasoning.length > 0;
-  const hydratedTiers: ComplexityTiers = {
-    SIMPLE: normalizeTierModels(parsedConfig.tiers?.SIMPLE),
-    MEDIUM: normalizeTierModels(parsedConfig.tiers?.MEDIUM),
-    COMPLEX: normalizeTierModels(parsedConfig.tiers?.COMPLEX),
-    REASONING: normalizeTierModels(parsedConfig.tiers?.REASONING),
-    ...(enable_non_reasoning_tier && { NON_REASONING: storedNonReasoning }),
-  };
-
+  const builtIn = hydrateBuiltInTiers(parsedConfig.tiers, parsedConfig.enable_non_reasoning_tier);
+  const { tiers: hydratedTiers, enable_non_reasoning_tier } = builtIn;
   const custom_tier_set = hydrateCustomTierSet(parsedConfig);
-  const activeTiers = { tiers: hydratedTiers, enable_non_reasoning_tier, custom_tier_set };
+  const activeTiers = { ...builtIn, custom_tier_set };
 
   return {
     tiers: hydratedTiers,

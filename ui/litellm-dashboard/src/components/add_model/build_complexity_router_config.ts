@@ -385,6 +385,26 @@ export const customTierWireFields = (
   };
 };
 
+/** The built-in tier pools and the opt-in flag, read back from a stored config. `tiers` is
+ * rewritten wholesale on save, so a stored tier this misses is deleted by any unrelated edit. */
+export const hydrateBuiltInTiers = (
+  storedTiers: Partial<Record<keyof ComplexityTiers, unknown>> | undefined,
+  storedFlag: boolean | undefined,
+): { tiers: ComplexityTiers; enable_non_reasoning_tier: boolean } => {
+  const nonReasoning: string[] = normalizeTierModels(storedTiers?.NON_REASONING);
+  const enable_non_reasoning_tier: boolean = storedFlag === true || nonReasoning.length > 0;
+  return {
+    enable_non_reasoning_tier,
+    tiers: {
+      SIMPLE: normalizeTierModels(storedTiers?.SIMPLE),
+      MEDIUM: normalizeTierModels(storedTiers?.MEDIUM),
+      COMPLEX: normalizeTierModels(storedTiers?.COMPLEX),
+      REASONING: normalizeTierModels(storedTiers?.REASONING),
+      ...(enable_non_reasoning_tier && { NON_REASONING: nonReasoning }),
+    },
+  };
+};
+
 // plan_mode_min_tier rides the strip list because the base payload carries it as a row id;
 // customTierWireFields re-emits it as the row's name, and an unresolvable floor stays off.
 const CUSTOM_TIER_STRIPPED_KEYS: readonly string[] = [...CUSTOM_TIER_OMITTED_KEYS, "plan_mode_min_tier"];
