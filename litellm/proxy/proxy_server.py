@@ -270,6 +270,7 @@ from litellm.constants import (
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -1289,6 +1290,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             proxy_budget_rescheduler_max_time=proxy_budget_rescheduler_max_time,
             proxy_batch_write_at=proxy_batch_write_at,
             proxy_logging_obj=proxy_logging_obj,
+            resolved_store_model_in_db=should_load_db_litellm_settings,
         )
         if prisma_client is not None
         else None
@@ -6041,6 +6043,9 @@ class ProxyConfig:
             if _alert == "slack":
                 # [OLD] v0 implementation - already handled by update_values above
                 pass
+            elif _alert == "prometheus":
+                if PrometheusLogger.get_instance() is None:
+                    litellm.logging_callback_manager.add_litellm_callback("prometheus")
             else:
                 # [NEW] v1 implementation - init as a custom logger
                 if _alert in litellm._known_custom_logger_compatible_callbacks:
@@ -9462,6 +9467,7 @@ class ProxyStartupEvent:
         proxy_budget_rescheduler_max_time: int,
         proxy_batch_write_at: int,
         proxy_logging_obj: ProxyLogging,
+        resolved_store_model_in_db: bool = False,
     ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
         global heuristic_v1_tuning_baselines, store_model_in_db, scheduler  # rebind-ok: startup publishes the one read-only baseline snapshot
@@ -9595,7 +9601,8 @@ class ProxyStartupEvent:
 
         ### ADD NEW MODELS ###
         store_model_in_db = (  # rebind-ok: preserve legacy YAML values unless env or DB explicitly enables storage
-            await cls.resolve_store_model_in_db(prisma_client=prisma_client, configured=store_model_in_db)
+            resolved_store_model_in_db
+            or await cls.resolve_store_model_in_db(prisma_client=prisma_client, configured=store_model_in_db)
             or store_model_in_db
         )
 

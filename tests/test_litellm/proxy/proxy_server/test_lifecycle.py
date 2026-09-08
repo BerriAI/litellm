@@ -17,6 +17,7 @@ Pins covered:
 
 from __future__ import annotations
 
+import datetime
 import inspect
 import json
 import logging
@@ -26,10 +27,15 @@ from typing import Final, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from prometheus_client import REGISTRY
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
+import litellm
+import litellm.litellm_core_utils.litellm_logging as logging_module
 import litellm.proxy.proxy_server as ps
+import litellm.proxy.utils as proxy_utils
+from litellm.integrations.prometheus import PrometheusLogger
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
     _initialize_shared_aiohttp_session,
@@ -856,6 +862,110 @@ async def test_startup_logging_applies_db_settings_before_callback_init(monkeypa
     )
 
     assert events.method_calls == [call.db_settings(), call.callback_init()]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("yaml_value", "db_value"), ((False, True), (True, False)))
+@pytest.mark.parametrize("also_callback", (False, True))
+async def test_prometheus_alerting_uses_persisted_settings_without_duplicate_callbacks(
+    monkeypatch: pytest.MonkeyPatch, yaml_value: bool, db_value: bool, also_callback: bool
+):
+    collectors: Final = tuple(REGISTRY._collector_to_names)  # pyright: ignore[reportPrivateUsage]  # isolate global registry
+    for collector in collectors:
+        REGISTRY.unregister(collector)
+    monkeypatch.setattr(logging_module, "_in_memory_loggers", [])
+    monkeypatch.setattr(litellm, "prometheus_emit_input_sequence_length_label", yaml_value)
+    monkeypatch.setattr(litellm, "callbacks", ["prometheus"] if also_callback else [])
+    monkeypatch.setattr(proxy_utils, "PROXY_HOOKS", ())
+    monkeypatch.setattr(ps, "cost_tracking", MagicMock())
+    proxy_logging: Final = ps.ProxyLogging(user_api_key_cache=ps.user_api_key_cache)
+    proxy_logging.deprecation_check_started = True
+    monkeypatch.setattr(ps, "proxy_logging_obj", proxy_logging)
+    config: Final = ps.ProxyConfig()
+    settings: Final = {"alerting": ["prometheus"], "alert_types": []}
+    prisma_client: Final = MagicMock()
+    monkeypatch.setattr(proxy_utils, "litellm_config_cache", proxy_utils.DualCache())
+    prisma_client.get_generic_data = AsyncMock(
+        return_value=MagicMock(param_value={"prometheus_emit_input_sequence_length_label": db_value})
+    )
+    try:
+        config._load_alerting_settings(settings)
+        config._load_alerting_settings(settings)
+        await ProxyStartupEvent._initialize_startup_logging(
+            llm_router=None,
+            proxy_logging_obj=proxy_logging,
+            redis_usage_cache=None,
+            prisma_client=prisma_client,
+            should_load_db_litellm_settings=True,
+            proxy_config_obj=config,
+        )
+        logger: Final = PrometheusLogger.get_instance()
+        assert logger is not None
+        assert litellm.prometheus_emit_input_sequence_length_label is db_value
+        for metric in (
+            "litellm_llm_api_latency_metric",
+            "litellm_request_total_latency_metric",
+            "litellm_llm_api_time_to_first_token_metric",
+        ):
+            assert ("input_sequence_length" in logger.get_labels_for_metric(metric)) is db_value
+
+        config._load_alerting_settings(settings)
+        config._load_alerting_settings(settings)
+        assert "prometheus" not in litellm.callbacks
+        assert sum(isinstance(callback, PrometheusLogger) for callback in litellm.callbacks) == 1
+        assert sum(isinstance(callback, PrometheusLogger) for callback in litellm._async_success_callback) == 1
+        now: Final = datetime.datetime.now()
+        await logger.async_log_success_event(
+            {
+                "model": "test-model",
+                "litellm_params": {"metadata": {}},
+                "start_time": now,
+                "end_time": now,
+                "standard_logging_object": {
+                    "id": "alerting-startup",
+                    "call_type": "completion",
+                    "status": "success",
+                    "model": "test-model",
+                    "model_group": "test-model",
+                    "model_id": "test-model",
+                    "api_base": "https://api.openai.com",
+                    "custom_llm_provider": "openai",
+                    "request_tags": [],
+                    "prompt_tokens": 4_000,
+                    "completion_tokens": 20,
+                    "total_tokens": 4_020,
+                    "response_cost": 0,
+                    "startTime": now,
+                    "endTime": now,
+                    "metadata": {
+                        "user_api_key_user_id": None,
+                        "user_api_key_hash": None,
+                        "user_api_key_alias": None,
+                        "user_api_key_team_id": None,
+                        "user_api_key_team_alias": None,
+                        "user_api_key_user_email": None,
+                    },
+                    "hidden_params": {},
+                },
+            },
+            None,
+            now,
+            now,
+        )
+        samples: Final = tuple(
+            sample
+            for metric in REGISTRY.collect()
+            for sample in metric.samples
+            if sample.name == "litellm_request_total_latency_metric_count"
+        )
+        assert len(samples) == 1
+        assert samples[0].value == 1
+        assert samples[0].labels.get("input_sequence_length") == ("4k-16k" if db_value else None)
+    finally:
+        for collector in tuple(REGISTRY._collector_to_names):  # pyright: ignore[reportPrivateUsage]  # restore test registry
+            REGISTRY.unregister(collector)
+        for collector in collectors:
+            REGISTRY.register(collector)
 
 
 def test_otel_global_provider_published_after_callback_init():

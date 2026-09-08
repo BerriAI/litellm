@@ -7407,7 +7407,8 @@ async def test_batch_cost_poller_is_confirmed_before_serving(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_store_model_in_db_db_override_when_config_false():
+@pytest.mark.parametrize("resolve_before_logging", (False, True))
+async def test_store_model_in_db_db_override_when_config_false(resolve_before_logging: bool):
     """
     Verify the early DB check in initialize_scheduled_background_jobs
     overrides store_model_in_db=False when DB has True.
@@ -7430,8 +7431,11 @@ async def test_store_model_in_db_db_override_when_config_false():
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
         patch("litellm.proxy.proxy_server.store_model_in_db", False),
-        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False),
+        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=False) as secret_lookup,
     ):
+        resolved: Final = resolve_before_logging and await ProxyStartupEvent.resolve_store_model_in_db(
+            prisma_client=mock_prisma_client, configured=False
+        )
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
             prisma_client=mock_prisma_client,
@@ -7439,8 +7443,13 @@ async def test_store_model_in_db_db_override_when_config_false():
             proxy_budget_rescheduler_max_time=2,
             proxy_batch_write_at=5,
             proxy_logging_obj=mock_proxy_logging,
+            resolved_store_model_in_db=resolved,
         )
 
+        mock_prisma_client.db.litellm_config.find_first.assert_awaited_once_with(
+            where={"param_name": "general_settings"}
+        )
+        assert sum(args.args[0] == "STORE_MODEL_IN_DB" for args in secret_lookup.call_args_list) == 1
         import litellm.proxy.proxy_server as ps
 
         # store_model_in_db should now be True (overridden by DB)

@@ -19,6 +19,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm
+import litellm.proxy.proxy_server as ps
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.proxy_server import (
     ProxyConfig,
@@ -1991,6 +1993,32 @@ def test_ProxyConfig__load_alerting_settings_noop_when_no_alerting():
         "called": True,
         "no_alerting": True,
     }
+
+
+def test_ProxyConfig__load_alerting_settings_preserves_other_logger_arguments(monkeypatch: pytest.MonkeyPatch):
+    logger: Final = CustomLogger()
+    factory: Final = MagicMock(return_value=logger)
+    proxy_logging: Final = MagicMock()
+    monkeypatch.setattr(ps, "_init_custom_logger_compatible_class", factory)
+    monkeypatch.setattr(ps, "proxy_logging_obj", proxy_logging)
+    settings: Final = {
+        "alerting": ["slack", "pagerduty", "prometheus"],
+        "alerting_args": {"routing_key": "test-routing-key"},
+        "alerting_threshold": 15,
+    }
+
+    ProxyConfig()._load_alerting_settings(settings)
+
+    factory.assert_called_once_with(
+        logging_integration="pagerduty",
+        internal_usage_cache=None,
+        llm_router=None,
+        custom_logger_init_args={"alerting_args": {"routing_key": "test-routing-key"}},
+    )
+    assert logger in ps.litellm.callbacks
+    assert "prometheus" in ps.litellm.callbacks
+    assert proxy_logging.update_values.call_args.kwargs["alerting"] == settings["alerting"]
+    assert proxy_logging.update_values.call_args.kwargs["alerting_threshold"] == 15
 
 
 def test_ProxyConfig__load_alerting_settings_invalid_alerting_raises():
