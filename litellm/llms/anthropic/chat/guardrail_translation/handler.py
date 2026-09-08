@@ -13,7 +13,7 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, repeat
@@ -161,7 +161,25 @@ class _ToolCallShape:
     arguments: str
 
 
-_SSEEventRewriter = Callable[[Mapping[str, object]], Mapping[str, object] | None]
+@dataclass(frozen=True, slots=True)
+class _SSEFieldRewrite:
+    """One field of one nested section of a buffered SSE event, rewritten."""
+
+    section: str
+    field: str
+    value: object
+
+
+class _SSEEventRewriter(Protocol):
+    def __call__(self, event: Mapping[str, object]) -> _SSEFieldRewrite | None: ...
+
+
+def _rewritten_event(event: Mapping[str, object], rewrite_event: _SSEEventRewriter) -> Mapping[str, object]:
+    rewrite: Final = rewrite_event(event)
+    section: Final = None if rewrite is None else event.get(rewrite.section)
+    if rewrite is None or not isinstance(section, Mapping):
+        return event
+    return {**event, rewrite.section: {**section, rewrite.field: rewrite.value}}  # mutable-ok: json.dumps needs a dict
 
 
 def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...]:
@@ -1253,13 +1271,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         message and content-block framing untouched."""
         replacements: Final = chain((rewritten_text,), repeat(""))
 
-        def rewrite_text_delta(event: Mapping[str, object]) -> Mapping[str, object] | None:
+        def rewrite_text_delta(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
             delta: Final = event.get("delta")
             if event.get("type") != "content_block_delta" or not isinstance(delta, Mapping):
                 return None
             if delta.get("type") != "text_delta":
                 return None
-            return {**event, "delta": {**delta, "text": next(replacements)}}
+            return _SSEFieldRewrite("delta", "text", next(replacements))
 
         AnthropicMessagesHandler._rewrite_ended_stream_events(responses_so_far, rewrite_text_delta)
 
@@ -1306,22 +1324,21 @@ class AnthropicMessagesHandler(BaseTranslation):
             {index: chain((rewrite.arguments,), repeat("")) for index, rewrite in rewrites_by_block.items()}
         )
 
-        def rewrite_tool_use(event: Mapping[str, object]) -> Mapping[str, object] | None:
+        def rewrite_tool_use(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
             index: Final = event.get("index")
             if not isinstance(index, int) or index not in rewrites_by_block:
                 return None
             match event.get("type"):
                 case "content_block_start":
-                    block: Final = event.get("content_block")
                     name: Final = rewrites_by_block[index].name
-                    if not isinstance(block, Mapping) or name is None:
+                    if name is None:
                         return None
-                    return {**event, "content_block": {**block, "name": name}}
+                    return _SSEFieldRewrite("content_block", "name", name)
                 case "content_block_delta":
                     delta: Final = event.get("delta")
                     if not isinstance(delta, Mapping) or delta.get("type") != "input_json_delta":
                         return None
-                    return {**event, "delta": {**delta, "partial_json": next(argument_replacements[index])}}
+                    return _SSEFieldRewrite("delta", "partial_json", next(argument_replacements[index]))
                 case _:
                     return None
 
@@ -1343,8 +1360,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     @staticmethod
     def _rewrite_buffered_item(item: object, rewrite_event: _SSEEventRewriter) -> object:
         if isinstance(item, dict):
-            rewritten: Final = rewrite_event(_as_str_mapping(item))
-            return item if rewritten is None else dict(rewritten)
+            return _rewritten_event(_as_str_mapping(item), rewrite_event)
         if isinstance(item, (bytes, bytearray)):
             return AnthropicMessagesHandler._rewrite_sse_events(bytes(item), rewrite_event)
         return item
@@ -1374,8 +1390,8 @@ class AnthropicMessagesHandler(BaseTranslation):
             return line
         if not isinstance(data, dict):
             return line
-        rewritten: Final = rewrite_event(_as_str_mapping(data))
-        return line if rewritten is None else "data: " + json.dumps(rewritten)
+        rewritten: Final = _rewritten_event(_as_str_mapping(data), rewrite_event)
+        return line if rewritten is data else "data: " + json.dumps(rewritten)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
