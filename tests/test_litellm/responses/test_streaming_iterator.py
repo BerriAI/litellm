@@ -25,8 +25,10 @@ code under test).
 """
 
 import json
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from types import MappingProxyType
+from typing import Any, Dict, Final, List, Optional
 from unittest.mock import Mock, patch
 
 import httpx
@@ -578,40 +580,44 @@ async def test_streaming_logging_copy_fallback_leaves_caller_event_untouched():
 # ---------------------------------------------------------------------------
 
 
-def _response_body(status: str) -> Dict[str, Any]:
-    return {
-        "id": "resp_real_upstream",
-        "object": "response",
-        "created_at": 1_700_000_000,
-        "status": status,
-        "model": "gpt-5",
-        "output": [
-            {
-                "id": "msg_1",
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "Hello world", "annotations": []}],
-            }
-        ],
-        "parallel_tool_calls": True,
-        "tool_choice": "auto",
-        "tools": [],
-    }
+def _response_body(status: str) -> Mapping[str, Any]:
+    return MappingProxyType(
+        {
+            "id": "resp_real_upstream",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": status,
+            "model": "gpt-5",
+            "output": (
+                MappingProxyType(
+                    {
+                        "id": "msg_1",
+                        "type": "message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": (
+                            MappingProxyType({"type": "output_text", "text": "Hello world", "annotations": ()}),
+                        ),
+                    }
+                ),
+            ),
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": (),
+        }
+    )
 
 
-def _sse_frames(events: List[Dict[str, Any]]) -> List[bytes]:
+def _sse_frames(events: Sequence[Mapping[str, object]]) -> tuple[bytes, ...]:
     """One `data: {...}\\n\\n` SSE frame per event, plus a terminating [DONE]."""
-    frames = [f"data: {json.dumps(evt)}\n\n".encode("utf-8") for evt in events]
-    frames.append(b"data: [DONE]\n\n")
-    return frames
+    return (*(f"data: {json.dumps(evt, default=dict)}\n\n".encode("utf-8") for evt in events), b"data: [DONE]\n\n")
 
 
 class _FakeStreamResponse:
     """Minimal stand-in for httpx.Response exposing (a)iter_bytes over fixed frames."""
 
-    def __init__(self, frames: List[bytes]):
-        self.headers: Dict[str, str] = {}
+    def __init__(self, frames: tuple[bytes, ...]):
+        self.headers: Mapping[str, str] = MappingProxyType({})
         self._frames = frames
 
     async def aiter_bytes(self):
@@ -624,125 +630,130 @@ class _FakeStreamResponse:
 
 
 def _make_logging_obj() -> Any:
-    logging_obj = Mock(spec=LiteLLMLoggingObj)
-    logging_obj.model_call_details = {"litellm_params": {}}
+    logging_obj: Final = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = MappingProxyType({"litellm_params": MappingProxyType({})})
     logging_obj.completion_start_time = None
     return logging_obj
 
 
-def _iterator(events: List[Dict[str, Any]], *, sync: bool, model: str = "gpt-5") -> Any:
-    response = _FakeStreamResponse(_sse_frames(events))
-    cls = SyncResponsesAPIStreamingIterator if sync else ResponsesAPIStreamingIterator
+def _iterator(events: tuple[Mapping[str, Any], ...], *, sync: bool, model: str = "gpt-5") -> Any:
+    response: Final = _FakeStreamResponse(_sse_frames(events))
+    cls: Final = SyncResponsesAPIStreamingIterator if sync else ResponsesAPIStreamingIterator
     return cls(
         response=response,
         model=model,
         responses_api_provider_config=OpenAIResponsesAPIConfig(),
         logging_obj=_make_logging_obj(),
-        litellm_metadata={"model_info": {"id": "model_123"}},
+        litellm_metadata=MappingProxyType({"model_info": MappingProxyType({"id": "model_123"})}),
         custom_llm_provider="openai",
     )
 
 
-async def _drive(events: List[Dict[str, Any]], *, sync: bool, model: str = "gpt-5") -> List[Any]:
-    iterator = _iterator(events, sync=sync, model=model)
-    collected: List[Any] = []
+async def _drive(events: Sequence[Mapping[str, object]], *, sync: bool, model: str = "gpt-5") -> tuple[Any, ...]:
+    iterator: Final = _iterator(events, sync=sync, model=model)
     if sync:
-        for chunk in iterator:
-            collected.append(chunk)
-    else:
-        async for chunk in iterator:
-            collected.append(chunk)
-    return collected
+        return tuple(iterator)
+    return tuple([chunk async for chunk in iterator])
 
 
-def _types(events: List[Any]) -> List[Any]:
-    return [getattr(e, "type", None) for e in events]
+def _types(events: tuple[Any, ...]) -> tuple[Any, ...]:
+    return tuple((getattr(e, "type", None) for e in events))
 
 
-# ----- truncated upstream (the copilot / ollama / Azure case) -----
-
-_TRUNCATED_TEXT_EVENTS: List[Dict[str, Any]] = [
-    {
-        "type": "response.output_text.delta",
-        "item_id": "msg_1",
-        "output_index": 0,
-        "content_index": 0,
-        "delta": "Hello",
-    },
-    {
-        "type": "response.output_text.delta",
-        "item_id": "msg_1",
-        "output_index": 0,
-        "content_index": 0,
-        "delta": " world",
-    },
-    {"type": "response.completed", "response": _response_body("completed")},
-]
-
-_FULL_TEXT_EVENTS: List[Dict[str, Any]] = [
-    {"type": "response.created", "response": _response_body("in_progress")},
-    {"type": "response.in_progress", "response": _response_body("in_progress")},
-    {
-        "type": "response.output_item.added",
-        "output_index": 0,
-        "item": {
-            "id": "msg_1",
-            "type": "message",
-            "status": "in_progress",
-            "role": "assistant",
-            "content": [],
-        },
-    },
-    {
-        "type": "response.content_part.added",
-        "item_id": "msg_1",
-        "output_index": 0,
-        "content_index": 0,
-        "part": {"type": "output_text", "text": "", "annotations": []},
-    },
-    {
-        "type": "response.output_text.delta",
-        "item_id": "msg_1",
-        "output_index": 0,
-        "content_index": 0,
-        "delta": "Hello world",
-    },
-    {
-        "type": "response.output_text.done",
-        "item_id": "msg_1",
-        "output_index": 0,
-        "content_index": 0,
-        "text": "Hello world",
-    },
-    {
-        "type": "response.content_part.done",
-        "item_id": "msg_1",
-        "output_index": 0,
-        "content_index": 0,
-        "part": {"type": "output_text", "text": "Hello world", "annotations": []},
-    },
-    {
-        "type": "response.output_item.done",
-        "output_index": 0,
-        "item": {
-            "id": "msg_1",
-            "type": "message",
-            "status": "completed",
-            "role": "assistant",
-            "content": [{"type": "output_text", "text": "Hello world", "annotations": []}],
-        },
-    },
-    {"type": "response.completed", "response": _response_body("completed")},
-]
+_TRUNCATED_TEXT_EVENTS: Final[tuple[Mapping[str, Any], ...]] = (
+    MappingProxyType(
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello",
+        }
+    ),
+    MappingProxyType(
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": " world",
+        }
+    ),
+    MappingProxyType({"type": "response.completed", "response": _response_body("completed")}),
+)
+_FULL_TEXT_EVENTS: Final[tuple[Mapping[str, Any], ...]] = (
+    MappingProxyType({"type": "response.created", "response": _response_body("in_progress")}),
+    MappingProxyType({"type": "response.in_progress", "response": _response_body("in_progress")}),
+    MappingProxyType(
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": MappingProxyType(
+                {"id": "msg_1", "type": "message", "status": "in_progress", "role": "assistant", "content": ()}
+            ),
+        }
+    ),
+    MappingProxyType(
+        {
+            "type": "response.content_part.added",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "part": MappingProxyType({"type": "output_text", "text": "", "annotations": ()}),
+        }
+    ),
+    MappingProxyType(
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello world",
+        }
+    ),
+    MappingProxyType(
+        {
+            "type": "response.output_text.done",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "text": "Hello world",
+        }
+    ),
+    MappingProxyType(
+        {
+            "type": "response.content_part.done",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "part": MappingProxyType({"type": "output_text", "text": "Hello world", "annotations": ()}),
+        }
+    ),
+    MappingProxyType(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": MappingProxyType(
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": (MappingProxyType({"type": "output_text", "text": "Hello world", "annotations": ()}),),
+                }
+            ),
+        }
+    ),
+    MappingProxyType({"type": "response.completed", "response": _response_body("completed")}),
+)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
 async def test_truncated_text_stream_synthesizes_full_lifecycle(sync):
-    collected = await _drive(_TRUNCATED_TEXT_EVENTS, sync=sync)
-    types = _types(collected)
-
-    assert types == [
+    collected: Final = await _drive(_TRUNCATED_TEXT_EVENTS, sync=sync)
+    types: Final = _types(collected)
+    assert types == (
         E.RESPONSE_CREATED,
         E.RESPONSE_IN_PROGRESS,
         E.OUTPUT_ITEM_ADDED,
@@ -753,31 +764,24 @@ async def test_truncated_text_stream_synthesizes_full_lifecycle(sync):
         E.CONTENT_PART_DONE,
         E.OUTPUT_ITEM_DONE,
         E.RESPONSE_COMPLETED,
-    ], types
-
-    # openers must anchor to the same item_id / indices as the deltas
-    output_item_added = collected[2]
-    content_part_added = collected[3]
+    ), types
+    output_item_added: Final = collected[2]
+    content_part_added: Final = collected[3]
     assert output_item_added.item.id == "msg_1"
     assert content_part_added.item_id == "msg_1"
     assert content_part_added.output_index == 0
     assert content_part_added.content_index == 0
-
-    # teardown text must equal the concatenation of streamed deltas
-    output_text_done = collected[6]
+    output_text_done: Final = collected[6]
     assert output_text_done.text == "Hello world"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
 async def test_complete_stream_passes_through_without_duplication(sync):
-    collected = await _drive(_FULL_TEXT_EVENTS, sync=sync)
-    types = _types(collected)
-
-    # byte-for-byte: same event types, same count, nothing injected
-    assert types == [evt["type"] for evt in _FULL_TEXT_EVENTS], types
+    collected: Final = await _drive(_FULL_TEXT_EVENTS, sync=sync)
+    types: Final = _types(collected)
+    assert types == tuple((evt["type"] for evt in _FULL_TEXT_EVENTS)), types
     assert len(collected) == len(_FULL_TEXT_EVENTS)
-    # no duplicated openers
     assert types.count(E.RESPONSE_CREATED) == 1
     assert types.count(E.OUTPUT_ITEM_ADDED) == 1
     assert types.count(E.CONTENT_PART_ADDED) == 1
@@ -786,25 +790,23 @@ async def test_complete_stream_passes_through_without_duplication(sync):
 
 @pytest.mark.asyncio
 async def test_truncated_function_call_stream_synthesizes_item_lifecycle():
-    events = [
-        {
-            "type": "response.function_call_arguments.delta",
-            "item_id": "fc_1",
-            "output_index": 0,
-            "delta": '{"city":',
-        },
-        {
-            "type": "response.function_call_arguments.delta",
-            "item_id": "fc_1",
-            "output_index": 0,
-            "delta": '"NYC"}',
-        },
-        {"type": "response.completed", "response": _response_body("completed")},
-    ]
-    collected = await _drive(events, sync=False)
-    types = _types(collected)
-
-    assert types == [
+    events: Final = (
+        MappingProxyType(
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 0,
+                "delta": '{"city":',
+            }
+        ),
+        MappingProxyType(
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 0, "delta": '"NYC"}'}
+        ),
+        MappingProxyType({"type": "response.completed", "response": _response_body("completed")}),
+    )
+    collected: Final = await _drive(events, sync=False)
+    types: Final = _types(collected)
+    assert types == (
         E.RESPONSE_CREATED,
         E.RESPONSE_IN_PROGRESS,
         E.OUTPUT_ITEM_ADDED,
@@ -813,94 +815,177 @@ async def test_truncated_function_call_stream_synthesizes_item_lifecycle():
         E.FUNCTION_CALL_ARGUMENTS_DONE,
         E.OUTPUT_ITEM_DONE,
         E.RESPONSE_COMPLETED,
-    ], types
-
-    # function_call items have NO content part
+    ), types
     assert E.CONTENT_PART_ADDED not in types
     assert E.CONTENT_PART_DONE not in types
-
-    output_item_added = collected[2]
+    output_item_added: Final = collected[2]
     assert output_item_added.item.type == "function_call"
     assert output_item_added.item.id == "fc_1"
-
-    args_done = collected[5]
+    args_done: Final = collected[5]
     assert args_done.arguments == '{"city":"NYC"}'
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
-@pytest.mark.parametrize("complete_reasoning", [False, True], ids=["truncated-reasoning", "complete-reasoning"])
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+@pytest.mark.parametrize("complete_reasoning", (False, True), ids=("truncated-reasoning", "complete-reasoning"))
 async def test_gpt_5_6_reasoning_stream_preserves_item_lifecycle(sync: bool, complete_reasoning: bool) -> None:
-    reasoning_events = [
-        {
-            "type": "response.output_item.added",
-            "output_index": 0,
-            "item": {"id": "rs_1", "type": "reasoning", "summary": []},
-        },
-        {
-            "type": "response.reasoning_summary_text.delta",
-            "item_id": "rs_1",
-            "output_index": 0,
-            "summary_index": 0,
-            "delta": "Thinking",
-        },
-        {
-            "type": "response.reasoning_summary_text.done",
-            "item_id": "rs_1",
-            "output_index": 0,
-            "summary_index": 0,
-            "sequence_number": 4,
-            "text": "Thinking",
-        },
-        {
-            "type": "response.output_item.done",
-            "output_index": 0,
-            "item": {
-                "id": "rs_1",
-                "type": "reasoning",
-                "summary": [{"type": "summary_text", "text": "Thinking"}],
-            },
-        },
-    ]
-    message_events = [
-        {**event, **({"output_index": 1} if "output_index" in event else {})} for event in _FULL_TEXT_EVENTS[2:]
-    ]
-    events = [
-        {
-            **event,
-            **({"response": {**event["response"], "model": "gpt-5.6"}} if "response" in event else {}),
-        }
-        for event in [
-            *_FULL_TEXT_EVENTS[:2],
-            *(reasoning_events if complete_reasoning else reasoning_events[:2]),
-            *message_events,
-        ]
-    ]
-    collected = await _drive(events, sync=sync, model="gpt-5.6")
-
-    assert _types(collected) == [event["type"] for event in events]
+    reasoning_events: Final = (
+        MappingProxyType(
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": MappingProxyType({"id": "rs_1", "type": "reasoning", "summary": ()}),
+            }
+        ),
+        MappingProxyType(
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "summary_index": 0,
+                "delta": "Thinking",
+            }
+        ),
+        MappingProxyType(
+            {
+                "type": "response.reasoning_summary_text.done",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "summary_index": 0,
+                "sequence_number": 4,
+                "text": "Thinking",
+            }
+        ),
+        MappingProxyType(
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": MappingProxyType(
+                    {
+                        "id": "rs_1",
+                        "type": "reasoning",
+                        "summary": (MappingProxyType({"type": "summary_text", "text": "Thinking"}),),
+                    }
+                ),
+            }
+        ),
+    )
+    message_events: Final = tuple(
+        (
+            MappingProxyType(
+                {
+                    **event,
+                    **(MappingProxyType({"output_index": 1}) if "output_index" in event else MappingProxyType({})),
+                }
+            )
+            for event in _FULL_TEXT_EVENTS[2:]
+        )
+    )
+    events: Final = tuple(
+        (
+            MappingProxyType(
+                {
+                    **event,
+                    **(
+                        MappingProxyType({"response": MappingProxyType({**event["response"], "model": "gpt-5.6"})})
+                        if "response" in event
+                        else MappingProxyType({})
+                    ),
+                }
+            )
+            for event in (
+                *_FULL_TEXT_EVENTS[:2],
+                *(reasoning_events if complete_reasoning else reasoning_events[:2]),
+                *message_events,
+            )
+        )
+    )
+    collected: Final = await _drive(events, sync=sync, model="gpt-5.6")
+    expected_types: Final = tuple((event["type"] for event in events))
+    assert _types(collected) == (
+        expected_types if complete_reasoning else (*expected_types[:-1], E.OUTPUT_ITEM_DONE, expected_types[-1])
+    )
     assert collected[2].item.id == "rs_1"
     assert collected[2].item.type == "reasoning"
     assert collected[3].delta == "Thinking"
     if complete_reasoning:
         assert collected[4].text == "Thinking"
         assert collected[5].item.type == "reasoning"
-    message_start = 6 if complete_reasoning else 4
+    message_start: Final = 6 if complete_reasoning else 4
     assert collected[message_start].output_index == 1
     assert collected[message_start].item.id == "msg_1"
     assert collected[message_start + 2].delta == "Hello world"
     assert collected[message_start + 3].text == "Hello world"
     assert collected[-1].response.model == "gpt-5.6"
     assert E.FUNCTION_CALL_ARGUMENTS_DONE not in _types(collected)
+    reasoning_done: Final = next(
+        (event for event in collected if event.type == E.OUTPUT_ITEM_DONE and event.item.id == "rs_1")
+    )
+    assert reasoning_done.item.type == "reasoning"
+    assert json.loads(reasoning_done.model_dump_json())["item"]["summary"][0]["text"] == "Thinking"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
-async def test_stream_without_item_events_preserves_response_status_events(sync: bool) -> None:
-    events = [_FULL_TEXT_EVENTS[0], _FULL_TEXT_EVENTS[-1]]
-    collected = await _drive(events, sync=sync)
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+@pytest.mark.parametrize("terminal_has_item", (False, True))
+@pytest.mark.parametrize("has_summary_deltas", (False, True))
+async def test_reasoning_teardown_preserves_summary_indices_and_encrypted_content(
+    sync: bool, terminal_has_item: bool, has_summary_deltas: bool
+):
+    opening_item: Final = MappingProxyType(
+        {"id": "rs_1", "type": "reasoning", "summary": (), "encrypted_content": "opening-encrypted"}
+    )
+    terminal_item: Final = MappingProxyType(
+        {**opening_item, "status": "completed", "encrypted_content": "final-encrypted"}
+    )
+    events: Final = (
+        *_FULL_TEXT_EVENTS[:2],
+        MappingProxyType({"type": E.OUTPUT_ITEM_ADDED, "output_index": 0, "item": opening_item}),
+        *(
+            MappingProxyType(
+                {
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": "rs_1",
+                    "output_index": 0,
+                    "summary_index": index,
+                    "delta": text,
+                }
+            )
+            for index, text in ((1, "Second"), (0, "Think"), (0, "ing"))
+            if has_summary_deltas
+        ),
+        MappingProxyType(
+            {
+                "type": E.RESPONSE_COMPLETED,
+                "response": MappingProxyType(
+                    {**_response_body("completed"), "output": (terminal_item,) if terminal_has_item else ()}
+                ),
+            }
+        ),
+    )
+    collected: Final = await _drive(events, sync=sync)
+    done: Final = collected[-2]
+    wire: Final = json.loads(done.model_dump_json(exclude_none=True, exclude_unset=True))
 
-    assert _types(collected) == [E.RESPONSE_CREATED, E.RESPONSE_COMPLETED]
+    assert done.type == E.OUTPUT_ITEM_DONE
+    assert done.output_index == 0
+    assert wire["item"]["id"] == "rs_1"
+    assert wire["item"]["type"] == "reasoning"
+    assert wire["item"]["status"] == "completed"
+    assert wire["item"]["encrypted_content"] == ("final-encrypted" if terminal_has_item else "opening-encrypted")
+    assert tuple(part["text"] for part in wire["item"]["summary"]) == (
+        ("Thinking", "Second") if has_summary_deltas else ()
+    )
+    assert _types(collected).count(E.OUTPUT_ITEM_DONE) == 1
+    assert E.FUNCTION_CALL_ARGUMENTS_DONE not in _types(collected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
+async def test_stream_without_item_events_preserves_response_status_events(sync: bool) -> None:
+    events: Final = (_FULL_TEXT_EVENTS[0], _FULL_TEXT_EVENTS[-1])
+    collected: Final = await _drive(events, sync=sync)
+    assert _types(collected) == (E.RESPONSE_CREATED, E.RESPONSE_COMPLETED)
     assert collected[0].response.id == collected[1].response.id
 
 
@@ -911,71 +996,46 @@ async def test_synthesized_events_survive_proxy_serialization():
     exclude_unset=True). Synthesized events must set their required fields
     explicitly so nothing load-bearing is stripped off the wire.
     """
-    collected = await _drive(_TRUNCATED_TEXT_EVENTS, sync=False)
-
-    required_by_type = {
-        E.OUTPUT_ITEM_ADDED: ["type", "output_index", "item"],
-        E.CONTENT_PART_ADDED: [
-            "type",
-            "item_id",
-            "output_index",
-            "content_index",
-            "part",
-        ],
-        E.OUTPUT_TEXT_DONE: [
-            "type",
-            "item_id",
-            "output_index",
-            "content_index",
-            "text",
-        ],
-        E.CONTENT_PART_DONE: [
-            "type",
-            "item_id",
-            "output_index",
-            "content_index",
-            "part",
-        ],
-        E.OUTPUT_ITEM_DONE: ["type", "output_index", "item"],
-    }
-
-    seen_types = set()
-    for event in collected:
-        etype = getattr(event, "type", None)
-        if etype not in required_by_type:
-            continue
-        seen_types.add(etype)
-        wire = json.loads(event.model_dump_json(exclude_none=True, exclude_unset=True))
-        for field in required_by_type[etype]:
-            assert field in wire, f"{etype} lost required field {field}: {wire}"
-
-    # all synthesized wrapper events were exercised
-    assert seen_types == set(required_by_type.keys())
+    collected: Final = await _drive(_TRUNCATED_TEXT_EVENTS, sync=False)
+    required_by_type: Final = MappingProxyType(
+        {
+            E.OUTPUT_ITEM_ADDED: ("type", "output_index", "item"),
+            E.CONTENT_PART_ADDED: ("type", "item_id", "output_index", "content_index", "part"),
+            E.OUTPUT_TEXT_DONE: ("type", "item_id", "output_index", "content_index", "text"),
+            E.CONTENT_PART_DONE: ("type", "item_id", "output_index", "content_index", "part"),
+            E.OUTPUT_ITEM_DONE: ("type", "output_index", "item"),
+        }
+    )
+    seen_types: Final = frozenset((event.type for event in collected if event.type in required_by_type))
+    serialized: Final = tuple(
+        (event.type, json.loads(event.model_dump_json(exclude_none=True, exclude_unset=True)))
+        for event in collected
+        if event.type in required_by_type
+    )
+    assert all(field in wire for event_type, wire in serialized for field in required_by_type[event_type])
+    assert seen_types == frozenset(required_by_type)
 
 
 class _RedactingDeploymentHook:
     """A streaming deployment hook that redacts output_text delta content."""
 
-    REDACTION = "[REDACTED]"
+    REDACTION: Final = "[REDACTED]"
 
     async def async_post_call_streaming_deployment_hook(self, *, request_data, response_chunk, call_type):
         if getattr(response_chunk, "type", None) == E.OUTPUT_TEXT_DELTA:
-            response_chunk.delta = self.REDACTION
+            return response_chunk.model_copy(update=MappingProxyType({"delta": self.REDACTION}))
         return response_chunk
 
 
 @pytest.fixture
-def redacting_deployment_hook():
-    hook = _RedactingDeploymentHook()
-    litellm.callbacks.append(hook)
-    try:
-        yield hook
-    finally:
-        litellm.callbacks.remove(hook)
+def redacting_deployment_hook(monkeypatch):
+    hook: Final = _RedactingDeploymentHook()
+    monkeypatch.setattr(litellm, "callbacks", (*litellm.callbacks, hook))
+    return hook
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
 async def test_streaming_hook_governs_synthesized_teardown(sync, redacting_deployment_hook):
     """
     A post-call streaming deployment hook that redacts response.output_text.delta
@@ -984,56 +1044,47 @@ async def test_streaming_hook_governs_synthesized_teardown(sync, redacting_deplo
     carry the redacted text, never the raw provider text (issue #20975 review:
     the pre-hook accumulation leaked redacted content through the done events).
     """
-    redacted = _RedactingDeploymentHook.REDACTION * 2  # two deltas
-    collected = await _drive(_TRUNCATED_TEXT_EVENTS, sync=sync)
-
-    by_type: Dict[Any, List[Any]] = {}
-    for event in collected:
-        by_type.setdefault(getattr(event, "type", None), []).append(event)
-
-    # client-visible deltas are redacted
-    assert [d.delta for d in by_type[E.OUTPUT_TEXT_DELTA]] == [
+    redacted: Final = _RedactingDeploymentHook.REDACTION * 2
+    collected: Final = await _drive(_TRUNCATED_TEXT_EVENTS, sync=sync)
+    by_type: Final = MappingProxyType(
+        {
+            event_type: tuple((event for event in collected if event.type == event_type))
+            for event_type in _types(collected)
+        }
+    )
+    assert tuple((d.delta for d in by_type[E.OUTPUT_TEXT_DELTA])) == (
         _RedactingDeploymentHook.REDACTION,
         _RedactingDeploymentHook.REDACTION,
-    ]
-
-    # synthesized teardown reflects the post-hook (redacted) accumulation
+    )
     assert by_type[E.OUTPUT_TEXT_DONE][0].text == redacted
     assert by_type[E.CONTENT_PART_DONE][0].part.text == redacted
     assert by_type[E.OUTPUT_ITEM_DONE][0].item.content[0].text == redacted
-
-    # the raw provider text never leaks anywhere in the stream
-    assert all(getattr(e, "text", None) != "Hello world" for e in collected)
+    assert all((getattr(e, "text", None) != "Hello world" for e in collected))
 
 
-# ----- truncated refusal stream -----
-
-_TRUNCATED_REFUSAL_EVENTS: List[Dict[str, Any]] = [
-    {
-        "type": "response.refusal.delta",
-        "item_id": "msg_r",
-        "output_index": 0,
-        "content_index": 0,
-        "delta": "I can",
-    },
-    {
-        "type": "response.refusal.delta",
-        "item_id": "msg_r",
-        "output_index": 0,
-        "content_index": 0,
-        "delta": "not help",
-    },
-    {"type": "response.completed", "response": _response_body("completed")},
-]
+_TRUNCATED_REFUSAL_EVENTS: Final[tuple[Mapping[str, Any], ...]] = (
+    MappingProxyType(
+        {"type": "response.refusal.delta", "item_id": "msg_r", "output_index": 0, "content_index": 0, "delta": "I can"}
+    ),
+    MappingProxyType(
+        {
+            "type": "response.refusal.delta",
+            "item_id": "msg_r",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "not help",
+        }
+    ),
+    MappingProxyType({"type": "response.completed", "response": _response_body("completed")}),
+)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+@pytest.mark.parametrize("sync", (False, True), ids=("async", "sync"))
 async def test_truncated_refusal_stream_synthesizes_lifecycle(sync):
-    collected = await _drive(_TRUNCATED_REFUSAL_EVENTS, sync=sync)
-    types = _types(collected)
-
-    assert types == [
+    collected: Final = await _drive(_TRUNCATED_REFUSAL_EVENTS, sync=sync)
+    types: Final = _types(collected)
+    assert types == (
         E.RESPONSE_CREATED,
         E.RESPONSE_IN_PROGRESS,
         E.OUTPUT_ITEM_ADDED,
@@ -1044,23 +1095,20 @@ async def test_truncated_refusal_stream_synthesizes_lifecycle(sync):
         E.CONTENT_PART_DONE,
         E.OUTPUT_ITEM_DONE,
         E.RESPONSE_COMPLETED,
-    ], types
-
-    # the synthesized content part is a refusal part, not output_text
+    ), types
     assert collected[3].part.type == "refusal"
-    # teardown carries the accumulated refusal text at every level
     assert collected[6].refusal == "I cannot help"
     assert collected[7].part.refusal == "I cannot help"
     assert collected[8].item.content[0].refusal == "I cannot help"
 
 
 def test_obj_get_handles_dict_object_and_none():
-    assert _obj_get({"a": 1}, "a") == 1
-    assert _obj_get({"a": 1}, "missing", "d") == "d"
+    assert _obj_get(MappingProxyType({"a": 1}), "a") == 1
+    assert _obj_get(MappingProxyType({"a": 1}), "missing", "d") == "d"
     assert _obj_get(None, "a", "d") == "d"
 
     class _Obj:
-        x = 5
+        x: Final = 5
 
     assert _obj_get(_Obj(), "x") == 5
     assert _obj_get(_Obj(), "y", "fallback") == "fallback"
@@ -1068,13 +1116,13 @@ def test_obj_get_handles_dict_object_and_none():
 
 def test_safe_int_narrows_dynamic_values():
     assert _safe_int(3, 0) == 3
-    assert _safe_int(True, 9) == 9  # bool is not an accepted int
+    assert _safe_int(True, 9) == 9
     assert _safe_int("5", 0) == 5
     assert _safe_int("nope", 7) == 7
     assert _safe_int(1.5, 4) == 4
 
 
 def test_gap_filler_passes_unknown_event_through():
-    gap_filler = _ResponsesLifecycleGapFiller(model="m", response_id="resp_x")
-    event = {"type": "response.some_unhandled_event"}
+    gap_filler: Final = _ResponsesLifecycleGapFiller(model="m", response_id="resp_x")
+    event: Final = MappingProxyType({"type": "response.some_unhandled_event"})
     assert gap_filler.expand(event) == (event,)

@@ -238,7 +238,7 @@ def _obj_get(obj: object, key: str, default: object | None = None) -> object:
     """Read ``key`` from a dict or a pydantic/attr object uniformly."""
     if obj is None:
         return default
-    if isinstance(obj, dict):
+    if isinstance(obj, Mapping):
         source: Mapping[object, object] = obj
         return source.get(key, default)
     return getattr(obj, key, default)
@@ -287,7 +287,9 @@ class _ResponsesStreamItemState:
     item_id: str
     output_index: int
     content_index: int = 0
-    item_type: Literal["message", "function_call"] = "message"
+    item_type: str = "message"
+    item_snapshot: str = "{}"
+    reasoning_summary: tuple[tuple[int, str], ...] = ()
     part_kind: str = "output_text"  # "output_text" | "refusal"
     accumulated_text: str = ""
     output_item_added_seen: bool = False
@@ -367,6 +369,14 @@ class _ResponsesLifecycleGapFiller:
             self._accumulate(event, _safe_str(_obj_get(event, "delta", ""), ""))
             return (*openers, event)
         if etype in (
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_part.done",
+        ):
+            self._observe_reasoning_summary(event, is_delta=etype == "response.reasoning_summary_text.delta")
+            return (event,)
+        if etype in (
             ev.OUTPUT_TEXT_DONE,
             ev.REFUSAL_DONE,
             ev.FUNCTION_CALL_ARGUMENTS_DONE,
@@ -381,7 +391,7 @@ class _ResponsesLifecycleGapFiller:
             return (event,)
         if etype in (ev.RESPONSE_COMPLETED, ev.RESPONSE_INCOMPLETE, ev.RESPONSE_FAILED):
             openers = self._response_openers() if self._items else ()
-            return (*openers, *self._teardown(), event)
+            return (*openers, *self._teardown(event), event)
         return (event,)
 
     def _response_openers(self) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
@@ -472,9 +482,6 @@ class _ResponsesLifecycleGapFiller:
         output_index: Final = _safe_int(_obj_get(event, "output_index", 0), 0)
         item: Final = _obj_get(event, "item")
         item_type: Final = _obj_get(item, "type")
-        # Reasoning and server-side tools have separate lifecycles; never synthesize function calls for them.
-        if item_type not in ("message", "refusal", "function_call"):
-            return
         item_id: Final = (
             _safe_str(_obj_get(item, "id", ""), "")
             or _safe_str(_obj_get(event, "item_id", ""), "")
@@ -487,7 +494,8 @@ class _ResponsesLifecycleGapFiller:
             replace(
                 state,
                 item_id=item_id,
-                item_type="function_call" if item_type == "function_call" else "message",
+                item_type="message" if item_type == "refusal" else _safe_str(item_type, "message"),
+                item_snapshot=item.model_dump_json() if isinstance(item, BaseModel) else json.dumps(item),
                 output_item_added_seen=True,
             )
         )
@@ -501,12 +509,38 @@ class _ResponsesLifecycleGapFiller:
         if state is not None:
             self._store_item(replace(state, output_item_done_seen=True))
 
-    def _teardown(self) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
-        return tuple(event for _, state in sorted(self._items.items()) for event in self._item_teardown(state))
+    def _observe_reasoning_summary(self, event: object, *, is_delta: bool) -> None:
+        state: Final = self._items.get(_safe_int(_obj_get(event, "output_index"), 0))
+        if state is None or state.item_type != "reasoning":
+            return
+        index: Final = _safe_int(_obj_get(event, "summary_index"), 0)
+        previous: Final = next((text for part_index, text in state.reasoning_summary if part_index == index), "")
+        text: Final = _safe_str(
+            _obj_get(event, "delta", _obj_get(event, "text", _obj_get(_obj_get(event, "part"), "text"))), ""
+        )
+        self._store_item(
+            replace(
+                state,
+                reasoning_summary=(
+                    *((part_index, value) for part_index, value in state.reasoning_summary if part_index != index),
+                    (index, previous + text if is_delta else text),
+                ),
+            )
+        )
 
-    def _item_teardown(self, state: _ResponsesStreamItemState) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
+    def _teardown(self, terminal_event: object) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
+        return tuple(
+            event for _, state in sorted(self._items.items()) for event in self._item_teardown(state, terminal_event)
+        )
+
+    def _item_teardown(
+        self, state: _ResponsesStreamItemState, terminal_event: object
+    ) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
         if state.output_item_done_seen:
             return ()
+        if state.item_type not in ("message", "function_call"):
+            self._store_item(replace(state, output_item_done_seen=True))
+            return (self._build_other_item_done(state, terminal_event),)
         need_leaf: Final = not state.leaf_done_seen
         need_content_part: Final = state.has_content_part and not state.content_part_done_seen
         self._store_item(replace(state, leaf_done_seen=True, content_part_done_seen=True, output_item_done_seen=True))
@@ -514,6 +548,45 @@ class _ResponsesLifecycleGapFiller:
             *((self._build_leaf_done(state),) if need_leaf else ()),
             *((self._build_content_part_done(state),) if need_content_part else ()),
             self._build_output_item_done(state),
+        )
+
+    def _build_other_item_done(self, state: _ResponsesStreamItemState, terminal_event: object) -> OutputItemDoneEvent:
+        response: Final = _obj_get(terminal_event, "response")
+        terminal_item: Final = next(
+            (
+                item
+                for item in _json_array_or_empty(_obj_get(response, "output"))
+                if _obj_get(item, "id") == state.item_id
+            ),
+            None,
+        )
+        payload: Final = _load_json_value(
+            state.item_snapshot
+            if terminal_item is None
+            else terminal_item.model_dump_json()
+            if isinstance(terminal_item, BaseModel)
+            else json.dumps(terminal_item)
+        )
+        fields: Final = MappingProxyType(payload) if _is_json_object(payload) else EMPTY_MAPPING
+        summary: Final = MappingProxyType(
+            {
+                "summary": tuple(
+                    _build_bag(BaseLiteLLMOpenAIResponseObject, type="summary_text", text=text)
+                    for _, text in sorted(state.reasoning_summary)
+                )
+            }
+            if state.reasoning_summary
+            else {}
+        )
+        return OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=state.output_index,
+            item=_build_bag(
+                BaseLiteLLMOpenAIResponseObject,
+                **MappingProxyType(
+                    {**fields, "id": state.item_id, "type": state.item_type, "status": "completed", **summary}
+                ),
+            ),
         )
 
     def _build_output_item_added(self, state: _ResponsesStreamItemState) -> OutputItemAddedEvent:
