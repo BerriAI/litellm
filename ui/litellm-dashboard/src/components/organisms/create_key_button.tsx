@@ -568,7 +568,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     setUserSearchLoading(true);
     try {
       const params = new URLSearchParams();
-      params.append("user_email", searchText); // Always search by email
+      params.append("search", searchText);
       if (accessToken == null) {
         return;
       }
@@ -727,7 +727,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                             onValueChange={control.onChange}
                             onSearchChange={fetchUsers}
                             isLoading={userSearchLoading}
-                            placeholder="Type email to search for users"
+                            placeholder="Type email or user ID to search for users"
                             emptyText="No users found"
                             loadingText="Searching..."
                             inputId={control.id}
