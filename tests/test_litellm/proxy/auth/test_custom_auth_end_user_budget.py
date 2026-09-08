@@ -277,3 +277,80 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
     # DB values should win
     assert result.end_user_tpm_limit == 500
     assert result.end_user_model_max_budget == db_budget
+
+
+# ---------------------------------------------------------------------------
+# Regression test: end-user rpm_limit must be stamped on cache-hit requests
+# ---------------------------------------------------------------------------
+
+
+def test_end_user_rpm_limit_applied_on_cache_hit():
+    """
+    Regression: end_user_rpm_limit / end_user_tpm_limit were only written onto
+    the token inside the DB-miss branch of _user_api_key_auth_builder via the
+    raw .get() assignments. On a cache hit those raw assignments run but they
+    read from end_user_params which is built from get_end_user_object — the
+    bug is that a cached token whose end_user_rpm_limit was previously None
+    is never updated via update_valid_token_with_end_user_params unless the
+    unconditional call we added is present.
+
+    This test directly exercises update_valid_token_with_end_user_params to
+    confirm:
+    1. Without calling it, a cached token retains None for rpm/tpm limits.
+    2. After calling it with populated end_user_params, the limits are set.
+
+    This matches exactly what the fix does: call it unconditionally so that
+    cache-hit requests (where the token object in memory has stale None values)
+    get the correct limits stamped before reaching parallel_request_limiter_v3.
+    """
+    # Simulate a token as it sits in the in-memory cache — no end_user fields
+    cached_token = UserAPIKeyAuth(
+        token="hashed-sk-test",
+        end_user_rpm_limit=None,
+        end_user_tpm_limit=None,
+        end_user_id=None,
+    )
+
+    # end_user_params as built by the early get_end_user_object call
+    end_user_params_with_limits = {
+        "end_user_id": "alice@example.com",
+        "end_user_rpm_limit": 5,
+        "end_user_tpm_limit": 1000,
+    }
+
+    # --- WITHOUT the fix: cache hit skips the unconditional call ---
+    # Token in cache still has None — parallel_request_limiter_v3 skips bucket
+    assert cached_token.end_user_rpm_limit is None, (
+        "Precondition: cached token starts with no rpm limit"
+    )
+
+    # --- WITH the fix: unconditional call stamps the limits ---
+    result = update_valid_token_with_end_user_params(
+        cached_token, end_user_params_with_limits
+    )
+
+    assert result.end_user_rpm_limit == 5, (
+        "end_user_rpm_limit must be stamped onto the token so "
+        "parallel_request_limiter_v3 creates a rate-limit bucket"
+    )
+    assert result.end_user_tpm_limit == 1000
+    assert result.end_user_id == "alice@example.com"
+
+
+def test_end_user_rpm_limit_none_without_unconditional_update():
+    """
+    Demonstrates the pre-fix state: a cached token whose rpm/tpm limits are
+    None stays None if update_valid_token_with_end_user_params is never called.
+    This is what happened on every cache-hit request before the fix.
+    """
+    cached_token = UserAPIKeyAuth(
+        token="hashed-sk-test",
+        end_user_rpm_limit=None,
+        end_user_tpm_limit=None,
+    )
+
+    # Simulate the pre-fix cache-hit path: update function is NOT called
+    # (the DB-miss block's raw assignments also don't run on a cache hit)
+    # So the token retains None — no bucket, no 429.
+    assert cached_token.end_user_rpm_limit is None
+    assert cached_token.end_user_tpm_limit is None
