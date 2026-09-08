@@ -16,6 +16,7 @@ const baseInput: KeyCreateInput = {
   budgetLimits: [],
   tagRateLimits: [],
   budgetFallbacks: {},
+  modelMaxBudget: {},
 };
 
 const build = (formValues: Record<string, unknown>, overrides: Partial<KeyCreateInput> = {}): KeyPayloadResult =>
@@ -552,5 +553,29 @@ describe("endpoint", () => {
   ])("routes a %s key to the %s endpoint", (keyOwner, endpoint) => {
     const result = build({ key_alias: "my-key" }, { keyOwner });
     expect(result.kind === "ok" && result.endpoint).toBe(endpoint);
+  });
+});
+
+describe("model_max_budget", () => {
+  it("sends the per-model budgets in the shape the API stores", () => {
+    const payload = payloadOf(
+      build(
+        {},
+        {
+          modelMaxBudget: {
+            "claude-opus-4-8": { budget_limit: 200, time_period: "1mo" },
+            "gpt-4o": { budget_limit: 0.5, time_period: "30d" },
+          },
+        },
+      ),
+    );
+    expect(payload.model_max_budget).toEqual({
+      "claude-opus-4-8": { budget_limit: 200, time_period: "1mo" },
+      "gpt-4o": { budget_limit: 0.5, time_period: "30d" },
+    });
+  });
+
+  it("omits model_max_budget entirely when no model budget is set", () => {
+    expect(payloadOf(build({}))).not.toHaveProperty("model_max_budget");
   });
 });

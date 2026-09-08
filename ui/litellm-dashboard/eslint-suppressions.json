@@ -1208,11 +1208,6 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/vector-stores/_components/VectorStoreForm.tsx": {
-    "no-nested-ternary": {
-      "count": 2
-    }
-  },
   "src/app/(dashboard)/vector-stores/_components/index.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -1399,9 +1394,6 @@
     },
     "prefer-const": {
       "count": 2
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "src/components/TeamsPage/teamTableColumns.tsx": {
@@ -1464,9 +1456,6 @@
   },
   "src/components/add_model/conditional_public_model_name.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "local/no-complex-jsx-arrow": {
       "count": 1
     }
   },
@@ -1627,14 +1616,6 @@
   },
   "src/components/common_components/check_openapi_schema.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/common_components/fetch_teams.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "max-params": {
       "count": 1
     }
   },
@@ -1834,7 +1815,7 @@
       "count": 5
     },
     "no-restricted-syntax": {
-      "count": 152
+      "count": 150
     },
     "prefer-const": {
       "count": 32
@@ -1881,9 +1862,6 @@
   },
   "src/components/per_user_usage.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
@@ -2018,11 +1996,6 @@
       "count": 1
     }
   },
-  "src/components/shared/form/field.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
   "src/components/shared/numerical_input.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2138,6 +2111,11 @@
       "count": 1
     }
   },
+  "src/components/ui/alert.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
   "src/components/ui/avatar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2198,6 +2176,11 @@
       "count": 1
     }
   },
+  "src/components/ui/field.tsx": {
+    "local/filename-pascal-case": {
+      "count": 1
+    }
+  },
   "src/components/ui/hover-card.tsx": {
     "local/filename-pascal-case": {
       "count": 1
@@ -2214,11 +2197,6 @@
     }
   },
   "src/components/ui/label.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/ui/meter.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }
@@ -2249,11 +2227,6 @@
     }
   },
   "src/components/ui/sheet.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    }
-  },
-  "src/components/ui/sidebar.tsx": {
     "local/filename-pascal-case": {
       "count": 1
     }
@@ -2313,17 +2286,6 @@
   },
   "src/components/user_agent_activity.tsx": {
     "local/filename-pascal-case": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/user_dashboard.tsx": {
-    "local/filename-pascal-case": {
-      "count": 1
-    },
-    "prefer-const": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {

@@ -1,8 +1,6 @@
 #### What this tests ####
 #    This tests litellm.token_counter.token_counter() function
 import importlib
-import os
-import sys
 import time
 import traceback
 from unittest.mock import MagicMock
@@ -10,10 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 import tiktoken
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
@@ -634,7 +629,6 @@ def test_token_counter():
 
 
 import unittest
-from unittest.mock import MagicMock, patch
 
 from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
 
@@ -1025,13 +1019,12 @@ def test_token_counter_with_image_url():
         }
     ]
 
-    try:
+    with pytest.raises(ValueError, match="Invalid detail value") as exc_info:
         token_counter(model="gpt-3.5-turbo", messages=messages_invalid)
-        pytest.fail("Expected ValueError for invalid detail value")
-    except ValueError as e:
-        assert "Invalid detail value" in str(
-            e
-        ), f"Expected detail validation error, got: {e}"
+    e = exc_info.value
+    assert "Invalid detail value" in str(
+        e
+    ), f"Expected detail validation error, got: {e}"
 
 
 def test_token_counter_with_thinking_content():
@@ -1167,3 +1160,255 @@ def test_count_content_list_rejects_unknown_type():
     message = str(exc_info.value)
     assert "Invalid content item type: totally_unknown_block" in message
     assert "tool_reference" in message
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},
+        {"type": "url", "url": "https://example.com/image.png"},
+        {"type": "file", "file_id": "file-abc123"},
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_token_counter_with_anthropic_image_block(source: dict[str, str]):
+    """Anthropic `image` blocks must count for every source variant, not raise `Invalid content item type` (which the router's context-window pre-call check swallows into an unfiltered dispatch)."""
+    from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this image?"},
+                {"type": "image", "source": source},
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        use_default_image_token_count=True,
+    )
+    assert tokens > DEFAULT_IMAGE_TOKEN_COUNT, (
+        f"Expected the image block to contribute tokens, got {tokens}"
+    )
+
+
+def test_anthropic_image_block_matches_equivalent_image_url():
+    """An Anthropic `image` block prices identically to the OpenAI `image_url` carrying the same bytes."""
+    anthropic_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgo=",
+                    },
+                }
+            ],
+        }
+    ]
+    openai_messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="},
+                }
+            ],
+        }
+    ]
+
+    anthropic_tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=anthropic_messages
+    )
+    openai_tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929", messages=openai_messages
+    )
+    assert anthropic_tokens == openai_tokens
+
+
+def test_anthropic_image_block_nested_in_tool_result():
+    """An `image` block nested in a `tool_result.content` list is counted through the same recursion."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "iVBORw0KGgo=",
+                            },
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    tokens = token_counter(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        use_default_image_token_count=True,
+    )
+    assert tokens > 0
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ({"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQ"}, "data:image/jpeg;base64,/9j/4AAQ"),
+        ({"type": "url", "url": "https://example.com/image.png"}, "https://example.com/image.png"),
+        ({"type": "file", "file_id": "file-abc123"}, ""),
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_anthropic_image_source_resolves_to_what_the_image_pricer_reads(source: dict[str, str], expected: str):
+    """base64 sources become a data URI, url sources pass through, file sources resolve to an empty string."""
+    from litellm.litellm_core_utils.token_counter import _anthropic_image_source_data
+
+    assert _anthropic_image_source_data(source) == expected
+
+
+def test_anthropic_image_block_with_empty_base64_data():
+    """A base64 source with empty `data` prices as an image rather than raising."""
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    tokens = _count_content_list(
+        count_function=len,
+        content_list=[
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}}
+        ],
+        use_default_image_token_count=False,
+        default_token_count=None,
+    )
+    assert tokens > 0
+
+
+def test_anthropic_image_block_without_source_raises():
+    """An `image` block with no `source` raises, matching the OpenAI `image_url`-without-`url` behavior."""
+    from litellm.litellm_core_utils.token_counter import _count_content_list
+
+    with pytest.raises(ValueError, match="Error getting number of tokens from content list"):
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "image"}],
+            use_default_image_token_count=False,
+            default_token_count=None,
+        )
+
+    # ... and `default_token_count`, the caller's opt-out from raising, still wins.
+    assert (
+        _count_content_list(
+            count_function=len,
+            content_list=[{"type": "image"}],
+            use_default_image_token_count=False,
+            default_token_count=7,
+        )
+        == 7
+    )
+
+
+def _count_user_content(content: list[dict]) -> int:
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    return token_counter(
+        model="anthropic/claude-fable-5",
+        messages=[{"role": "user", "content": content}],
+        use_default_image_token_count=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+        {"type": "url", "url": "https://example.com/report.pdf"},
+        {"type": "file", "file_id": "file-abc123"},
+    ],
+    ids=["base64", "url", "file"],
+)
+def test_anthropic_document_block_with_opaque_source_is_priced_like_an_image(source: dict[str, str]):
+    """A `document` whose bytes can't be tokenized locally is priced like an `image`, not raised on."""
+    prompt = {"type": "text", "text": "Summarize this file."}
+
+    assert _count_user_content([prompt, {"type": "document", "source": source}]) == _count_user_content(
+        [prompt, {"type": "image", "source": source}]
+    )
+
+
+def test_anthropic_document_block_text_sources_count_their_text():
+    """`text` and `content` document sources count the text they carry, as inline text blocks would."""
+    prompt = {"type": "text", "text": "Summarize this file."}
+    body = {"type": "text", "text": "Revenue grew eleven percent while churn fell to two percent."}
+    picture = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}
+
+    text_source = {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": body["text"]}}
+    assert _count_user_content([prompt, text_source]) == _count_user_content([prompt, body])
+
+    string_content = {"type": "document", "source": {"type": "content", "content": body["text"]}}
+    assert _count_user_content([prompt, string_content]) == _count_user_content([prompt, body])
+
+    block_content = {"type": "document", "source": {"type": "content", "content": [body, picture]}}
+    assert _count_user_content([prompt, block_content]) == _count_user_content([prompt, body, picture])
+
+
+def test_anthropic_document_title_and_context_add_their_tokens():
+    prompt = {"type": "text", "text": "Summarize this file."}
+    source = {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"}
+    described = {"type": "document", "source": source, "title": "Q3 board packet", "context": "Shared by finance"}
+
+    assert _count_user_content([prompt, described]) == _count_user_content(
+        [
+            prompt,
+            {"type": "text", "text": "Q3 board packet"},
+            {"type": "text", "text": "Shared by finance"},
+            {"type": "document", "source": source},
+        ]
+    )
+
+
+def test_openai_file_block_prices_like_the_equivalent_anthropic_document():
+    """An inline `file` is a `document` in the chat-completions dialect, so it must price identically, not raise.
+
+    Before the fix `file` was missing from the content-block match even though `ChatCompletionFileObject`
+    is in the union this counter accepts, so every local count of a Responses `input_file` raised
+    `Invalid content item type: file` and surfaced as a 500 on /v1/responses/input_tokens.
+    """
+    prompt = {"type": "text", "text": "Summarize this file."}
+    inline_file = {
+        "type": "file",
+        "file": {"filename": "report.pdf", "file_data": "data:application/pdf;base64,JVBERi0xLjQK"},
+    }
+    document = {
+        "type": "document",
+        "title": "report.pdf",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQK"},
+    }
+
+    assert _count_user_content([prompt, inline_file]) == _count_user_content([prompt, document])
+    assert _count_user_content([prompt, inline_file]) > _count_user_content([prompt])
+
+
+def test_openai_file_block_without_inline_bytes_counts_what_it_carries():
+    """A `file` block naming an uploaded file has no bytes to price, so it adds only the filename's tokens."""
+    prompt = {"type": "text", "text": "Summarize this file."}
+
+    by_id = {"type": "file", "file": {"file_id": "file-abc123"}}
+    assert _count_user_content([prompt, by_id]) == _count_user_content([prompt])
+
+    named = {"type": "file", "file": {"file_id": "file-abc123", "filename": "report.pdf"}}
+    assert _count_user_content([prompt, named]) == _count_user_content(
+        [prompt, {"type": "text", "text": "report.pdf"}]
+    )

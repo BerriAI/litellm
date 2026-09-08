@@ -1,5 +1,4 @@
 import os
-import sys
 import traceback
 from unittest import mock
 import pytest
@@ -11,11 +10,9 @@ import litellm.proxy.proxy_server
 
 load_dotenv()
 import io
-import os
 
 # this file is to test litellm/proxy
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import logging
 

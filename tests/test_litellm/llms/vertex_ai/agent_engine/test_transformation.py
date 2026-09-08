@@ -4,12 +4,9 @@ Tests for Vertex AI Agent Engine transformation.
 Tests the request transformation and streaming chunk parsing without making real API calls.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.vertex_ai.agent_engine.sse_iterator import (
     VertexAgentEngineResponseIterator,

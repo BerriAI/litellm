@@ -13,14 +13,11 @@ constructs a ``UserAPIKeyAuth`` from them. The fix has two parts:
    ``"proxy_admin"`` into ``LitellmUserRoles.PROXY_ADMIN``.
 """
 
-import os
-import sys
 
 import pytest
 from fastapi import Request
 from starlette.datastructures import Headers
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.auth.oauth2_proxy_hook import (

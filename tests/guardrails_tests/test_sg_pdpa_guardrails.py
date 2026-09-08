@@ -15,11 +15,9 @@ Each sub-guardrail validates:
 - identifier or block word alone → ALLOW (no match)
 """
 
-import sys
 import os
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,

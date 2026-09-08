@@ -5,15 +5,10 @@ These tests validate the ModelScopeImageGenerationConfig class which handles
 transformation between OpenAI-compatible format and ModelScope API format.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.modelscope.image_generation.transformation import (
     ModelScopeImageGenerationConfig,

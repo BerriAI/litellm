@@ -3,16 +3,13 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 """
 
 import json
-import os
 import re
-import sys
 from unittest.mock import patch
 
 import pytest
 
 from litellm.caching.dual_cache import DualCache
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from fastapi import HTTPException
 

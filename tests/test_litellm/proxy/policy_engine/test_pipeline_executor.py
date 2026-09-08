@@ -165,7 +165,7 @@ class ContentCheckGuardrail(CustomGuardrail):
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_escalation_step1_fails_step2_blocks():
+async def test_escalation_step1_fails_step2_blocks(monkeypatch):
     """
     Pipeline: simple-filter (on_fail: next) -> advanced-filter (on_fail: block)
     Input: request that fails simple-filter
@@ -182,36 +182,32 @@ async def test_escalation_step1_fails_step2_blocks():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [simple_guard, advanced_guard]
+    monkeypatch.setattr(litellm, "callbacks", [simple_guard, advanced_guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "bad content"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="content-safety",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "bad content"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="content-safety",
+    )
 
-        assert simple_guard.calls == 1
-        assert advanced_guard.calls == 1
-        assert result.terminal_action == "block"
-        assert len(result.step_results) == 2
-        assert result.step_results[0].guardrail_name == "simple-filter"
-        assert result.step_results[0].outcome == "fail"
-        assert result.step_results[0].action_taken == "next"
-        assert result.step_results[1].guardrail_name == "advanced-filter"
-        assert result.step_results[1].outcome == "fail"
-        assert result.step_results[1].action_taken == "block"
-    finally:
-        litellm.callbacks = original_callbacks
+    assert simple_guard.calls == 1
+    assert advanced_guard.calls == 1
+    assert result.terminal_action == "block"
+    assert len(result.step_results) == 2
+    assert result.step_results[0].guardrail_name == "simple-filter"
+    assert result.step_results[0].outcome == "fail"
+    assert result.step_results[0].action_taken == "next"
+    assert result.step_results[1].guardrail_name == "advanced-filter"
+    assert result.step_results[1].outcome == "fail"
+    assert result.step_results[1].action_taken == "block"
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_block_carries_original_guardrail_exception():
+async def test_block_carries_original_guardrail_exception(monkeypatch):
     """A blocking step must expose the guardrail's own raised exception on the
     result so the caller can re-raise it verbatim, giving the policy path the
     same response/trace as a direct guardrail attachment."""
@@ -219,67 +215,52 @@ async def test_block_carries_original_guardrail_exception():
 
     pipeline = GuardrailPipeline(
         mode="pre_call",
-        steps=[
-            PipelineStep(
-                guardrail="moderation-filter", on_fail="block", on_pass="allow"
-            )
-        ],
+        steps=[PipelineStep(guardrail="moderation-filter", on_fail="block", on_pass="allow")],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [guard]
+    monkeypatch.setattr(litellm, "callbacks", [guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "bad content"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="content-safety",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "bad content"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="content-safety",
+    )
 
-        assert result.terminal_action == "block"
-        assert isinstance(result.original_exception, HTTPException)
-        assert result.original_exception.status_code == 400
-        assert result.original_exception.detail == "Content policy violation"
-    finally:
-        litellm.callbacks = original_callbacks
+    assert result.terminal_action == "block"
+    assert isinstance(result.original_exception, HTTPException)
+    assert result.original_exception.status_code == 400
+    assert result.original_exception.detail == "Content policy violation"
 
 
 @pytest.mark.asyncio
-async def test_unsupported_mode_yields_error_outcome_without_exception():
+async def test_unsupported_mode_yields_error_outcome_without_exception(monkeypatch):
     """An unexpected hook mode must surface as an error outcome (carrying no
     original exception), not crash or run the guardrail."""
     guard = AlwaysPassGuardrail(guardrail_name="filter")
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [guard]
+    monkeypatch.setattr(litellm, "callbacks", [guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=[PipelineStep(guardrail="filter", on_error="block", on_fail="block")],
-            mode="during_call",
-            data={"messages": [{"role": "user", "content": "hi"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="content-safety",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="filter", on_error="block", on_fail="block")],
+        mode="during_call",
+        data={"messages": [{"role": "user", "content": "hi"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="content-safety",
+    )
 
-        assert guard.calls == 0
-        assert result.terminal_action == "block"
-        assert result.step_results[0].outcome == "error"
-        assert (
-            "Unsupported pipeline mode: during_call"
-            in result.step_results[0].error_detail
-        )
-        assert result.original_exception is None
-    finally:
-        litellm.callbacks = original_callbacks
+    assert guard.calls == 0
+    assert result.terminal_action == "block"
+    assert result.step_results[0].outcome == "error"
+    assert "Unsupported pipeline mode: during_call" in result.step_results[0].error_detail
+    assert result.original_exception is None
 
 
 @pytest.mark.asyncio
-async def test_passthrough_guardrail_failure_can_pipeline_block():
+async def test_passthrough_guardrail_failure_can_pipeline_block(monkeypatch):
     """
     Pipeline: passthrough guardrail (on_fail: block)
     Expected: passthrough ModifyResponseException is treated as policy fail,
@@ -298,35 +279,31 @@ async def test_passthrough_guardrail_failure_can_pipeline_block():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [passthrough_guard]
+    monkeypatch.setattr(litellm, "callbacks", [passthrough_guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={
-                "model": "fake-model",
-                "messages": [{"role": "user", "content": "bad content"}],
-            },
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="content-safety",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={
+            "model": "fake-model",
+            "messages": [{"role": "user", "content": "bad content"}],
+        },
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="content-safety",
+    )
 
-        assert passthrough_guard.calls == 1
-        assert result.terminal_action == "block"
-        assert len(result.step_results) == 1
-        assert result.step_results[0].guardrail_name == "passthrough-filter"
-        assert result.step_results[0].outcome == "fail"
-        assert result.step_results[0].action_taken == "block"
-        assert result.error_message == "Content policy violation"
-    finally:
-        litellm.callbacks = original_callbacks
+    assert passthrough_guard.calls == 1
+    assert result.terminal_action == "block"
+    assert len(result.step_results) == 1
+    assert result.step_results[0].guardrail_name == "passthrough-filter"
+    assert result.step_results[0].outcome == "fail"
+    assert result.step_results[0].action_taken == "block"
+    assert result.error_message == "Content policy violation"
 
 
 @pytest.mark.asyncio
-async def test_custom_code_guardrail_failure_can_pipeline_block():
+async def test_custom_code_guardrail_failure_can_pipeline_block(monkeypatch):
     """
     Pipeline: custom code guardrail (on_fail: block)
     Expected: custom code keeps its standalone passthrough block behavior, and
@@ -334,10 +311,7 @@ async def test_custom_code_guardrail_failure_can_pipeline_block():
     """
     custom_guard = CustomCodeGuardrail(
         guardrail_name="custom-code-filter",
-        custom_code=(
-            "def apply_guardrail(inputs, request_data, input_type):\n"
-            '    return block("SSN detected")\n'
-        ),
+        custom_code=('def apply_guardrail(inputs, request_data, input_type):\n    return block("SSN detected")\n'),
     )
 
     pipeline = GuardrailPipeline(
@@ -351,35 +325,31 @@ async def test_custom_code_guardrail_failure_can_pipeline_block():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [custom_guard]
+    monkeypatch.setattr(litellm, "callbacks", [custom_guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={
-                "model": "fake-model",
-                "messages": [{"role": "user", "content": "123-45-6789"}],
-            },
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="content-safety",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={
+            "model": "fake-model",
+            "messages": [{"role": "user", "content": "123-45-6789"}],
+        },
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="content-safety",
+    )
 
-        assert result.terminal_action == "block"
-        assert len(result.step_results) == 1
-        assert result.step_results[0].guardrail_name == "custom-code-filter"
-        assert result.step_results[0].outcome == "fail"
-        assert result.step_results[0].action_taken == "block"
-        assert result.error_message == "SSN detected"
-    finally:
-        litellm.callbacks = original_callbacks
+    assert result.terminal_action == "block"
+    assert len(result.step_results) == 1
+    assert result.step_results[0].guardrail_name == "custom-code-filter"
+    assert result.step_results[0].outcome == "fail"
+    assert result.step_results[0].action_taken == "block"
+    assert result.error_message == "SSN detected"
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_early_allow_step1_passes_step2_skipped():
+async def test_early_allow_step1_passes_step2_skipped(monkeypatch):
     """
     Pipeline: simple-filter (on_pass: allow) -> advanced-filter
     Input: clean request that passes simple-filter
@@ -396,32 +366,28 @@ async def test_early_allow_step1_passes_step2_skipped():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [simple_guard, advanced_guard]
+    monkeypatch.setattr(litellm, "callbacks", [simple_guard, advanced_guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "clean content"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="content-safety",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "clean content"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="content-safety",
+    )
 
-        assert simple_guard.calls == 1
-        assert advanced_guard.calls == 0
-        assert result.terminal_action == "allow"
-        assert len(result.step_results) == 1
-        assert result.step_results[0].outcome == "pass"
-        assert result.step_results[0].action_taken == "allow"
-    finally:
-        litellm.callbacks = original_callbacks
+    assert simple_guard.calls == 1
+    assert advanced_guard.calls == 0
+    assert result.terminal_action == "allow"
+    assert len(result.step_results) == 1
+    assert result.step_results[0].outcome == "pass"
+    assert result.step_results[0].action_taken == "allow"
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_escalation_step1_fails_step2_passes():
+async def test_escalation_step1_fails_step2_passes(monkeypatch):
     """
     Pipeline: simple-filter (on_fail: next) -> advanced-filter (on_pass: allow)
     Input: request that fails simple but passes advanced
@@ -438,34 +404,30 @@ async def test_escalation_step1_fails_step2_passes():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [simple_guard, advanced_guard]
+    monkeypatch.setattr(litellm, "callbacks", [simple_guard, advanced_guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "borderline content"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="content-safety",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "borderline content"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="content-safety",
+    )
 
-        assert simple_guard.calls == 1
-        assert advanced_guard.calls == 1
-        assert result.terminal_action == "allow"
-        assert len(result.step_results) == 2
-        assert result.step_results[0].outcome == "fail"
-        assert result.step_results[0].action_taken == "next"
-        assert result.step_results[1].outcome == "pass"
-        assert result.step_results[1].action_taken == "allow"
-    finally:
-        litellm.callbacks = original_callbacks
+    assert simple_guard.calls == 1
+    assert advanced_guard.calls == 1
+    assert result.terminal_action == "allow"
+    assert len(result.step_results) == 2
+    assert result.step_results[0].outcome == "fail"
+    assert result.step_results[0].action_taken == "next"
+    assert result.step_results[1].outcome == "pass"
+    assert result.step_results[1].action_taken == "allow"
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_data_forwarding_pii_masking():
+async def test_data_forwarding_pii_masking(monkeypatch):
     """
     Pipeline: pii-masker (pass_data: true, on_pass: next) -> content-check (on_pass: allow)
     Input: "Hello John Smith"
@@ -487,31 +449,76 @@ async def test_data_forwarding_pii_masking():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [pii_guard, content_guard]
+    monkeypatch.setattr(litellm, "callbacks", [pii_guard, content_guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "Hello John Smith"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="pii-then-safety",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "Hello John Smith"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="pii-then-safety",
+    )
 
-        assert pii_guard.calls == 1
-        assert content_guard.calls == 1
-        assert content_guard.received_messages[0]["content"] == "Hello [REDACTED]"
-        assert result.terminal_action == "allow"
-        assert result.modified_data is not None
-        assert result.modified_data["messages"][0]["content"] == "Hello [REDACTED]"
-    finally:
-        litellm.callbacks = original_callbacks
+    assert pii_guard.calls == 1
+    assert content_guard.calls == 1
+    assert content_guard.received_messages[0]["content"] == "Hello [REDACTED]"
+    assert result.terminal_action == "allow"
+    assert result.modified_data is not None
+    assert result.modified_data["messages"][0]["content"] == "Hello [REDACTED]"
 
 
 @pytest.mark.asyncio
-async def test_guardrail_not_found_uses_on_fail():
+async def test_scan_raw_request_step_sees_pre_pipeline_content(monkeypatch):
+    """
+    veria-ai finding on BerriAI/litellm#34940: a scan_raw_request=True guardrail
+    that is itself a pipeline step never saw raw_request_snapshot at all --
+    execute_steps had no way to receive it, so it evaluated whatever an earlier
+    pass_data step in the same pipeline had already rewritten, defeating the
+    whole point of the flag for pipeline-managed guardrails.
+
+    Pipeline: pii-masker (pass_data: true, on_pass: next) -> content-check
+    (scan_raw_request=True, on_pass: allow). Input: "Hello John Smith".
+    content-check must still see the original, unmasked content.
+    """
+    pii_guard = PiiMaskingGuardrail(guardrail_name="pii-masker")
+    content_guard = ContentCheckGuardrail(guardrail_name="content-check")
+    content_guard.scan_raw_request = True
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(
+                guardrail="pii-masker",
+                on_fail="block",
+                on_pass="next",
+                pass_data=True,
+            ),
+            PipelineStep(guardrail="content-check", on_fail="block", on_pass="allow"),
+        ],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pii_guard, content_guard])
+    original_data = {"messages": [{"role": "user", "content": "Hello John Smith"}]}
+
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=original_data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="pii-then-safety",
+        raw_request_snapshot=original_data,
+    )
+
+    assert pii_guard.calls == 1
+    assert content_guard.calls == 1
+    assert content_guard.received_messages[0]["content"] == "Hello John Smith"
+    assert result.terminal_action == "allow"
+
+
+@pytest.mark.asyncio
+async def test_guardrail_not_found_uses_on_fail(monkeypatch):
     """
     If a guardrail is not found, treat as error and use on_fail action.
     """
@@ -526,29 +533,25 @@ async def test_guardrail_not_found_uses_on_fail():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = []
+    monkeypatch.setattr(litellm, "callbacks", [])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "test"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="test-policy",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "test"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test-policy",
+    )
 
-        assert result.terminal_action == "block"
-        assert result.step_results[0].outcome == "error"
-        assert "not found" in result.step_results[0].error_detail
-    finally:
-        litellm.callbacks = original_callbacks
+    assert result.terminal_action == "block"
+    assert result.step_results[0].outcome == "error"
+    assert "not found" in result.step_results[0].error_detail
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_on_error_next_fallback_on_api_outage_on_fail_blocks_content():
+async def test_on_error_next_fallback_on_api_outage_on_fail_blocks_content(monkeypatch):
     """
     Policy intervention (400) uses on_fail; technical error (503) uses on_error.
 
@@ -574,32 +577,28 @@ async def test_on_error_next_fallback_on_api_outage_on_fail_blocks_content():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [primary, fallback]
+    monkeypatch.setattr(litellm, "callbacks", [primary, fallback])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "any"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="mod-fallback",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "any"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="mod-fallback",
+    )
 
-        assert primary.calls == 1
-        assert fallback.calls == 1
-        assert result.terminal_action == "allow"
-        assert result.step_results[0].outcome == "error"
-        assert result.step_results[0].action_taken == "next"
-        assert result.step_results[1].outcome == "pass"
-    finally:
-        litellm.callbacks = original_callbacks
+    assert primary.calls == 1
+    assert fallback.calls == 1
+    assert result.terminal_action == "allow"
+    assert result.step_results[0].outcome == "error"
+    assert result.step_results[0].action_taken == "next"
+    assert result.step_results[1].outcome == "pass"
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_on_fail_next_on_content_on_error_block_stops_api_fallback():
+async def test_on_fail_next_on_content_on_error_block_stops_api_fallback(monkeypatch):
     """
     Content policy fail (400) uses on_fail: next; API error uses on_error: block (no second step).
     """
@@ -625,48 +624,40 @@ async def test_on_fail_next_on_content_on_error_block_stops_api_fallback():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [primary_content, fallback]
+    monkeypatch.setattr(litellm, "callbacks", [primary_content, fallback])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline_content.steps,
-            mode=pipeline_content.mode,
-            data={"messages": [{"role": "user", "content": "bad"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="test",
-        )
-        assert result.terminal_action == "allow"
-        assert primary_content.calls == 1
-        assert fallback.calls == 1
-    finally:
-        litellm.callbacks = original_callbacks
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline_content.steps,
+        mode=pipeline_content.mode,
+        data={"messages": [{"role": "user", "content": "bad"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test",
+    )
+    assert result.terminal_action == "allow"
+    assert primary_content.calls == 1
+    assert fallback.calls == 1
 
     # API outage: on_error block -> do not run fallback
     fallback.calls = 0
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [primary_api, fallback]
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline_content.steps,
-            mode=pipeline_content.mode,
-            data={"messages": [{"role": "user", "content": "ok"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="test",
-        )
-        assert result.terminal_action == "block"
-        assert primary_api.calls == 1
-        assert fallback.calls == 0
-        assert result.step_results[0].outcome == "error"
-        assert result.step_results[0].action_taken == "block"
-    finally:
-        litellm.callbacks = original_callbacks
+    monkeypatch.setattr(litellm, "callbacks", [primary_api, fallback])
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline_content.steps,
+        mode=pipeline_content.mode,
+        data={"messages": [{"role": "user", "content": "ok"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test",
+    )
+    assert result.terminal_action == "block"
+    assert primary_api.calls == 1
+    assert fallback.calls == 0
+    assert result.step_results[0].outcome == "error"
+    assert result.step_results[0].action_taken == "block"
 
 
 @pytest.mark.asyncio
-async def test_guardrail_not_found_with_next_continues():
+async def test_guardrail_not_found_with_next_continues(monkeypatch):
     """
     If a guardrail is not found and on_fail is 'next', continue to next step.
     """
@@ -688,32 +679,28 @@ async def test_guardrail_not_found_with_next_continues():
         ],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [pass_guard]
+    monkeypatch.setattr(litellm, "callbacks", [pass_guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "test"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="test-policy",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "test"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test-policy",
+    )
 
-        assert result.terminal_action == "allow"
-        assert len(result.step_results) == 2
-        assert result.step_results[0].outcome == "error"
-        assert result.step_results[0].action_taken == "next"
-        assert result.step_results[1].outcome == "pass"
-        assert pass_guard.calls == 1
-    finally:
-        litellm.callbacks = original_callbacks
+    assert result.terminal_action == "allow"
+    assert len(result.step_results) == 2
+    assert result.step_results[0].outcome == "error"
+    assert result.step_results[0].action_taken == "next"
+    assert result.step_results[1].outcome == "pass"
+    assert pass_guard.calls == 1
 
 
 @pytest.mark.skipif(HTTPException is None, reason="fastapi not installed")
 @pytest.mark.asyncio
-async def test_single_step_pipeline_block():
+async def test_single_step_pipeline_block(monkeypatch):
     """Single step pipeline that blocks."""
     guard = AlwaysFailGuardrail(guardrail_name="blocker")
 
@@ -722,27 +709,23 @@ async def test_single_step_pipeline_block():
         steps=[PipelineStep(guardrail="blocker", on_fail="block")],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [guard]
+    monkeypatch.setattr(litellm, "callbacks", [guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "test"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="test",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "test"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test",
+    )
 
-        assert result.terminal_action == "block"
-        assert guard.calls == 1
-    finally:
-        litellm.callbacks = original_callbacks
+    assert result.terminal_action == "block"
+    assert guard.calls == 1
 
 
 @pytest.mark.asyncio
-async def test_single_step_pipeline_allow():
+async def test_single_step_pipeline_allow(monkeypatch):
     """Single step pipeline that allows."""
     guard = AlwaysPassGuardrail(guardrail_name="passer")
 
@@ -751,27 +734,123 @@ async def test_single_step_pipeline_allow():
         steps=[PipelineStep(guardrail="passer", on_pass="allow")],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [guard]
+    monkeypatch.setattr(litellm, "callbacks", [guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "test"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="test",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "test"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test",
+    )
 
-        assert result.terminal_action == "allow"
-        assert guard.calls == 1
-    finally:
-        litellm.callbacks = original_callbacks
+    assert result.terminal_action == "allow"
+    assert guard.calls == 1
 
 
 @pytest.mark.asyncio
-async def test_step_results_include_duration():
+async def test_allow_restores_independent_guardrails_list(monkeypatch):
+    """
+    Request activates an independent guardrail; an unrelated pipeline runs and allows.
+    Expected: no modified_data escapes, so the request's guardrails list survives
+    and the independent guardrail still runs at later lifecycle stages (post_call).
+    Regression: LIT-6587 (pipeline clobbered the list with its last step's guardrail).
+    """
+    pipeline_guard = AlwaysPassGuardrail(guardrail_name="input-scan")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="input-scan", on_fail="block", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_guard])
+
+    data = {
+        "messages": [{"role": "user", "content": "clean content"}],
+        "metadata": {"guardrails": ["independent-output-guard"]},
+    }
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="input-pipeline-policy",
+    )
+
+    assert pipeline_guard.calls == 1
+    assert result.terminal_action == "allow"
+    propagated = result.modified_data or data
+    assert propagated["metadata"]["guardrails"] == ["independent-output-guard"]
+    assert data["metadata"]["guardrails"] == ["independent-output-guard"]
+
+
+@pytest.mark.asyncio
+async def test_allow_does_not_leak_guardrails_into_bare_request(monkeypatch):
+    """A request without metadata must not gain a metadata.guardrails list from the pipeline."""
+    pipeline_guard = AlwaysPassGuardrail(guardrail_name="input-scan")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="input-scan", on_fail="block", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pipeline_guard])
+
+    data = {"messages": [{"role": "user", "content": "clean content"}]}
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="input-pipeline-policy",
+    )
+
+    assert result.terminal_action == "allow"
+    propagated = result.modified_data or data
+    assert "guardrails" not in propagated.get("metadata", {})
+    assert "metadata" not in data
+
+
+@pytest.mark.asyncio
+async def test_data_forwarding_keeps_changes_and_restores_guardrails_list(monkeypatch):
+    """A pass_data pipeline's modifications propagate while the request's guardrails list is restored."""
+    pii_guard = PiiMaskingGuardrail(guardrail_name="pii-masker")
+    content_guard = ContentCheckGuardrail(guardrail_name="content-check")
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[
+            PipelineStep(guardrail="pii-masker", on_fail="block", on_pass="next", pass_data=True),
+            PipelineStep(guardrail="content-check", on_fail="block", on_pass="allow"),
+        ],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [pii_guard, content_guard])
+
+    data = {
+        "messages": [{"role": "user", "content": "Hello John Smith"}],
+        "metadata": {"guardrails": ["independent-output-guard"]},
+    }
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data=data,
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="pii-then-safety",
+    )
+
+    assert result.terminal_action == "allow"
+    assert result.modified_data is not None
+    assert result.modified_data["messages"][0]["content"] == "Hello [REDACTED]"
+    assert result.modified_data["metadata"]["guardrails"] == ["independent-output-guard"]
+
+
+@pytest.mark.asyncio
+async def test_step_results_include_duration(monkeypatch):
     """Step results should include timing information."""
     guard = AlwaysPassGuardrail(guardrail_name="timed")
 
@@ -780,23 +859,19 @@ async def test_step_results_include_duration():
         steps=[PipelineStep(guardrail="timed")],
     )
 
-    original_callbacks = litellm.callbacks.copy()
-    litellm.callbacks = [guard]
+    monkeypatch.setattr(litellm, "callbacks", [guard])
 
-    try:
-        result = await PipelineExecutor.execute_steps(
-            steps=pipeline.steps,
-            mode=pipeline.mode,
-            data={"messages": [{"role": "user", "content": "test"}]},
-            user_api_key_dict=MagicMock(),
-            call_type="completion",
-            policy_name="test",
-        )
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"messages": [{"role": "user", "content": "test"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test",
+    )
 
-        assert result.step_results[0].duration_seconds is not None
-        assert result.step_results[0].duration_seconds >= 0
-    finally:
-        litellm.callbacks = original_callbacks
+    assert result.step_results[0].duration_seconds is not None
+    assert result.step_results[0].duration_seconds >= 0
 
 
 class _PolicyOptOutGuardrail(CustomGuardrail):

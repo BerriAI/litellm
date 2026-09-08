@@ -1,18 +1,13 @@
-import os
-import sys
 from unittest.mock import MagicMock, call, patch
 
 import httpx
 import openai
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
-from litellm.llms.openai.common_utils import BaseOpenAILLM
+from litellm.llms.openai.common_utils import BaseOpenAILLM, is_openai_backed_api_base
 
 # Test parameters for different API functions
 API_FUNCTION_PARAMS = [
@@ -86,7 +81,6 @@ async def test_openai_client_reuse(function_name, is_async, args):
     """
     Test that multiple API calls reuse the same OpenAI client
     """
-    litellm.set_verbose = True
 
     # Determine which client class to mock based on whether the test is async
     client_path = (
@@ -398,3 +392,22 @@ async def test_async_genuine_bad_request_still_raises(provider, stream):
 
     with pytest.raises(litellm.BadRequestError):
         await _call_and_drain()
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected"),
+    [
+        ("https://api.openai.com/v1", True),
+        ("https://api.openai.com:443/v1/", True),
+        ("https://southcentralus.privatelink.api.openai.com/v1", True),
+        ("https://eu.api.openai.com/v1", True),
+        ("HTTPS://API.OPENAI.COM/v1", True),
+        ("https://my-gateway.example/v1", False),
+        ("https://api.openai.com.evil.example/v1", False),
+        ("https://notapi.openai.com/v1", False),
+        ("https://gateway.example/v1?upstream=api.openai.com", False),
+        ("not a url", False),
+    ],
+)
+def test_is_openai_backed_api_base_decides_by_hostname_only(api_base, expected):
+    assert is_openai_backed_api_base(api_base) is expected

@@ -14,7 +14,7 @@ import {
   VectorStoreFieldConfig,
 } from "@/components/vector_store_providers";
 import { Logo } from "@/components/molecules/logo/Logo";
-import { Field, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -342,7 +342,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                   <SelectTrigger id="vector-store-provider" className="w-full">
                     <SelectValue placeholder="Select a provider" />
                   </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
+                  <SelectContent>
                     {providerItems.map((item) => (
                       <SelectItem key={item.value} value={item.value}>
                         <Logo src={vectorStoreProviderLogoMap[item.label]} label={item.label} className="w-5 h-5" />

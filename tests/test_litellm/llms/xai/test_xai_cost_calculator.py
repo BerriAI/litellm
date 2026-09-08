@@ -4,18 +4,17 @@ Test suite for XAI cost calculation functionality.
 
 import math
 import os
-import sys
 
 import litellm
 from litellm.types.utils import (
+    Choices,
     CompletionTokensDetailsWrapper,
+    Message,
+    ModelResponse,
     PromptTokensDetailsWrapper,
     Usage,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -55,8 +54,8 @@ class TestXAICostCalculator:
         # Expected costs for grok-3-mini:
         # Input: 12 tokens * $3e-7 = $0.0000036
         # Output: 125 tokens * $5e-7 = $0.0000625
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = 125 * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = 125 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -81,8 +80,8 @@ class TestXAICostCalculator:
         # Expected costs for grok-3-mini:
         # Input: 12 tokens * $3e-7 = $0.0000036
         # Completion: (125 + 949) tokens * $5e-7 = $0.000537
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = (125 + 949) * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = (125 + 949) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -108,8 +107,8 @@ class TestXAICostCalculator:
         # Input: 12 tokens * $3e-7 = $0.0000036
         # Completion: (125 + 949) tokens * $5e-7 = $0.000537
         # Note: text_tokens field is ignored, only completion_tokens + reasoning_tokens matters
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = (125 + 949) * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = (125 + 949) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -131,11 +130,12 @@ class TestXAICostCalculator:
 
         prompt_cost, completion_cost = cost_per_token(model="grok-4", usage=usage)
 
-        # Expected costs for grok-4:
-        # Input: 10 tokens * $3e-6 = $0.00003
-        # Completion: (200 + 150) tokens * $1.5e-5 = $0.00525
-        expected_prompt_cost = 10 * 3e-6
-        expected_completion_cost = (200 + 150) * 1.5e-5
+        # grok-4 was retired on 2026-05-15 and now redirects to grok-4.3, so it bills
+        # at grok-4.3's rates:
+        # Input: 10 tokens * $1.25e-6
+        # Completion: (200 + 150) tokens * $2.5e-6
+        expected_prompt_cost = 10 * 1.25e-6
+        expected_completion_cost = (200 + 150) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -162,8 +162,8 @@ class TestXAICostCalculator:
         # Expected costs for grok-3-fast-beta:
         # Input: 20 tokens * $5e-6 = $0.0001
         # Completion: (300 + 200) tokens * $2.5e-5 = $0.0125
-        expected_prompt_cost = 20 * 5e-6
-        expected_completion_cost = (300 + 200) * 2.5e-5
+        expected_prompt_cost = 20 * 1.25e-6
+        expected_completion_cost = (300 + 200) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -189,46 +189,34 @@ class TestXAICostCalculator:
         # Expected costs:
         # Input: 12 tokens * $3e-7 = $0.0000036
         # Completion: (50 + 100) tokens * $5e-7 = $0.000075
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = (50 + 100) * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = (50 + 100) * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_tiered_pricing_above_128k_tokens(self):
-        """Test tiered pricing for tokens above 128k."""
-        # Test with grok-4-fast-reasoning which has tiered pricing
+    def test_tiered_pricing_above_200k_tokens(self):
         usage = Usage(
-            prompt_tokens=150000,  # Above 128k threshold
-            completion_tokens=100000,  # Above 128k threshold
-            total_tokens=300000,
+            prompt_tokens=250000,
+            completion_tokens=100000,
+            total_tokens=400000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
-                reasoning_tokens=50000,  # Total completion tokens = 100000 + 50000 = 150000 > 128k
+                reasoning_tokens=50000,
                 rejected_prediction_tokens=0,
                 text_tokens=None,
             ),
         )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="xai/grok-4-fast-reasoning", usage=usage
-        )
-
-        # Expected costs for grok-4-fast-reasoning with tiered pricing:
-        # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
-        # Completion: (100000 + 50000) tokens * $1e-6 (tiered rate since input > 128k) = $0.15
-        expected_prompt_cost = 150000 * 0.4e-6
-        expected_completion_cost = (100000 + 50000) * 1e-6
-
+        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4.3", usage=usage)
+        expected_prompt_cost = 250000 * 2.5e-6
+        expected_completion_cost = (100000 + 50000) * 5e-6
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_tiered_pricing_below_128k_tokens(self):
-        """Test that regular pricing is used for tokens below 128k threshold."""
-        # Test with grok-4-fast-reasoning which has tiered pricing
+    def test_tiered_pricing_below_200k_tokens(self):
         usage = Usage(
-            prompt_tokens=100000,  # Below 128k threshold
+            prompt_tokens=100000,
             completion_tokens=50000,
             total_tokens=160000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
@@ -239,26 +227,18 @@ class TestXAICostCalculator:
                 text_tokens=None,
             ),
         )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="xai/grok-4-fast-reasoning", usage=usage
-        )
-
-        # Expected costs for grok-4-fast-reasoning with regular pricing:
-        # Input: 100000 tokens * $0.2e-6 (regular rate) = $0.02
-        # Completion: (50000 + 10000) tokens * $0.5e-6 (regular rate) = $0.03
-        expected_prompt_cost = 100000 * 0.2e-6
-        expected_completion_cost = (50000 + 10000) * 0.5e-6
-
+        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4.3", usage=usage)
+        expected_prompt_cost = 100000 * 1.25e-6
+        expected_completion_cost = (50000 + 10000) * 2.5e-6
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
     def test_tiered_pricing_grok_4_latest(self):
         """Test tiered pricing for grok-4-latest model."""
         usage = Usage(
-            prompt_tokens=200000,  # Above 128k threshold
+            prompt_tokens=250000,  # Above the 200k threshold
             completion_tokens=100000,
-            total_tokens=350000,
+            total_tokens=400000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -272,59 +252,45 @@ class TestXAICostCalculator:
             model="xai/grok-4-latest", usage=usage
         )
 
-        # Expected costs for grok-4-latest with tiered pricing:
-        # Input: 200000 tokens * $6e-6 (ALL tokens at tiered rate since input > 128k) = $1.2
-        # Completion: (100000 + 50000) tokens * $30e-6 (tiered rate since input > 128k) = $4.5
-        expected_prompt_cost = 200000 * 6e-6
-        expected_completion_cost = (100000 + 50000) * 30e-6
+        # grok-4-latest redirects to grok-4.3, which tiers at 200k rather than 128k:
+        # Input: 250000 tokens * $2.5e-6 (ALL tokens at tiered rate since input > 200k)
+        # Completion: (100000 + 50000) tokens * $5e-6 (tiered rate since input > 200k)
+        expected_prompt_cost = 250000 * 2.5e-6
+        expected_completion_cost = (100000 + 50000) * 5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
-    def test_tiered_pricing_output_tokens_below_128k(self):
-        """Test that output tokens get tiered rate when input tokens > 128k, even if output tokens < 128k."""
+    def test_tiered_pricing_output_tokens_below_200k(self):
         usage = Usage(
-            prompt_tokens=150000,  # Above 128k threshold
-            completion_tokens=50000,  # Below 128k threshold
-            total_tokens=210000,
+            prompt_tokens=250000,
+            completion_tokens=50000,
+            total_tokens=310000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
-                reasoning_tokens=10000,  # Total completion tokens = 50000 + 10000 = 60000 < 128k
+                reasoning_tokens=10000,
                 rejected_prediction_tokens=0,
                 text_tokens=None,
             ),
         )
-
-        prompt_cost, completion_cost = cost_per_token(
-            model="xai/grok-4-fast-reasoning", usage=usage
-        )
-
-        # Expected costs for grok-4-fast-reasoning:
-        # Input: 150000 tokens * $0.4e-6 (ALL tokens at tiered rate since input > 128k) = $0.06
-        # Completion: (50000 + 10000) tokens * $1e-6 (tiered rate since input > 128k) = $0.06
-        expected_prompt_cost = 150000 * 0.4e-6
-        expected_completion_cost = (50000 + 10000) * 1e-6
-
+        prompt_cost, completion_cost = cost_per_token(model="xai/grok-4.3", usage=usage)
+        expected_prompt_cost = 250000 * 2.5e-6
+        expected_completion_cost = (50000 + 10000) * 5e-6
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
     def test_tiered_pricing_model_without_tiered_pricing(self):
-        """Test that models without tiered pricing use regular pricing even above 128k."""
-        usage = Usage(
-            prompt_tokens=150000,  # Above 128k threshold
-            completion_tokens=50000,
-            total_tokens=200000,
-        )
-
-        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
-
-        # grok-3-mini doesn't have tiered pricing, so should use regular rates:
-        # Input: 150000 tokens * $3e-7 (regular rate) = $0.045
-        # Completion: 50000 tokens * $5e-7 (regular rate) = $0.025
-        expected_prompt_cost = 150000 * 3e-7
+        litellm.model_cost["xai/flat-rate-fixture"] = {
+            "input_cost_per_token": 3e-7,
+            "output_cost_per_token": 5e-7,
+            "litellm_provider": "xai",
+            "mode": "chat",
+        }
+        usage = Usage(prompt_tokens=250000, completion_tokens=50000, total_tokens=300000)
+        prompt_cost, completion_cost = cost_per_token(model="xai/flat-rate-fixture", usage=usage)
+        expected_prompt_cost = 250000 * 3e-7
         expected_completion_cost = 50000 * 5e-7
-
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
@@ -345,8 +311,8 @@ class TestXAICostCalculator:
 
         prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
 
-        expected_prompt_cost = 12 * 3e-7
-        expected_completion_cost = 200 * 5e-7
+        expected_prompt_cost = 12 * 1.25e-6
+        expected_completion_cost = 200 * 2.5e-6
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
@@ -397,6 +363,145 @@ class TestXAICostCalculator:
         assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
             response_object=object(), usage=usage
         )
+
+    def test_reported_cost_is_preferred_over_token_math(self):
+        """The amount xAI reported, carried on usage.cost by the transformation, is billed.
+
+        It lands entirely on completion cost because xAI does not split its total by
+        direction, the same shape the perplexity calculator returns.
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=200,
+            total_tokens=300,
+            cost=0.0037756,
+        )
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost == 0.0
+        assert math.isclose(completion_cost, 0.0037756, rel_tol=1e-10)
+
+    def test_reported_cost_suppresses_web_search_surcharge(self):
+        """The reported total already covers server-side tool calls.
+
+        Without the suppression these 3 searches would be billed a second time on
+        top of the total xAI already charged.
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=100,
+                web_search_requests=3,
+            ),
+            cost=0.0037756,
+        )
+
+        assert cost_per_web_search_request(usage=usage, model_info={}) == 0.0
+
+    def test_web_search_surcharge_suppressed_through_the_dispatcher(self):
+        """The suppression has to hold on the path cost tracking actually uses.
+
+        Legacy behaviour stays intact when xAI reports no cost.
+        """
+        from litellm.llms import get_cost_for_web_search_request
+
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 3})
+
+        assert get_cost_for_web_search_request("xai", usage, {}) > 0.0
+
+        reported = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150, cost=0.0037756
+        )
+        setattr(reported, "server_side_tool_usage_details", {"web_search_calls": 3})
+        assert get_cost_for_web_search_request("xai", reported, {}) == 0.0
+
+    def test_no_reported_cost_falls_back_to_token_math(self):
+        """Absent the provider figure, nothing changes for existing callers."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+
+    def test_malformed_reported_cost_falls_back_to_token_math(self):
+        """A junk value must not fail the request, fall back to calculating."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+        setattr(usage, "cost", "not-a-number")
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+
+    def test_boolean_reported_cost_falls_back_to_token_math(self):
+        """True is an int in python and would otherwise be billed as $1."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300)
+        setattr(usage, "cost", True)
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+        assert completion_cost != 1.0
+
+    def test_negative_reported_cost_is_rejected(self):
+        """A negative amount must never reach spend tracking.
+
+        A caller who can set api_base controls the response body, so trusting a
+        negative figure would let them subtract from their own recorded spend and
+        slip past a budget. Fall back to token pricing instead, and keep charging
+        the web search surcharge, since no trustworthy total was reported.
+        """
+        usage = Usage(
+            prompt_tokens=100,
+            completion_tokens=200,
+            total_tokens=300,
+            cost=-0.0037756,
+        )
+        setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 3})
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+        assert prompt_cost > 0.0
+        assert completion_cost > 0.0
+        assert cost_per_web_search_request(usage=usage, model_info={}) > 0.0
+
+    def test_non_finite_reported_cost_is_rejected(self):
+        """NaN compares false against every budget threshold.
+
+        Usage stores a provider supplied cost without validating it, so a caller who
+        controls the response body could report NaN and leave spend >= max_budget
+        false for the life of the key rather than mispricing one request. The
+        infinities are refused alongside it. Fall back to token pricing and keep
+        charging the web search surcharge, since no trustworthy total was reported.
+        """
+        for reported_cost in (float("nan"), float("inf"), float("-inf")):
+            usage = Usage(
+                prompt_tokens=100,
+                completion_tokens=200,
+                total_tokens=300,
+                cost=reported_cost,
+            )
+            setattr(usage, "server_side_tool_usage_details", {"web_search_calls": 3})
+
+            prompt_cost, completion_cost = cost_per_token(model="grok-4-latest", usage=usage)
+
+            assert math.isfinite(prompt_cost), reported_cost
+            assert math.isfinite(completion_cost), reported_cost
+            assert prompt_cost > 0.0, reported_cost
+            assert completion_cost > 0.0, reported_cost
+            assert cost_per_web_search_request(usage=usage, model_info={}) > 0.0, reported_cost
+
+    def test_zero_reported_cost_is_honoured(self):
+        """A reported zero is a real answer, not a missing value."""
+        usage = Usage(prompt_tokens=100, completion_tokens=200, total_tokens=300, cost=0.0)
+
+        assert cost_per_token(model="grok-4-latest", usage=usage) == (0.0, 0.0)
 
     def test_grok_4_20_beta_reasoning_cost_calculation(self):
         """Test cost calculation for grok-4.20-beta-0309-reasoning model."""
@@ -473,6 +578,48 @@ class TestXAICostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_custom_pricing_beats_the_reported_cost(self):
+        response = ModelResponse(
+            id="chatcmpl-xai",
+            model="grok-4-latest",
+            choices=[Choices(index=0, message=Message(role="assistant", content="x"), finish_reason="stop")],
+            usage=Usage(prompt_tokens=198, completion_tokens=353, total_tokens=551, cost=0.0009956),
+        )
+
+        billed = litellm.completion_cost(
+            completion_response=response,
+            model="xai/grok-4-latest",
+            custom_llm_provider="xai",
+            custom_cost_per_token={"input_cost_per_token": 0.001, "output_cost_per_token": 0.001},
+            custom_pricing=True,
+        )
+
+        assert math.isclose(billed, 0.551, rel_tol=1e-10)
+
+    def test_deployment_custom_pricing_beats_the_reported_cost(self, monkeypatch):
+        deployment_id = "xai-deployment-priced-by-the-operator"
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment_id,
+            {"input_cost_per_token": 0.001, "output_cost_per_token": 0.001, "litellm_provider": "xai", "mode": "chat"},
+        )
+        response = ModelResponse(
+            id="chatcmpl-xai",
+            model="grok-4-latest",
+            choices=[Choices(index=0, message=Message(role="assistant", content="x"), finish_reason="stop")],
+            usage=Usage(prompt_tokens=198, completion_tokens=353, total_tokens=551, cost=0.0009956),
+        )
+
+        billed = litellm.completion_cost(
+            completion_response=response,
+            model="xai/grok-4-latest",
+            custom_llm_provider="xai",
+            custom_pricing=True,
+            router_model_id=deployment_id,
+        )
+
+        assert math.isclose(billed, 0.551, rel_tol=1e-10)
 
 
 class TestXAIWebSearchCostHelpers:

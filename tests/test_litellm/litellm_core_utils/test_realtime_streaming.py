@@ -1,17 +1,20 @@
+import asyncio
 import json
-import os
-import sys
+from collections.abc import Coroutine
+from dataclasses import dataclass
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from websockets.exceptions import ConnectionClosed
+from websockets.frames import Close
 
 import litellm
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
@@ -1326,7 +1329,7 @@ async def test_log_messages_includes_tools_in_model_call_details():
 
 
 @pytest.mark.asyncio
-async def test_realtime_guardrail_blocks_prompt_injection():
+async def test_realtime_guardrail_blocks_prompt_injection(monkeypatch: pytest.MonkeyPatch):
     """
     Test that when a transcription event containing prompt injection arrives from the
     backend, a registered guardrail blocks it — sending a warning to the client
@@ -1350,7 +1353,7 @@ async def test_realtime_guardrail_blocks_prompt_injection():
         event_hook=GuardrailEventHooks.realtime_input_transcription,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     # --- client websocket mock ---
     client_ws = MagicMock()
@@ -1405,11 +1408,10 @@ async def test_realtime_guardrail_blocks_prompt_injection():
         f"Expected guardrail_violation error type, got: {error_events[0]}"
     )
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_guardrail_allows_clean_transcript():
+async def test_realtime_guardrail_allows_clean_transcript(monkeypatch: pytest.MonkeyPatch):
     """
     Test that a clean transcript passes through the guardrail and triggers
     response.create to the backend.
@@ -1430,7 +1432,7 @@ async def test_realtime_guardrail_allows_clean_transcript():
         event_hook=GuardrailEventHooks.realtime_input_transcription,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1463,11 +1465,10 @@ async def test_realtime_guardrail_allows_clean_transcript():
     response_creates = [e for e in sent_to_backend if e.get("type") == "response.create"]
     assert len(response_creates) == 1, f"Clean transcript should trigger response.create, got: {sent_to_backend}"
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_text_input_guardrail_blocks_and_returns_error():
+async def test_realtime_text_input_guardrail_blocks_and_returns_error(monkeypatch: pytest.MonkeyPatch):
     """
     Test that when conversation.item.create arrives with text that triggers a guardrail,
     the proxy blocks it (doesn't forward to backend) and returns an error event directly
@@ -1495,7 +1496,7 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1558,11 +1559,10 @@ async def test_realtime_text_input_guardrail_blocks_and_returns_error():
     ]
     assert len(original_items) == 0, f"Blocked item should not be forwarded to backend, got: {original_items}"
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_function_call_output_guardrail_blocks_and_returns_error():
+async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(monkeypatch: pytest.MonkeyPatch):
     """
     Test that a client-supplied function_call_output whose content triggers a
     guardrail is blocked: it is not forwarded to the backend, and an error
@@ -1590,7 +1590,7 @@ async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1648,11 +1648,10 @@ async def test_realtime_function_call_output_guardrail_blocks_and_returns_error(
     assert sanitized_item["call_id"] == "call_123"
     assert "test@example.com" not in sanitized_item["output"]
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_function_call_output_guardrail_allows_clean_output():
+async def test_realtime_function_call_output_guardrail_allows_clean_output(monkeypatch: pytest.MonkeyPatch):
     """
     Test that a clean function_call_output passes through and reaches the backend
     when guardrails are configured.
@@ -1670,7 +1669,7 @@ async def test_realtime_function_call_output_guardrail_allows_clean_output():
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1714,11 +1713,10 @@ async def test_realtime_function_call_output_guardrail_allows_clean_output():
     ]
     assert len(forwarded) == 1, f"Clean function_call_output should be forwarded, got: {forwarded}"
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_text_input_guardrail_uses_pre_call_mode():
+async def test_realtime_text_input_guardrail_uses_pre_call_mode(monkeypatch: pytest.MonkeyPatch):
     """
     Test that _has_realtime_guardrails returns True for a guardrail configured with
     pre_call mode (not just realtime_input_transcription).
@@ -1736,7 +1734,7 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode():
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     backend_ws = MagicMock()
@@ -1751,11 +1749,10 @@ async def test_realtime_text_input_guardrail_uses_pre_call_mode():
         "pre_call-only guardrail must not disable server_vad auto-response"
     )
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_created_injects_session_update_for_audio_guardrail():
+async def test_realtime_session_created_injects_session_update_for_audio_guardrail(monkeypatch: pytest.MonkeyPatch):
     """
     Test that when an audio transcription guardrail is configured, a session.created
     event from the backend triggers a session.update injection (create_response: false)
@@ -1775,7 +1772,7 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
         event_hook=GuardrailEventHooks.realtime_input_transcription,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1809,11 +1806,12 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
         "GA session.update must nest turn_detection under audio.input"
     )
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_realtime_session_created_does_not_inject_session_update_for_pre_call_only():
+async def test_realtime_session_created_does_not_inject_session_update_for_pre_call_only(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """
     pre_call-only guardrails must not inject create_response:false on realtime
     sessions — that breaks server_vad for audio-only voice agents (e.g. Model Armor).
@@ -1831,7 +1829,7 @@ async def test_realtime_session_created_does_not_inject_session_update_for_pre_c
         event_hook=GuardrailEventHooks.pre_call,
         default_on=True,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1853,11 +1851,10 @@ async def test_realtime_session_created_does_not_inject_session_update_for_pre_c
     session_updates = [e for e in sent_to_backend if e.get("type") == "session.update"]
     assert len(session_updates) == 0, f"pre_call-only guardrail must not inject session.update, got: {sent_to_backend}"
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad():
+async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad(monkeypatch: pytest.MonkeyPatch):
     """Model Armor-style pre_call + post_call must not gate audio VAD."""
     import litellm
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -1867,18 +1864,22 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad():
         async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
             return inputs
 
-    litellm.callbacks = [
-        ModelArmorStyleGuardrail(
-            guardrail_name="model_armor_all_pre_call",
-            event_hook=GuardrailEventHooks.pre_call,
-            default_on=False,
-        ),
-        ModelArmorStyleGuardrail(
-            guardrail_name="model_armor_all_post_call",
-            event_hook=GuardrailEventHooks.post_call,
-            default_on=False,
-        ),
-    ]
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+                ModelArmorStyleGuardrail(
+                    guardrail_name="model_armor_all_pre_call",
+                    event_hook=GuardrailEventHooks.pre_call,
+                    default_on=False,
+                ),
+                ModelArmorStyleGuardrail(
+                    guardrail_name="model_armor_all_post_call",
+                    event_hook=GuardrailEventHooks.post_call,
+                    default_on=False,
+                ),
+            ],
+    )
 
     client_ws = MagicMock()
     backend_ws = MagicMock()
@@ -1900,11 +1901,10 @@ async def test_pre_call_and_post_call_guardrails_do_not_disable_server_vad():
     assert streaming._has_realtime_guardrails() is True
     assert streaming._has_audio_transcription_guardrails() is False
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_end_session_after_n_fails_closes_connection():
+async def test_end_session_after_n_fails_closes_connection(monkeypatch: pytest.MonkeyPatch):
     """
     Test that end_session_after_n_fails=2 closes the backend websocket after
     the second guardrail violation in a session.
@@ -1923,7 +1923,7 @@ async def test_end_session_after_n_fails_closes_connection():
         default_on=True,
         end_session_after_n_fails=2,
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1948,11 +1948,10 @@ async def test_end_session_after_n_fails_closes_connection():
     assert backend_ws.close.called, "Expected backend_ws.close() to be called after 2 violations"
     assert streaming._violation_count == 2
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
-async def test_on_violation_end_session_closes_on_first_fail():
+async def test_on_violation_end_session_closes_on_first_fail(monkeypatch: pytest.MonkeyPatch):
     """
     Test that on_violation='end_session' closes the session immediately on the
     first violation, regardless of end_session_after_n_fails.
@@ -1971,7 +1970,7 @@ async def test_on_violation_end_session_closes_on_first_fail():
         default_on=True,
         on_violation="end_session",
     )
-    litellm.callbacks = [guardrail]
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
 
     client_ws = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -1995,7 +1994,6 @@ async def test_on_violation_end_session_closes_on_first_fail():
     assert backend_ws.close.called, "Expected session to close immediately with on_violation=end_session"
     assert streaming._violation_count == 1
 
-    litellm.callbacks = []  # cleanup
 
 
 @pytest.mark.asyncio
@@ -2898,53 +2896,47 @@ def _transcription_guardrail():
     )
 
 
-def test_setup_folds_in_auto_response_disable_when_transcription_guardrail_active():
+def test_setup_folds_in_auto_response_disable_when_transcription_guardrail_active(monkeypatch: pytest.MonkeyPatch):
     """Gemini rejects a second setup, so a transcription guardrail's auto-response
     disable must be folded into the one-and-only setup; otherwise the model
     auto-responds and the guardrail is bypassed."""
     import litellm
 
-    litellm.callbacks = [_transcription_guardrail()]
-    try:
-        streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
-        setup = json.dumps(
-            {
-                "setup": {
-                    "model": "models/gemini-3.1-flash-live-preview",
-                    "generationConfig": {"responseModalities": ["AUDIO"]},
-                    "inputAudioTranscription": {},
-                }
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    setup = json.dumps(
+        {
+            "setup": {
+                "model": "models/gemini-3.1-flash-live-preview",
+                "generationConfig": {"responseModalities": ["AUDIO"]},
+                "inputAudioTranscription": {},
             }
-        )
-        out = json.loads(streaming._maybe_inject_guardrail_auto_response_disable(setup))
-        aad = out["setup"]["realtimeInputConfig"]["automaticActivityDetection"]
-        assert aad["disabled"] is True
-    finally:
-        litellm.callbacks = []
+        }
+    )
+    out = json.loads(streaming._maybe_inject_guardrail_auto_response_disable(setup))
+    aad = out["setup"]["realtimeInputConfig"]["automaticActivityDetection"]
+    assert aad["disabled"] is True
 
 
-def test_setup_unchanged_without_transcription_guardrail():
+def test_setup_unchanged_without_transcription_guardrail(monkeypatch: pytest.MonkeyPatch):
     import litellm
 
-    litellm.callbacks = []
+    monkeypatch.setattr(litellm, "callbacks", [])
     streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
     setup = json.dumps({"setup": {"model": "x", "generationConfig": {"responseModalities": ["AUDIO"]}}})
     out = streaming._maybe_inject_guardrail_auto_response_disable(setup)
     assert json.loads(out) == json.loads(setup)
 
 
-def test_non_bidi_setup_left_untouched_for_followup_capable_providers():
+def test_non_bidi_setup_left_untouched_for_followup_capable_providers(monkeypatch: pytest.MonkeyPatch):
     """OpenAI realtime accepts a follow-up session.update, so a non-bidi message
     (no top-level 'setup' key) must be left untouched even with a guardrail on."""
     import litellm
 
-    litellm.callbacks = [_transcription_guardrail()]
-    try:
-        streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
-        msg = json.dumps({"type": "session.update", "session": {"instructions": "hi"}})
-        assert streaming._maybe_inject_guardrail_auto_response_disable(msg) == msg
-    finally:
-        litellm.callbacks = []
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    msg = json.dumps({"type": "session.update", "session": {"instructions": "hi"}})
+    assert streaming._maybe_inject_guardrail_auto_response_disable(msg) == msg
 
 
 @pytest.mark.asyncio
@@ -2955,13 +2947,11 @@ async def test_log_messages_routes_async_logging_through_bounded_worker():
     realtime turn leaves a suspended task pinning its response in memory -> an
     unbounded leak. Regression for that fix."""
     logging_obj = MagicMock()
-    streaming = RealTimeStreaming(MagicMock(), MagicMock(), logging_obj)
+    mock_worker = MagicMock()
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), logging_obj, logging_worker=mock_worker)
     streaming.messages = [{"type": "session.created"}]
 
-    with (
-        patch("litellm.litellm_core_utils.realtime_streaming.GLOBAL_LOGGING_WORKER") as mock_worker,
-        patch("litellm.litellm_core_utils.realtime_streaming.asyncio.create_task") as mock_create_task,
-    ):
+    with patch("litellm.litellm_core_utils.realtime_streaming.asyncio.create_task") as mock_create_task:
         await streaming.log_messages()
 
         mock_worker.ensure_initialized_and_enqueue.assert_called_once()
@@ -2971,3 +2961,454 @@ async def test_log_messages_routes_async_logging_through_bounded_worker():
         logging_obj.success_handler.assert_not_called()
         # the bare create_task path must no longer be used for success logging
         mock_create_task.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_provider_config_path_captures_transcription_usage():
+    """A transcription.completed event with usage from the provider transform must
+    land in the logged messages so realtime cost calculation can bill it."""
+    from typing import Final
+
+    from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage, RealtimeResponseTypedDict
+
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = MagicMock()
+
+    usage: Final[RealtimeInputAudioTranscriptionUsage] = {
+        "type": "tokens",
+        "input_tokens": 50,
+        "output_tokens": 6,
+        "total_tokens": 56,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 50},
+    }
+    transform_output: Final[RealtimeResponseTypedDict] = {
+        "response": {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "event_id": "event_1",
+            "transcript": "ahoy",
+            "item_id": "item_1",
+            "content_index": 0,
+            "usage": usage,
+        },
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    provider_config: Final = MagicMock()
+    provider_config.transform_realtime_request = MagicMock(return_value=())
+    provider_config.transform_realtime_response = MagicMock(return_value=transform_output)
+
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=provider_config,
+        model="gemini-3.5-transcribe-live",
+    )
+
+    await streaming._handle_provider_config_message("{}")
+
+    usage_events: Final = tuple(
+        message
+        for message in streaming.messages
+        if isinstance(message, dict)
+        and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        and message.get("usage") == usage
+    )
+    assert len(usage_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_session_close_flushes_unbilled_transcription_usage():
+    """Trailing audio appended after the last transcript frame must still be billed:
+    on session close the provider's unbilled estimate is flushed into the logged
+    messages before log_messages runs, and never forwarded to the client."""
+    from typing import Final
+
+    from litellm.types.realtime import RealtimeInputAudioTranscriptionUsage, RealtimeResponseTypedDict
+
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=[b'{"serverContent": {}}', ConnectionClosed(None, None)])
+    logging_obj: Final = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    usage: Final[RealtimeInputAudioTranscriptionUsage] = {
+        "type": "tokens",
+        "input_tokens": 153,
+        "output_tokens": 18,
+        "total_tokens": 171,
+        "input_token_details": {"text_tokens": 0, "audio_tokens": 153},
+    }
+    transcript_frame: Final[RealtimeResponseTypedDict] = {
+        "response": {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "event_id": "event_1",
+            "transcript": "ahoy",
+            "item_id": "item_1",
+            "content_index": 0,
+        },
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    provider_config: Final = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(return_value=transcript_frame)
+    provider_config.unbilled_usage_on_session_close = MagicMock(return_value=usage)
+
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=provider_config,
+        model="gemini-3.5-transcribe-live",
+    )
+    logged_snapshots: Final[list[tuple]] = []
+
+    original_log_messages: Final = streaming.log_messages
+
+    async def _snapshot_then_log():
+        logged_snapshots.append(tuple(streaming.messages))
+        await original_log_messages()
+
+    streaming.log_messages = _snapshot_then_log
+
+    await streaming.backend_to_client_send_messages()
+
+    provider_config.unbilled_usage_on_session_close.assert_called_once_with("gemini-3.5-transcribe-live")
+    flushed: Final = tuple(
+        message
+        for message in streaming.messages
+        if isinstance(message, dict)
+        and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        and message.get("usage") == usage
+    )
+    assert len(flushed) == 1
+    assert flushed[0] in logged_snapshots[0]
+    forwarded: Final = tuple(json.loads(call.args[0]) for call in client_ws.send_text.await_args_list)
+    assert [event.get("transcript") for event in forwarded] == ["ahoy"]
+    assert all("usage" not in event for event in forwarded)
+
+
+@pytest.mark.asyncio
+async def test_session_close_flush_noop_without_unbilled_usage():
+    """Everything already billed mid-stream: the session-close flush must not append
+    a duplicate transcription event."""
+    from typing import Final
+
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=ConnectionClosed(None, None))
+    logging_obj: Final = MagicMock()
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config: Final = MagicMock()
+    provider_config.unbilled_usage_on_session_close = MagicMock(return_value=None)
+
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=provider_config,
+        model="gemini-3.5-transcribe-live",
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert not any(
+        isinstance(message, dict) and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        for message in streaming.messages
+    )
+
+
+
+_UPSTREAM_REFUSAL: Final = "Publisher model `publishers/google/models/gemini-live-2.5-flash` was not found"
+
+
+class _InlineLoggingWorker:
+    def __init__(self) -> None:
+        self.enqueued: tuple[Coroutine[object, object, None], ...] = ()
+
+    def ensure_initialized_and_enqueue(self, async_coroutine: Coroutine[object, object, None]) -> None:
+        self.enqueued = (*self.enqueued, async_coroutine)
+
+    async def drain(self) -> None:
+        for coroutine in self.enqueued:
+            await coroutine
+
+
+class _RecordingLogging:
+    def __init__(self) -> None:
+        self.model_call_details: dict[str, object] = {}
+        self.logged_sessions: tuple[tuple[dict, ...], ...] = ()
+        self.logged_failures: tuple[Exception, ...] = ()
+
+    def pre_call(self, input: str | dict, api_key: str) -> None:
+        return None
+
+    async def dispatch_success_handlers(self, result: list[dict], prefer_async_handlers: bool = False) -> None:
+        self.logged_sessions = (*self.logged_sessions, tuple(result))
+
+    async def dispatch_failure_handlers(
+        self, exception: Exception, traceback_exception: str, prefer_async_handlers: bool = False
+    ) -> None:
+        self.logged_failures = (*self.logged_failures, exception)
+
+
+@dataclass(frozen=True, slots=True)
+class _RelaySession:
+    streaming: RealTimeStreaming
+    logging: _RecordingLogging
+    worker: _InlineLoggingWorker
+
+    async def run(self) -> None:
+        await asyncio.wait_for(self.streaming.bidirectional_forward(), timeout=2)
+        await self.worker.drain()
+
+
+async def _wait_forever() -> str:
+    await asyncio.Event().wait()
+    raise AssertionError("unreachable")
+
+
+def _client_ws_that_never_sends() -> MagicMock:
+    client_ws: Final = MagicMock()
+    client_ws.headers = {}
+    client_ws.receive_text = AsyncMock(side_effect=_wait_forever)
+    client_ws.send_text = AsyncMock()
+    client_ws.close = AsyncMock()
+    return client_ws
+
+
+def _backend_ws_closing_with(*frames: bytes | Exception) -> MagicMock:
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=list(frames))
+    return backend_ws
+
+
+def _relay_session(client_ws: MagicMock, backend_ws: MagicMock) -> _RelaySession:
+    logging: Final = _RecordingLogging()
+    worker: Final = _InlineLoggingWorker()
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, logging, model="gpt-realtime", logging_worker=worker
+    )
+    return _RelaySession(streaming=streaming, logging=logging, worker=worker)
+
+
+def _error_events_sent_to(client_ws: MagicMock) -> list[dict]:
+    events: Final = (json.loads(call.args[0]) for call in client_ws.send_text.await_args_list)
+    return [event for event in events if event.get("type") == "error"]
+
+
+@pytest.mark.asyncio
+async def test_bidirectional_forward_relays_upstream_policy_close_to_client():
+    client_ws: Final = _client_ws_that_never_sends()
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(upstream_close))
+
+    await session.run()
+
+    (error_event,) = _error_events_sent_to(client_ws)
+    assert error_event["error"]["type"] == "server_error"
+    assert "1008" in error_event["error"]["message"]
+    assert _UPSTREAM_REFUSAL in error_event["error"]["message"]
+    client_ws.close.assert_awaited_once_with(code=1008, reason=_UPSTREAM_REFUSAL)
+
+
+@pytest.mark.parametrize(
+    "leaked_detail",
+    (
+        pytest.param("sk-live-abcdef0123456789abcdef0123", id="credential"),
+        pytest.param("vertex-int.svc.cluster.local", id="internal-hostname"),
+        pytest.param("/etc/litellm/service-account.json", id="filesystem-path"),
+    ),
+)
+@pytest.mark.asyncio
+async def test_upstream_close_details_are_scrubbed_before_reaching_the_client(leaked_detail: str):
+    """LIT-6973: the relayed close goes through the proxy's client-facing redaction, so an upstream
+    error echoing a credential, an internal host, or a server path never reaches the client verbatim."""
+    client_ws: Final = _client_ws_that_never_sends()
+    upstream_close: Final = ConnectionClosed(Close(1008, f"upstream rejected: {leaked_detail}"), None)
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(upstream_close))
+
+    await session.run()
+
+    (error_event,) = _error_events_sent_to(client_ws)
+    assert leaked_detail not in error_event["error"]["message"]
+    relayed_reason: Final = client_ws.close.await_args.kwargs["reason"]
+    assert leaked_detail not in relayed_reason
+    assert "REDACTED" in relayed_reason
+
+
+@pytest.mark.asyncio
+async def test_bidirectional_forward_maps_abnormal_upstream_close_to_internal_error():
+    client_ws: Final = _client_ws_that_never_sends()
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(ConnectionClosed(None, None)))
+
+    await session.run()
+
+    (error_event,) = _error_events_sent_to(client_ws)
+    assert "1006" in error_event["error"]["message"]
+    client_ws.close.assert_awaited_once()
+    assert client_ws.close.await_args.kwargs["code"] == 1011
+
+
+@pytest.mark.asyncio
+async def test_bidirectional_forward_relays_normal_upstream_close_without_error_event():
+    client_ws: Final = _client_ws_that_never_sends()
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(ConnectionClosed(Close(1000, ""), None)))
+
+    await session.run()
+
+    assert _error_events_sent_to(client_ws) == []
+    client_ws.close.assert_awaited_once()
+    assert client_ws.close.await_args.kwargs["code"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_upstream_refusal_before_any_frame_logs_a_failure_not_a_success():
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    session: Final = _relay_session(_client_ws_that_never_sends(), _backend_ws_closing_with(upstream_close))
+
+    await session.run()
+
+    assert session.logging.logged_failures == (upstream_close,)
+    assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_upstream_refusal_after_a_synthetic_session_created_still_logs_a_failure():
+    """LIT-6973: deferred Gemini Live setup stores a synthetic ``session.created`` before
+    the relay starts. It is not an upstream frame, so a refusal after it is still a refusal."""
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    session: Final = _relay_session(_client_ws_that_never_sends(), _backend_ws_closing_with(upstream_close))
+    session.streaming.store_message(json.dumps({"type": "session.created", "session": {"id": "sess_synthetic"}}))
+
+    await session.run()
+
+    assert session.logging.logged_failures == (upstream_close,)
+    assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_upstream_close_after_relayed_events_still_logs_the_session_as_success():
+    client_ws: Final = _client_ws_that_never_sends()
+    session_created: Final = json.dumps({"type": "session.created", "session": {"id": "sess_1"}}).encode()
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(session_created, upstream_close))
+
+    await session.run()
+
+    (logged_session,) = session.logging.logged_sessions
+    assert [event["type"] for event in logged_session] == ["session.created"]
+    assert session.logging.logged_failures == ()
+    client_ws.close.assert_awaited_once_with(code=1008, reason=_UPSTREAM_REFUSAL)
+
+
+@pytest.mark.asyncio
+async def test_upstream_closing_while_a_client_message_is_forwarded_still_reaches_the_client():
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    backend_closed: Final = asyncio.Event()
+    client_messages: Final = iter((json.dumps({"type": "response.create"}),))
+
+    async def receive_text() -> str:
+        message = next(client_messages, None)
+        return message if message is not None else await _wait_forever()
+
+    async def send_to_backend(_message: str) -> None:
+        backend_closed.set()
+        raise upstream_close
+
+    async def recv_from_backend() -> bytes:
+        await backend_closed.wait()
+        raise upstream_close
+
+    client_ws: Final = _client_ws_that_never_sends()
+    client_ws.receive_text = receive_text
+    backend_ws: Final = MagicMock()
+    backend_ws.send = send_to_backend
+    backend_ws.recv = recv_from_backend
+    session: Final = _relay_session(client_ws, backend_ws)
+
+    await session.run()
+
+    (error_event,) = _error_events_sent_to(client_ws)
+    assert _UPSTREAM_REFUSAL in error_event["error"]["message"]
+    client_ws.close.assert_awaited_once_with(code=1008, reason=_UPSTREAM_REFUSAL)
+    assert session.logging.logged_failures == (upstream_close,)
+
+
+@pytest.mark.asyncio
+async def test_client_hanging_up_first_ends_the_session_without_a_relayed_close():
+    client_ws: Final = _client_ws_that_never_sends()
+    client_ws.receive_text = AsyncMock(side_effect=RuntimeError("client went away"))
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=_wait_forever)
+    session: Final = _relay_session(client_ws, backend_ws)
+
+    await session.run()
+
+    assert session.logging.logged_sessions == ((),)
+    assert session.logging.logged_failures == ()
+    client_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_client_hanging_up_with_a_websockets_close_is_not_mistaken_for_the_backend_closing():
+    client_ws: Final = _client_ws_that_never_sends()
+    client_ws.receive_text = AsyncMock(side_effect=ConnectionClosed(None, None))
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(side_effect=_wait_forever)
+    session: Final = _relay_session(client_ws, backend_ws)
+
+    await session.run()
+
+    assert session.logging.logged_sessions == ((),)
+    assert session.logging.logged_failures == ()
+    client_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_success_logging_stamps_the_reservation_ownership_marker():
+    """LIT-6973: only the success path enqueues the cost callback that settles the
+    session's budget reservation, so it stamps REALTIME_SESSION_SUCCESS_LOGGED_KEY on
+    the shared logging object. The proxy endpoint reads that stamp to decide whether to
+    release the reservation itself, so a logged-as-success session must carry it."""
+    client_ws: Final = _client_ws_that_never_sends()
+    session_created: Final = json.dumps({"type": "session.created", "session": {"id": "sess_1"}}).encode()
+    upstream_close: Final = ConnectionClosed(Close(1000, ""), None)
+    session: Final = _relay_session(client_ws, _backend_ws_closing_with(session_created, upstream_close))
+
+    await session.run()
+
+    assert session.logging.logged_sessions != ()
+    assert session.logging.model_call_details.get(REALTIME_SESSION_SUCCESS_LOGGED_KEY) is True
+
+
+@pytest.mark.asyncio
+async def test_refused_session_does_not_stamp_the_reservation_ownership_marker():
+    """A refused session logs a failure, not a success, so it must not stamp
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY. If it did, the proxy endpoint would skip its
+    own reservation release and the refused session's reservation would stay pinned."""
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    session: Final = _relay_session(_client_ws_that_never_sends(), _backend_ws_closing_with(upstream_close))
+
+    await session.run()
+
+    assert session.logging.logged_failures == (upstream_close,)
+    assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in session.logging.model_call_details

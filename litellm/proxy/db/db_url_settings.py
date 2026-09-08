@@ -60,6 +60,11 @@ AzureTokenAuthFlag = Annotated[
     bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=AZURE_POSTGRESQL_AUTH_ENV_VAR))
 ]
 
+DISABLE_PREPARED_STATEMENTS_ENV_VAR: Final = "DATABASE_DISABLE_PREPARED_STATEMENTS"
+DisablePreparedStatementsFlag = Annotated[
+    bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR))
+]
+
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
 # Prisma can actually connect with.
 SUPPORTED_DB_SCHEMES: Final[frozenset[str]] = frozenset({"postgresql", "postgres"})
@@ -77,9 +82,29 @@ CONNECTION_PARAM_KEYS: Final[frozenset[str]] = frozenset(
         "pool_timeout",
         "connect_timeout",
         "socket_timeout",
+        "max_idle_connection_lifetime",
         "pgbouncer",
     }
 )
+
+# Quaint never tests pooled connections on checkout and keeps them idle for
+# 300s by default, past many infra idle timeouts, so dead sockets surface as
+# `Error { kind: Closed }`. 60s recycles them first; explicit values win.
+DEFAULT_MAX_IDLE_CONNECTION_LIFETIME: Final = 60
+IDLE_LIFETIME_DEFAULT_PARAMS: Final[Mapping[str, int]] = MappingProxyType(
+    {"max_idle_connection_lifetime": DEFAULT_MAX_IDLE_CONNECTION_LIFETIME}
+)
+
+
+def idle_lifetime_params(configured: float | None) -> Mapping[str, str | int | float]:
+    """The `max_idle_connection_lifetime` to add to URLs that do not pin one.
+
+    Applied via ``add_missing_query_params`` so a URL-pinned value always wins,
+    whether the operator configured `database_max_idle_connection_lifetime` or not.
+    """
+    if configured is None:
+        return IDLE_LIFETIME_DEFAULT_PARAMS
+    return MappingProxyType({"max_idle_connection_lifetime": configured})
 
 
 def add_missing_query_params(url: str, params: Mapping[str, str | int | float]) -> str:
@@ -96,6 +121,42 @@ def add_missing_query_params(url: str, params: Mapping[str, str | int | float]) 
     if not additions:
         return url
     query: Final = urllib.parse.urlencode(existing + additions)
+    return urllib.parse.urlunsplit(parsed._replace(query=query))
+
+
+LIBPQ_VERIFY_SSLMODES: Final[frozenset[str]] = frozenset({"verify-ca", "verify-full"})
+
+
+def translate_libpq_ssl_params(url: str) -> str:
+    """Rewrite libpq's certificate-verification params into Prisma's dialect.
+
+    Prisma's engine only knows ``sslmode=disable|prefer|require``, ``sslcert``
+    (the CA bundle) and ``sslaccept=strict``. It silently discards
+    ``sslrootcert`` and downgrades ``sslmode=verify-ca`` / ``verify-full`` to
+    ``prefer``, so a URL copied from libpq / RDS docs connects over TLS with no
+    certificate check at all. ``verify-ca`` and ``verify-full`` both become
+    ``require`` (Prisma has no CA-only mode), ``sslrootcert`` becomes
+    ``sslcert``, and either one turns on ``sslaccept=strict`` (chain and
+    hostname), matching libpq where a root cert makes ``require`` verify.
+    Prisma params the operator pinned themselves win; anything else is left
+    untouched.
+    """
+    parsed: Final = urllib.parse.urlsplit(url)
+    pairs: Final = tuple(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    keys: Final = frozenset(key for key, _ in pairs)
+    wants_verify: Final = any(key == "sslmode" and value in LIBPQ_VERIFY_SSLMODES for key, value in pairs)
+    if not wants_verify and "sslrootcert" not in keys:
+        return url
+    translated: Final = tuple(
+        ("sslmode", "require") if key == "sslmode" and value in LIBPQ_VERIFY_SSLMODES else (key, value)
+        for key, value in pairs
+        if key != "sslrootcert"
+    )
+    root_cert: Final = tuple(
+        ("sslcert", value) for key, value in pairs if key == "sslrootcert" and "sslcert" not in keys
+    )
+    strict: Final = () if "sslaccept" in keys else (("sslaccept", "strict"),)
+    query: Final = urllib.parse.urlencode(translated + root_cert + strict)
     return urllib.parse.urlunsplit(parsed._replace(query=query))
 
 
@@ -153,6 +214,9 @@ class DatabaseURLSettings(BaseSettings):
 
     iam_token_db_auth: IamTokenAuthFlag = Field(default=False, validation_alias=IAM_TOKEN_DB_AUTH_ENV_VAR)
     azure_postgresql_auth: AzureTokenAuthFlag = Field(default=False, validation_alias=AZURE_POSTGRESQL_AUTH_ENV_VAR)
+    disable_prepared_statements: DisablePreparedStatementsFlag = Field(
+        default=False, validation_alias=DISABLE_PREPARED_STATEMENTS_ENV_VAR
+    )
 
     # Writer
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
@@ -375,13 +439,27 @@ class DatabaseURLSettings(BaseSettings):
         self._raise_for_unsupported_scheme()
         wrote_writer: Final = self.apply_writer_url_to_env()
 
+        for env_var in ("DATABASE_URL", "DIRECT_URL"):
+            url = os.environ.get(env_var)
+            if url:
+                os.environ[env_var] = translate_libpq_ssl_params(url)
+
+        # DATABASE_DISABLE_PREPARED_STATEMENTS maps to Prisma's `pgbouncer=true`
+        # URL param, same as the CLI's `database_disable_prepared_statements`
+        # config key. An explicit `pgbouncer` value already on the URL wins.
+        if self.disable_prepared_statements:
+            for env_var in ("DATABASE_URL", "DIRECT_URL"):
+                url = os.environ.get(env_var)
+                if url:
+                    os.environ[env_var] = add_missing_query_params(url, MappingProxyType({"pgbouncer": "true"}))
+
         # The reader inherits the writer's connection params (pool size, timeouts,
         # pgbouncer mode). Without this the reader pool ignores the configured cap
         # and falls back to Prisma's `num_physical_cpus * 2 + 1` default.
         reader_url: Final = self.build_reader_url() or self.database_url_read_replica
         if reader_url is not None:
             os.environ["DATABASE_URL_READ_REPLICA"] = add_missing_query_params(
-                reader_url,
+                translate_libpq_ssl_params(reader_url),
                 connection_params_from_url(os.environ.get("DATABASE_URL", "")),
             )
 

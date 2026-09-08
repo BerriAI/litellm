@@ -66,5 +66,5 @@ def test_prepare_completion_kwargs_keeps_prompt_cache_key_through_responses_rero
         {"custom_llm_provider": "openai"},
         thinking={"type": "enabled", "budget_tokens": 1024},
     )
-    assert completion_kwargs["model"] == "responses/openai/gpt-5.6-luna"
+    assert completion_kwargs["model"] == "openai/responses/gpt-5.6-luna"
     assert completion_kwargs["prompt_cache_key"] == "session-abc"

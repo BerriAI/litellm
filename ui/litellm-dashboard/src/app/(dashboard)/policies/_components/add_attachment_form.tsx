@@ -5,7 +5,7 @@ import { Policy } from "@/components/policies/types";
 import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { FieldGroup, FieldLabel, FieldTitle } from "@/components/shared/form/field";
+import { FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";

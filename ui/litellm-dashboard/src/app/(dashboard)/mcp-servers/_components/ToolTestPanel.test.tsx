@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ToolTestPanel } from "./ToolTestPanel";
 import { InputSchema, MCPTool } from "@/components/mcp_tools/types";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 const buildTool = (schema: InputSchema | string): MCPTool => ({
   name: "demo-tool",
@@ -229,8 +230,7 @@ describe("ToolTestPanel argument payload", () => {
     const onSubmit = await submitPanel(
       { type: "object", properties: { active: { type: "boolean", default: false } } },
       async (user) => {
-        await user.click(screen.getByLabelText("active"));
-        await user.click(await screen.findByText("True"));
+        await chooseSelectOption(user, screen.getByLabelText("active"), "True");
       },
     );
 

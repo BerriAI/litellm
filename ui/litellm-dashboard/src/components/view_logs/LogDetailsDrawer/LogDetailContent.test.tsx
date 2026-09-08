@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { LogDetailContent } from "./LogDetailContent";
+import { GuardrailJumpLink, LogDetailContent } from "./LogDetailContent";
 import type { LogEntry } from "../columns";
 
 vi.mock("../GuardrailViewer/GuardrailViewer", () => ({
@@ -359,6 +359,36 @@ describe("LogDetailContent", () => {
     expect(screen.queryByText("Response Cache")).not.toBeInTheDocument();
   });
 
+  it("should display the Cache Key next to the Response Cache result", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "True", cache_key: "abc123cachekey" })} />);
+
+    expect(screen.getByText("Cache Key")).toBeInTheDocument();
+    expect(screen.getByText("abc123cachekey")).toBeInTheDocument();
+  });
+
+  it("should display a cache miss and Cache Key for the request that populates the response cache", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "None", cache_key: "abc123cachekey" })} />);
+
+    expect(screen.getByText("Response Cache")).toBeInTheDocument();
+    expect(screen.getByText("Miss")).toBeInTheDocument();
+    expect(screen.getByText("Cache Key")).toBeInTheDocument();
+    expect(screen.getByText("abc123cachekey")).toBeInTheDocument();
+  });
+
+  it("should hide the Cache Key row when caching is off", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "False", cache_key: "Cache OFF" })} />);
+
+    expect(screen.getByText("Response Cache")).toBeInTheDocument();
+    expect(screen.queryByText("Cache Key")).not.toBeInTheDocument();
+  });
+
+  it("should hide response cache metadata when caching is off and cache_hit is None", () => {
+    render(<LogDetailContent logEntry={createLogEntry({ cache_hit: "None", cache_key: "Cache OFF" })} />);
+
+    expect(screen.queryByText("Response Cache")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cache Key")).not.toBeInTheDocument();
+  });
+
   it("should display LiteLLM Overhead when litellm_overhead_time_ms is in metadata", () => {
     render(
       <LogDetailContent
@@ -457,5 +487,19 @@ describe("LogDetailContent", () => {
     const descriptions = screen.getByText("Provider").parentElement as HTMLElement;
     expect(descriptions).toBeInTheDocument();
     expect(within(descriptions).getByText("-")).toBeInTheDocument();
+  });
+});
+
+describe("GuardrailJumpLink", () => {
+  it.each([
+    [["success", "success"], "text-success", "\u2713"],
+    [["success", "guardrail_flagged"], "text-warning", "\u26A0"],
+    [["guardrail_flagged", "guardrail_intervened"], "text-destructive", "\u2717"],
+  ])("styles %j as %s", (statuses, expectedClass, glyph) => {
+    render(<GuardrailJumpLink guardrailEntries={statuses.map((s) => ({ guardrail_status: s }))} />);
+
+    const pill = screen.getByText(/2 guardrails evaluated/);
+    expect(pill).toHaveClass(expectedClass);
+    expect(pill).toHaveTextContent(glyph);
   });
 });

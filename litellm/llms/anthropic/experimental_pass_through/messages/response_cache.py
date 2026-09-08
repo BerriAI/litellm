@@ -46,6 +46,10 @@ class AnthropicMessagesStreamCacheWriter:
             stream._hidden_params if isinstance(stream, AnthropicMessagesStreamingResponse) else _EMPTY_MAPPING
         )
 
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        return getattr(self.stream, "has_buffered_provider_output", False) is True
+
     def __aiter__(self) -> "AnthropicMessagesStreamCacheWriter":
         return self
 

@@ -21,14 +21,11 @@ into an open ``thinking`` block, crashing Anthropic SDK clients (Claude Code)
 with "Content block is not a text block".
 """
 
-import os
-import sys
 from typing import List, Optional
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
@@ -109,6 +106,136 @@ def _text_deltas(events: List[dict]) -> List[str]:
         for e in events
         if e.get("type") == "content_block_delta" and e["delta"].get("type") == "text_delta"
     ]
+
+
+def test_streaming_chat_refusal_emits_refusal_text_and_stop_details():
+    chunks = [
+        _make_chunk(Delta(content=None, refusal="I cannot fulfill this request.")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="openai-model")
+
+    events = _drain_sync(wrapper)
+
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"] == {
+        "stop_reason": "refusal",
+        "stop_details": {
+            "type": "refusal",
+            "category": None,
+            "explanation": "I cannot fulfill this request.",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_streaming_chat_refusal_emits_refusal_text_and_stop_details_async():
+    chunks = [
+        _make_chunk(Delta(content=None, refusal="I cannot fulfill this request.")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="openai-model")
+
+    events = await _drain_async(wrapper)
+
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
+def test_streaming_chat_refusal_parked_in_provider_specific_fields_is_emitted():
+    """Providers that do not populate ``delta.refusal`` (Azure o-series among
+    them) hand LiteLLM the refusal as an unrecognized field, which lands in
+    ``provider_specific_fields``. That first delta still has to stream as text,
+    otherwise the client gets ``stop_reason: refusal`` over an empty content
+    array and shows the user nothing.
+    """
+    chunks = [
+        _make_chunk(Delta(content=None, provider_specific_fields={"refusal": "I cannot fulfill this request."})),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="openai-model")
+
+    events = _drain_sync(wrapper)
+
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
+@pytest.mark.asyncio
+async def test_streaming_chat_refusal_parked_in_provider_specific_fields_is_emitted_async():
+    chunks = [
+        _make_chunk(Delta(content=None, provider_specific_fields={"refusal": "I cannot fulfill this request."})),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="openai-model")
+
+    events = await _drain_async(wrapper)
+
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
+def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved():
+    """Fake-streamed responses arrive as one chunk carrying both the delta and the
+    finish_reason. The refusal has to be split off and streamed as text, or the
+    client gets ``stop_reason: refusal`` over an empty content array.
+    """
+    chunks = [
+        _make_chunk(
+            Delta(content=None, refusal="I cannot fulfill this request."),
+            finish_reason="stop",
+        )
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="openai-model")
+
+    events = _drain_sync(wrapper)
+
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
+@pytest.mark.asyncio
+async def test_streaming_chat_combined_refusal_and_finish_reason_is_preserved_async():
+    chunks = [
+        _make_chunk(
+            Delta(content=None, provider_specific_fields={"refusal": "I cannot fulfill this request."}),
+            finish_reason="stop",
+        )
+    ]
+    wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="openai-model")
+
+    events = await _drain_async(wrapper)
+
+    assert _text_deltas(events) == ["I cannot fulfill this request."]
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "refusal"
+    assert message_delta["delta"]["stop_details"]["explanation"] == "I cannot fulfill this request."
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_streaming_chat_length_takes_precedence_over_refusal(async_mode: bool):
+    chunks = [
+        _make_chunk(Delta(content=None, refusal="Partial refusal")),
+        _make_chunk(Delta(content=None), finish_reason="length"),
+    ]
+    stream = _AsyncStream(chunks) if async_mode else iter(chunks)
+    wrapper = AnthropicStreamWrapper(completion_stream=stream, model="openai-model")
+
+    events = await _drain_async(wrapper) if async_mode else _drain_sync(wrapper)
+
+    message_delta = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["delta"]["stop_reason"] == "max_tokens"
+    assert "stop_details" not in message_delta["delta"]
 
 
 def _input_json_deltas(events: List[dict]) -> List[str]:
@@ -1029,4 +1156,172 @@ async def test_tool_block_start_flush_does_not_duplicate_or_drop_events(is_async
         "message_stop",
     ]
     assert _input_json_deltas(events) == ['{"file_text":', ' "hello"}']
+    _assert_deltas_match_their_block_type(events)
+
+
+def _thinking_block_starts(events: List[dict]) -> List[dict]:
+    return [
+        e["content_block"]
+        for e in events
+        if e.get("type") == "content_block_start" and e["content_block"].get("type") == "thinking"
+    ]
+
+
+def _empty_thinking_then_tool_chunks(thinking: str = "", signature: str = "") -> List[MagicMock]:
+    return [
+        _thinking_chunk(thinking, signature=signature),
+        _tool_chunk("call_paris", "get_weather", '{"city": "Paris"}'),
+        _make_chunk(Delta(content=None), finish_reason="tool_calls"),
+    ]
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize(
+    "thinking,signature",
+    [("", ""), (" \n\t ", "")],
+    ids=["empty", "whitespace-only"],
+)
+@pytest.mark.asyncio
+async def test_contentless_thinking_chunk_opens_no_thinking_block(is_async: bool, thinking: str, signature: str):
+    """LIT-6357 producer half: a reasoning model that goes straight to tool
+    calls streams a ``thinking_blocks`` entry with no real thinking text and
+    no signature; the wrapper used to open ``{"type": "thinking",
+    "thinking": ""}`` for it and close the block with no delta. Clients
+    (Claude Code) replay that block as history and Anthropic rejects the next
+    tool-loop request with "each thinking block must contain thinking".
+    The contentless unsigned chunk must open nothing; the tool_use block must
+    be unaffected. A SIGNED contentless chunk is different: see
+    test_signature_only_thinking_chunk_opens_signed_block."""
+    chunks = _empty_thinking_then_tool_chunks(thinking, signature)
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    assert _thinking_block_starts(events) == []
+    assert _thinking_deltas(events) == []
+    tool_starts = [
+        e["content_block"]
+        for e in events
+        if e.get("type") == "content_block_start" and e["content_block"].get("type") == "tool_use"
+    ]
+    assert [b["name"] for b in tool_starts] == ["get_weather"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_empty_first_thinking_chunk_then_real_text_still_opens_one_block(is_async: bool):
+    """The contentless-chunk skip must not eat a thinking stream whose first
+    chunk is empty but whose later chunks carry real text: exactly one thinking
+    block opens and the text flows into it."""
+    chunks = [
+        _thinking_chunk(""),
+        _thinking_chunk("Let me think"),
+        _thinking_chunk("", signature="sig123"),
+        _make_chunk(Delta(content="Hello")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    assert len(_thinking_block_starts(events)) == 1
+    assert _thinking_deltas(events) == ["Let me think"]
+    assert _signature_deltas(events) == ["sig123"]
+    assert _text_deltas(events) == ["Hello"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_early_signature_on_blank_thinking_chunk_is_carried_to_the_opened_block(is_async: bool):
+    """Pins that the blank-chunk skip does not lose an early signature: the
+    classifier captures the skipped chunk's signature into the pending block
+    start body, so when real thinking text follows, the opened block still
+    carries it. Guards the LIT-6357 blank-skip against regressing signature
+    replay."""
+    chunks = [
+        _thinking_chunk("", signature="sig_early"),
+        _thinking_chunk("Let me think"),
+        _make_chunk(Delta(content="Hello")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    starts = _thinking_block_starts(events)
+    assert len(starts) == 1
+    assert starts[0].get("signature") == "sig_early"
+    assert _thinking_deltas(events) == ["Let me think"]
+    assert _text_deltas(events) == ["Hello"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_signature_only_thinking_chunk_opens_signed_block(is_async: bool):
+    """Bedrock Converse under adaptive thinking emits a reasoning delta with
+    empty text and only a signature. The signed chunk must open a thinking
+    block that carries the signature to the client (needed to replay reasoning
+    across tool-use turns); the tool_use block must be unaffected. Dropping it
+    like the unsigned case regressed the claude_code thinking e2e cells."""
+    chunks = _empty_thinking_then_tool_chunks("", "sig_bedrock")
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    starts = _thinking_block_starts(events)
+    assert len(starts) == 1
+    assert starts[0].get("signature") == "sig_bedrock" or _signature_deltas(events) == ["sig_bedrock"]
+    assert _thinking_deltas(events) == []
+    tool_starts = [
+        e["content_block"]
+        for e in events
+        if e.get("type") == "content_block_start" and e["content_block"].get("type") == "tool_use"
+    ]
+    assert [b["name"] for b in tool_starts] == ["get_weather"]
+    _assert_deltas_match_their_block_type(events)
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_signature_only_thinking_chunk_before_text_leaks_no_signature(is_async: bool):
+    """The signed thinking block a signature-only chunk opens must stay its
+    own block: the text block that follows carries no signature."""
+    chunks = [
+        _thinking_chunk("", signature="sig_early"),
+        _make_chunk(Delta(content="Hello")),
+        _make_chunk(Delta(content=None), finish_reason="stop"),
+    ]
+    if is_async:
+        wrapper = AnthropicStreamWrapper(completion_stream=_AsyncStream(chunks), model="claude-x")
+        events = await _drain_async(wrapper)
+    else:
+        wrapper = AnthropicStreamWrapper(completion_stream=iter(chunks), model="claude-x")
+        events = _drain_sync(wrapper)
+
+    starts = _thinking_block_starts(events)
+    assert len(starts) == 1
+    assert starts[0].get("signature") == "sig_early" or _signature_deltas(events) == ["sig_early"]
+    text_starts = [
+        e["content_block"]
+        for e in events
+        if e.get("type") == "content_block_start" and e["content_block"].get("type") == "text"
+    ]
+    assert len(text_starts) == 1
+    assert "signature" not in text_starts[0]
+    assert _text_deltas(events) == ["Hello"]
     _assert_deltas_match_their_block_type(events)

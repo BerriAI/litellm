@@ -69,6 +69,38 @@ describe("PaginatedMultiSelect", () => {
     await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith(""), { timeout: 2000 });
   });
 
+  it("puts the unfiltered page back when a typed query is abandoned by closing", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange });
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "gamma");
+    await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith("gamma"), { timeout: 2000 });
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith(""), { timeout: 2000 });
+    expect(input).toHaveValue("");
+  });
+
+  it("puts the unfiltered page back when the popup is dismissed by clicking away", async () => {
+    const user = userEvent.setup();
+    const onSearchChange = vi.fn();
+    renderSelect({ onSearchChange });
+
+    const input = screen.getByRole("combobox");
+    await user.click(input);
+    await user.type(input, "gamma");
+    await waitFor(() => expect(onSearchChange).toHaveBeenCalledWith("gamma"), { timeout: 2000 });
+
+    await user.click(document.body);
+
+    await waitFor(() => expect(onSearchChange).toHaveBeenLastCalledWith(""), { timeout: 2000 });
+    expect(input).toHaveValue("");
+  });
+
   it("selects multiple values and reports them cumulatively", async () => {
     const user = userEvent.setup();
     const onValueChange = vi.fn();
@@ -190,6 +222,33 @@ describe("PaginatedMultiSelect", () => {
     const chips = document.querySelector('[data-slot="combobox-chips"]') as HTMLElement;
     expect(within(chips).getByText("Prod Alpha")).toBeInTheDocument();
     expect(within(chips).queryByText("hash-alpha")).not.toBeInTheDocument();
+  });
+
+  it("clears every selection through the clear-all control when a label is provided", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+    renderSelect({ value: ["alias-alpha", "alias-beta"], onValueChange, clearAllLabel: "Clear all" });
+
+    await user.click(screen.getByLabelText("Clear all"));
+
+    expect(onValueChange).toHaveBeenCalledWith([]);
+  });
+
+  it("shows no clear-all control without a label or without selections", () => {
+    const { unmount } = render(
+      <PaginatedMultiSelect
+        options={OPTIONS}
+        value={["alias-alpha"]}
+        onValueChange={vi.fn()}
+        onSearchChange={vi.fn()}
+        onLoadMore={vi.fn()}
+      />,
+    );
+    expect(document.querySelector('[data-slot="combobox-clear"]')).not.toBeInTheDocument();
+    unmount();
+
+    renderSelect({ value: [], clearAllLabel: "Clear all" });
+    expect(document.querySelector('[data-slot="combobox-clear"]')).not.toBeInTheDocument();
   });
 
   it("anchors the dropdown to the chips container so it tracks the growing chip box", async () => {

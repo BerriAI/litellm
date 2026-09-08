@@ -1,12 +1,9 @@
-import os
+from importlib import import_module
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 # Tests for RedisSemanticCache
@@ -893,7 +890,6 @@ async def test_redis_semantic_cache_async_paths_set_similarity_on_misses():
 
 
 def test_redis_get_embedding_routes_through_router(monkeypatch):
-    import sys
     import types
 
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
@@ -928,7 +924,6 @@ def test_redis_get_embedding_routes_through_router(monkeypatch):
 
 
 def test_redis_get_embedding_falls_back_to_direct(monkeypatch):
-    import sys
     import types
 
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
@@ -1138,7 +1133,6 @@ def test_redis_sync_get_cache_passes_precomputed_vector():
 
 @pytest.mark.asyncio
 async def test_redis_async_embedding_forwards_full_metadata(monkeypatch):
-    import sys
     import types
 
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
@@ -1169,7 +1163,6 @@ LONG_PROMPT = " ".join(f"token{i}" for i in range(300))
 
 
 def _proxy_with_router(monkeypatch: pytest.MonkeyPatch, router: MagicMock, model_name: str) -> None:
-    import sys
     import types
 
     fake_proxy = types.ModuleType("litellm.proxy.proxy_server")
@@ -1223,7 +1216,6 @@ async def test_redis_async_embedding_explicit_limit_beats_deployment_limit(monke
 
 
 def test_redis_get_embedding_truncates_direct_path_with_explicit_limit(monkeypatch):
-    import sys
     import types
 
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
@@ -1342,7 +1334,6 @@ def _router_proxy_module(router, model_name):
 
 
 def test_redis_sync_embedding_call_is_bounded(monkeypatch):
-    import sys
 
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
@@ -1366,7 +1357,6 @@ def test_redis_sync_embedding_call_is_bounded(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_redis_async_embedding_call_is_bounded(monkeypatch):
-    import sys
 
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
@@ -1391,7 +1381,6 @@ async def test_redis_async_embedding_call_is_bounded(monkeypatch):
 @pytest.mark.asyncio
 async def test_redis_async_embedding_gives_up_on_unresponsive_endpoint(monkeypatch):
     import asyncio
-    import sys
     import time
 
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
@@ -1422,7 +1411,6 @@ async def test_redis_async_embedding_gives_up_on_unresponsive_endpoint(monkeypat
 @pytest.mark.asyncio
 async def test_redis_async_get_cache_fails_open_when_embedding_hangs(monkeypatch):
     import asyncio
-    import sys
     import time
 
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
@@ -1466,7 +1454,7 @@ def test_cache_forwards_semantic_cache_embedding_timeout():
     from litellm.caching.caching import Cache
     from litellm.types.caching import LiteLLMCacheType
 
-    with patch("litellm.caching.caching.RedisSemanticCache") as backend:
+    with patch.object(import_module("litellm.caching.caching"), "RedisSemanticCache") as backend:
         Cache(
             type=LiteLLMCacheType.REDIS_SEMANTIC,
             similarity_threshold=0.8,

@@ -1,8 +1,9 @@
 import json
+from collections.abc import Sequence
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from typing_extensions import Required, TypedDict, override
+from typing_extensions import ReadOnly, Required, TypedDict, override
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -94,6 +95,10 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
     signature: str
     redactedContent: str
     text: str
+
+
+class BedrockConverseGptReasoningEffortBlock(TypedDict):
+    effort: ReadOnly[str]
 
 
 class GuardrailConverseTextBlock(TypedDict, total=False):
@@ -216,14 +221,22 @@ class ConverseResponseOutputBlock(TypedDict):
     message: MessageBlock | None
 
 
-class ConverseTokenUsageBlock(TypedDict):
-    inputTokens: int
-    outputTokens: int
-    totalTokens: int
-    cacheReadInputTokenCount: int
-    cacheReadInputTokens: int
-    cacheWriteInputTokenCount: int
-    cacheWriteInputTokens: int
+class CacheDetailBlock(TypedDict):
+    """Per-TTL cache-write breakdown, read-only AWS response data. https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_CacheDetail.html"""
+
+    inputTokens: ReadOnly[int]
+    ttl: ReadOnly[Literal["5m", "1h"]]
+
+
+class ConverseTokenUsageBlock(TypedDict, total=False):
+    inputTokens: Required[ReadOnly[int]]
+    outputTokens: Required[ReadOnly[int]]
+    totalTokens: Required[ReadOnly[int]]
+    cacheReadInputTokenCount: ReadOnly[int]
+    cacheReadInputTokens: ReadOnly[int]
+    cacheWriteInputTokenCount: ReadOnly[int]
+    cacheWriteInputTokens: ReadOnly[int]
+    cacheDetails: ReadOnly[list[CacheDetailBlock]]  # mutable-ok: AWS response array, never mutated after parsing
 
 
 class ServiceTierBlock(TypedDict):
@@ -396,7 +409,7 @@ class OutputConfigBlock(TypedDict, total=False):
 
 class CommonRequestObject(TypedDict, total=False):  # common request object across sync + async flows
     additionalModelRequestFields: dict
-    additionalModelResponseFieldPaths: list[str]
+    additionalModelResponseFieldPaths: Sequence[str]
     inferenceConfig: InferenceConfig
     system: list[SystemContentBlock]
     toolConfig: ToolConfigBlock

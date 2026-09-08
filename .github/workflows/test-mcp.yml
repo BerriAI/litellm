@@ -47,6 +47,10 @@ jobs:
         with:
           version: "0.10.9"
 
+      - name: Cache the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-cargo-build
+
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
         run: |
@@ -56,4 +60,4 @@ jobs:
       - name: Run MCP tests
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=./litellm --cov-report=xml --durations=5
+          uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml --durations=5

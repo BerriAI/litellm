@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface BulkEditUserModalProps {
   open: boolean;
@@ -36,6 +37,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
   userModels,
   allowAllUsers = false,
 }) => {
+  const { premiumUser } = useAuthorized();
   const [loading, setLoading] = useState(false);
   const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
   const [teamBudget, setTeamBudget] = useState<number | null>(null);
@@ -362,6 +364,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
           userModels={userModels}
           possibleUIRoles={possibleUIRoles}
           isBulkEdit={true}
+          premiumUser={premiumUser === true}
         />
 
         {loading && (

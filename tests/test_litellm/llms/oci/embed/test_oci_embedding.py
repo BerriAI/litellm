@@ -1,12 +1,10 @@
 import json
 import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.oci.embed.transformation import OCIEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse

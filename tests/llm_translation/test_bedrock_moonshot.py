@@ -14,13 +14,11 @@ This test suite verifies:
 from base_llm_unit_tests import BaseLLMChatTest
 import httpx
 import pytest
-import sys
 import os
 import json
 from typing import Optional
 from unittest.mock import AsyncMock, Mock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler

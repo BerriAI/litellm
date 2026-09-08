@@ -475,7 +475,6 @@ class TestBedrockGovCloudSupport:
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
     def test_govcloud_completion_with_cost_tracking(self, mock_post):
         """Test that completion requests with cost tracking use correct pricing for GovCloud models"""
-        from litellm import completion
         from unittest.mock import Mock
         import json
 

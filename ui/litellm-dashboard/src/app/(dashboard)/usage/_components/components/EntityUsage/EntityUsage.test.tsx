@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
 
@@ -60,15 +61,28 @@ vi.mock("./TopModelView", () => ({
   ),
 }));
 
+vi.mock("./TeamUserSpendCard", () => ({
+  default: ({ teamIds }: { teamIds: string[] }) => <div>{`team-user-spend:${teamIds.join("|")}`}</div>,
+}));
+
 vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
   default: () => <div>Entity Usage Export Modal</div>,
 }));
 
 vi.mock("@/components/EntityUsageExport", () => ({
-  UsageExportHeader: ({ filterLabel, filterSlot }: { filterLabel?: string; filterSlot?: ReactNode }) => (
+  UsageExportHeader: ({
+    filterLabel,
+    filterSlot,
+    showFilters,
+  }: {
+    filterLabel?: string;
+    filterSlot?: ReactNode;
+    showFilters?: boolean;
+  }) => (
     <div>
       <span>Usage Export Header</span>
       <span>{filterLabel}</span>
+      <span>{`show-filters:${showFilters === true}`}</span>
       {filterSlot}
     </div>
   ),
@@ -451,6 +465,26 @@ describe("EntityUsage", () => {
     });
   });
 
+  it("feeds the per-user spend card every visible team except the dashboard team, only for teams", async () => {
+    const mockUseTeams = vi.mocked(useTeams);
+    const teamsResult = (teams: { team_id: string }[]) =>
+      ({ teams, setTeams: vi.fn() }) as unknown as ReturnType<typeof useTeams>;
+    mockUseTeams.mockReturnValue(
+      teamsResult([{ team_id: "team-alpha" }, { team_id: "litellm-dashboard" }, { team_id: "team-beta" }]),
+    );
+
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+    expect(await screen.findByText("team-user-spend:team-alpha|team-beta")).toBeInTheDocument();
+
+    cleanup();
+    mockUseTeams.mockReturnValue(teamsResult([]));
+    render(<EntityUsage {...defaultProps} entityType="tag" />);
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+    expect(screen.queryByText(/^team-user-spend:/)).not.toBeInTheDocument();
+  });
+
   it("should render with organization entity type and call organization API", async () => {
     render(<EntityUsage {...defaultProps} entityType="organization" />);
 
@@ -737,6 +771,26 @@ describe("EntityUsage", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Tag 1").length).toBeGreaterThan(0);
     });
+  });
+
+  it("should still request the filter when the caller's tag scope is empty", async () => {
+    render(<EntityUsage {...defaultProps} entityList={[]} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("show-filters:true")).toBeInTheDocument();
+  });
+
+  it("should not request the filter while the entity list is still unresolved", async () => {
+    render(<EntityUsage {...defaultProps} entityList={null} />);
+
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("show-filters:false")).toBeInTheDocument();
   });
 
   it("should display Agent Activity tab for team entity type", async () => {

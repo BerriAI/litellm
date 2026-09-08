@@ -3,12 +3,9 @@ Test raise_if_unsafe_secret_name, the shared guard applied before secret_name
 reaches a secret manager backend.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 
 from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_name
 

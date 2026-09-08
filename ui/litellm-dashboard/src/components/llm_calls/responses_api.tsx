@@ -116,6 +116,7 @@ export async function makeOpenAIResponsesRequest(
   try {
     const startTime = Date.now();
     let firstTokenReceived = false;
+    let servedFromResponseCache = false;
 
     // Format messages for the API
     const formattedInput = messages.map((message) => {
@@ -202,7 +203,15 @@ export async function makeOpenAIResponsesRequest(
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
-    const response = await (client as any).responses.create({ ...requestBody, stream: streamingEnabled }, { signal });
+    const response = streamingEnabled
+      ? await (client as any).responses.create({ ...requestBody, stream: true }, { signal })
+      : await (async () => {
+          const nonStreamingResponse = await (client as any).responses
+            .create({ ...requestBody, stream: false }, { signal })
+            .withResponse();
+          servedFromResponseCache = nonStreamingResponse.response.headers.get("x-litellm-cache-key") !== null;
+          return nonStreamingResponse.data;
+        })();
     const events = streamingEnabled ? response : responseAsEvents(response);
 
     let mcpToolUsed = "";
@@ -292,11 +301,14 @@ export async function makeOpenAIResponsesRequest(
               promptTokens: usage.input_tokens,
               totalTokens: usage.total_tokens,
               ...extractPromptCacheTokens(usage),
+              ...(servedFromResponseCache ? { servedFromResponseCache: true } : {}),
             };
 
             // Add reasoning tokens if available
-            if (usage.completion_tokens_details?.reasoning_tokens) {
-              usageData.reasoningTokens = usage.completion_tokens_details.reasoning_tokens;
+            const reasoningTokens =
+              usage.output_tokens_details?.reasoning_tokens ?? usage.completion_tokens_details?.reasoning_tokens;
+            if (reasoningTokens) {
+              usageData.reasoningTokens = reasoningTokens;
             }
 
             if (usage.cost !== undefined && usage.cost !== null) {

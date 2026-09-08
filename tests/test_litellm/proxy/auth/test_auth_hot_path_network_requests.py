@@ -18,15 +18,12 @@ NOTE: This test does NOT require proxy extras (apscheduler, etc.) because
 it tests at the auth_checks level, not the full proxy_server level.
 """
 
-import os
-import sys
 import time
 from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache

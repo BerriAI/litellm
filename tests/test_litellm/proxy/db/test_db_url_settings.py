@@ -34,6 +34,7 @@ def _apply() -> bool:
 _MANAGED_DB_ENV_VARS = (
     "IAM_TOKEN_DB_AUTH",
     "AZURE_POSTGRESQL_AUTH",
+    "DATABASE_DISABLE_PREPARED_STATEMENTS",
     "DATABASE_URL",
     "DIRECT_URL",
     "DATABASE_URL_READ_REPLICA",
@@ -504,7 +505,7 @@ def test_apply_to_env_rejects_pinned_sqlite_direct_url(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
     monkeypatch.setenv("DIRECT_URL", "sqlite:///data/litellm.db")
 
-    with pytest.raises(RuntimeError, match="DIRECT_URL.*sqlite"):
+    with pytest.raises(RuntimeError, match=r"DIRECT_URL.*sqlite"):
         _apply()
 
 
@@ -514,7 +515,7 @@ def test_apply_to_env_rejects_pinned_non_postgres_reader(monkeypatch):
         "DATABASE_URL_READ_REPLICA", "mysql://u:p@reader.example.com:3306/db"
     )
 
-    with pytest.raises(RuntimeError, match="DATABASE_URL_READ_REPLICA.*mysql"):
+    with pytest.raises(RuntimeError, match=r"DATABASE_URL_READ_REPLICA.*mysql"):
         _apply()
 
 
@@ -656,8 +657,167 @@ def test_reader_url_left_alone_when_writer_has_no_params(monkeypatch):
     )
 
 
+# ---------------------------------------------------------------------------
+# DATABASE_DISABLE_PREPARED_STATEMENTS
+# ---------------------------------------------------------------------------
+
+
+def test_disable_prepared_statements_appends_pgbouncer_to_assembled_writer(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_HOST", "writer.example.com")
+    monkeypatch.setenv("DATABASE_USER", "litellm")
+    monkeypatch.setenv("DATABASE_NAME", "litellm_db")
+    monkeypatch.setenv("DATABASE_PASSWORD", "s3cr3t")
+
+    assert _apply() is True
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db?pgbouncer=true"
+    )
+    assert "DIRECT_URL" not in os.environ
+
+
+def test_disable_prepared_statements_appends_pgbouncer_to_pinned_writer(monkeypatch):
+    """The componentized entrypoints (gateway / backend / migrations) receive a
+    pinned DATABASE_URL and call apply_to_env; without the pgbouncer param Prisma
+    keeps named prepared statements and 42P05 collisions surface behind a
+    transaction-pooling pgbouncer."""
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
+
+    assert _apply() is False
+    assert os.environ["DATABASE_URL"] == "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=true"
+
+
+def test_disable_prepared_statements_respects_a_pinned_pgbouncer_value(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=false")
+
+    _apply()
+
+    assert os.environ["DATABASE_URL"] == "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=false"
+
+
+def test_disable_prepared_statements_applies_to_direct_url(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
+    monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@direct.example.com:5432/litellm_db")
+
+    _apply()
+
+    assert os.environ["DIRECT_URL"] == "postgresql://u:p@direct.example.com:5432/litellm_db?pgbouncer=true"
+
+
+def test_reader_inherits_pgbouncer_from_disable_prepared_statements(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db")
+
+    _apply()
+
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(os.environ["DATABASE_URL_READ_REPLICA"]).query)
+    assert query["pgbouncer"] == ["true"]
+
+
+def test_disable_prepared_statements_off_leaves_urls_alone(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "false")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
+
+    _apply()
+
+    assert os.environ["DATABASE_URL"] == "postgresql://u:p@db.example.com:5432/litellm_db"
+
+
+def test_disable_prepared_statements_rejects_an_unreadable_value(monkeypatch):
+    monkeypatch.setenv("DATABASE_DISABLE_PREPARED_STATEMENTS", "enabled")
+
+    with pytest.raises(ValidationError, match="DATABASE_DISABLE_PREPARED_STATEMENTS"):
+        DatabaseURLSettings.from_env()
+
+
 def test_unsupported_db_scheme_message_names_var_and_scheme():
     msg = unsupported_db_scheme_message("DIRECT_URL", "sqlite")
     assert "DIRECT_URL" in msg
     assert "sqlite" in msg
     assert "postgresql://" in msg
+
+
+def _query(url: str) -> dict[str, list[str]]:
+    return urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+
+
+def test_libpq_verify_full_and_sslrootcert_become_prisma_strict_sslcert(monkeypatch):
+    """Prisma drops ``sslrootcert`` and treats ``verify-full`` as ``prefer``, so a
+    libpq-style URL (the form the RDS docs give) connects with no certificate
+    check. The URL Prisma actually receives must carry its own strict dialect."""
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:p@db.example.com:5432/litellm_db?sslmode=verify-full&sslrootcert=/certs/rds-bundle.pem",
+    )
+
+    assert _apply() is False
+
+    assert _query(os.environ["DATABASE_URL"]) == {
+        "sslmode": ["require"],
+        "sslcert": ["/certs/rds-bundle.pem"],
+        "sslaccept": ["strict"],
+    }
+
+
+def test_libpq_verify_ca_becomes_prisma_strict(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db?sslmode=verify-ca")
+
+    _apply()
+
+    assert _query(os.environ["DATABASE_URL"]) == {"sslmode": ["require"], "sslaccept": ["strict"]}
+
+
+def test_sslrootcert_alone_turns_on_strict_verification(monkeypatch):
+    """libpq verifies the chain whenever a root cert is supplied under
+    ``sslmode=require``; Prisma needs ``sslaccept=strict`` to do the same."""
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db?sslmode=require&sslrootcert=/certs/ca.pem"
+    )
+
+    _apply()
+
+    assert _query(os.environ["DATABASE_URL"]) == {
+        "sslmode": ["require"],
+        "sslcert": ["/certs/ca.pem"],
+        "sslaccept": ["strict"],
+    }
+
+
+def test_pinned_prisma_ssl_params_win_over_libpq_translation(monkeypatch):
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://u:p@db.example.com:5432/litellm_db"
+        "?sslmode=verify-full&sslrootcert=/ignored.pem&sslcert=/pinned.pem&sslaccept=accept_invalid_certs",
+    )
+
+    _apply()
+
+    assert _query(os.environ["DATABASE_URL"]) == {
+        "sslmode": ["require"],
+        "sslcert": ["/pinned.pem"],
+        "sslaccept": ["accept_invalid_certs"],
+    }
+
+
+def test_prisma_native_ssl_url_is_left_untouched(monkeypatch):
+    url = "postgresql://u:p@db.example.com:5432/litellm_db?sslmode=require&sslcert=/certs/ca.pem&sslaccept=strict"
+    monkeypatch.setenv("DATABASE_URL", url)
+
+    _apply()
+
+    assert os.environ["DATABASE_URL"] == url
+
+
+def test_libpq_ssl_translation_covers_direct_url_and_read_replica(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db?sslmode=verify-full")
+    monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@direct.example.com:5432/db?sslmode=verify-full")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db?sslmode=verify-full")
+
+    _apply()
+
+    for env_var in ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA"):
+        assert _query(os.environ[env_var]) == {"sslmode": ["require"], "sslaccept": ["strict"]}, env_var

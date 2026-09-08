@@ -1,13 +1,14 @@
 """Tests for the shared PTU rules: which deployments accrue flat cost, and what that zeroes."""
 
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 import pytest
 
 from litellm.litellm_core_utils.ptu_pricing import (
     ptu_config_error,
+    ptu_identity_error,
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
     PTU_ZEROED_PRICING_FIELDS,
@@ -133,6 +134,15 @@ def test_the_search_context_table_is_zeroed_in_place_on_every_deployment():
         assert dict(override[field]) == dict.fromkeys(SEARCH_CONTEXT_SIZES, 0.0)
 
 
+def test_the_maps_grounding_rate_is_zeroed_on_every_deployment():
+    """An absent rate falls back to the Maps default rather than free, so it is written
+    even when the deployment never declared one."""
+    override = _with_flag(_VALID)
+
+    assert override is not None
+    assert override["google_maps_grounding_cost_per_query"] == 0.0
+
+
 def test_a_declared_table_does_not_become_a_scalar():
     """Zeroing it as a plain 0.0 would leave the provider's reader without a table to
     consult, which is the same as absent."""
@@ -209,3 +219,78 @@ def test_an_inverted_window_is_caught_before_the_count_and_rate_gate():
     }
 
     assert ptu_config_error(window_only) == "ptu_effective_to must be after ptu_effective_from"
+
+
+# --- the identity a config.yaml reservation has to declare ---------------------------
+
+
+def test_a_declared_unique_id_is_accepted():
+    assert ptu_identity_error(declared_id="azure-ptu-eastus", taken=False) is None
+
+
+@pytest.mark.parametrize("missing", [None, ""], ids=["absent", "blank"])
+def test_a_reservation_without_an_id_is_refused(missing):
+    error = ptu_identity_error(declared_id=missing, taken=False)
+
+    assert error is not None
+    assert error.startswith("model_info.id is required when PTU fields are set")
+
+
+def test_the_refusal_names_the_id_the_deployment_already_uses():
+    """An operator who invents a fresh name starts a second identity beside the charges
+    already written, which is the duplicate this rule exists to prevent."""
+    error = ptu_identity_error(declared_id=None, taken=False, current_id="0ba149287615")
+
+    assert error is not None
+    assert "0ba149287615" in error
+
+
+def test_the_refusal_points_at_the_model_info_route_when_the_current_id_is_unknown():
+    error = ptu_identity_error(declared_id=None, taken=False)
+
+    assert error is not None
+    assert "GET /model/info" in error
+
+
+def test_an_id_declared_twice_is_refused():
+    error = ptu_identity_error(declared_id="azure-ptu-eastus", taken=True)
+
+    assert error is not None
+    assert "declared on more than one deployment" in error
+
+
+def test_the_deployment_is_named_when_the_caller_supplies_one():
+    error = ptu_identity_error(declared_id=None, taken=False, model_name="azure-ptu")
+
+    assert error is not None
+    assert error.startswith("PTU configuration on model 'azure-ptu' is invalid:")
+
+
+def test_a_bare_yaml_date_bound_is_read_as_that_day_opening():
+    """An unquoted 2027-01-01 in config.yaml loads as a date, not a string. Discarding it
+    took the whole deployment out of PTU handling, so it billed per token and accrued no
+    flat cost while the provider invoiced the reservation hourly."""
+    terms = ptu_terms({**_VALID, "ptu_effective_to": date(2027, 1, 1)})
+
+    assert terms is not None
+    assert terms.effective_to == datetime(2027, 1, 1, tzinfo=timezone.utc)
+
+
+def test_a_bare_yaml_date_start_is_read_as_that_day_opening():
+    terms = ptu_terms({**_VALID, "ptu_effective_from": date(2026, 5, 1)})
+
+    assert terms is not None
+    assert terms.effective_from == datetime(2026, 5, 1, tzinfo=timezone.utc)
+
+
+def test_the_string_zero_is_a_declared_id():
+    """0 is a perfectly stable id, and ModelInfo stores it as a string. Reading it as absent
+    refused a deployment whose identity was never in doubt."""
+    assert ptu_identity_error(declared_id="0", taken=False) is None
+
+
+def test_an_empty_id_is_no_id():
+    error = ptu_identity_error(declared_id="", taken=False)
+
+    assert error is not None
+    assert error.startswith("model_info.id is required")

@@ -1,15 +1,12 @@
-import os
-import sys
+import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
-
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.bedrock.chat.invoke_handler import (
     AWSEventStreamDecoder,
     make_call,
@@ -211,6 +208,29 @@ def test_bedrock_converse_streaming_consistent_id():
         ), "All chunk IDs must match the one captured from the messageStart event"
 
 
+def test_converse_streaming_usage_uses_provider_thinking_tokens():
+    """Regression LIT-5714: the messageStop event carries provider thinking tokens
+    under ``additionalModelResponseFields``; the usage chunk must report them instead
+    of a token_counter estimate."""
+    chunks = [
+        {
+            "contentBlockIndex": 0,
+            "delta": {"reasoningContent": {"text": "thinking about it"}},
+        },
+        {
+            "stopReason": "end_turn",
+            "additionalModelResponseFields": {"usage": {"output_tokens_details": {"thinking_tokens": 1033}}},
+        },
+        {"usage": {"inputTokens": 40, "outputTokens": 3002, "totalTokens": 3042}},
+    ]
+
+    decoder = AWSEventStreamDecoder(model="bedrock/anthropic.claude-opus-4-7")
+    parsed = [decoder.converse_chunk_parser(chunk) for chunk in chunks]
+
+    usage = parsed[-1].usage
+    assert usage.completion_tokens_details.reasoning_tokens == 1033
+
+
 @pytest.mark.asyncio
 async def test_make_call_does_not_rechunk_stream_by_default():
     """Re-chunking the event stream into fixed 1024-byte blocks holds small
@@ -297,6 +317,139 @@ def test_make_sync_call_honors_explicit_stream_chunk_size():
     response.iter_bytes.assert_called_once_with(chunk_size=2048)
 
 
+CONVERSE_MODEL = "anthropic.claude-sonnet-4-6"
+CONVERSE_METADATA_EVENT = {
+    "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15},
+    "metrics": {"latencyMs": 100},
+}
+
+
+def _converse_stream_wrapper(events):
+    async def bedrock_stream():
+        decoder = AWSEventStreamDecoder(model=CONVERSE_MODEL)
+        for event in events:
+            yield decoder._chunk_parser(chunk_data=event)
+
+    return CustomStreamWrapper(
+        completion_stream=bedrock_stream(),
+        model=CONVERSE_MODEL,
+        custom_llm_provider="bedrock",
+        logging_obj=LiteLLMLoggingObj(
+            model=CONVERSE_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="completion",
+            start_time=datetime.datetime.now(),
+            litellm_call_id="1234",
+            function_id="1234",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "events, expected_finish_reason",
+    [
+        pytest.param(
+            (
+                {"role": "assistant"},
+                {"contentBlockIndex": 0, "delta": {"text": "Hello"}},
+                {"contentBlockIndex": 0, "delta": {"text": " world"}},
+                {"contentBlockIndex": 0},
+                {"stopReason": "end_turn"},
+                CONVERSE_METADATA_EVENT,
+            ),
+            "stop",
+            id="text",
+        ),
+        pytest.param(
+            (
+                {"role": "assistant"},
+                {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "t1", "name": "get_weather"}}},
+                {"contentBlockIndex": 0, "delta": {"toolUse": {"input": '{"city": "SF"}'}}},
+                {"contentBlockIndex": 0},
+                {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "t2", "name": "get_time"}}},
+                {"contentBlockIndex": 1, "delta": {"toolUse": {"input": '{"tz": "PT"}'}}},
+                {"contentBlockIndex": 1},
+                {"stopReason": "tool_use"},
+                CONVERSE_METADATA_EVENT,
+            ),
+            "tool_calls",
+            id="multiple_tool_calls",
+        ),
+        pytest.param(
+            (
+                {"role": "assistant"},
+                {"contentBlockIndex": 0, "start": {}},
+                {"contentBlockIndex": 0, "delta": {"text": "Let me check."}},
+                {"contentBlockIndex": 0},
+                {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "t1", "name": "get_weather"}}},
+                {"contentBlockIndex": 1, "delta": {"toolUse": {"input": '{"city": "SF"}'}}},
+                {"contentBlockIndex": 1},
+                {"stopReason": "tool_use"},
+                CONVERSE_METADATA_EVENT,
+            ),
+            "tool_calls",
+            id="text_then_tool_call",
+        ),
+        pytest.param(
+            (
+                {"role": "assistant"},
+                {"contentBlockIndex": 0, "start": {}},
+                {"contentBlockIndex": 0, "delta": {"reasoningContent": {"text": "thinking hard"}}},
+                {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "sig123"}}},
+                {"contentBlockIndex": 0},
+                {"contentBlockIndex": 1, "start": {}},
+                {"contentBlockIndex": 1, "delta": {"text": "Answer"}},
+                {"contentBlockIndex": 1},
+                {"stopReason": "end_turn"},
+                CONVERSE_METADATA_EVENT,
+            ),
+            "stop",
+            id="reasoning_then_text",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_converse_stream_ends_on_finish_reason_chunk(events, expected_finish_reason):
+    """The usage-only metadata event Bedrock sends after messageStop must not reach the caller as an extra
+    assistant delta following the finish_reason chunk."""
+    wrapper = _converse_stream_wrapper(events)
+
+    chunks = [chunk async for chunk in wrapper]
+
+    finish_reasons = [choice.finish_reason for chunk in chunks for choice in chunk.choices if choice.finish_reason]
+    assert finish_reasons == [expected_finish_reason]
+    assert chunks[-1].choices[0].finish_reason == expected_finish_reason, (
+        f"stream must end on the finish_reason chunk, got trailing {chunks[-1].model_dump(exclude_none=True)}"
+    )
+    roles = [choice.delta.role for chunk in chunks for choice in chunk.choices if choice.delta.role]
+    assert roles == ["assistant"]
+    assert any(getattr(chunk, "usage", None) is not None for chunk in wrapper.chunks)
+
+
+@pytest.mark.asyncio
+async def test_converse_stream_still_emits_guardrail_trace_after_finish_reason():
+    """Guardrail metadata events carry a trace payload alongside usage; that chunk must still reach the caller
+    after the finish_reason chunk, as it did before the regression."""
+    trace = {"guardrail": {"inputAssessment": {"g1": {}}}}
+    events = (
+        {"role": "assistant"},
+        {"contentBlockIndex": 0, "delta": {"text": "Hello"}},
+        {"contentBlockIndex": 0},
+        {"stopReason": "end_turn"},
+        {**CONVERSE_METADATA_EVENT, "trace": trace},
+    )
+    wrapper = _converse_stream_wrapper(events)
+
+    chunks = [chunk async for chunk in wrapper]
+
+    finish_reasons = [choice.finish_reason for chunk in chunks for choice in chunk.choices if choice.finish_reason]
+    assert finish_reasons == ["stop"]
+    assert chunks[-1].provider_specific_fields == {"trace": trace}
+    assert chunks[-1].choices[0].delta.content == ""
+    assert chunks[-1].choices[0].delta.role == "assistant"
+
+
 def test_invoke_streaming_forwards_bedrock_response_headers():
     response = MagicMock()
     response.status_code = 200
@@ -343,3 +496,171 @@ async def test_async_invoke_streaming_forwards_bedrock_response_headers():
 
     assert stream._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-987"
 
+
+def _bedrock_stream_error_response(status_code: int, request_id: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        headers={
+            "x-amzn-RequestId": request_id,
+            "x-amzn-ErrorType": "InternalServerException",
+        },
+        text='{"message":"Amazon Bedrock is unable to process your request."}',
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+
+
+def test_invoke_streaming_error_forwards_bedrock_response_headers():
+    error_response = _bedrock_stream_error_response(500, "req-stream-err-1")
+    client = HTTPHandler()
+    client.post = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        litellm.completion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-stream-err-1"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_error_forwards_bedrock_response_headers():
+    error_response = _bedrock_stream_error_response(500, "req-stream-err-2")
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await litellm.acompletion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-stream-err-2"
+
+
+def _unread_bedrock_stream_error_response(status_code: int, request_id: str) -> httpx.Response:
+    return httpx.Response(
+        status_code=status_code,
+        headers={
+            "x-amzn-RequestId": request_id,
+            "x-amzn-ErrorType": "InternalServerException",
+        },
+        stream=httpx.ByteStream(b'{"message":"Amazon Bedrock is unable to process your request."}'),
+        request=httpx.Request("POST", "https://bedrock-runtime.us-east-1.amazonaws.com/"),
+    )
+
+
+def test_invoke_streaming_error_forwards_headers_when_body_was_never_read():
+    """A retried streamed request raises HTTPStatusError over a body nobody read, so
+    reading it for the error message throws and loses the request id (LIT-5428)."""
+    error_response = _unread_bedrock_stream_error_response(500, "req-unread-sync")
+    client = HTTPHandler()
+    client.post = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        litellm.completion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-unread-sync"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_error_forwards_headers_when_body_was_never_read():
+    error_response = _unread_bedrock_stream_error_response(500, "req-unread-async")
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "server error",
+            request=error_response.request,
+            response=error_response,
+        )
+    )
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await litellm.acompletion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-unread-async"
+
+
+def test_invoke_streaming_non_200_forwards_bedrock_response_headers():
+    """A caller-supplied client that returns a failure instead of raising still reaches the
+    provider's headers, and reading the streamed body for the message must not throw (LIT-5428)."""
+    error_response = _unread_bedrock_stream_error_response(500, "req-non200-sync")
+    client = HTTPHandler()
+    client.post = MagicMock(return_value=error_response)
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        litellm.completion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-non200-sync"
+
+
+@pytest.mark.asyncio
+async def test_async_invoke_streaming_non_200_forwards_bedrock_response_headers():
+    error_response = _unread_bedrock_stream_error_response(500, "req-non200-async")
+    client = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=error_response)
+
+    with pytest.raises(litellm.ServiceUnavailableError) as exc_info:
+        await litellm.acompletion(
+            model="bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+        )
+
+    assert exc_info.value.response.headers["x-amzn-requestid"] == "req-non200-async"

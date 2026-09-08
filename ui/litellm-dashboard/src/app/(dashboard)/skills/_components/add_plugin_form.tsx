@@ -3,7 +3,7 @@ import { CircleHelp } from "lucide-react";
 import { z } from "zod/v4";
 import { toast } from "@/lib/toast";
 import { registerClaudeCodePlugin } from "@/components/networking";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";

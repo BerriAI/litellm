@@ -1,11 +1,7 @@
 import os
-import sys
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import pytest
 from fastapi import HTTPException, Request
@@ -428,6 +424,29 @@ def test_virtual_key_llm_api_routes_rejects_non_get_mcp_server_discovery(route, 
     assert exc_info.value.status_code == 403
 
 
+def test_virtual_key_llm_api_routes_allows_model_group_info():
+    """Regression test: the UI mints virtual keys with key_type="llm_api", which
+    maps to allowed_routes=["llm_api_routes"]. The Playground model picker loads
+    its options from GET /model_group/info, so that key must reach the route or
+    no model can be selected. The handler already scopes the response to the
+    models the key can call.
+    """
+
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    assert (
+        RouteChecks.is_virtual_key_allowed_to_call_route(
+            route="/model_group/info",
+            valid_token=valid_token,
+            request=_mock_request("GET"),
+        )
+        is True
+    )
+
+
 @pytest.mark.parametrize(
     "route",
     [
@@ -527,7 +546,7 @@ def test_virtual_key_llm_api_routes_allows_model_info(route):
     assert result is True
 
 
-@pytest.mark.parametrize("route", ["/model/info", "/v1/model/info"])
+@pytest.mark.parametrize("route", ["/model/info", "/v1/model/info", "/model_group/info"])
 def test_model_info_not_classified_as_llm_api(route):
     """Membership in `llm_api_routes` must not promote /model/info to an
     `is_llm_api_route()`. That predicate gates DISABLE_LLM_API_ENDPOINTS,
@@ -539,10 +558,10 @@ def test_model_info_not_classified_as_llm_api(route):
     assert RouteChecks.is_llm_api_route(route=route) is False
 
 
-@pytest.mark.parametrize("route", ["/v2/model/info", "/model_group/info"])
+@pytest.mark.parametrize("route", ["/v2/model/info"])
 def test_virtual_key_llm_api_routes_denies_other_model_info_routes(route):
-    """The grant is scoped to the two /model/info paths. The paginated Admin UI
-    listing and the model-group endpoint stay outside it.
+    """The grant covers the model metadata reads an AI API key needs. The
+    paginated Admin UI listing stays outside it.
     """
 
     valid_token = UserAPIKeyAuth(
@@ -1791,7 +1810,6 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
 # Routes returning proxy-wide spend across every team / customer / api_key.
 # Sourced from `LiteLLMRoutes.global_spend_tracking_routes` so any future
 # additions to that list are exercised by these tests automatically.
-from litellm.proxy._types import LiteLLMRoutes
 
 GLOBAL_SPEND_ROUTES = LiteLLMRoutes.global_spend_tracking_routes.value
 
@@ -2617,10 +2635,7 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
 
 # ── _user_is_org_admin tests ──────────────────────────────────────────────────
 
-from datetime import datetime
 
-from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
-from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
@@ -3202,6 +3217,65 @@ def test_internal_user_blocked_from_search_tool_writes(route):
     assert "Your role=internal_user" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_non_admin_can_open_vector_store_details(user_role):
+    """Regression for LIT-7132: the dashboard lists a vector store via /vector_store/list
+    (an LLM API route) but opened it via /vector_store/info, which no non-admin allowlist
+    granted, so the route gate 401'd before the handler's per-store access check ran."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    granted = RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=user_role,
+        route="/vector_store/info",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+    assert granted is None
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/vector_store/new", "/vector_store/update", "/vector_store/delete"],
+)
+def test_internal_user_blocked_from_vector_store_writes(route):
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update"):
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+
 def test_proxy_admin_viewer_can_read_another_users_info():
     """Admin Viewer has read parity with Proxy Admin, so the /user/info
     key-ownership gate must not apply to it — the Users page reads every row."""
@@ -3295,6 +3369,41 @@ def test_user_daily_activity_routes_reachable_by_non_admin(route, user_role):
         valid_token=valid_token,
         request_data={},
     )
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+def test_team_spend_by_user_reachable_by_non_admin(user_role):
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=user_role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=user_role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    def outcome(route: str) -> str:
+        try:
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=user_obj,
+                _user_role=user_role,
+                route=route,
+                request=request,
+                valid_token=valid_token,
+                request_data={},
+            )
+        except Exception as exc:
+            return f"denied: {exc}"
+        return "allowed"
+
+    assert outcome("/team/spend/by_user") == "allowed"
+    assert outcome("/team/spend/by_key").startswith("denied: Only proxy admin")
 
 
 def test_user_daily_activity_aggregated_not_covered_by_prefix_match():

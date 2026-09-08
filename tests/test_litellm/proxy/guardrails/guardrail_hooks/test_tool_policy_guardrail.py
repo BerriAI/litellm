@@ -2,15 +2,12 @@
 Unit tests for ToolPolicyGuardrail.
 """
 
-import os
-import sys
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 from litellm.proxy.guardrails.guardrail_hooks.tool_policy.tool_policy_guardrail import (
     ToolPolicyGuardrail,

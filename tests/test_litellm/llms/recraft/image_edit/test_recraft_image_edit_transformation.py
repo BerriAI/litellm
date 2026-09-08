@@ -1,6 +1,4 @@
 import json
-import os
-import sys
 from io import BufferedReader, BytesIO
 from typing import Dict, List
 from unittest.mock import MagicMock, mock_open, patch
@@ -8,9 +6,6 @@ from unittest.mock import MagicMock, mock_open, patch
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.recraft.image_edit.transformation import RecraftImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams

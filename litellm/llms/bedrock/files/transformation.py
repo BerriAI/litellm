@@ -20,6 +20,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import BEDROCK_INVOKE_PROVIDERS_LITERAL
 from litellm.files.utils import FilesAPIUtils
+from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
     BEDROCK_MANAGED_S3_PREFIXES,
@@ -145,6 +146,7 @@ class _BedrockS3RequestParams(BaseModel):
     aws_role_name: str | None = None
     aws_web_identity_token: str | None = None
     aws_sts_endpoint: str | None = None
+    aws_external_id: str | None = None
     s3_region_name: str | None = None
     s3_endpoint_url: str | None = None
 
@@ -413,7 +415,8 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         # S3 endpoint URL format
         s3_endpoint_url: Final = (
-            request_params.get("s3_endpoint_url") or f"https://s3.{aws_region_name}.amazonaws.com"
+            request_params.get("s3_endpoint_url")
+            or f"https://s3.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
         ).rstrip("/")
 
         return f"{s3_endpoint_url}/{bucket_name}/{encoded_object_name}"
@@ -1027,6 +1030,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             aws_role_name=optional_params.get("aws_role_name"),
             aws_web_identity_token=optional_params.get("aws_web_identity_token"),
             aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
+            aws_external_id=optional_params.get("aws_external_id"),
         )
 
         # Calculate SHA256 hash of the content (REQUIRED for S3)
@@ -1249,7 +1253,9 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         region_params: Final[dict[str, str | None]] = {"aws_region_name": region_preference}
         aws_region_name: Final = self._get_aws_region_name(optional_params=region_params, model="")
 
-        s3_endpoint_url = (request_params.s3_endpoint_url or f"https://s3.{aws_region_name}.amazonaws.com").rstrip("/")
+        s3_endpoint_url = (
+            request_params.s3_endpoint_url or f"https://s3.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}"
+        ).rstrip("/")
         url: Final = f"{s3_endpoint_url}/{bucket_name}/{encode_s3_object_key_for_url(object_key)}"
 
         litellm_params[S3_SIGNED_GET_HEADERS_PARAM] = self._sign_s3_get_request(
@@ -1286,6 +1292,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             aws_role_name=request_params.aws_role_name,
             aws_web_identity_token=request_params.aws_web_identity_token,
             aws_sts_endpoint=request_params.aws_sts_endpoint,
+            aws_external_id=request_params.aws_external_id,
         )
 
         empty_body_hash: Final = hashlib.sha256(b"").hexdigest()

@@ -3,13 +3,10 @@ Tests for Nimble Search API integration.
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from tests.search_tests.base_search_unit_tests import BaseSearchTest

@@ -23,20 +23,6 @@ def _load_cost_map(filename: str = "model_prices_and_context_window.json") -> di
         return json.load(f)
 
 
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled backup cost map so assertions don't depend on the
-    network-fetched ``main`` copy (which lags this branch until merge)."""
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
-
 
 @pytest.mark.parametrize("model, input_cost, cached_cost, output_cost", PRICING)
 def test_muse_spark_1_2_model_info(model: str, input_cost: float, cached_cost: float, output_cost: float):

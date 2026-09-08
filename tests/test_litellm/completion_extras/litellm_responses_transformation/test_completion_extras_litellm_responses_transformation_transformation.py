@@ -1,17 +1,13 @@
 import datetime
 import json
 import os
-import sys
 import unittest
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system-path
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
@@ -1299,6 +1295,19 @@ def test_text_plus_tool_calls_sequence():
 # =============================================================================
 
 
+def test_developer_message_content_uses_input_text():
+    handler = LiteLLMResponsesTransformationHandler()
+
+    input_items, instructions = handler.convert_chat_completion_messages_to_responses_api(
+        [{"role": "developer", "content": "Always answer in French."}]
+    )
+
+    assert instructions is None
+    assert input_items == [
+        {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Always answer in French."}]}
+    ]
+
+
 def test_tool_message_output_uses_input_text_not_output_text():
     """
     Test that tool message content uses input_text type, not output_text.
@@ -1508,7 +1517,7 @@ def test_multiple_tool_calls_in_single_choice():
     print("✓ Multiple tool calls are correctly grouped in a single choice")
 
 
-def test_map_reasoning_effort_adds_summary_detailed():
+def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
     """
     Test that _map_reasoning_effort behavior with reasoning_auto_summary flag.
 
@@ -1518,7 +1527,6 @@ def test_map_reasoning_effort_adds_summary_detailed():
 
     When flag is enabled (flag=True or env var), summary="detailed" is added.
     """
-    import os
 
     import litellm
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -1571,7 +1579,7 @@ def test_map_reasoning_effort_adds_summary_detailed():
 
         # Test 3: With env var enabled (flag disabled) - summary IS added
         litellm.reasoning_auto_summary = False
-        os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+        monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", "true")
 
         result = handler._map_reasoning_effort("high")
         assert (
@@ -1590,10 +1598,16 @@ def test_map_reasoning_effort_adds_summary_detailed():
         assert result_dict["summary"] == "custom_summary"
         print("✓ Dict input is passed through without modification")
 
-        # Test 5: None/unknown values return None
-        result_unknown = handler._map_reasoning_effort("unknown_value")
-        assert result_unknown is None
-        print("✓ Unknown reasoning_effort values return None")
+        # Test 5: every REASONING_EFFORT level reaches the provider, and anything else (a typo, an
+        # unshipped level, "default") is dropped so the request still succeeds at the provider default
+        from litellm.types.llms.openai import Reasoning
+
+        for effort in ("max", "xhigh", "none"):
+            result_passthrough = handler._map_reasoning_effort(effort)
+            assert result_passthrough == Reasoning(effort=effort)
+        for dropped in ("ultra", "hgih", "unknown_value", "", "default"):
+            assert handler._map_reasoning_effort(dropped) is None
+        print("✓ Enumerated levels pass through and unknown ones are dropped")
 
         print(
             "✓ All reasoning_effort behaviors work correctly with flag/env var control"
@@ -1603,7 +1617,7 @@ def test_map_reasoning_effort_adds_summary_detailed():
         # Restore original values
         litellm.reasoning_auto_summary = original_flag
         if original_env is not None:
-            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = original_env
+            monkeypatch.setenv("LITELLM_REASONING_AUTO_SUMMARY", original_env)
         elif "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
@@ -2441,6 +2455,32 @@ def test_map_optional_params_preserves_reasoning_summary():
     }
     assert responses_api_request["reasoning"]["effort"] == "high"
     assert responses_api_request["reasoning"]["summary"] == "detailed"
+
+
+@pytest.mark.parametrize("reasoning_effort", ["max", "high"])
+def test_transform_request_bedrock_mantle_tools_keeps_reasoning_effort(monkeypatch, reasoning_effort):
+    """Regression for reasoning_effort=max being dropped on the chat -> Responses bridge (issue #38084)."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    monkeypatch.setattr(litellm, "reasoning_auto_summary", False)
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    result: Final = handler.transform_request(
+        model="openai.gpt-5.6-sol",
+        messages=[{"role": "user", "content": "Say pong"}],
+        optional_params={
+            "reasoning_effort": reasoning_effort,
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        },
+        litellm_params={"custom_llm_provider": "bedrock_mantle"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert result["reasoning"] == {"effort": reasoning_effort}
 
 
 def test_map_optional_params_tool_choice_chat_nested_to_responses_api():
@@ -3767,3 +3807,343 @@ def test_response_incomplete_stream_event_without_details_defaults_to_length():
     result = iterator.chunk_parser(chunk)
 
     assert result.choices[0].finish_reason == "length"
+
+
+def test_assistant_message_with_tool_calls_keeps_its_content():
+    """Regression for https://github.com/BerriAI/litellm/issues/24985.
+
+    An assistant turn that both answered and called a tool used to lose its whole message:
+    the branch handling tool_calls emitted the calls and dropped the text.
+    """
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "What is the weather in Denver?"},
+        {
+            "role": "assistant",
+            "content": "Let me look that up.",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city": "Denver"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "88F"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    assistant_message = next(
+        item for item in input_items if item.get("type") == "message" and item.get("role") == "assistant"
+    )
+    assert assistant_message["content"] == [{"type": "output_text", "text": "Let me look that up."}]
+    assert [item.get("type") for item in input_items] == [
+        "message",
+        "message",
+        "function_call",
+        "function_call_output",
+    ]
+
+
+def test_assistant_thinking_blocks_become_a_reasoning_input_item():
+    """Thinking blocks are how an Anthropic-shaped turn carries reasoning into this bridge."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "What is the weather in Denver?"},
+        {
+            "role": "assistant",
+            "content": "Denver is sunny.",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "August in Denver is dry.", "signature": "sig1"},
+                {"type": "redacted_thinking", "data": "REDACTED"},
+            ],
+        },
+        {"role": "user", "content": "Why?"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    reasoning_item = next(item for item in input_items if item.get("type") == "reasoning")
+    assert reasoning_item["summary"] == [{"type": "summary_text", "text": "August in Denver is dry."}]
+    assert "id" not in reasoning_item
+
+
+def test_thinking_only_assistant_turn_still_sends_its_reasoning():
+    """An assistant turn can be pure reasoning, with no visible text and no tool call."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {"role": "user", "content": "What is the weather in Denver?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "August in Denver is dry.", "signature": "sig1"}
+            ],
+        },
+        {"role": "user", "content": "Why?"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    reasoning_items = [item for item in input_items if item.get("type") == "reasoning"]
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["summary"] == [{"type": "summary_text", "text": "August in Denver is dry."}]
+
+
+def test_stored_reasoning_items_win_over_thinking_blocks():
+    """A minted reasoning id beats a re-derived one, so the two must not both be sent."""
+    handler = LiteLLMResponsesTransformationHandler()
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Denver is sunny.",
+            "reasoning_items": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_real",
+                    "summary": [{"type": "summary_text", "text": "August in Denver is dry."}],
+                }
+            ],
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "August in Denver is dry.", "signature": "rs_real"}
+            ],
+        },
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    reasoning_items = [item for item in input_items if item.get("type") == "reasoning"]
+    assert len(reasoning_items) == 1
+    assert reasoning_items[0]["id"] == "rs_real"
+
+
+def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool_reference():
+    """Tool-search tool_reference blocks have no Responses API equivalent: skip them, never stringify them."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {"name": "ToolSearch", "arguments": '{"query": "web"}'},
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": [
+                {"type": "tool_reference", "tool_name": "WebFetch"},
+                {"type": "text", "text": "1 tool found"},
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    function_call_output = next(item for item in response if item.get("type") == "function_call_output")
+    assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
+
+
+def _litellm_encoded_response_id(upstream_id: str) -> str:
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="azure", model_id="deployment-1", response_id=upstream_id
+    )
+
+
+def test_transform_response_keeps_upstream_id_and_provider_extras():
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse, Usage
+
+    content_filters = [
+        {"blocked": False, "source_type": "prompt", "content_filter_results": {"hate": {"filtered": False}}}
+    ]
+    raw_response = ResponsesAPIResponse.model_validate(
+        {
+            "id": _litellm_encoded_response_id("resp_azure_123"),
+            "created_at": 1734366691,
+            "object": "response",
+            "model": "gpt-5.6",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "lookup_weather",
+                    "arguments": '{"city": "Seattle"}',
+                    "status": "completed",
+                }
+            ],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            "service_tier": "default",
+            "content_filters": content_filters,
+            "max_tool_calls": None,
+            "background": False,
+            "top_logprobs": 0,
+            "store": True,
+        }
+    )
+    model_response = ModelResponse(
+        id="chatcmpl-local",
+        created=1734366691,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result = LiteLLMResponsesTransformationHandler().transform_response(
+        model="gpt-5.6",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.6"},
+        messages=[{"role": "user", "content": "What is the weather in Seattle?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+    dumped = result.model_dump()
+
+    assert dumped["id"] == "resp_azure_123"
+    assert dumped["object"] == "chat.completion"
+    assert dumped["service_tier"] == "default"
+    assert dumped["content_filters"] == content_filters
+    assert "max_tool_calls" not in dumped, "a null provider field must not appear as a null top-level key"
+    assert "output" not in dumped and "status" not in dumped, (
+        "Responses schema fields must not leak into the chat response"
+    )
+    assert not {"background", "top_logprobs", "store"} & dumped.keys(), (
+        "Responses API bookkeeping must not ride along as chat metadata"
+    )
+    assert dumped["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "lookup_weather"
+
+
+def test_bridged_response_is_priced_by_the_reported_service_tier():
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse
+
+    raw_response = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_flex",
+            "created_at": 1734366691,
+            "object": "response",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100},
+            "service_tier": "flex",
+        }
+    )
+
+    result = LiteLLMResponsesTransformationHandler().transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+    pricing = litellm.model_cost["gpt-5.4"]
+    flex_cost = 1000 * pricing["input_cost_per_token_flex"] + 100 * pricing["output_cost_per_token_flex"]
+    standard_cost = 1000 * pricing["input_cost_per_token"] + 100 * pricing["output_cost_per_token"]
+
+    cost = litellm.completion_cost(completion_response=result, custom_llm_provider="openai")
+
+    assert cost == pytest.approx(flex_cost)
+    assert cost < standard_cost
+
+
+def test_streaming_chunks_carry_the_upstream_response_id():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    encoded_id = _litellm_encoded_response_id("resp_azure_stream")
+    events = [
+        {"type": "response.created", "response": {"id": encoded_id, "output": []}},
+        {"type": "response.output_text.delta", "delta": "Hel"},
+        {"type": "response.completed", "response": {"id": encoded_id, "output": [{"type": "message"}]}},
+    ]
+
+    ids = [iterator.chunk_parser(event).id for event in events]
+
+    assert ids == ["resp_azure_stream"] * len(events), f"streamed chunks did not carry the upstream id: {ids}"
+
+
+def test_streaming_final_chunk_carries_provider_metadata():
+    from unittest.mock import MagicMock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    content_filters = [{"blocked": False, "source_type": "completion", "content_filter_results": {}}]
+    events = [
+        {"type": "response.created", "response": {"id": "resp_azure_stream", "output": []}},
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_azure_stream",
+                "output": [{"type": "message"}],
+                "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+                "service_tier": "default",
+                "content_filters": content_filters,
+                "background": False,
+            },
+        },
+    ]
+    stream = CustomStreamWrapper(
+        completion_stream=iter([iterator.chunk_parser(event) for event in events]),
+        model="gpt-5.6",
+        custom_llm_provider="azure",
+        logging_obj=MagicMock(),
+    )
+
+    chunks = [chunk.model_dump() for chunk in stream]
+
+    assert chunks[-1]["choices"][0]["finish_reason"] == "stop"
+    assert chunks[-1]["service_tier"] == "default"
+    assert chunks[-1]["content_filters"] == content_filters
+    assert "background" not in chunks[-1]
+    assert all("service_tier" not in chunk for chunk in chunks[:-1])

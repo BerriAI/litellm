@@ -1,21 +1,16 @@
 import asyncio
 import json
+import logging
 import os
-import sys
-from contextlib import asynccontextmanager
+from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, Request
 
-from litellm._uuid import uuid
-
-sys.path.insert(
-    0, os.path.abspath("../../../")
-)  # Adds the parent directory to the system path
-
 import litellm
+from litellm._uuid import uuid
 from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
@@ -35,6 +30,15 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
     TeamMappings,
+)
+
+_SSO_PROVIDER_ENV_VARS = (
+    "DISABLE_ADMIN_UI",
+    "MICROSOFT_CLIENT_ID",
+    "GOOGLE_CLIENT_ID",
+    "GENERIC_CLIENT_ID",
+    "SAML_IDP_METADATA_URL",
+    "SAML_IDP_METADATA_XML",
 )
 
 
@@ -1610,8 +1614,8 @@ async def test_get_generic_sso_response_with_empty_headers():
 async def test_get_generic_sso_response_includes_token_claims_when_enabled(monkeypatch):
     import jwt as pyjwt
 
-    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
     from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.ui_sso import get_generic_sso_response
 
     mock_request = MagicMock(spec=Request)
     mock_jwt_handler = MagicMock(spec=JWTHandler)
@@ -2316,10 +2320,10 @@ class TestCustomUISSO:
     async def test_handle_custom_ui_sso_sign_in_success(self):
         """Test successful custom UI SSO sign-in with valid headers"""
         from fastapi_sso.sso.base import OpenID
-
         from litellm_enterprise.proxy.auth.custom_sso_handler import (
             EnterpriseCustomSSOHandler,
         )
+
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
 
         # Mock request with custom headers
@@ -2395,6 +2399,7 @@ class TestCustomUISSO:
         from litellm_enterprise.proxy.auth.custom_sso_handler import (
             EnterpriseCustomSSOHandler,
         )
+
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
 
         mock_request = MagicMock(spec=Request)
@@ -2431,10 +2436,10 @@ class TestCustomUISSO:
         and its methods are called with the correct parameters
         """
         from fastapi_sso.sso.base import OpenID
-
         from litellm_enterprise.proxy.auth.custom_sso_handler import (
             EnterpriseCustomSSOHandler,
         )
+
         from litellm.integrations.custom_sso_handler import CustomSSOLoginHandler
 
         # Create a real custom handler class instance
@@ -2800,10 +2805,15 @@ class TestCLIKeyRegenerationFlow:
         mock_request.base_url = "https://proxy.example.com/"
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {"poll_secret_hash": "h"}
+        env_without_sso_providers = {
+            name: value
+            for name, value in os.environ.items()
+            if name not in _SSO_PROVIDER_ENV_VARS
+        }
 
         async def drive(enabled: bool):
             with (
-                patch.dict(os.environ, {}, clear=True),
+                patch.dict(os.environ, env_without_sso_providers, clear=True),
                 patch("litellm.proxy.proxy_server.premium_user", True),
                 patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
                 patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
@@ -2829,15 +2839,13 @@ class TestCLIKeyRegenerationFlow:
                     return_value=None,
                 ) as mock_get_cli_state,
             ):
-                try:
-                    await google_login(
-                        request=mock_request,
-                        source="litellm-cli",
-                        key="cli-validsessionkey123456",
-                        user_code="WXYZ-2345",
-                    )
-                except Exception:
-                    pass
+                await google_login(
+                    request=mock_request,
+                    source="litellm-cli",
+                    key="cli-validsessionkey123456",
+                    user_code="WXYZ-2345",
+                )
+            assert mock_get_cli_state.called
             return mock_get_cli_state.call_args.kwargs["user_code"]
 
         assert await drive(enabled=True) == "WXYZ-2345"
@@ -6590,13 +6598,94 @@ def test_get_litellm_user_role_with_invalid_role():
     assert result is None
 
 
-def test_get_litellm_user_role_with_list_multiple_roles():
-    """Test that get_litellm_user_role takes the first element from a multi-element list."""
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["proxy_admin", "internal_user"],
+        ["internal_user", "proxy_admin"],
+    ],
+)
+def test_get_litellm_user_role_picks_highest_privilege_regardless_of_order(role_claim):
+    """A multi-valued role claim resolves to the most privileged role, not the first one listed."""
     from litellm.proxy._types import LitellmUserRoles
     from litellm.proxy.management_endpoints.types import get_litellm_user_role
 
-    result = get_litellm_user_role(["proxy_admin", "internal_user"])
-    assert result == LitellmUserRoles.PROXY_ADMIN
+    assert get_litellm_user_role(role_claim) == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["proxy_admin_viewer", "internal_user"],
+        ["internal_user", "proxy_admin_viewer"],
+    ],
+)
+def test_get_litellm_user_role_keeps_org_spend_visibility_for_mixed_roles(role_claim):
+    """
+    Regression for LIT-6077: a user holding both proxy_admin_viewer and internal_user kept
+    losing org-level spend visibility whenever the IdP happened to list internal_user first.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(role_claim) == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+
+
+def test_get_litellm_user_role_ignores_unrecognised_entries():
+    """Roles LiteLLM does not know about are skipped rather than swallowing the whole claim."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(["some_idp_group", "internal_user"]) == LitellmUserRoles.INTERNAL_USER
+    assert get_litellm_user_role(["some_idp_group", "another_group"]) is None
+
+
+def test_get_litellm_user_role_list_lookup_is_case_insensitive():
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(["INTERNAL_USER", "Proxy_Admin"]) == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["org_admin", "team"],
+        ["team", "org_admin"],
+    ],
+)
+def test_get_litellm_user_role_is_deterministic_for_unranked_roles(role_claim):
+    """Roles outside the privilege hierarchy still resolve the same way in either claim order."""
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(role_claim) == LitellmUserRoles.ORG_ADMIN
+
+
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["org_admin", "internal_user"],
+        ["internal_user", "org_admin"],
+    ],
+)
+def test_get_litellm_user_role_prefers_a_ranked_role_over_an_unranked_one(role_claim):
+    """
+    org_admin, team and customer sit outside the privilege ladder, so a claim mixing one of
+    them with a ranked role settles on the ranked role in either order. Same rule the Entra
+    app_roles and role_mappings paths already follow.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(role_claim) == LitellmUserRoles.INTERNAL_USER
+
+
+def test_get_litellm_user_role_returns_none_for_non_string_claims():
+    from litellm.proxy.management_endpoints.types import get_litellm_user_role
+
+    assert get_litellm_user_role(None) is None
+    assert get_litellm_user_role({"role": "proxy_admin"}) is None
 
 
 # ============================================================================
@@ -6644,6 +6733,46 @@ def test_process_sso_jwt_access_token_extracts_role_from_access_token():
         )
 
     assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    "role_claim",
+    [
+        ["internal_user", "proxy_admin_viewer"],
+        ["proxy_admin_viewer", "internal_user"],
+    ],
+)
+def test_process_sso_jwt_access_token_resolves_highest_privilege_role(role_claim):
+    """
+    The generic SSO access-token path must land on the same role for a user whose role
+    claim holds several roles, whichever order the IdP emitted them in.
+    """
+    import jwt as pyjwt
+
+    from litellm.proxy._types import LitellmUserRoles
+
+    access_token_str = pyjwt.encode(
+        {"sub": "user-123", "email": "mixed@test.com", "litellm_role": role_claim},
+        "secret",
+        algorithm="HS256",
+    )
+    result = CustomOpenID(
+        id="user-123",
+        email="mixed@test.com",
+        display_name="Mixed Role User",
+        team_ids=[],
+        user_role=None,
+    )
+
+    with patch.dict(os.environ, {"GENERIC_USER_ROLE_ATTRIBUTE": "litellm_role"}):
+        process_sso_jwt_access_token(
+            access_token_str=access_token_str,
+            sso_jwt_handler=None,
+            result=result,
+            role_mappings=None,
+        )
+
+    assert result.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
 
 
 def test_process_sso_jwt_access_token_does_not_override_existing_role():
@@ -7597,6 +7726,112 @@ class TestPKCEStateCookieBinding:
         assert "Secure" not in cookie_str
 
     @pytest.mark.asyncio
+    async def test_redirect_response_sets_secure_flag_behind_trusted_tls_terminating_proxy(
+        self, monkeypatch
+    ):
+        """Regression: litellm sees a plain-HTTP hop when TLS terminates at a reverse
+        proxy. The Secure flag must still be set when the direct peer is a configured
+        trusted proxy and it reports X-Forwarded-Proto: https -- but NOT from an
+        unconfigured/untrusted caller spoofing the same header (see the sibling test
+        below)."""
+        from fastapi.responses import RedirectResponse
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_redirect = RedirectResponse(
+            url="http://idp.internal/authorize?state=behind-proxy-state"
+        )
+        mock_generic_sso = MagicMock()
+        mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
+        mock_generic_sso.__exit__ = MagicMock(return_value=None)
+        mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
+
+        proxied_request = MagicMock(spec=Request)
+        proxied_request.url.scheme = "http"
+        proxied_request.headers = {"X-Forwarded-Proto": "https"}
+        proxied_request.client = MagicMock()
+        proxied_request.client.host = "10.0.0.5"
+
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "behind-proxy-state",
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=mock_generic_sso,
+                state=None,
+                generic_authorization_endpoint="http://idp.internal/authorize",
+                request=proxied_request,
+            )
+
+        cookie_headers = response.headers.getlist("set-cookie")
+        cookie_str = next(
+            (c for c in cookie_headers if "litellm_oauth_state=" in c), None
+        )
+        assert cookie_str is not None
+        assert "Secure" in cookie_str
+
+    @pytest.mark.asyncio
+    async def test_redirect_response_ignores_spoofed_forwarded_proto_without_trust_config(
+        self, monkeypatch
+    ):
+        """The same X-Forwarded-Proto: https header must NOT flip Secure on when no
+        trusted-proxy config is present -- honoring it unconditionally would let any
+        client spoof the header and would not itself be the vulnerability the ticket
+        warns against."""
+        from fastapi.responses import RedirectResponse
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_redirect = RedirectResponse(
+            url="http://idp.internal/authorize?state=spoofed-state"
+        )
+        mock_generic_sso = MagicMock()
+        mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
+        mock_generic_sso.__exit__ = MagicMock(return_value=None)
+        mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
+
+        spoofed_request = MagicMock(spec=Request)
+        spoofed_request.url.scheme = "http"
+        spoofed_request.headers = {"X-Forwarded-Proto": "https"}
+        spoofed_request.client = MagicMock()
+        spoofed_request.client.host = "203.0.113.5"
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "spoofed-state",
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=mock_generic_sso,
+                state=None,
+                generic_authorization_endpoint="http://idp.internal/authorize",
+                request=spoofed_request,
+            )
+
+        cookie_headers = response.headers.getlist("set-cookie")
+        cookie_str = next(
+            (c for c in cookie_headers if "litellm_oauth_state=" in c), None
+        )
+        assert cookie_str is not None
+        assert "Secure" not in cookie_str
+
+    @pytest.mark.asyncio
     async def test_pkce_callback_rejects_missing_cookie(self):
         """When PKCE is enabled and a code_verifier is in the cache, the
         callback must reject a request that has no ``litellm_oauth_state``
@@ -7932,6 +8167,128 @@ async def test_debug_sso_callback_handles_missing_raw_response():
     assert "user@example.com" in body
 
 
+# ── The debug page is where an operator lands when ID-JAG is failing ──────────
+
+_GOOGLE_DEBUG_CLIENT_ID = "debug-google-client-id"
+_GENERIC_DEBUG_CLIENT_ID = "debug-generic-client-id"
+
+
+async def _render_debug_page(provider_env, id_jag_registered, force_inert=False):
+    """Drive /sso/debug/callback and return the raw response body."""
+    from litellm.proxy.management_endpoints.ui_sso import GoogleSSOHandler, debug_sso_callback
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://proxy.example.com/"
+    mock_request.cookies = {}
+    mock_request.query_params = {}
+
+    parsed = {"sub": "user_123", "email": "u@example.com"}
+
+    async def fake_generic(**kwargs):
+        return parsed, {"sub": "user_123"}, {"scope": "openid"}, None
+
+    async def fake_google(**kwargs):
+        return parsed
+
+    stack = [
+        patch.dict(os.environ, provider_env, clear=False),
+        patch(  # test-quality-ok: endpoint test stubs the upstream generic IdP boundary
+            "litellm.proxy.management_endpoints.ui_sso.get_generic_sso_response", side_effect=fake_generic
+        ),
+        patch.object(  # test-quality-ok: endpoint test stubs the upstream Google IdP boundary
+            GoogleSSOHandler, "get_google_callback_response", side_effect=fake_google
+        ),
+        patch(  # test-quality-ok: debug endpoint reads this module global without an injection seam
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(return_value=id_jag_registered),
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: debug endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: debug endpoint reads proxy DB
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: debug endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),  # test-quality-ok: debug endpoint reads proxy globals
+    ]
+    if force_inert:
+        stack.append(
+            patch(  # test-quality-ok: force-inert reference isolates the endpoint's pre-change response
+                "litellm.proxy.management_endpoints.ui_sso.warn_if_id_jag_capture_gap",
+                AsyncMock(return_value=None),
+            )
+        )
+
+    with ExitStack() as es:
+        for ctx in stack:
+            es.enter_context(ctx)
+        for var in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID", "GENERIC_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+            if var not in provider_env:
+                os.environ.pop(var, None)
+        response = await debug_sso_callback(mock_request)
+
+    return response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_debug_page_logs_the_capture_gap_but_never_renders_it(caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        body = await _render_debug_page({"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, id_jag_registered=True)
+
+    warnings = _id_jag_gap_warnings(caplog)
+    assert len(warnings) == 1
+    assert "google" in warnings[0]
+    assert "GENERIC_CLIENT_ID" in warnings[0]
+    assert "id_jag" not in body
+    assert "GENERIC_CLIENT_ID" not in body
+
+
+@pytest.mark.asyncio
+async def test_debug_page_is_byte_identical_when_the_provider_captures():
+    """A deployment with no gap must get the page it got before this change, to the byte. The
+    comparison is against the endpoint with the diagnostic forced inert, not against a guess."""
+    with_feature = await _render_debug_page(
+        {"GENERIC_CLIENT_ID": _GENERIC_DEBUG_CLIENT_ID}, id_jag_registered=True
+    )
+    pre_change = await _render_debug_page(
+        {"GENERIC_CLIENT_ID": _GENERIC_DEBUG_CLIENT_ID},
+        id_jag_registered=True,
+        force_inert=True,
+    )
+
+    assert with_feature == pre_change
+    assert "id_jag" not in with_feature
+
+
+@pytest.mark.asyncio
+async def test_debug_page_is_byte_identical_when_no_id_jag_server_is_registered():
+    """Most deployments run Google SSO and no id_jag server at all; their debug page must not
+    grow an ID-JAG section about a feature they do not use."""
+    with_feature = await _render_debug_page(
+        {"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID}, id_jag_registered=False
+    )
+    pre_change = await _render_debug_page(
+        {"GOOGLE_CLIENT_ID": _GOOGLE_DEBUG_CLIENT_ID},
+        id_jag_registered=False,
+        force_inert=True,
+    )
+
+    assert with_feature == pre_change
+    assert "id_jag" not in with_feature
+
+
+@pytest.mark.asyncio
+async def test_debug_page_survives_a_store_outage(monkeypatch, caplog):
+    """The page's job is to render claims; an unreachable MCP table must cost it the annotation,
+    not the page."""
+    from litellm.proxy.management_endpoints.ui_sso import warn_if_id_jag_capture_gap
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", _GOOGLE_DEBUG_CLIENT_ID)
+    retention_check = AsyncMock(side_effect=Exception("db down"))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        assert await warn_if_id_jag_capture_gap(retention_enabled=retention_check) is None
+
+    retention_check.assert_awaited_once()
+
+    assert _id_jag_gap_warnings(caplog) == []
+
+
 async def _render_legacy_login_page(env_overrides, general_settings):
     from litellm.proxy.management_endpoints.ui_sso import google_login
 
@@ -8026,8 +8383,8 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
     that /sso/key/generate enforces; the ACS re-checks it after validating the assertion,
     so the entitlement DB query never runs on unvalidated input."""
     from litellm.proxy._types import ProxyException
-    from litellm.proxy.management_endpoints.ui_sso import saml_callback
     from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import saml_callback
 
     call_order: list[str] = []
 
@@ -8446,6 +8803,248 @@ async def test_cli_completion_persists_assertion_under_db_user_id():
     assert response.status_code == 200
 
 
+def _id_jag_gap_warnings(caplog) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "oauth2_id_jag" in record.getMessage()
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_env, expected_fragment",
+    [
+        ({"GOOGLE_CLIENT_ID": "cid"}, "google"),
+        ({"MICROSOFT_CLIENT_ID": "cid", "MICROSOFT_TENANT": "t"}, "microsoft"),
+        ({}, "no SSO provider is configured"),
+    ],
+)
+async def test_uncaptured_assertion_warns_when_an_id_jag_server_is_registered(
+    monkeypatch, caplog, provider_env, expected_fragment
+):
+    """A provider with no capture path leaves ID-JAG permanently broken, and the only place
+    that is knowable is the login itself; without this line the operator sees nothing at all."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    for name in ("GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "GENERIC_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in provider_env.items():
+        monkeypatch.setenv(name, value)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await warn_if_id_jag_assertion_uncaptured(None, retention_enabled=AsyncMock(return_value=True))
+
+    warnings = _id_jag_gap_warnings(caplog)
+    assert len(warnings) == 1
+    assert expected_fragment in str(warnings[0])
+
+
+@pytest.mark.asyncio
+async def test_generic_provider_that_returned_no_id_token_still_warns(monkeypatch, caplog):
+    """Generic OIDC has a capture path, so there is no configuration gap to report; the login
+    still handed the id_jag arm nothing, and that must not pass silently."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    for name in ("GOOGLE_CLIENT_ID", "MICROSOFT_CLIENT_ID", "SAML_IDP_METADATA_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GENERIC_CLIENT_ID", "cid")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await warn_if_id_jag_assertion_uncaptured(None, retention_enabled=AsyncMock(return_value=True))
+
+    warnings = _id_jag_gap_warnings(caplog)
+    assert len(warnings) == 1
+    assert "no usable id_token" in str(warnings[0])
+
+
+@pytest.mark.asyncio
+async def test_no_warning_when_the_assertion_was_captured(monkeypatch, caplog):
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
+        assertion_from_sso_login,
+    )
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    assertion = assertion_from_sso_login(_ema_id_token(), None)
+    assert assertion is not None
+
+    retention_mock = AsyncMock(return_value=True)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await warn_if_id_jag_assertion_uncaptured(assertion, retention_enabled=retention_mock)
+
+    assert _id_jag_gap_warnings(caplog) == []
+    retention_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_warning_when_no_id_jag_server_is_registered(monkeypatch, caplog):
+    """Most deployments never register one; a warning about ID-JAG on every login there would
+    be pure noise and would train operators to ignore it."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await warn_if_id_jag_assertion_uncaptured(None, retention_enabled=AsyncMock(return_value=False))
+
+    assert _id_jag_gap_warnings(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_store_outage_does_not_break_the_login(monkeypatch, caplog):
+    from litellm.proxy.management_endpoints.ui_sso import (
+        warn_if_id_jag_assertion_uncaptured,
+    )
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        assert (
+            await warn_if_id_jag_assertion_uncaptured(
+                None, retention_enabled=AsyncMock(side_effect=Exception("db down"))
+            )
+            is None
+        )
+
+    assert _id_jag_gap_warnings(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_browser_funnel_reports_an_uncaptured_assertion(monkeypatch, caplog):
+    """Wiring: the browser login path must reach the diagnostic, not just define it."""
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.cookies = {}
+
+    with (
+        patch(  # test-quality-ok: endpoint test stubs the Prisma client lookup
+            "litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()
+        ),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.premium_user", False),  # test-quality-ok: endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.user_custom_sso", None),  # test-quality-ok: endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.redis_usage_cache", None),  # test-quality-ok: endpoint reads proxy globals
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: endpoint reads proxy globals
+        patch(  # test-quality-ok: endpoint test stubs key generation at its module boundary
+            "litellm.proxy.proxy_server.generate_key_helper_fn",
+            AsyncMock(return_value={"token": "sk-ui-key", "user_id": "canonical-user-id"}),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the user database lookup
+            "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+            AsyncMock(return_value=None),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs the admin database lookup
+            "litellm.proxy.management_endpoints.ui_sso.check_and_update_if_proxy_admin_id",
+            AsyncMock(return_value="internal_user"),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs assertion persistence
+            "litellm.proxy.management_endpoints.ui_sso.retain_sso_identity_assertion_for_ema",
+            AsyncMock(),
+        ),
+        patch(  # test-quality-ok: endpoint reads this module global without an injection seam
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            await SSOAuthenticationHandler.get_redirect_response_from_openid(
+                result=CustomOpenID(
+                    id="raw-idp-subject",
+                    email="u@example.com",
+                    first_name="U",
+                    last_name="Ser",
+                    display_name="U Ser",
+                    provider="google",
+                    team_ids=[],
+                    user_role=None,
+                ),
+                request=mock_request,
+                received_response=None,
+                generic_client_id=None,
+                ui_access_mode=None,
+                access_token_payload=None,
+                jwt_handler=None,
+                sso_assertion=None,
+            )
+
+    warnings = _id_jag_gap_warnings(caplog)
+    assert len(warnings) == 1
+    assert "google" in str(warnings[0])
+
+
+@pytest.mark.asyncio
+async def test_cli_funnel_reports_an_uncaptured_assertion(monkeypatch, caplog):
+    """Wiring: the CLI login path shares the gap, so it must share the diagnostic."""
+    from litellm.proxy.management_endpoints.ui_sso import (
+        _complete_cli_sso_callback_session,
+    )
+
+    monkeypatch.setenv("MICROSOFT_CLIENT_ID", "cid")
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+
+    user_info = MagicMock()
+    user_info.user_id = "cli-user-id"
+    user_info.user_role = "internal_user"
+    user_info.models = []
+    user_info.teams = []
+
+    with (
+        patch(  # test-quality-ok: endpoint test stubs the user database lookup
+            "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+            AsyncMock(return_value=user_info),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs CLI team lookup
+            "litellm.proxy.management_endpoints.ui_sso.fetch_cli_sso_team_details",
+            AsyncMock(return_value=[]),
+        ),
+        patch(  # test-quality-ok: endpoint test stubs attribution metadata
+            "litellm.proxy.management_endpoints.ui_sso.build_cli_sso_attribution_metadata",
+            return_value={},
+        ),
+        patch(  # test-quality-ok: endpoint test stubs assertion persistence
+            "litellm.proxy.management_endpoints.ui_sso.retain_sso_identity_assertion_for_ema",
+            AsyncMock(),
+        ),
+        patch(  # test-quality-ok: endpoint reads this module global without an injection seam
+            "litellm.proxy.management_endpoints.ui_sso.ema_assertion_retention_enabled",
+            AsyncMock(return_value=True),
+        ),
+    ):
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            await _complete_cli_sso_callback_session(
+                request=mock_request,
+                key="cli-login-id",
+                flow={},
+                result={"sub": "raw-idp-subject"},
+                parsed_openid_result={
+                    "user_id": "raw-idp-subject",
+                    "user_email": "u@example.com",
+                    "user_role": None,
+                },
+                user_defined_values=None,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                cli_sso_session_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+                sso_assertion=None,
+            )
+
+    warnings = _id_jag_gap_warnings(caplog)
+    assert len(warnings) == 1
+    assert "microsoft" in str(warnings[0])
+
+
 def _cli_callback_kwargs(flow):
     return {
         "request": _cli_callback_request(),
@@ -8578,6 +9177,24 @@ class TestSameOriginReturnPath:
         assert _is_same_origin_return_path("") is False
 
 
+def _make_https_request() -> Request:
+    request = MagicMock(spec=Request)
+    request.url.scheme = "https"
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "203.0.113.5"
+    return request
+
+
+def _make_http_request() -> Request:
+    request = MagicMock(spec=Request)
+    request.url.scheme = "http"
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "203.0.113.5"
+    return request
+
+
 class TestPersistReturnToCookieSharedHelper:
     """The single shared return_to helper used by EVERY sign-in branch (SSO / Okta / generic AND the
     username/password form). It must be best-effort and NEVER raise — a bad return_to can never block
@@ -8595,7 +9212,7 @@ class TestPersistReturnToCookieSharedHelper:
 
         monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
         resp = Response()
-        _persist_return_to_cookie(resp, "/mcp/authorize?client_id=llm_dcrc_abc")
+        _persist_return_to_cookie(resp, "/mcp/authorize?client_id=llm_dcrc_abc", _make_https_request())
         assert "litellm_cp_return_to=" in self._cookie(resp)
 
     def test_bad_absolute_with_control_plane_configured_does_not_raise_and_is_not_stored(self, monkeypatch):
@@ -8609,7 +9226,7 @@ class TestPersistReturnToCookieSharedHelper:
             "litellm.proxy.proxy_server.general_settings", {"control_plane_url": "https://cp.example.com"}
         )
         resp = Response()
-        _persist_return_to_cookie(resp, "https://evil.example.com/steal")  # must not raise
+        _persist_return_to_cookie(resp, "https://evil.example.com/steal", _make_https_request())  # must not raise
         assert "litellm_cp_return_to=" not in self._cookie(resp)
 
     def test_none_return_to_is_a_noop(self):
@@ -8618,7 +9235,7 @@ class TestPersistReturnToCookieSharedHelper:
         from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
 
         resp = Response()
-        _persist_return_to_cookie(resp, None)
+        _persist_return_to_cookie(resp, None, _make_https_request())
         assert "litellm_cp_return_to=" not in self._cookie(resp)
 
     def test_control_plane_matching_absolute_is_stored(self, monkeypatch):
@@ -8630,5 +9247,126 @@ class TestPersistReturnToCookieSharedHelper:
             "litellm.proxy.proxy_server.general_settings", {"control_plane_url": "https://cp.example.com"}
         )
         resp = Response()
-        _persist_return_to_cookie(resp, "https://cp.example.com/ui?page=models")
+        _persist_return_to_cookie(resp, "https://cp.example.com/ui?page=models", _make_https_request())
         assert "litellm_cp_return_to=" in self._cookie(resp)
+
+    def test_cookie_is_secure_and_httponly_over_https(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        resp = Response()
+        _persist_return_to_cookie(resp, "/mcp/authorize", _make_https_request())
+        cookie = self._cookie(resp)
+        assert "Secure" in cookie
+        assert "HttpOnly" in cookie
+        assert "SameSite=lax" in cookie
+
+    def test_cookie_is_not_secure_over_plain_http_direct(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        resp = Response()
+        _persist_return_to_cookie(resp, "/mcp/authorize", _make_http_request())
+        assert "Secure" not in self._cookie(resp)
+
+    def test_cookie_is_secure_behind_trusted_tls_terminating_proxy(self, monkeypatch):
+        """Regression for the reported bug: TLS terminates at a reverse proxy, litellm only
+        sees a plain-HTTP hop, but a trusted X-Forwarded-Proto: https must still mark the
+        cookie Secure."""
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import _persist_return_to_cookie
+
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+        )
+        resp = Response()
+        request = _make_http_request()
+        request.client.host = "10.0.0.5"
+        request.headers = {"X-Forwarded-Proto": "https"}
+        _persist_return_to_cookie(resp, "/mcp/authorize", request)
+        assert "Secure" in self._cookie(resp)
+
+
+class TestSessionTokenCookie:
+    """Regression tests for the ``token`` session cookie set by every sign-in path
+    (username/password login, SSO callback, the CLI /v2, /v3 login exchange helpers).
+    It was previously set with no Secure/HttpOnly/SameSite attributes at all -- always
+    sent over plain HTTP and readable by any script on the page. HttpOnly must stay off
+    deliberately: the dashboard reads this cookie via document.cookie."""
+
+    @staticmethod
+    def _cookie(resp) -> str:
+        return resp.headers.get("set-cookie", "")
+
+    def test_secure_over_direct_https(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
+
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        resp = Response()
+        set_session_token_cookie(resp, _make_https_request(), "jwt-token-value")
+        cookie = self._cookie(resp)
+        assert "token=jwt-token-value" in cookie
+        assert "Secure" in cookie
+        assert "SameSite=lax" in cookie
+        assert "HttpOnly" not in cookie
+
+    def test_not_secure_over_direct_http(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
+
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        resp = Response()
+        set_session_token_cookie(resp, _make_http_request(), "jwt-token-value")
+        assert "Secure" not in self._cookie(resp)
+
+    def test_secure_behind_trusted_tls_terminating_proxy(self, monkeypatch):
+        """THE regression: TLS terminates at a reverse proxy, litellm only sees a
+        plain-HTTP hop, but the session cookie must still be marked Secure when the
+        operator has configured a trusted proxy that reports X-Forwarded-Proto: https."""
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
+
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"use_x_forwarded_for": True, "mcp_trusted_proxy_ranges": ["10.0.0.0/8"]},
+        )
+        request = _make_http_request()
+        request.client.host = "10.0.0.5"
+        request.headers = {"X-Forwarded-Proto": "https"}
+        resp = Response()
+        set_session_token_cookie(resp, request, "jwt-token-value")
+        assert "Secure" in self._cookie(resp)
+
+    def test_untrusted_spoofed_forwarded_proto_is_ignored(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
+
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        request = _make_http_request()
+        request.headers = {"X-Forwarded-Proto": "https"}
+        resp = Response()
+        set_session_token_cookie(resp, request, "jwt-token-value")
+        assert "Secure" not in self._cookie(resp)
+
+    def test_proxy_base_url_https_overrides_literal_http_scheme(self, monkeypatch):
+        from fastapi import Response
+
+        from litellm.proxy.management_endpoints.ui_sso import set_session_token_cookie
+
+        monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+        resp = Response()
+        set_session_token_cookie(resp, _make_http_request(), "jwt-token-value")
+        assert "Secure" in self._cookie(resp)

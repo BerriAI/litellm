@@ -1,13 +1,9 @@
 import copy
 import sys
-import os
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_scan_id,

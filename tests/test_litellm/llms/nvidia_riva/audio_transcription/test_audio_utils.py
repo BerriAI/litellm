@@ -15,7 +15,6 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.llms.nvidia_riva.audio_transcription.audio_utils import (
     resample_to_riva_pcm,

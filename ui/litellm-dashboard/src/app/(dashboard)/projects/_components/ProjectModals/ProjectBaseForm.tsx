@@ -14,7 +14,7 @@ import { getGuardrailsList } from "@/components/networking";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { Alert, AlertTitle } from "@/components/shared/Alert";
 import { SearchSelect } from "@/components/shared/SearchSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";

@@ -22,7 +22,9 @@ import type { ObjectPermission } from "@/components/object_permission_types";
 import { isProxyAdminRole } from "@/utils/roles";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { Badge } from "@/components/ui/badge";
+import { modelGroupHref } from "@/utils/entityLinks";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
@@ -31,7 +33,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleTooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { labelWithDocsHint, labelWithHint } from "@/components/shared/form/LabelWithHint";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -48,13 +50,15 @@ import { z } from "zod/v4";
 import GuardrailsSelect from "./GuardrailsSelect";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AccessGroupSelector from "../common_components/AccessGroupSelector";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import BudgetDurationDropdown, { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_duration_dropdown";
 import {
   computeTeamModelBadges,
   normalizeTeamModelSelection,
   TeamAccessGroupModelGrant,
+  TeamModelBadge,
   TeamModelBadgeKind,
 } from "./teamModelAccess";
+import { computeInheritedGrants } from "../permissions/inheritedGrants";
 import MetadataKeyValueFields, {
   metadataObjectToPairs,
   metadataPairsSchema,
@@ -64,13 +68,21 @@ import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMeta
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
-import DurationSelect from "../common_components/DurationSelect";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import GuardrailSettingsView from "../GuardrailSettingsView";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import {
+  mcpServersForIdentifier,
+  resolveEffectiveMcpServers,
+  type EffectiveMcpServer,
+} from "../mcp_server_management/effectiveMcpServers";
+import type { MCPServer } from "../mcp_tools/types";
+import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
+import { useAccessGroups, type AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
 import { estimateChecks, estimateTooltips } from "../templates/estimatedOutputTokens";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -111,6 +123,113 @@ const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
   direct: "info",
   "access-group": "success",
 };
+
+const teamModelBadgeHref = (badge: TeamModelBadge): string | undefined =>
+  badge.kind === "direct" || badge.kind === "access-group" ? modelGroupHref(badge.label) : undefined;
+
+export type McpGrantResolution =
+  | { readonly kind: "resolved"; readonly serverIds: ReadonlySet<string> }
+  | { readonly kind: "unresolvable"; readonly reason: string };
+
+export type TeamAccessGroupGrants = {
+  readonly ids: readonly string[];
+  readonly serverIds: readonly string[];
+};
+
+const sameIdSelection = (a: readonly string[], b: readonly string[]): boolean => {
+  const aSet = new Set(a);
+  const bSet = new Set(b);
+  return aSet.size === bSet.size && [...aSet].every((id) => bSet.has(id));
+};
+
+export const standingToolPermissionServerIds = (
+  loadedEffectiveServers: readonly EffectiveMcpServer[],
+  loadedAccessGroupIds: readonly string[],
+  accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[],
+  loadedTeamGroupServerIds: readonly string[],
+): ReadonlySet<string> => {
+  const loadedUnifiedServerIds = new Set([
+    ...accessGroups
+      .filter((group) => loadedAccessGroupIds.includes(group.access_group_id))
+      .flatMap((group) => group.access_mcp_server_ids),
+    ...loadedTeamGroupServerIds,
+  ]);
+  return new Set(
+    loadedEffectiveServers
+      .filter(({ source, server }) => source.kind === "toolPermission" && !loadedUnifiedServerIds.has(server.server_id))
+      .map(({ server }) => server.server_id),
+  );
+};
+
+export type McpGrantInput = {
+  readonly effectiveServers: readonly EffectiveMcpServer[];
+  readonly selectedAccessGroupIds: readonly string[];
+  readonly accessGroups: readonly Pick<AccessGroupResponse, "access_group_id" | "access_mcp_server_ids">[];
+  readonly standingServerIds: ReadonlySet<string>;
+  readonly loadTeamGroups: () => Promise<TeamAccessGroupGrants>;
+};
+
+export const grantedMcpServerIds = async ({
+  effectiveServers,
+  selectedAccessGroupIds,
+  accessGroups,
+  standingServerIds,
+  loadTeamGroups,
+}: McpGrantInput): Promise<McpGrantResolution> => {
+  const selectedGroups = accessGroups.filter((group) => selectedAccessGroupIds.includes(group.access_group_id));
+  const direct = effectiveServers
+    .filter(({ source }) => source.kind !== "toolPermission")
+    .map(({ server }) => server.server_id);
+  if (selectedAccessGroupIds.every((id) => selectedGroups.some((group) => group.access_group_id === id))) {
+    return {
+      kind: "resolved",
+      serverIds: new Set([
+        ...direct,
+        ...selectedGroups.flatMap((group) => group.access_mcp_server_ids),
+        ...standingServerIds,
+      ]),
+    };
+  }
+  const loadedTeamGroups = await loadTeamGroups().catch(() => null);
+  if (loadedTeamGroups === null) {
+    return { kind: "unresolvable", reason: "the team's access groups could not be reloaded" };
+  }
+  if (sameIdSelection(selectedAccessGroupIds, loadedTeamGroups.ids)) {
+    return {
+      kind: "resolved",
+      serverIds: new Set([...direct, ...loadedTeamGroups.serverIds, ...standingServerIds]),
+    };
+  }
+  return { kind: "unresolvable", reason: "the team's access groups could not be loaded" };
+};
+
+export const retainedMcpToolPermissions = (
+  toolPermissions: Record<string, string[]>,
+  grantedServerIds: ReadonlySet<string>,
+  knownServers: readonly MCPServer[],
+): Record<string, string[]> => {
+  const entries = Object.entries(toolPermissions).flatMap(([key, tools]) => {
+    const named = mcpServersForIdentifier(knownServers, key);
+    const granted = named.filter((server) => grantedServerIds.has(server.server_id));
+    if (named.length === 0 || granted.length === named.length) {
+      return [[key, tools] as const];
+    }
+    if (granted.length === 0) {
+      return [];
+    }
+    return granted.map(({ server_id }) => [server_id, [...(toolPermissions[server_id] ?? []), ...tools]] as const);
+  });
+  return entries.reduce<Record<string, string[]>>(
+    (retained, [key, tools]) => ({
+      ...retained,
+      [key]: [...new Set([...(retained[key] ?? []), ...tools])],
+    }),
+    {},
+  );
+};
+
+export const mcpUnresolvableSaveError = (reason: string): string =>
+  `Cannot save MCP tool permissions because ${reason}. Retry once the page has finished loading`;
 
 export interface TeamMembership {
   user_id: string;
@@ -169,7 +288,7 @@ export interface TeamData {
     object_permission?: ObjectPermission | null;
     team_member_budget_table: {
       max_budget: number;
-      budget_duration: string;
+      budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
     } | null;
@@ -329,7 +448,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
-  team_member_key_duration: info.team_member_key_duration,
+  team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
   team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
   budget_duration: info.budget_duration,
@@ -436,6 +555,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const routerSettingsRef = React.useRef<RouterSettingsAccordionRef>(null);
   const [organization, setOrganization] = useState<Organization | null>(null);
   const { userRole, userId } = useAuthorized();
+  const { data: allMcpServers = [], isError: mcpServersFailed, isLoading: mcpServersLoading } = useMCPServers();
+  const { data: allMcpToolsets = [], isError: mcpToolsetsFailed, isLoading: mcpToolsetsLoading } = useMCPToolsets();
+  const { data: allAccessGroups = [], isError: accessGroupsFailed, isLoading: accessGroupsLoading } = useAccessGroups();
   const canEditTeamEstimates = isProxyAdminRole(userRole);
   const teamEstimateTooltip = estimateTooltips(canEditTeamEstimates, "team");
   const { data: userOrganizations = [] } = useOrganizations();
@@ -456,6 +578,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const killSwitchOn = form.watch("disable_global_guardrails");
   const watchedMcpSelection = form.watch("mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
+  const mcpLookupFailure =
+    (
+      [
+        [mcpServersFailed, "the MCP server list could not be loaded"],
+        [mcpToolsetsFailed, "the MCP toolset list could not be loaded"],
+        [accessGroupsFailed, "the access group list could not be loaded"],
+        [mcpServersLoading || mcpToolsetsLoading || accessGroupsLoading, "the MCP server inventory is still loading"],
+      ] as const
+    ).find(([failed]) => failed)?.[1] ?? null;
   const availableRateLimitModels = useMemo(() => {
     const selected = watchedModels ?? teamData?.team_info?.models ?? [];
     if (selected.includes("all-proxy-models") || selected.includes("all-team-models")) {
@@ -831,10 +962,56 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         accessGroups: [],
         toolsets: [],
       };
-      const serverIds = new Set(servers || []);
-      const mcpToolPermissions = Object.fromEntries(
-        Object.entries(values.mcp_tool_permissions || {}).filter(([serverId]) => serverIds.has(serverId)),
+      const submittedToolPermissions: Record<string, string[]> = values.mcp_tool_permissions || {};
+      const effectiveMcpInput = {
+        allServers: allMcpServers,
+        selectedServers: servers || [],
+        selectedAccessGroups: accessGroups || [],
+        selectedToolsets: toolsets || [],
+        toolsets: allMcpToolsets,
+        toolPermissions: submittedToolPermissions,
+      };
+      const loadedObjectPermission = info.object_permission ?? {};
+      const loadedMcpInput = {
+        allServers: allMcpServers,
+        selectedServers: loadedObjectPermission.mcp_servers ?? [],
+        selectedAccessGroups: loadedObjectPermission.mcp_access_groups ?? [],
+        selectedToolsets: loadedObjectPermission.mcp_toolsets ?? [],
+        toolsets: allMcpToolsets,
+        toolPermissions: loadedObjectPermission.mcp_tool_permissions ?? {},
+      };
+      const loadedEffectiveMcpServers = resolveEffectiveMcpServers(loadedMcpInput);
+      const standingServerIds = standingToolPermissionServerIds(
+        loadedEffectiveMcpServers,
+        info.access_group_ids ?? [],
+        allAccessGroups,
+        info.access_group_mcp_server_ids ?? [],
       );
+      const mcpGrantInput: McpGrantInput = {
+        effectiveServers: resolveEffectiveMcpServers(effectiveMcpInput),
+        selectedAccessGroupIds: values.access_group_ids || [],
+        accessGroups: allAccessGroups,
+        standingServerIds,
+        loadTeamGroups: async () => {
+          const teamInfo = await teamInfoCall(accessToken, teamId);
+          return {
+            ids: teamInfo.team_info.access_group_ids ?? [],
+            serverIds: teamInfo.team_info.access_group_mcp_server_ids ?? [],
+          };
+        },
+      };
+      const mcpResolution: McpGrantResolution =
+        mcpLookupFailure !== null
+          ? { kind: "unresolvable", reason: mcpLookupFailure }
+          : await grantedMcpServerIds(mcpGrantInput);
+      if (mcpResolution.kind === "unresolvable" && Object.keys(submittedToolPermissions).length > 0) {
+        toast.fromError(mcpUnresolvableSaveError(mcpResolution.reason));
+        return;
+      }
+      const mcpToolPermissions =
+        mcpResolution.kind === "resolved"
+          ? retainedMcpToolPermissions(submittedToolPermissions, mcpResolution.serverIds, allMcpServers)
+          : submittedToolPermissions;
 
       updateData.object_permission = {};
       if (servers) {
@@ -857,16 +1034,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         agents: [],
         accessGroups: [],
       };
-      if (agents && agents.length > 0) {
-        updateData.object_permission.agents = agents;
-      }
-      if (agentAccessGroups && agentAccessGroups.length > 0) {
-        updateData.object_permission.agent_access_groups = agentAccessGroups;
-      }
+      updateData.object_permission.agents = agents;
+      updateData.object_permission.agent_access_groups = agentAccessGroups;
       delete values.agents_and_groups;
 
       // Handle vector stores permissions
-      if (values.vector_stores && values.vector_stores.length > 0) {
+      if (values.vector_stores) {
         updateData.object_permission.vector_stores = values.vector_stores;
       }
 
@@ -931,6 +1104,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const { team_info: info } = teamData;
 
+  const inheritedMcpServers = computeInheritedGrants(
+    info.access_group_mcp_server_ids,
+    info.access_group_details,
+    (grant) => grant.mcp_server_ids,
+  );
+  const inheritedAgents = computeInheritedGrants(
+    info.access_group_agent_ids,
+    info.access_group_details,
+    (grant) => grant.agent_ids,
+  );
+
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
 
   const allGuardrails: GuardrailListItem[] = guardrailsData?.guardrails ?? [];
@@ -971,8 +1155,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           <Card className="block p-6">
             <p>Rate Limits</p>
             <div className="mt-2">
-              <p>TPM: {info.tpm_limit || "Unlimited"}</p>
-              <p>RPM: {info.rpm_limit || "Unlimited"}</p>
+              <p>TPM: {info.tpm_limit ?? "Unlimited"}</p>
+              <p>RPM: {info.rpm_limit ?? "Unlimited"}</p>
               {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
               {(() => {
                 const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
@@ -1007,7 +1191,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 (badge, index) => (
                   <SimpleTooltip key={`${badge.kind}-${badge.label}-${index}`} content={badge.tooltip}>
                     <span>
-                      <StatusBadge tone={TEAM_MODEL_BADGE_TONES[badge.kind]} label={badge.label} />
+                      <StatusBadge
+                        tone={TEAM_MODEL_BADGE_TONES[badge.kind]}
+                        label={badge.label}
+                        href={teamModelBadgeHref(badge)}
+                      />
                     </span>
                   </SimpleTooltip>
                 ),
@@ -1024,7 +1212,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             </div>
           </Card>
 
-          <ObjectPermissionsView objectPermission={info.object_permission} variant="card" accessToken={accessToken} />
+          <ObjectPermissionsView
+            objectPermission={info.object_permission}
+            inheritedMcpServers={inheritedMcpServers}
+            inheritedAgents={inheritedAgents}
+            variant="card"
+            accessToken={accessToken}
+          />
 
           <Card className="block p-6">
             <GuardrailSettingsView
@@ -1256,7 +1450,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                           name="team_member_budget_duration"
                           label="Default Budget Duration"
                         >
-                          {({ value, onChange }) => <DurationSelect value={value ?? undefined} onChange={onChange} />}
+                          {({ id, value, onChange }) => (
+                            <BudgetDurationDropdown
+                              id={id}
+                              showNeverResets
+                              placeholder="Inherit team reset period"
+                              value={value === null ? NEVER_RESETS_BUDGET_DURATION : value}
+                              onChange={(next) => onChange(next === NEVER_RESETS_BUDGET_DURATION ? null : next)}
+                            />
+                          )}
                         </FormField>
                         <FormField
                           control={form.control}
@@ -1598,6 +1800,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <MCPToolPermissions
                       accessToken={accessToken || ""}
                       selectedServers={watchedMcpSelection?.servers || []}
+                      selectedAccessGroups={watchedMcpSelection?.accessGroups || []}
+                      selectedToolsets={watchedMcpSelection?.toolsets || []}
                       toolPermissions={watchedToolPermissions || {}}
                       onChange={(toolPerms) => form.setValue("mcp_tool_permissions", toolPerms)}
                     />
@@ -1689,7 +1893,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   </FormField>
                 </FieldGroup>
 
-                <div className="sticky z-10 -inset-x-6 -bottom-6 border-t border-border bg-card p-4 pr-0">
+                <div className="sticky z-chrome -inset-x-6 -bottom-6 border-t border-border bg-card p-4 pr-0">
                   <div className="flex items-center justify-end gap-2">
                     <Button type="button" variant="outline" onClick={() => setIsEditing(false)} disabled={isTeamSaving}>
                       Cancel
@@ -1720,9 +1924,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <p className="font-medium">Models</p>
                 <div className="flex flex-wrap gap-2 mt-1">
                   {info.models.map((model, index) => (
-                    <Badge key={index} variant="secondary">
+                    <BadgeLink key={index} href={modelGroupHref(model)}>
                       {model}
-                    </Badge>
+                    </BadgeLink>
                   ))}
                 </div>
               </div>
@@ -1731,9 +1935,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   <p className="font-medium">Default Member Models</p>
                   <div className="flex flex-wrap gap-2 mt-1">
                     {info.default_team_member_models.map((model, index) => (
-                      <Badge key={index} variant="secondary">
+                      <BadgeLink key={index} href={modelGroupHref(model)}>
                         {model}
-                      </Badge>
+                      </BadgeLink>
                     ))}
                   </div>
                 </div>
@@ -1760,8 +1964,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               </div>
               <div>
                 <p className="font-medium">Rate Limits</p>
-                <div>TPM: {info.tpm_limit || "Unlimited"}</div>
-                <div>RPM: {info.rpm_limit || "Unlimited"}</div>
+                <div>TPM: {info.tpm_limit ?? "Unlimited"}</div>
+                <div>RPM: {info.rpm_limit ?? "Unlimited"}</div>
                 {(() => {
                   const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
                   const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
@@ -1811,11 +2015,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Info className="ml-1 inline size-3.5 align-text-bottom" />
                   </SimpleTooltip>
                 </p>
-                <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
+                <div>Max Budget: {info.team_member_budget_table?.max_budget ?? "No Limit"}</div>
                 <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
                 <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
-                <div>TPM Limit: {info.team_member_budget_table?.tpm_limit || "No Limit"}</div>
-                <div>RPM Limit: {info.team_member_budget_table?.rpm_limit || "No Limit"}</div>
+                <div>TPM Limit: {info.team_member_budget_table?.tpm_limit ?? "No Limit"}</div>
+                <div>RPM Limit: {info.team_member_budget_table?.rpm_limit ?? "No Limit"}</div>
               </div>
               <div>
                 <p className="font-medium">Router Settings</p>
@@ -1866,6 +2070,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
               <ObjectPermissionsView
                 objectPermission={info.object_permission}
+                inheritedMcpServers={inheritedMcpServers}
+                inheritedAgents={inheritedAgents}
                 variant="inline"
                 className="pt-4 border-t border-border"
                 accessToken={accessToken}
@@ -1921,7 +2127,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               variant="ghost"
               size="icon-xs"
               onClick={() => copyToClipboard(info.team_id, "team-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
+              className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["team-id"]
                   ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent"

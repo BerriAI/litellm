@@ -1,14 +1,9 @@
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.vertex_ai.common_utils import (
     _get_vertex_url,
@@ -33,7 +28,7 @@ def test_validate_vertex_location_accepts_valid(location):
     ["attacker.example/", "evil.com#", "us.attacker.example", "us/../..", "US", "us_central1", "-us", "", None],
 )
 def test_validate_vertex_location_rejects_invalid(location):
-    with pytest.raises(ValueError, match="vertex_location is required|Invalid vertex_location format"):
+    with pytest.raises(ValueError, match=r"vertex_location is required|Invalid vertex_location format"):
         validate_vertex_location(location)
 
 
@@ -198,6 +193,22 @@ def test_set_schema_property_ordering_with_excessive_nesting():
         match=f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting.",
     ):
         set_schema_property_ordering(schema)
+
+
+def test_set_schema_property_ordering_skips_non_dict_property_values():
+    """Non-dict property values must be skipped, not recursed into (they used to raise)."""
+    schema = {
+        "properties": {
+            "a": "hello",
+            "b": {"type": "string"},
+            "c": ["x"],
+            "d": "a string mentioning items",
+        }
+    }
+
+    result = set_schema_property_ordering(schema)
+
+    assert result["propertyOrdering"] == ["a", "b", "c", "d"]
 
 
 def test_build_vertex_schema():
@@ -953,6 +964,48 @@ def test_construct_target_url_with_version_prefix():
     assert str(target_url) == expected_url
 
 
+@pytest.mark.parametrize(
+    ("requested_route", "expected_url"),
+    [
+        (
+            "/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+        ),
+        (
+            "/projects/test-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/count-tokens:rawPredict",
+        ),
+        (
+            "/projects/other-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-6:rawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:rawPredict",
+        ),
+        (
+            "/projects/test-project/locations/global/cachedContents",
+            "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/cachedContents",
+        ),
+        (
+            "/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+            "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict",
+        ),
+        (
+            "/v1beta1/projects/test-project/locations/global/cachedContents",
+            "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/global/cachedContents",
+        ),
+    ],
+)
+def test_construct_target_url_versionless_project_route_gets_api_version(requested_route: str, expected_url: str) -> None:
+    from litellm.llms.vertex_ai.common_utils import construct_target_url
+
+    target_url = construct_target_url(
+        base_url="https://aiplatform.googleapis.com",
+        requested_route=requested_route,
+        vertex_project="test-project",
+        vertex_location="global",
+    )
+
+    assert str(target_url) == expected_url
+
+
 def test_fix_enum_types():
     """
     Test _fix_enum_types function removes enum fields when type is not string.
@@ -1273,6 +1326,85 @@ async def test_vertex_ai_token_counter_routes_gemini_models():
         assert result is not None
         assert isinstance(result, TokenCountResponse)
         assert result.total_tokens == 50
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_converts_messages_to_contents_for_gemini():
+    """
+    Regression test for #36921: acount_tokens passed contents=None to the
+    Gemini countTokens endpoint when called with messages=, causing a
+    silent zero token count. Verify messages are converted to Gemini
+    contents format when contents is None.
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    token_counter = VertexAITokenCounter()
+
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
+    ) as mock_acount_tokens:
+        mock_acount_tokens.return_value = {
+            "totalTokens": 42,
+            "tokenizer_used": "gemini",
+        }
+
+        await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello, how are you?"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                }
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+        )
+
+        mock_acount_tokens.assert_called_once()
+        call_kwargs = mock_acount_tokens.call_args.kwargs
+        passed_contents = call_kwargs["contents"]
+        assert passed_contents is not None
+        assert isinstance(passed_contents, list)
+        assert len(passed_contents) >= 1
+        assert "parts" in passed_contents[0]
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_returns_none_when_api_omits_total_tokens():
+    """
+    Regression test for #36921: Vertex returns HTTP 200 with no totalTokens
+    when contents is null. The old code read totalTokens with a default of 0
+    and returned a silent zero. Verify we now return None so the caller falls
+    back to local token counting.
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    token_counter = VertexAITokenCounter()
+
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens"
+    ) as mock_acount_tokens:
+        mock_acount_tokens.return_value = {"tokenizer_used": "gemini"}
+
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-central1",
+                }
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+        )
+
+        assert result is None
 
 
 @pytest.mark.asyncio
@@ -1606,3 +1738,44 @@ def test_vertex_text_embedding_request_includes_labels_from_metadata():
         },
     )
     assert req.get("labels") == {"project_id": "cost-center-1"}
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_api"),
+    [
+        ("lyria-002", "lyria_predict"),
+        ("vertex_ai/lyria-002", "lyria_predict"),
+        ("lyria-3-clip-preview", "lyria_interactions"),
+        ("lyria-3-pro-preview", "lyria_interactions"),
+    ],
+)
+def test_get_vertex_ai_lyria_model_info_resolves_audio_api(model, expected_api):
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    model_info = get_vertex_ai_lyria_model_info(model=model)
+
+    assert model_info is not None
+    assert model_info["vertex_ai_audio_api"] == expected_api
+
+
+@pytest.mark.parametrize("model", ["en-US-Studio-O", "gemini-2.5-flash-preview-tts", "chirp-3-hd-charon"])
+def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(model):
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    assert get_vertex_ai_lyria_model_info(model=model) is None
+
+
+def test_get_vertex_ai_lyria_model_info_falls_back_to_bundled_map(monkeypatch):
+    import litellm
+    from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
+
+    stale_runtime_model_cost = {
+        key: value for key, value in litellm.model_cost.items() if not key.startswith("vertex_ai/lyria")
+    }
+    monkeypatch.setattr(litellm, "model_cost", stale_runtime_model_cost)
+
+    model_info = get_vertex_ai_lyria_model_info(model="lyria-3-pro-preview")
+
+    assert model_info is not None
+    assert model_info["vertex_ai_audio_api"] == "lyria_interactions"
+    assert model_info["supported_audio_formats"] == ("mp3", "wav")

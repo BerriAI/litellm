@@ -4,12 +4,9 @@ Tests for Pydantic AI agents transformation.
 Tests the helper functions and response transformation without making real API calls.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.a2a_protocol.providers.pydantic_ai_agents.transformation import (
     PydanticAITransformation,

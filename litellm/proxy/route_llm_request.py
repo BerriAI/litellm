@@ -50,12 +50,12 @@ def _route_user_config_request(data: dict, route_type: str):
     return ret_val
 
 
-def _is_a2a_agent_model(model_name: Any) -> bool:
+def _is_a2a_agent_model(model_name: object) -> bool:
     """Check if the model name is for an A2A agent (a2a/ prefix)."""
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
-def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: Any, team_id: str | None) -> None:
+def _raise_if_model_fully_blocked(llm_router: LitellmRouter, model_name: object, team_id: str | None) -> None:
     if not isinstance(model_name, str) or not model_name:
         return
     if not isinstance(llm_router, litellm.Router):

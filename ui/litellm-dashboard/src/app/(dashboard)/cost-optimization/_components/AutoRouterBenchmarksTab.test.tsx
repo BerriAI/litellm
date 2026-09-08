@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,10 +9,20 @@ import { ApiError } from "@/lib/http/client";
 vi.mock("./useAutoRouterBenchmarks", () => ({ useAutoRouterBenchmarks: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({ useAutoRouters: vi.fn() }));
 vi.mock("./ShadowEvalSection", () => ({ default: () => <div data-testid="shadow-eval-section" /> }));
+vi.mock("@/components/shared/advanced_date_picker", () => ({
+  __esModule: true,
+  default: ({ onValueChange }: { onValueChange: (value: { from?: Date; to?: Date }) => void }) => (
+    <button
+      type="button"
+      data-testid="date-picker"
+      onClick={() => onValueChange({ from: new Date(2026, 7, 1), to: new Date(2026, 7, 5) })}
+    />
+  ),
+}));
 
 import { useAutoRouters } from "@/app/(dashboard)/hooks/models/useModels";
 
-import AutoRouterBenchmarksTab from "./AutoRouterBenchmarksTab";
+import AutoRouterBenchmarksTab, { AutoRouterUsageView } from "./AutoRouterBenchmarksTab";
 import type {
   AutoRouterBenchmarkGroup,
   AutoRouterBenchmarksResponse,
@@ -58,6 +68,7 @@ const totals = (overrides: Partial<Totals> = {}): Totals => ({
   avg_session_seconds: 7560,
   avg_tokens_per_session: 5_300_000,
   spend: 359.86,
+  classifier_cost: 6.146,
   saved_spend: 2174.59,
   baseline_spend: 2534.45,
   saved_pct: 85.8,
@@ -89,6 +100,7 @@ const zeroTotals: Totals = {
   avg_session_seconds: 0,
   avg_tokens_per_session: 0,
   spend: 0,
+  classifier_cost: 0,
   saved_spend: 0,
   baseline_spend: 0,
   saved_pct: 0,
@@ -112,12 +124,28 @@ const response = (groups: AutoRouterBenchmarkGroup[], shared: Totals = totals())
 });
 
 const renderTab = () => {
+  const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
+  const onDateChange = vi.fn();
+  const activity = {
+    dateValue,
+    onDateChange,
+    results: [],
+    loading: false,
+    isFetchingMore: false,
+    progress: { currentPage: 1, totalPages: 1 },
+    cancelled: false,
+    cancel: vi.fn(),
+  };
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <AutoRouterBenchmarksTab accessToken="sk-test" />
-    </QueryClientProvider>,
-  );
+  return {
+    dateValue,
+    onDateChange,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <AutoRouterBenchmarksTab accessToken="sk-test" activity={activity} />
+      </QueryClientProvider>,
+    ),
+  };
 };
 
 describe("AutoRouterBenchmarksTab", () => {
@@ -125,15 +153,18 @@ describe("AutoRouterBenchmarksTab", () => {
     mockAutoRouters();
   });
 
-  it("leads with total estimated savings, before the three session-shape metrics", () => {
+  it("leads with total estimated savings, before the four session-shape metrics", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
 
     const labels = screen
-      .getAllByText(/Total estimated savings|Avg turns per session|Avg session length|Avg tokens per session/)
+      .getAllByText(
+        /Total estimated savings|Avg saved per session|Avg turns per session|Avg session length|Avg tokens per session/,
+      )
       .map((node) => node.textContent);
     expect(labels).toEqual([
       "Total estimated savings",
+      "Avg saved per session",
       "Avg turns per session",
       "Avg session length",
       "Avg tokens per session",
@@ -155,13 +186,71 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("5.3M")).toBeInTheDocument();
   });
 
-  it("pairs the savings with the session count it was earned over", () => {
+  it.each([
+    { spend: 20665.28, classifier_cost: 342.18, turns: 140815, llm: "$20,323.10", cost: "$342.18" },
+    { spend: 0, classifier_cost: 0, turns: 0, llm: "$0.00", cost: "$0.00" },
+    { spend: 0.002, classifier_cost: 0.0004, turns: 100, llm: "$0.0016", cost: "$0.0004" },
+  ])("shows total classification cost across $turns turns without a per-turn rate", ({ llm, cost, ...values }) => {
+    const stats = totals({ ...values, saved_spend: 10126.28, baseline_spend: values.spend + 10126.28 });
+    mockHook({ data: response([group(stats)], stats) });
+    renderTab();
+
+    expect(
+      screen
+        .getAllByRole("definition")
+        .map((node) => node.textContent)
+        .slice(1, 3),
+    ).toEqual([llm, cost]);
+    expect(screen.queryByText(/1K turns/)).not.toBeInTheDocument();
+    expect(screen.getAllByText("$10,126.28").length).toBeGreaterThan(0);
+  });
+
+  it.each([null, undefined])("keeps totals when the classification breakdown is %s", (classifier_cost) => {
+    const stats = totals({ classifier_cost });
+    mockHook({ data: response([group(stats)], stats) });
+    renderTab();
+
+    expect(screen.getAllByText("Unavailable")).toHaveLength(2);
+    expect(screen.queryByText(/\/ 1K turns/)).not.toBeInTheDocument();
+    expect(screen.getByText("$359.86")).toBeInTheDocument();
+    expect(screen.getByText("$2,174.59")).toBeInTheDocument();
+    expect(screen.getByText(/some usage predates classification-cost tracking/)).toBeInTheDocument();
+  });
+
+  it("pairs the savings with the session count it was earned over, in its own tile", () => {
     mockHook({ data: response([group(), group({ router_name: "gpt-auto" })]) });
     renderTab();
 
-    expect(screen.getByText("Avg saved per session")).toBeInTheDocument();
-    expect(screen.getByText("$23.13")).toBeInTheDocument();
-    expect(screen.getByText("across 94 sessions")).toBeInTheDocument();
+    const tile = screen.getByText("Avg saved per session").closest('[data-slot="card"]');
+    if (!tile) throw new Error("expected avg saved per session to render as a metric tile");
+
+    expect(within(tile).getByText("$23.13")).toBeInTheDocument();
+    expect(within(tile).getByText("· 94 sessions")).toBeInTheDocument();
+  });
+
+  it("exposes each spend row as a term and its value, not as loose text", () => {
+    mockHook({ data: response([group()]) });
+    renderTab();
+
+    const terms = screen.getAllByRole("term").map((node) => node.textContent);
+    const values = screen.getAllByRole("definition").map((node) => node.textContent);
+    expect(terms).toEqual([
+      "Actual auto-router spend",
+      "LLM spend",
+      "Classification cost",
+      "Estimated spend at highest-tier model",
+    ]);
+    expect(values).toEqual(["$359.86", "$353.71", "$6.15", "$2,534.45"]);
+  });
+
+  it("lets both hero columns shrink below their content so a large total cannot clip", () => {
+    const huge = totals({ saved_spend: 123_456_789_012.34 });
+    mockHook({ data: response([group(huge)], huge) });
+    renderTab();
+
+    const figure = screen.getByText("$123,456,789,012.34");
+    const grid = figure.closest('[data-slot="card"]')?.firstElementChild;
+    expect(grid).toHaveClass("md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]");
   });
 
   it("shows a cost increase as a positive delta rather than a saving", () => {
@@ -288,8 +377,8 @@ describe("AutoRouterBenchmarksTab", () => {
     renderTab();
 
     expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
-    expect(screen.getAllByText("$0.00")).toHaveLength(4);
-    expect(screen.getByText("across 0 sessions")).toBeInTheDocument();
+    expect(screen.getAllByText("$0.00")).toHaveLength(6);
+    expect(screen.getByText("· 0 sessions")).toBeInTheDocument();
     expect(screen.getByText("0s")).toBeInTheDocument();
     expect(screen.getByText(/turns measured/)).toBeInTheDocument();
     expect(screen.getAllByText("0.0%").length).toBeGreaterThan(0);
@@ -304,20 +393,39 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.queryByText("-0%")).not.toBeInTheDocument();
   });
 
-  it("requests the default thirty day window and widens or narrows it from the picker", () => {
+  it("queries the shared picker's range and pushes picker changes back to the shared state", () => {
     mockHook({ data: response([group()]) });
-    renderTab();
+    const { dateValue, onDateChange } = renderTab();
 
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "30d");
-    expect(screen.getByText("Last 30 days")).toBeInTheDocument();
+    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, undefined);
+    expect(screen.getByText("Jul 6 – Aug 5 (UTC)")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "7d" }));
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "7d");
-    expect(screen.getByText("Last 7 days")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("date-picker"));
+    expect(onDateChange).toHaveBeenCalledWith({ from: new Date(2026, 7, 1), to: new Date(2026, 7, 5) });
+  });
 
-    fireEvent.click(screen.getByRole("tab", { name: "24h" }));
-    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", "24h");
-    expect(screen.getByText("Last 24 hours")).toBeInTheDocument();
+  it("scopes the query to one key when the usage view is mounted for a key", () => {
+    mockHook({ data: response([group()]) });
+    const dateValue = { from: new Date(2026, 6, 6), to: new Date(2026, 7, 5) };
+    const activity = {
+      dateValue,
+      onDateChange: vi.fn(),
+      results: [],
+      loading: false,
+      isFetchingMore: false,
+      progress: { currentPage: 1, totalPages: 1 },
+      cancelled: false,
+      cancel: vi.fn(),
+    };
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <AutoRouterUsageView accessToken="sk-test" activity={activity} apiKey="key-hash-1" />
+      </QueryClientProvider>,
+    );
+
+    expect(vi.mocked(useAutoRouterBenchmarks)).toHaveBeenCalledWith("sk-test", dateValue, "key-hash-1");
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Shadow Evals" })).not.toBeInTheDocument();
   });
 
   it("shows usage by default and mounts shadow evals only when its sub-tab is selected", () => {
@@ -347,11 +455,11 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByTestId("shadow-eval-section")).toBeInTheDocument();
   });
 
-  it("keeps the window picker reachable while a window has no sessions", () => {
+  it("keeps the range picker reachable while a window has no sessions", () => {
     mockHook({ data: response([], zeroTotals) });
     renderTab();
 
-    expect(screen.getByRole("tab", { name: "30d" })).toBeInTheDocument();
+    expect(screen.getByTestId("date-picker")).toBeInTheDocument();
     expect(screen.getByText("All auto-routers")).toBeInTheDocument();
   });
 });

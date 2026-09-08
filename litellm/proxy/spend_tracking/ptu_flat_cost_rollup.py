@@ -14,7 +14,6 @@ and share the existing unique constraint.
 
 import asyncio
 import json
-import sys
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -324,17 +323,6 @@ class _LoadedDeployments:
 
     models: tuple[PTUModel, ...]
     scanned_ids: frozenset[str]
-    config_sourced: bool
-
-
-def _running_router() -> object | None:
-    """The proxy's router, or None outside a running proxy.
-
-    Read out of ``sys.modules`` rather than imported, so a rollup driven from a test or a
-    script does not pull the whole proxy server in behind it.
-    """
-    proxy_server: Final = sys.modules.get("litellm.proxy.proxy_server")
-    return getattr(proxy_server, "llm_router", None) if proxy_server is not None else None
 
 
 def _config_deployments(router: object | None, *, owned_by_db: frozenset[str]) -> tuple[_PTUDeployment, ...]:
@@ -357,21 +345,22 @@ def _config_deployments(router: object | None, *, owned_by_db: frozenset[str]) -
     )
 
 
-async def _load_ptu_models(prisma_client: "PrismaClient") -> _LoadedDeployments:
+async def _load_ptu_models(prisma_client: "PrismaClient", *, router: object | None) -> _LoadedDeployments:
     """Every deployment carrying valid manual PTU config, and every id the scan saw.
 
     Reserved capacity is billed by the provider whichever file declared it, so a
     deployment the proxy only knows from config.yaml accrues alongside the stored ones.
+    The router is handed in rather than read off the proxy module, so a run prices exactly
+    the deployments its caller declares and nothing a co-resident process left behind.
     """
     rows: Final = await prisma_client.db.litellm_proxymodeltable.find_many()
     db_ids: Final = frozenset(model_id for row in rows if (model_id := str(getattr(row, "model_id", "") or "")))
-    config_records: Final = _config_deployments(_running_router(), owned_by_db=db_ids)
+    config_records: Final = _config_deployments(router, owned_by_db=db_ids)
     models: Final = tuple(
         parsed for parsed in (_parse_ptu_model(row) for row in (*rows, *config_records)) if parsed is not None
     )
     return _LoadedDeployments(
         models=models,
-        config_sourced=bool(config_records),
         scanned_ids=db_ids
         | frozenset(record.model_id for record in config_records)
         | frozenset(model.model_id for model in models),
@@ -382,12 +371,15 @@ async def run_ptu_flat_cost_rollup(
     prisma_client: "PrismaClient",
     target_date: date | None = None,
     may_prune: bool = True,
+    router: object | None = None,
 ) -> RollupResult:
     """Rollup one UTC day of flat PTU cost across all PTU-configured model deployments.
 
-    Defaults to yesterday UTC. Authoritative for the day: it upserts the current charges
-    first, then deletes the day's sentinel rows this run did not refresh, so a
-    since-removed, invalidated, or now-out-of-window deployment leaves no stale charge.
+    Defaults to yesterday UTC. It upserts the current charges first, then deletes the
+    day's sentinel rows it scanned and did not refresh, so an invalidated or
+    now-out-of-window deployment leaves no stale charge. A deployment it cannot see is
+    left alone, since its charge records capacity that was reserved and this run has no
+    grounds to retract it.
 
     The prune predicate is ``updated_at < run_started`` rather than "not in the charge
     set I computed", which matters under concurrency: whether a row is garbage becomes a
@@ -406,7 +398,7 @@ async def run_ptu_flat_cost_rollup(
     date_str: Final = day.isoformat()
     run_started: Final = datetime.now(timezone.utc)
 
-    loaded: Final = await _load_ptu_models(prisma_client)
+    loaded: Final = await _load_ptu_models(prisma_client, router=router)
     ptu_models: Final = loaded.models
     charges: Final = _aggregate_charges(ptu_models, day)
 
@@ -436,7 +428,7 @@ async def run_ptu_flat_cost_rollup(
             prisma_client,
             date_str=date_str,
             run_started=run_started,
-            scanned_ids=loaded.scanned_ids if loaded.config_sourced else None,
+            scanned_ids=loaded.scanned_ids,
         )
 
     verbose_proxy_logger.info(
@@ -527,6 +519,7 @@ async def _existing_sentinel_keys(
 async def run_ptu_flat_cost_backfill(
     prisma_client: "PrismaClient",
     today: date | None = None,
+    router: object | None = None,
 ) -> BackfillResult:
     """Price the elapsed days of every PTU window that carry no sentinel row yet.
 
@@ -546,7 +539,7 @@ async def run_ptu_flat_cost_backfill(
         verbose_proxy_logger.warning("PTU backfill: prisma_client is None, skipping")
         return BackfillResult(start=end, end=end, days_scanned=0, rows_written=0)
 
-    ptu_models: Final = (await _load_ptu_models(prisma_client)).models
+    ptu_models: Final = (await _load_ptu_models(prisma_client, router=router)).models
     days: Final = _backfill_window(ptu_models, end)
 
     if not days:
@@ -591,6 +584,7 @@ async def run_scheduled_ptu_rollup(
     pod_lock_manager: "PodLockManager | None" = None,
     target_date: date | None = None,
     alert: Callable[[str], Awaitable[None]] | None = None,
+    router: object | None = None,
 ) -> RollupResult | None:
     """Run the daily rollup under a cross-pod lock so only one proxy reconciles a day.
 
@@ -615,7 +609,7 @@ async def run_scheduled_ptu_rollup(
         return None
 
     if pod_lock_manager is None or pod_lock_manager.redis_cache is None:
-        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=False)
+        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=False, router=router)
 
     if not await pod_lock_manager.acquire_lock(cronjob_id=PTU_ROLLUP_JOB_ID, ttl=PTU_ROLLUP_LOCK_TTL_SECONDS):
         if await _lock_is_held(pod_lock_manager):
@@ -629,10 +623,10 @@ async def run_scheduled_ptu_rollup(
             "PTU rollup: could not take the rollup lock and no other pod holds it, "
             "running unguarded rather than skipping the day"
         )
-        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=False)
+        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=False, router=router)
 
     try:
-        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=True)
+        return await _run_and_alert(prisma_client, target_date=target_date, alert=alert, may_prune=True, router=router)
     finally:
         await pod_lock_manager.release_lock(cronjob_id=PTU_ROLLUP_JOB_ID)
 
@@ -657,6 +651,7 @@ async def _run_and_alert(
     target_date: date | None,
     alert: "Callable[[str], Awaitable[None]] | None",
     may_prune: bool = True,
+    router: object | None = None,
 ) -> RollupResult:
     """Reconcile the day, catch up any days left unpriced, and alert on charges that did not land.
 
@@ -669,7 +664,9 @@ async def _run_and_alert(
     explicit date means reconcile exactly that day, so it stays a single-day operation.
     Its failure is contained: the day's own result is returned either way.
     """
-    result: Final = await run_ptu_flat_cost_rollup(prisma_client, target_date=target_date, may_prune=may_prune)
+    result: Final = await run_ptu_flat_cost_rollup(
+        prisma_client, target_date=target_date, may_prune=may_prune, router=router
+    )
     if result.rows_failed:
         await _deliver_alert(
             alert,
@@ -686,7 +683,7 @@ async def _run_and_alert(
             "by the provider with nothing attributing it here. Extend the window, or retire the deployment.",
         )
     if target_date is None:
-        await _backfill_and_alert(prisma_client, alert=alert)
+        await _backfill_and_alert(prisma_client, alert=alert, router=router)
     return result
 
 
@@ -694,6 +691,7 @@ async def _backfill_and_alert(
     prisma_client: "PrismaClient",
     *,
     alert: "Callable[[str], Awaitable[None]] | None",
+    router: object | None = None,
 ) -> None:
     """Catch up unpriced PTU days, alerting on charges that did not land.
 
@@ -701,7 +699,7 @@ async def _backfill_and_alert(
     caller whatever the catch-up pass does.
     """
     try:
-        backfill: Final = await run_ptu_flat_cost_backfill(prisma_client)
+        backfill: Final = await run_ptu_flat_cost_backfill(prisma_client, router=router)
     except Exception as exc:  # noqa: BLE001  # the catch-up pass must not fail the day's rollup
         verbose_proxy_logger.error("PTU backfill: catch-up pass failed, the day's rollup still stands: %s", exc)
         return
@@ -724,8 +722,8 @@ async def _deliver_alert(alert: "Callable[[str], Awaitable[None]] | None", messa
         verbose_proxy_logger.error("PTU rollup: could not deliver the failed-charge alert: %s", exc)
 
 
-def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...] | None") -> "Mapping[str, object]":
-    """One delete statement's predicate. An absent chunk leaves the sweep unbounded.
+def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...]") -> "Mapping[str, object]":
+    """One delete statement's predicate, bounded to the deployments in ``chunk``.
 
     Returns a plain dict because the query builder serialises the mapping it is handed and
     rejects a read-only view of one.
@@ -734,7 +732,7 @@ def _prune_filter(*, date_str: str, cutoff: datetime, chunk: "tuple[str, ...] | 
         "date": date_str,
         "api_key": PTU_SENTINEL_API_KEY,
         "updated_at": {"lt": cutoff},  # mutable-ok: prisma comparison filter
-        **({} if chunk is None else {"model": {"in": chunk}}),  # mutable-ok: prisma membership filter
+        "model": {"in": chunk},  # mutable-ok: prisma membership filter
     }
 
 
@@ -743,7 +741,7 @@ async def _prune_unrefreshed_sentinel_rows(
     *,
     date_str: str,
     run_started: datetime,
-    scanned_ids: frozenset[str] | None,
+    scanned_ids: frozenset[str],
 ) -> None:
     """Delete the day's PTU sentinel rows this run looked at and did not refresh.
 
@@ -754,25 +752,22 @@ async def _prune_unrefreshed_sentinel_rows(
     different hosts, and the grace separates a row that is hours old from one written
     seconds ago without waiting on clocks agreeing.
 
-    A run that priced a deployment only its own host declares must also name the
-    deployments it scanned. Staleness alone is sufficient while every run derives its
-    charges from the same table, because then any two runs compute the same set, so a
-    database-only run still sweeps by timestamp exactly as it always has. Once one host's
-    charges come from a file the others cannot read, a row it never considered is not
-    evidence of anything, and deleting it drops a charge that host is responsible for.
+    It must also be a deployment this run could see. A charge already written is a record
+    of capacity that was reserved, so the only rows a run may retract are the ones it can
+    reassess: a deployment it scanned and then declined to charge, because the window
+    closed or the PTU config was removed. A row whose deployment is absent from every
+    source the run reads is not evidence that the reservation never happened, only that
+    this host cannot account for it. A deployment the router refused to register is in that
+    same bucket as one that was removed, because neither reaches the scan.
 
-    Where the bound applies the ids go out in chunks, because each is one bind variable and
-    the server rejects a statement carrying more than 32767 of them, which a proxy holding
-    that many deployments would otherwise hit every night with no handler above here.
+    The ids go out in chunks, because each is one bind variable and the server rejects a
+    statement carrying more than 32767 of them, which a proxy holding that many
+    deployments would otherwise hit every night with no handler above here.
     """
     cutoff: Final = run_started - timedelta(seconds=PTU_PRUNE_SKEW_GRACE_SECONDS)
-    ordered: Final = () if scanned_ids is None else tuple(sorted(scanned_ids))
-    chunks: Final = (
-        (None,)
-        if scanned_ids is None
-        else tuple(
-            ordered[start : start + _PRUNE_ID_CHUNK_SIZE] for start in range(0, len(ordered), _PRUNE_ID_CHUNK_SIZE)
-        )
+    ordered: Final = tuple(sorted(scanned_ids))
+    chunks: Final = tuple(
+        ordered[start : start + _PRUNE_ID_CHUNK_SIZE] for start in range(0, len(ordered), _PRUNE_ID_CHUNK_SIZE)
     )
     filters: Final = tuple(_prune_filter(date_str=date_str, cutoff=cutoff, chunk=chunk) for chunk in chunks)
     deletions: Final = tuple(
@@ -781,10 +776,10 @@ async def _prune_unrefreshed_sentinel_rows(
     deleted: Final = sum(deletions)
     if deleted:
         verbose_proxy_logger.info(
-            "PTU rollup for %s: pruned %s stale sentinel row(s) across %s deployment(s)",
+            "PTU rollup for %s: pruned %s stale sentinel row(s) of %s deployment(s) considered",
             date_str,
             deleted,
-            "every" if scanned_ids is None else len(scanned_ids),
+            len(ordered),
         )
 
 

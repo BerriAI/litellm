@@ -358,9 +358,7 @@ async def test_update_spend_logs_failure_raises_after_retries(
 
     monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
 
-    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
-        side_effect=httpx.ReadError("network blip")
-    )
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=httpx.ReadError("network blip"))
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
     with pytest.raises(httpx.ReadError):
@@ -395,9 +393,7 @@ async def test_update_spend_logs_isolates_poison_row_and_persists_good_rows(
     async def _create_many(*, data: Any, skip_duplicates: bool) -> None:
         ids = [row["request_id"] for row in data]
         if poison_id in ids:
-            raise _data_error(
-                "Inconsistent column data: 22P05 invalid byte sequence for encoding UTF8: 0x00"
-            )
+            raise _data_error("Inconsistent column data: 22P05 invalid byte sequence for encoding UTF8: 0x00")
         written.extend(ids)
 
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_create_many)
@@ -477,6 +473,110 @@ async def test_update_spend_logs_retries_and_requeues_batch_on_db_outage(
     assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["a", "b", "c"]
 
 
+def _deadlock_error() -> Exception:
+    return _data_error(
+        'Error occurred during query execution: ConnectorError(ConnectorError { user_facing_error: None, '
+        'kind: QueryError(PostgresError { code: "40P01", message: "deadlock detected", severity: "ERROR" }) })'
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_retries_deadlock_and_keeps_every_row(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 40P01 deadlock aborts the whole insert, so the same rows succeed on replay.
+    Before the fix the deadlock surfaced as a plain ``DataError`` and went through
+    poison-row isolation, which bisected the batch and dropped every row the
+    deadlock happened to hit as if Postgres had rejected it.
+    """
+
+    async def _fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
+    create_many = AsyncMock(side_effect=[_deadlock_error(), _deadlock_error(), None])
+    mock_prisma_client.db.litellm_spendlogs.create_many = create_many
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = []
+
+    await ProxyUpdateSpend.update_spend_logs(
+        n_retry_times=2,
+        prisma_client=mock_prisma_client,
+        db_writer_client=None,
+        proxy_logging_obj=proxy_logging,
+        logs_to_process=[make_spend_log_row(request_id="a"), make_spend_log_row(request_id="b")],
+    )
+
+    attempts = tuple(
+        tuple(row["request_id"] for row in call.kwargs["data"]) for call in create_many.await_args_list
+    )
+    assert attempts == (("a", "b"), ("a", "b"), ("a", "b"))
+    assert mock_prisma_client.spend_log_transactions == []
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_requeues_batch_once_deadlock_retries_exhaust(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If every retry deadlocks, the batch goes back to the head of the queue for
+    the next flush instead of being dropped.
+    """
+
+    async def _fake_sleep(_: float) -> None:
+        return None
+
+    monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_deadlock_error())
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="c")]
+
+    with pytest.raises(type(_deadlock_error())):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=1,
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=[make_spend_log_row(request_id="a"), make_spend_log_row(request_id="b")],
+        )
+
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == 2
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["a", "b", "c"]
+
+
+@pytest.mark.asyncio
+async def test_update_spend_logs_requeues_batch_on_non_transport_db_error(
+    mock_prisma_client: Any, make_spend_log_row: Any
+) -> None:
+    """A DB error that is neither transport nor deadlock (here P2021, the table is
+    gone mid-migration) is not retried in place, but the dequeued batch must not
+    be lost either: it goes back to the head of the queue so it lands once the
+    DB is healthy again.
+    """
+    from prisma.errors import TableNotFoundError
+
+    err = TableNotFoundError(
+        {"user_facing_error": {"error_code": "P2021", "message": "The table does not exist", "meta": {}}}
+    )
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=err)
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    mock_prisma_client.spend_log_transactions = [make_spend_log_row(request_id="c")]
+
+    with pytest.raises(TableNotFoundError):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=2,
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=[make_spend_log_row(request_id="a"), make_spend_log_row(request_id="b")],
+        )
+
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count == 1
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["a", "b", "c"]
+
+
 @pytest.mark.asyncio
 async def test_requeue_after_outage_drops_oldest_logs_past_the_byte_budget(
     mock_prisma_client: Any, make_spend_log_row: Any
@@ -553,8 +653,9 @@ async def test_flush_returns_the_bytes_it_took_off_the_queue(mock_prisma_client:
 async def test_update_spend_logs_does_not_requeue_non_transport_failures(
     mock_prisma_client: Any, make_spend_log_row: Any
 ) -> None:
-    """Only transport failures are worth replaying. A rejection the DB will keep
-    rejecting must not be requeued, or it would wedge the queue forever.
+    """Only DB failures are worth replaying. A row the proxy itself cannot
+    serialize would fail the same way on every flush, so requeueing it would
+    wedge the head of the queue forever.
     """
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=ValueError("bad payload"))
     proxy_logging = MagicMock()
@@ -576,7 +677,7 @@ async def test_update_spend_logs_does_not_requeue_non_transport_failures(
 
 @pytest.mark.asyncio
 async def test_update_spend_logs_caps_isolation_attempts_under_poison_flood(
-    mock_prisma_client: Any, make_spend_log_row: Any
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A flood of poisoned rows must not amplify one failed bulk insert into
     unbounded failed inserts. The per-batch failure budget hard-caps the number
@@ -590,6 +691,9 @@ async def test_update_spend_logs_caps_isolation_attempts_under_poison_flood(
     # single create_many batch (< BATCH_SIZE) whose row count exceeds the attempt
     # cap, so the bound bites and attempts stay below the input row count
     n_rows = attempt_cap * 3
+    # One statement, so this measures the isolation cap alone. The per-statement
+    # floor the row budget adds is pinned separately below.
+    monkeypatch.setattr(utils_mod, "SPEND_LOG_WRITE_BATCH_MAX_ROWS", n_rows)
 
     async def _always_poison(*, data: Any, skip_duplicates: bool) -> None:
         raise _data_error("invalid byte sequence for encoding UTF8: 0x00")
@@ -612,20 +716,52 @@ async def test_update_spend_logs_caps_isolation_attempts_under_poison_flood(
     assert attempts < n_rows
 
 
+@pytest.mark.asyncio
+async def test_row_budget_costs_at_most_one_extra_attempt_per_statement(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Splitting a flush into more statements must not buy the poison flood a
+    fresh isolation budget each time. Every statement costs the one insert it
+    takes to discover it is poisoned, and the shared budget caps everything
+    above that, so the whole flush stays within the cap plus the statement
+    count however finely it is split.
+    """
+    attempt_cap = utils_mod.MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
+    n_rows = attempt_cap * 3
+    logs = [make_spend_log_row(request_id=f"r{i}") for i in range(n_rows)]
+    split = {"max_bytes": 2_000_000, "max_rows": 100, "monkeypatch": monkeypatch}
+
+    # A clean flush issues exactly one call per statement, so this is the observed
+    # split count rather than an arithmetic one; asserting it is >1 is what proves
+    # the row budget really divided the flush.
+    statements = await _flush_and_count_create_many(mock_prisma_client, logs, poison=False, **split)
+    attempts = await _flush_and_count_create_many(mock_prisma_client, logs, poison=True, **split)
+
+    assert statements > 1
+    assert attempts <= attempt_cap + statements
+    assert attempts < n_rows
+
+
 async def _flush_and_count_create_many(
     mock_prisma_client: Any,
     logs: List[Any],
     max_bytes: int,
     poison: bool,
     monkeypatch: pytest.MonkeyPatch,
+    max_rows: int = 10_000,
 ) -> int:
-    """Run one flush and return how many ``create_many`` calls it issued."""
+    """Run one flush and return how many ``create_many`` calls it issued.
+
+    ``max_rows`` defaults high enough not to bind so a caller varying
+    ``max_bytes`` measures the byte budget alone.
+    """
 
     async def _create_many(*, data: Any, skip_duplicates: bool) -> None:
         if poison:
             raise _data_error("invalid byte sequence for encoding UTF8: 0x00")
 
     monkeypatch.setattr(utils_mod, "SPEND_LOG_WRITE_BATCH_MAX_BYTES", max_bytes)
+    monkeypatch.setattr(utils_mod, "SPEND_LOG_WRITE_BATCH_MAX_ROWS", max_rows)
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(side_effect=_create_many)
     proxy_logging = MagicMock()
     proxy_logging.failure_handler = AsyncMock()
@@ -717,15 +853,11 @@ def test_disable_spend_updates_reflects_general_settings(
     """
     import litellm.proxy.proxy_server as proxy_server_mod
 
-    monkeypatch.setattr(
-        proxy_server_mod, "general_settings", {"disable_spend_updates": True}
-    )
+    monkeypatch.setattr(proxy_server_mod, "general_settings", {"disable_spend_updates": True})
     pinned = {
         "with_flag_true": ProxyUpdateSpend.disable_spend_updates(),
         "type_is_bool": isinstance(ProxyUpdateSpend.disable_spend_updates(), bool),
-        "method_is_static": isinstance(
-            ProxyUpdateSpend.__dict__["disable_spend_updates"], staticmethod
-        ),
+        "method_is_static": isinstance(ProxyUpdateSpend.__dict__["disable_spend_updates"], staticmethod),
     }
     assert pinned == {
         "with_flag_true": True,

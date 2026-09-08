@@ -1,8 +1,8 @@
 import sys
 import time
 import webbrowser
-from collections.abc import Callable, Mapping
-from typing import Any, Final
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Final, TypeVar
 from urllib.parse import urlencode
 
 import click
@@ -99,15 +99,11 @@ class CliPollData(TypedDict, total=False):
     team_id: str
 
 
-class CliPollRequestKwargs(TypedDict, total=False):
-    timeout: int
-    headers: dict[str, str]
-
-
 class CliSsoStartData(TypedDict):
-    login_id: str
-    poll_secret: str
-    user_code: str
+    login_id: ReadOnly[str]
+    poll_secret: ReadOnly[str]
+    user_code: ReadOnly[str]
+    verification_uri_complete: ReadOnly[NotRequired[str]]
 
 
 class CliAuthResult(TypedDict):
@@ -116,6 +112,8 @@ class CliAuthResult(TypedDict):
     teams: list[str]
     team_id: str | None
 
+
+_TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 KEYRING_INSTALL_HINT: Final = "pip install 'litellm[cli]'"
 
@@ -358,7 +356,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(teams: list[dict[str, Any]], selected_index: int = 0) -> None:
+def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console: Final = Console()
 
@@ -396,7 +394,7 @@ def display_interactive_team_selection(teams: list[dict[str, Any]], selected_ind
             console.print(f"   Budget: [dim]{budget_str}[/dim]\n")
 
 
-def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
+def prompt_team_selection(teams: Sequence[_TeamMapping]) -> _TeamMapping | None:
     """Interactive team selection with arrow keys"""
     if not teams:
         return None
@@ -446,8 +444,8 @@ def prompt_team_selection(teams: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def prompt_team_selection_fallback(
-    teams: list[dict[str, Any]],
-) -> dict[str, Any] | None:
+    teams: Sequence[_TeamMapping],
+) -> _TeamMapping | None:
     """Fallback team selection for non-interactive environments"""
     if not teams:
         return None
@@ -518,10 +516,7 @@ def _poll_for_ready_data(
 ) -> CliPollData | None:
     for attempt in range(total_timeout // poll_interval):
         try:
-            request_kwargs: CliPollRequestKwargs = {"timeout": request_timeout}
-            if headers is not None:
-                request_kwargs["headers"] = headers
-            response = requests.get(url, **request_kwargs)
+            response = requests.get(url, headers=headers, timeout=request_timeout)
             if response.status_code == 200:
                 data: CliPollData = response.json()
                 status = data.get("status")
@@ -868,11 +863,22 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
         poll_secret: Final = cli_sso_flow["poll_secret"]
         user_code: Final = cli_sso_flow["user_code"]
 
-        sso_url = f"{base_url}/sso/key/generate?" + urlencode({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": key_id})
+        browser_prefills_code: Final = isinstance(cli_sso_flow.get("verification_uri_complete"), str)
+        sso_url: Final = f"{base_url}/sso/key/generate?" + urlencode(
+            (
+                ("source", LITELLM_CLI_SOURCE_IDENTIFIER),
+                ("key", key_id),
+                *((("user_code", user_code),) if browser_prefills_code else ()),
+            )
+        )
 
         click.echo(f"Opening browser to: {sso_url}")
         click.echo("Please complete the SSO authentication in your browser...")
-        click.echo(f"Verification code: {user_code}")
+        click.echo(
+            f"Verification code: {user_code} (pre-filled in the browser, check it matches)"
+            if browser_prefills_code
+            else f"Verification code: {user_code}"
+        )
         click.echo(f"Session ID: {key_id}")
 
         # Open browser

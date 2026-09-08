@@ -8,7 +8,7 @@ import { useInfiniteTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { ModelSelect, MODEL_SENTINEL_OPTIONS } from "@/components/ModelSelect/ModelSelect";
 import { toast } from "@/lib/toast";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import type { SearchSelectOption } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";

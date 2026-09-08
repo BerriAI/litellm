@@ -427,4 +427,21 @@ describe("RegenerateKeyModal", () => {
       );
     });
   });
+
+  it("should report the rotated hash from token_id when the API leaves token null", async () => {
+    const user = userEvent.setup();
+    mockRegenerateKeyCall.mockResolvedValue({
+      key: "sk-new-regenerated-key",
+      token: null,
+      token_id: "rotated-hash-456",
+    });
+
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} />);
+    await user.click(screen.getByRole("button", { name: /Regenerate/ }));
+
+    await waitFor(() => {
+      expect(mockOnKeyUpdate).toHaveBeenCalledOnce();
+    });
+    expect(mockOnKeyUpdate.mock.calls[0][0].token).toBe("rotated-hash-456");
+  });
 });

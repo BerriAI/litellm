@@ -1,12 +1,9 @@
 import asyncio
 import copy
-import os
-import sys
 from typing import List, cast
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -26,25 +23,12 @@ OPUS_4_6_MIN_TOKENS = 4096
 
 
 @pytest.fixture(autouse=True)
-def local_model_cost_map(monkeypatch):
-    """
-    The remote cost map does not carry `prompt_cache_min_tokens` yet, so a test that reads the
-    default map would pass here and flake in CI. Force the in-repo map.
+def _local_model_cost_map_autouse(local_model_cost_map):
+    """Every test here reads `prompt_cache_min_tokens`, which only the in-repo map
+    carries, so the shared local_model_cost_map fixture (conftest.py) is autouse
+    for the whole file."""
+    yield
 
-    `get_model_info` is lru_cached, so swapping `model_cost` is not enough on its own: an earlier
-    test that resolved these models against the remote map leaves entries with no
-    `prompt_cache_min_tokens`, and the stale hit resolves to the default. Clear on the way out too,
-    so the entries these tests warm against the local map do not leak into later tests.
-    """
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
 
 
 def _deployments(*models: str) -> List[dict]:
@@ -164,6 +148,25 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
     )
 
     assert filtered == [deployments[1]]
+
+
+@pytest.mark.asyncio
+async def test_async_filter_deployments_does_not_pin_when_target_order_is_set():
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
+    messages = _messages(word_count=5000)
+
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"_target_order": 2},
+    )
+
+    assert filtered == deployments
 
 
 @pytest.mark.asyncio
