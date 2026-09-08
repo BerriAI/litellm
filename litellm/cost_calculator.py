@@ -2414,6 +2414,46 @@ class RealtimeAPITokenUsageProcessor(BaseTokenUsageProcessor):
         )
 
 
+_RESPONSES_WS_BILLABLE_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete"})
+
+
+class _ResponsesWsEventResponse(BaseModel):
+    usage: Mapping[str, object] | None = None
+
+
+class _ResponsesWsEvent(BaseModel):
+    type: str = ""
+    response: _ResponsesWsEventResponse | None = None
+
+
+class ResponsesWebSocketTokenUsageProcessor(BaseTokenUsageProcessor):
+    @staticmethod
+    def collect_usage_from_responses_ws_results(
+        results: Sequence[Mapping[str, object]],
+    ) -> tuple[Usage, ...]:
+        events: Final = tuple(_ResponsesWsEvent.model_validate(result) for result in results)
+        return tuple(
+            ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform the realtime processor uses
+                event.response.usage
+            )
+            for event in events
+            if event.type in _RESPONSES_WS_BILLABLE_EVENT_TYPES
+            and event.response is not None
+            and event.response.usage is not None
+        )
+
+    @staticmethod
+    def collect_and_combine_usage_from_responses_ws_results(
+        results: Sequence[Mapping[str, object]],
+    ) -> Usage:
+        collected_usage_objects: Final = ResponsesWebSocketTokenUsageProcessor.collect_usage_from_responses_ws_results(
+            results
+        )
+        return ResponsesWebSocketTokenUsageProcessor.combine_usage_objects(
+            list(collected_usage_objects)  # mutable-ok: combine_usage_objects requires a list parameter
+        )
+
+
 _TRANSCRIPTION_COMPLETED_EVENT_TYPE: Final = "conversation.item.input_audio_transcription.completed"
 
 

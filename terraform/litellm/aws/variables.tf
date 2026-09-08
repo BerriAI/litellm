@@ -549,6 +549,44 @@ variable "proxy_config" {
   default     = {}
 }
 
+# ---------- Prometheus metrics sidecar ----------
+
+variable "gateway_metrics_port" {
+  description = <<-EOT
+    Serve Prometheus /metrics from a `metrics` sidecar container in the
+    gateway task on this port (1-65535, not 4000), so a scrape never runs on
+    an inference worker. The sidecar runs the gateway image with
+    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
+    workers' PROMETHEUS_MULTIPROC_DIR samples over a task volume. Null (the
+    default) leaves /metrics on the gateway port only. The sidecar port has
+    no virtual-key auth and is not routed through the ALB; open it to your
+    scrapers with gateway_metrics_scrape_cidrs. Needs gateway_image v1.101.0
+    or newer.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.gateway_metrics_port == null || (var.gateway_metrics_port >= 1 && var.gateway_metrics_port <= 65535 && var.gateway_metrics_port != 4000)
+    error_message = "gateway_metrics_port must be between 1 and 65535 and must not be 4000 (the gateway port)."
+  }
+}
+
+variable "gateway_metrics_scrape_cidrs" {
+  description = <<-EOT
+    CIDR blocks allowed to reach gateway_metrics_port on the gateway tasks
+    (your Prometheus or collector subnets). Empty by default, so only the
+    ALB can reach the tasks. Ignored when gateway_metrics_port is null.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.gateway_metrics_scrape_cidrs : can(cidrnetmask(c))])
+    error_message = "gateway_metrics_scrape_cidrs must contain valid IPv4 CIDR blocks."
+  }
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log retention for the three services."
   type        = number
