@@ -165,11 +165,9 @@ class EncryptedContentAffinityCheck(CustomLogger):
         litellm_params: object,
     ) -> tuple[object, object] | None:
         """
-        ``(api_base, api_key)`` pair identifying an Azure resource. Two
-        deployments sharing both are interchangeable for ``encrypted_content``
-        follow-ups; Azure rejects content produced by any other resource.
-        Missing values are resolved from ``litellm_credential_name`` without
-        modifying the deployment, and explicit deployment values take precedence.
+        ``(api_base, api_key)`` identifies an upstream encryption boundary.
+        The values are resolved from the deployment and its named credential
+        without modifying the deployment.
 
         Accepts any object exposing dict-style ``.get(key, default)``: plain
         dicts (the common case in ``healthy_deployments``) as well as
@@ -187,22 +185,18 @@ class EncryptedContentAffinityCheck(CustomLogger):
         credential_name: Final = getter("litellm_credential_name")
         credential_values: Final[Mapping[str, object] | None] = (
             CredentialAccessor.get_credential_values(credential_name)
-            if isinstance(credential_name, str) and credential_name and (api_base is None or api_key is None)
+            if isinstance(credential_name, str) and credential_name
             else None
         )
         effective_api_base: Final = (
-            api_base
-            if api_base is not None
-            else credential_values.get("api_base")
-            if credential_values is not None
-            else None
+            credential_values.get("api_base")
+            if credential_values is not None and "api_base" in credential_values
+            else api_base
         )
         effective_api_key: Final = (
-            api_key
-            if api_key is not None
-            else credential_values.get("api_key")
-            if credential_values is not None
-            else None
+            credential_values.get("api_key")
+            if credential_values is not None and "api_key" in credential_values
+            else api_key
         )
         if not effective_api_base or not effective_api_key:
             return None
