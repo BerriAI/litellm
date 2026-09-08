@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -77,6 +78,7 @@ _SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
     max_size_in_memory=SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
     default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL,
 )
+_SPEND_LOG_QUERY_LOCK: Final = asyncio.Lock()
 _EMPTY_KEY_METADATA: Final[Mapping[str, KeyMetadataDict]] = MappingProxyType({})
 _EMPTY_EMAILS: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -205,11 +207,17 @@ def _spend_log_cache_key(digest: str, window: tuple[datetime, datetime]) -> str:
 
 def _cached_spend_log_metadata(
     cache: InMemoryCache,
-    digest: str,
+    digests: AbstractSet[str],
     window: tuple[datetime, datetime],
-) -> KeyMetadataDict | None:
-    cached: Final[object] = cache.get_cache(_spend_log_cache_key(digest, window))
-    return None if cached is None else _CACHED_KEY_METADATA.validate_python(cached)
+) -> Mapping[str, KeyMetadataDict]:
+    return MappingProxyType(
+        {
+            digest: _CACHED_KEY_METADATA.validate_python(cached)
+            for digest in digests
+            for cached in (cache.get_cache(_spend_log_cache_key(digest, window)),)
+            if cached is not None
+        }
+    )
 
 
 async def _query_spend_log_metadata(
@@ -237,12 +245,36 @@ async def _query_spend_log_metadata(
 def _remember_spend_log_metadata(
     cache: InMemoryCache, digest: str, window: tuple[datetime, datetime], meta: KeyMetadataDict | None
 ) -> None:
-    if meta is None:
-        cache.set_cache(
-            _spend_log_cache_key(digest, window), KeyMetadataDict(), ttl=SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL
-        )
+    key: Final = _spend_log_cache_key(digest, window)
+    if meta is not None:
+        cache.set_cache(key, meta)
         return
-    cache.set_cache(_spend_log_cache_key(digest, window), meta)
+    missed_before: Final = f"{key}:missed-before"
+    if cache.get_cache(missed_before) is not None:
+        cache.set_cache(key, KeyMetadataDict())
+        return
+    cache.set_cache(key, KeyMetadataDict(), ttl=SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL)
+    cache.set_cache(missed_before, True)
+
+
+async def _spend_log_metadata_one_query_at_a_time(
+    prisma_client: PrismaClient,
+    cache: InMemoryCache,
+    lock: asyncio.Lock,
+    digests: AbstractSet[str],
+    window: tuple[datetime, datetime],
+) -> Mapping[str, KeyMetadataDict]:
+    async with lock:
+        settled: Final = _cached_spend_log_metadata(cache, digests, window)
+        pending: Final = digests - frozenset(settled)
+        fresh: Final = (
+            await _query_spend_log_metadata(prisma_client, pending, window) if pending else _EMPTY_KEY_METADATA
+        )
+        if fresh is None:
+            return settled
+        for digest in pending:
+            _remember_spend_log_metadata(cache, digest, window, fresh.get(digest))
+        return MappingProxyType({**settled, **fresh})
 
 
 async def recover_key_metadata_from_spend_logs(
@@ -250,26 +282,19 @@ async def recover_key_metadata_from_spend_logs(
     missing_keys: AbstractSet[str],
     window: tuple[datetime, datetime],
     cache: InMemoryCache = _SPEND_LOG_METADATA_CACHE,
+    lock: asyncio.Lock = _SPEND_LOG_QUERY_LOCK,
 ) -> Mapping[str, KeyMetadataDict]:
     digests: Final = frozenset(key for key in missing_keys if _is_spend_log_digest(key))
     if not digests:
         return _EMPTY_KEY_METADATA
-    cached: Final = MappingProxyType(
-        {
-            digest: meta
-            for digest in digests
-            for meta in (_cached_spend_log_metadata(cache, digest, window),)
-            if meta is not None
-        }
-    )
+    cached: Final = _cached_spend_log_metadata(cache, digests, window)
     uncached: Final = digests - frozenset(cached)
-    fresh: Final = await _query_spend_log_metadata(prisma_client, uncached, window) if uncached else _EMPTY_KEY_METADATA
-    if fresh is not None:
-        for digest in uncached:
-            _remember_spend_log_metadata(cache, digest, window, fresh.get(digest))
-    return MappingProxyType(
-        {digest: meta for digest, meta in (*cached.items(), *(fresh or _EMPTY_KEY_METADATA).items()) if meta}
+    settled: Final = (
+        await _spend_log_metadata_one_query_at_a_time(prisma_client, cache, lock, uncached, window)
+        if uncached
+        else _EMPTY_KEY_METADATA
     )
+    return MappingProxyType({digest: meta for digest, meta in (*cached.items(), *settled.items()) if meta})
 
 
 def _row_with_recovered_fields(

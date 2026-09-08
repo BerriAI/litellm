@@ -1,3 +1,4 @@
+import asyncio
 import time
 from collections.abc import Sequence
 from datetime import datetime
@@ -415,3 +416,46 @@ async def test_recover_key_metadata_from_spend_logs_forgets_a_miss_long_before_a
     miss_expires = next(deadline for key, deadline in cache.ttl_dict.items() if unknown in key)
     assert miss_expires - started <= SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL + 1
     assert hit_expires - started >= SPEND_LOG_KEY_METADATA_CACHE_TTL - 1
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_runs_one_query_for_concurrent_lookups():
+    digest = hash_token("cli-session-shared")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    cache = InMemoryCache()
+    lock = asyncio.Lock()
+    mock_prisma = MagicMock()
+
+    async def slow_query_raw(sql: str, *params: object) -> list[dict[str, str | None]]:
+        await asyncio.sleep(0.01)
+        return [_digest_row(digest, "shared-alias", None, None)]
+
+    mock_prisma.db.query_raw = AsyncMock(side_effect=slow_query_raw)
+
+    results = await asyncio.gather(
+        *(
+            recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache, lock=lock)
+            for _ in range(9)
+        )
+    )
+
+    assert all(result[digest]["key_alias"] == "shared-alias" for result in results)
+    assert mock_prisma.db.query_raw.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_key_metadata_from_spend_logs_keeps_a_repeated_miss_as_long_as_a_hit():
+    unknown = hash_token("cli-session-never-named")
+    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
+    mock_prisma = MagicMock()
+    mock_prisma.db.query_raw = _query_raw_spend_logs([])
+    await recover_key_metadata_from_spend_logs(mock_prisma, {unknown}, window, cache=cache)
+    first_miss_key = next(key for key in cache.ttl_dict if unknown in key and not key.endswith(":missed-before"))
+    cache.ttl_dict[first_miss_key] = time.time() - 1
+    started = time.time()
+
+    await recover_key_metadata_from_spend_logs(mock_prisma, {unknown}, window, cache=cache)
+
+    assert mock_prisma.db.query_raw.await_count == 2
+    assert cache.ttl_dict[first_miss_key] - started >= SPEND_LOG_KEY_METADATA_CACHE_TTL - 1
