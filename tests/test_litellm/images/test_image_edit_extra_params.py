@@ -121,6 +121,35 @@ def test_image_edit_forwards_scalar_array_as_repeated_fields():
     assert b"style_a" in body and b"style_b" in body and b"style_c" in body
 
 
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_image_edit_strips_per_model_drop_params_from_multipart(drop_params):
+    """Per-model drop_params / additional_drop_params are LiteLLM control
+    flags. If they survive into non_default_params they are flattened onto the
+    OpenAI images/edits multipart body and the provider rejects the call with
+    Unknown parameter: 'drop_params'. Issue #40153."""
+    captured = {}
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured))))
+
+    litellm.image_edit(
+        model="openai/gpt-image-1",
+        image=PNG_BYTES,
+        prompt="Make the background blue",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+        seed=42,
+        drop_params=drop_params,
+        additional_drop_params=["quality_level"],
+    )
+
+    fields = _multipart_text_fields(captured["content_type"], captured["body"])
+    assert "drop_params" not in fields
+    assert "additional_drop_params" not in fields
+    assert fields["seed"] == "42"
+    assert fields["prompt"] == "Make the background blue"
+    assert fields["model"] == "gpt-image-1"
+
+
 @pytest.mark.asyncio
 async def test_aimage_edit_forwards_extra_body():
     """aimage_edit used to drop extra_headers/extra_query/extra_body when

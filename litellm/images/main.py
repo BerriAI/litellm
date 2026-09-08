@@ -64,6 +64,9 @@ from litellm.utils import (
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
 
+# Kept out of all_litellm_params because that list is stripped before drop_params is applied.
+_IMAGE_EDIT_CONTROL_KWARGS: Final = frozenset(("drop_params", "additional_drop_params"))
+
 
 def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
     """Get ImageEditRequestUtils, loading it lazily if needed."""
@@ -759,8 +762,8 @@ def image_edit(
         litellm_params_list: Final = all_litellm_params
         default_params: Final = openai_params + litellm_params_list
         non_default_params: Final = {
-            k: v for k, v in kwargs.items() if k not in default_params
-        }  # model-specific params - pass them straight to the model/provider
+            k: v for k, v in kwargs.items() if k not in default_params and k not in _IMAGE_EDIT_CONTROL_KWARGS
+        }
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         model_info: Final = kwargs.get("model_info", None)
