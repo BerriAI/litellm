@@ -631,6 +631,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.prometheus_cleanup import mark_dead_workers, mark_worker_exit
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.public_endpoints.public_v1 import router as public_v1_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
@@ -1059,6 +1060,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
     init_verbose_loggers()
 
+    prometheus_multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+    if prometheus_multiproc_dir:
+        mark_dead_workers(prometheus_multiproc_dir)
+
     ## RUN WORKER STARTUP HOOKS (e.g., gflags initialization) ##
     _startup_hooks_env: Final = os.environ.get("LITELLM_WORKER_STARTUP_HOOKS", "")
     if _startup_hooks_env:
@@ -1364,6 +1369,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     await proxy_config.stop_auth_cache_invalidation_subscriber()
 
     await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
+
+    if prometheus_multiproc_dir:
+        mark_worker_exit(os.getpid())
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
