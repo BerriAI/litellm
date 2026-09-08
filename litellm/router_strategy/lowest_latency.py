@@ -136,14 +136,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 ## Time to first token
                 if time_to_first_token is not None:
                     if (
-                        len(request_count_dict[id].get("time_to_first_token", []))
+                        len(request_count_dict[id].get("time_to_first_token_seconds", []))
                         < self.routing_args.max_latency_list_size
                     ):
-                        request_count_dict[id].setdefault("time_to_first_token", []).append(time_to_first_token)
+                        request_count_dict[id].setdefault("time_to_first_token_seconds", []).append(time_to_first_token)
                     else:
-                        request_count_dict[id]["time_to_first_token"] = request_count_dict[id]["time_to_first_token"][
-                            1:
-                        ] + [time_to_first_token]
+                        request_count_dict[id]["time_to_first_token_seconds"] = request_count_dict[id][
+                            "time_to_first_token_seconds"
+                        ][1:] + [time_to_first_token]
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -250,7 +250,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     {model_group}_map: {
                         id: {
                             "latency": [..]
-                            "time_to_first_token": [..]
+                            "time_to_first_token_seconds": [..]
                             f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
                         }
                     }
@@ -318,14 +318,14 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 ## Time to first token
                 if time_to_first_token is not None:
                     if (
-                        len(request_count_dict[id].get("time_to_first_token", []))
+                        len(request_count_dict[id].get("time_to_first_token_seconds", []))
                         < self.routing_args.max_latency_list_size
                     ):
-                        request_count_dict[id].setdefault("time_to_first_token", []).append(time_to_first_token)
+                        request_count_dict[id].setdefault("time_to_first_token_seconds", []).append(time_to_first_token)
                     else:
-                        request_count_dict[id]["time_to_first_token"] = request_count_dict[id]["time_to_first_token"][
-                            1:
-                        ] + [time_to_first_token]
+                        request_count_dict[id]["time_to_first_token_seconds"] = request_count_dict[id][
+                            "time_to_first_token_seconds"
+                        ][1:] + [time_to_first_token]
 
                 if precise_minute not in request_count_dict[id]:
                     request_count_dict[id][precise_minute] = {}
@@ -423,7 +423,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 or float("inf")
             )
             item_latency = item_map.get("latency", [])
-            item_ttft_latency = item_map.get("time_to_first_token", [])
+            item_ttft_latency = item_map.get("time_to_first_token_seconds", [])
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 

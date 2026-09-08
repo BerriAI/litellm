@@ -166,8 +166,8 @@ def test_sync_chat_zero_completion_tokens_falls_back_to_seconds():
 
 
 MODEL_GROUP = "gpt-4o-mini"
-FAST_TTFT_ID = "fast-ttft-long-output"
-SLOW_TTFT_ID = "slow-ttft-short-output"
+FAST_TTFT_ID = "fast-ttft-short-output"
+SLOW_TTFT_ID = "slow-ttft-long-output"
 STREAMING_DEPLOYMENTS = [
     {"model_info": {"id": FAST_TTFT_ID}, "litellm_params": {}},
     {"model_info": {"id": SLOW_TTFT_ID}, "litellm_params": {}},
@@ -187,23 +187,23 @@ def _streaming_kwargs(deployment_id: str, start_time: datetime, ttft_seconds: fl
 
 def _recorded_ttft(cache: DualCache, deployment_id: str):
     cached = cache.get_cache(key=f"{MODEL_GROUP}_map") or {}
-    return cached.get(deployment_id, {}).get("time_to_first_token", [])
+    return cached.get(deployment_id, {}).get("time_to_first_token_seconds", [])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
 async def test_streaming_ttft_ranking_ignores_completion_length(sync_mode: bool):
-    """Deployment A: TTFT 1s, 500 completion tokens. Deployment B: TTFT 3s, 50
+    """Deployment A: TTFT 1s, 50 completion tokens. Deployment B: TTFT 3s, 500
     completion tokens. Dividing TTFT by completion tokens made B look faster
-    (3/50 = 0.06 vs 1/500 = 0.002 the other way round); actual TTFT must win."""
+    (3/500 = 0.006 beats 1/50 = 0.02); actual TTFT must win."""
     cache = DualCache()
     handler = LowestLatencyLoggingHandler(router_cache=cache)
     start_time = datetime(2026, 1, 1, 12, 0, 0)
     end_time = start_time + timedelta(seconds=10)
 
     samples = (
-        (FAST_TTFT_ID, 1.0, 500),
-        (SLOW_TTFT_ID, 3.0, 50),
+        (FAST_TTFT_ID, 1.0, 50),
+        (SLOW_TTFT_ID, 3.0, 500),
     )
     for deployment_id, ttft, completion_tokens in samples:
         kwargs = _streaming_kwargs(deployment_id, start_time, ttft)
@@ -229,6 +229,31 @@ async def test_streaming_ttft_ranking_ignores_completion_length(sync_mode: bool)
         picked = await handler.async_get_available_deployments(
             model_group=MODEL_GROUP, healthy_deployments=STREAMING_DEPLOYMENTS, request_kwargs=request_kwargs
         )
+
+    assert picked is not None
+    assert picked["model_info"]["id"] == FAST_TTFT_ID
+
+
+@pytest.mark.asyncio
+async def test_streaming_routing_ignores_per_token_ttft_samples_from_older_workers():
+    """Workers on the previous release share the Redis map and keep writing
+    seconds-per-token under the old "time_to_first_token" key during a rolling
+    deploy. Those samples favor SLOW; routing must only read the seconds key."""
+    cache = DualCache()
+    handler = LowestLatencyLoggingHandler(router_cache=cache)
+    cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={
+            FAST_TTFT_ID: {"time_to_first_token": [0.02], "time_to_first_token_seconds": [1.0]},
+            SLOW_TTFT_ID: {"time_to_first_token": [0.006], "time_to_first_token_seconds": [3.0]},
+        },
+    )
+
+    picked = await handler.async_get_available_deployments(
+        model_group=MODEL_GROUP,
+        healthy_deployments=STREAMING_DEPLOYMENTS,
+        request_kwargs={"stream": True, "metadata": {}},
+    )
 
     assert picked is not None
     assert picked["model_info"]["id"] == FAST_TTFT_ID

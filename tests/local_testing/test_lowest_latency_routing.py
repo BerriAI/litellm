@@ -1124,7 +1124,7 @@ def test_ttft_list_trimming_discards_oldest_entry():
 
     latency_key = f"{model_group}_map"
     cached_data = test_cache.get_cache(key=latency_key)
-    ttft_list = cached_data[deployment_id].get("time_to_first_token", [])
+    ttft_list = cached_data[deployment_id].get("time_to_first_token_seconds", [])
 
     assert (
         len(ttft_list) == max_size
@@ -1320,7 +1320,7 @@ async def test_ttft_list_trimming_discards_oldest_entry_async():
 
     latency_key = f"{model_group}_map"
     cached_data = await test_cache.async_get_cache(key=latency_key)
-    ttft_list = cached_data[deployment_id].get("time_to_first_token", [])
+    ttft_list = cached_data[deployment_id].get("time_to_first_token_seconds", [])
 
     assert (
         len(ttft_list) == max_size
