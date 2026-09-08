@@ -891,10 +891,8 @@ def test_bedrock_cross_region_openai_routing(model: str):
     import litellm
     from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
     
-    # 1. Verify route identification
     assert BedrockModelInfo.get_bedrock_route(model) == "openai"
     assert BedrockModelInfo._explicit_openai_route(model) is True
 
-    # 2. Verify config mapping
     config = get_bedrock_chat_config(model)
     assert isinstance(config, litellm.AmazonBedrockOpenAIConfig)
