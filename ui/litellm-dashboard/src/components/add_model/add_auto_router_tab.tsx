@@ -374,6 +374,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
     tiers: complexityRouterConfig.tiers,
+    enableNonReasoningTier: complexityRouterConfig.enable_non_reasoning_tier,
     customTierSet: complexityRouterConfig.custom_tier_set,
     defaultModel: complexityRouterConfig.default_model,
     planModeMinTier: complexityRouterConfig.plan_mode_min_tier,

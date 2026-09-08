@@ -44,6 +44,7 @@ from litellm.router_strategy.complexity_router.config import (
     DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE,
     DEFAULT_COMPLEXITY_CONFIG,
     DEFAULT_TECHNICAL_KEYWORDS,
+    TIER_SEVERITY_ORDER,
     ClassificationRubric,
     ClassifierLLMConfig,
     ComplexityRouterConfig,
@@ -11044,7 +11045,7 @@ async def test_tier_model_params_reach_the_hook_response_and_override_client_val
 async def test_tier_params_mask_credentials_in_routing_decision(route, mock_router_instance):
     params = {"reasoning_effort": "xhigh", "api_key": "secret-tier-key"}
     config = {
-        "tiers": {tier.value: {"model_name": "opus", "litellm_params": params} for tier in ComplexityTier},
+        "tiers": {tier.value: {"model_name": "opus", "litellm_params": params} for tier in TIER_SEVERITY_ORDER},
         "keyword_tier_rules": [{"keywords": ["reason carefully"], "tier": "REASONING"}] if route == "keyword" else None,
         "session_affinity": route == "session",
     }
@@ -13212,3 +13213,197 @@ class TestClassifierVision:
     def test_max_images_must_be_positive(self):
         with pytest.raises(ValidationError):
             ClassifierLLMConfig(model="clf", vision={"enabled": True, "max_images": 0})
+
+
+NON_REASONING_TIERS: Final = {
+    "NON_REASONING": "gpt-4o-mini",
+    "SIMPLE": "gpt-4o-mini",
+    "MEDIUM": "gpt-4o",
+    "COMPLEX": "claude-sonnet-4-20250514",
+    "REASONING": "o1-preview",
+}
+
+
+class TestNonReasoningTier:
+    """The opt-in fifth built-in tier below SIMPLE.
+
+    Two properties carry the feature. A router that did not opt in must be byte-identical to one
+    built before the tier existed, because the tier set feeds the classifier rubric, the wire enum,
+    and the savings baseline, all of which move live routing decisions and spend. A router that did
+    opt in must be able to actually reach the tier and escalate off it.
+    """
+
+    @staticmethod
+    def _router(mock_router_instance, **overrides) -> ComplexityRouter:
+        config: Final = {
+            "tiers": dict(NON_REASONING_TIERS),
+            "enable_non_reasoning_tier": True,
+            "classifier_type": "llm",
+            "classifier_llm_config": {"model": "haiku-classifier"},
+            **overrides,
+        }
+        return ComplexityRouter(
+            model_name="test-non-reasoning-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config=config,
+        )
+
+    def test_ladder_gains_a_rung_below_simple_only_when_enabled(self):
+        """Tier 0 sits at the bottom. Anywhere else and escalation, the savings baseline, and
+        heuristic_first's 'highest tier' check would all read a different ladder."""
+        enabled: Final = ComplexityRouterConfig(
+            tiers=dict(NON_REASONING_TIERS),
+            enable_non_reasoning_tier=True,
+            classifier_type="llm",
+            classifier_llm_config={"model": "clf"},
+        )
+        assert enabled.tier_names() == ("NON_REASONING", "SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+        assert ComplexityRouterConfig().tier_names() == ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+
+    def test_default_router_is_unchanged_by_the_tier_existing(self):
+        """The regression that matters for every already-deployed router: the enum grew a member,
+        and nothing a four-tier router sends or resolves may change because of it."""
+        default: Final = ComplexityRouterConfig()
+        assert default.enable_non_reasoning_tier is False
+        assert "NON_REASONING" not in DEFAULT_COMPLEXITY_CONFIG.tiers
+        assert default.classifier_wire_labels() == ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+        assert default.labeled_tiers() == TIER_SEVERITY_ORDER_LABELED
+        assert default.resolve_classified_tier("NON_REASONING") is None
+
+    @pytest.mark.parametrize("preset", tuple(ClassificationRubric))
+    def test_rubric_gains_the_bullet_only_when_enabled(self, preset):
+        """Every preset renders one bullet per active tier, so an unset toggle must leave all four
+        shipped rubrics byte-identical while an enabled one must actually describe the new tier."""
+        enabled: Final = ComplexityRouterConfig(
+            tiers=dict(NON_REASONING_TIERS),
+            enable_non_reasoning_tier=True,
+            classifier_type="llm",
+            classifier_llm_config={"model": "clf"},
+        )
+        on: Final = classification_system_prompt(3, None, enabled.labeled_tiers(), preset)
+        off: Final = classification_system_prompt(3, None, ComplexityRouterConfig().labeled_tiers(), preset)
+        assert "- NON_REASONING:" in on
+        assert "- NON_REASONING" not in off
+
+    def test_enabled_router_puts_the_tier_on_the_classifier_wire(self, mock_router_instance):
+        """The response schema's enum is what the classifier may return; without the new label the
+        tier would be unreachable no matter what the rubric says."""
+        router: Final = self._router(mock_router_instance)
+        enum: Final = router._classifier_response_format["json_schema"]["schema"]["properties"]["tier"]["enum"]
+        assert enum == ["NON_REASONING", "SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
+
+    @pytest.mark.asyncio
+    async def test_classifier_verdict_routes_to_the_tier_model(self, mock_router_instance):
+        """End to end on the LLM path: the classifier names the tier and the request lands on that
+        tier's model with the decision recording it."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "NON_REASONING"}'))
+        router: Final = self._router(mock_router_instance, tiers={**NON_REASONING_TIERS, "NON_REASONING": "cheap-relay"})
+        response = await router.async_pre_routing_hook(
+            model="test-non-reasoning-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "here is the file, pass it along"}],
+        )
+        assert response.model == "cheap-relay"
+        assert response.routing_decision["tier"] == "NON_REASONING"
+        assert response.routing_decision["cause"] == "llm_classifier"
+
+    @pytest.mark.asyncio
+    async def test_a_four_tier_router_ignores_a_non_reasoning_verdict(self, llm_complexity_router, mock_router_instance):
+        """A classifier that names the tier at a router which never opted in must be an unparseable
+        reply that falls back, not a silent route to a tier the operator did not configure."""
+        mock_router_instance.acompletion = AsyncMock(return_value=_llm_response('{"tier": "NON_REASONING"}'))
+        outcome = await llm_complexity_router.aclassify("relay this")
+        assert outcome.tier != ComplexityTier.NON_REASONING
+        assert outcome.cause != "llm_classifier"
+
+    def test_escalation_walks_up_off_the_tier(self, mock_router_instance):
+        """Escalation is a built-in-ladder feature and the issue asks for it from the new tier."""
+        router: Final = self._router(mock_router_instance)
+        assert router._escalate_tier(ComplexityTier.NON_REASONING) == ComplexityTier.SIMPLE
+        assert router._escalate_tier(ComplexityTier.REASONING) == ComplexityTier.REASONING
+
+    def test_escalation_skips_the_tier_when_unconfigured(self, mock_router_instance):
+        """SIMPLE must still escalate to MEDIUM rather than to the cheaper new rung, or escalation
+        would route below the model the caller would otherwise have received."""
+        router: Final = self._router(
+            mock_router_instance,
+            tiers={"NON_REASONING": "cheap-relay", "SIMPLE": "gpt-4o-mini", "MEDIUM": "gpt-4o"},
+        )
+        assert router._escalate_tier(ComplexityTier.SIMPLE) == ComplexityTier.MEDIUM
+
+    def test_tier_zero_is_never_the_savings_baseline(self, mock_router_instance):
+        """Savings are measured against the hardest configured tier. If tier 0 could win that pick,
+        every enabled router's reported savings would invert."""
+        assert self._router(mock_router_instance)._hardest_tier_models() == ("o1-preview",)
+        cheap_only: Final = self._router(
+            mock_router_instance, tiers={"NON_REASONING": "cheap-relay", "SIMPLE": "gpt-4o-mini"}
+        )
+        assert cheap_only._hardest_tier_models() == ("gpt-4o-mini",)
+
+    def test_the_tier_gets_its_own_display_label(self, mock_router_instance):
+        """tier_labels covers the built-in tiers, so the new rung must be renameable like the rest."""
+        router: Final = self._router(mock_router_instance, tier_labels={"NON_REASONING": "Relay"})
+        assert router.config.classifier_wire_labels()[0] == "Relay"
+        assert router.config.resolve_classified_tier("relay") == ComplexityTier.NON_REASONING
+
+    @pytest.mark.parametrize(
+        "overrides, expected",
+        (
+            ({"classifier_type": "heuristic", "classifier_llm_config": None}, "requires classifier_type"),
+            ({"classifier_type": "heuristic_v2", "classifier_llm_config": None}, "requires classifier_type"),
+            ({"tiers": {"SIMPLE": "a", "MEDIUM": "b"}}, "at least one model"),
+        ),
+        ids=["heuristic", "heuristic_v2", "no_model"],
+    )
+    def test_unreachable_or_unroutable_configs_are_rejected(self, overrides, expected):
+        """The toggle is refused wherever it could not do anything: the heuristic scorers cannot
+        emit the tier, and an unconfigured tier would fall through to the default model."""
+        config: Final = {
+            "tiers": dict(NON_REASONING_TIERS),
+            "enable_non_reasoning_tier": True,
+            "classifier_type": "llm",
+            "classifier_llm_config": {"model": "clf"},
+            **overrides,
+        }
+        with pytest.raises(ValidationError, match=expected):
+            ComplexityRouterConfig.model_validate(config)
+
+    def test_the_tier_cannot_be_configured_without_the_toggle(self):
+        """Silently ignoring the key would leave an operator paying for a pool nothing routes to."""
+        with pytest.raises(ValidationError, match="no request can route there"):
+            ComplexityRouterConfig(tiers={"NON_REASONING": "cheap", "SIMPLE": "a"})
+
+    def test_the_toggle_is_refused_alongside_a_custom_tier_set(self):
+        """A custom tier set replaces the built-in ladder, so both at once has no meaning."""
+        with pytest.raises(ValidationError, match="cannot be combined with tier_definitions"):
+            ComplexityRouterConfig(
+                enable_non_reasoning_tier=True,
+                classifier_type="llm",
+                classifier_llm_config={"model": "clf"},
+                tier_definitions=({"name": "lo", "description": "d"}, {"name": "hi", "description": "d"}),
+                tiers={"lo": "a", "hi": "b"},
+                fallback_tier="lo",
+            )
+
+    def test_heuristic_v2_predictions_never_reach_the_new_tier(self, mock_router_instance):
+        """The bundled artifact is trained on four classes, so its 1-based tier index must keep
+        mapping onto SIMPLE..REASONING. Reading the enabled ladder here would shift every
+        prediction down a rung and make REASONING unreachable."""
+        router: Final = ComplexityRouter(
+            model_name="v2-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                "tiers": {k: v for k, v in NON_REASONING_TIERS.items() if k != "NON_REASONING"},
+                "classifier_type": "heuristic_v2",
+            },
+        )
+        outcome = router._classify_with_heuristic_v2("implement a distributed rate limiter under concurrency")
+        assert outcome.tier in TIER_SEVERITY_ORDER
+        # One probability signal per trained class, named for the tier that class means. A ladder
+        # shifted by the new rung would relabel all four and lose REASONING off the end.
+        assert tuple(signal.split(":")[1].split("=")[0] for signal in outcome.signals[1:]) == (
+            "simple",
+            "medium",
+            "complex",
+            "reasoning",
+        )

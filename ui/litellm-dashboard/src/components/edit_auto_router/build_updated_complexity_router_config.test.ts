@@ -598,6 +598,10 @@ describe("managed keys survive an untouched open-and-save", () => {
     "stall_escalation_repeat_threshold",
   ]);
 
+  // The opt-in fifth tier requires the LLM classifier, which this heuristic_first fixture is not,
+  // so it gets its own round trip below.
+  const KEYS_ANOTHER_TIER_LADDER_OWNS = new Set(["enable_non_reasoning_tier"]);
+
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
@@ -605,8 +609,53 @@ describe("managed keys survive an untouched open-and-save", () => {
     const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
       .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))
       .filter((key) => !KEYS_ANOTHER_CLASSIFICATION_FREQUENCY_OWNS.has(key))
+      .filter((key) => !KEYS_ANOTHER_TIER_LADDER_OWNS.has(key))
       .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
+  });
+
+  it("carries an enabled non-reasoning tier and its models through their own round trip", () => {
+    // `tiers` is rewritten wholesale on save, so this is the regression that matters: opening an
+    // enabled router and saving an unrelated edit must not delete the tier or its pool.
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "haiku-classifier" },
+      heuristic_first_max_tier: undefined,
+      enable_non_reasoning_tier: true,
+      tiers: { ...(STORED_ALL_MANAGED.tiers as object), NON_REASONING: ["gpt-4o-mini"] },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.enable_non_reasoning_tier).toBe(true);
+    expect((saved.tiers as Record<string, string[]>).NON_REASONING).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("keeps a stored non-reasoning tier when the stored config never wrote the flag", () => {
+    // A hand-written config that names the tier: the flag is inferred from the stored pool, so an
+    // edit made for an unrelated reason cannot silently turn the tier off.
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "haiku-classifier" },
+      heuristic_first_max_tier: undefined,
+      tiers: { ...(STORED_ALL_MANAGED.tiers as object), NON_REASONING: ["gpt-4o-mini"] },
+    };
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+
+    expect(saved.enable_non_reasoning_tier).toBe(true);
+    expect((saved.tiers as Record<string, string[]>).NON_REASONING).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("leaves the tier and its flag out of a saved config that never had it on", () => {
+    const saved = buildUpdatedComplexityRouterConfig(
+      STORED_ALL_MANAGED,
+      hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined),
+    );
+
+    expect(saved).not.toHaveProperty("enable_non_reasoning_tier");
+    expect(saved.tiers).not.toHaveProperty("NON_REASONING");
   });
 
   it("carries the stall-escalation keys through their own round trip", () => {

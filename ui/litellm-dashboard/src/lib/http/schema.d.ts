@@ -23573,16 +23573,22 @@ export interface components {
         };
         /**
          * AutoRouterPresetTiers
-         * @description Exactly the four built-in tiers the dashboard's preset prefill can apply.
+         * @description The built-in tiers the dashboard's preset prefill can apply.
          *
          *     extra="forbid" on purpose: a tier name this dashboard cannot apply would grey out or crash the
-         *     picker, so such a catalog is rejected wholesale and the bundled one serves instead.
+         *     picker, so such a catalog is rejected wholesale and the bundled one serves instead. NON_REASONING
+         *     is optional rather than required so this proxy accepts both a catalog that ships the opt-in fifth
+         *     tier and the four-tier catalogs that predate it. It stays None when unset rather than defaulting
+         *     to an empty pool, so a four-tier preset serves the tier set it was published with instead of
+         *     growing a key the dashboard would render as an empty fifth tier row.
          */
         AutoRouterPresetTiers: {
             /** Complex */
             COMPLEX: string[];
             /** Medium */
             MEDIUM: string[];
+            /** Non Reasoning */
+            NON_REASONING?: string[] | null;
             /** Reasoning */
             REASONING: string[];
             /** Simple */
@@ -25579,7 +25585,7 @@ export interface components {
          * @description Complexity tiers for routing decisions.
          * @enum {string}
          */
-        ComplexityTier: "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
+        ComplexityTier: "NON_REASONING" | "SIMPLE" | "MEDIUM" | "COMPLEX" | "REASONING";
         /** ComplexityTierModel */
         ComplexityTierModel: {
             /** Litellm Params */
@@ -34948,6 +34954,12 @@ export interface components {
              */
             enable_context_window_escalation: boolean;
             /**
+             * Enable Non Reasoning Tier
+             * @description Add NON_REASONING as a fifth built-in tier below SIMPLE, for operational agent traffic that relays or reformats information rather than reasoning about it. Off by default: turning it on adds a rung to this router's ladder, a bullet to the LLM classifier's rubric, and a value the classifier may return, all of which move tier decisions and spend on an already-deployed router. Requires an LLM classifier or a custom classifier plugin, since the heuristic scorers cannot produce the tier, and a model in `tiers` under the NON_REASONING key. Escalation still walks up from it, and it is never the savings baseline or a `heuristic_v2` prediction.
+             * @default false
+             */
+            enable_non_reasoning_tier: boolean;
+            /**
              * Escalation Keywords
              * @description Case-sensitive phrases a user can include to force a bump to the next-higher complexity tier when they aren't satisfied with results (they can force a stronger model, but not choose which one). Defaults to ['LITELLM ESCALATE'] when unset; set to an empty list to disable.
              */
@@ -37212,7 +37224,7 @@ export interface components {
         TierDefinition: {
             /**
              * Description
-             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (SIMPLE/MEDIUM/COMPLEX/REASONING), which inherits the built-in criteria when omitted
+             * @description What belongs in this tier; rendered as this tier's bullet in the classifier rubric. Required unless the name is a built-in tier (NON_REASONING, SIMPLE, MEDIUM, COMPLEX, REASONING), which inherits the built-in criteria when omitted
              */
             description?: string | null;
             /**

@@ -75,11 +75,16 @@ export const DEFAULT_CLASSIFICATION_MODE: ClassificationMode = "every_request";
  */
 export type ClassificationFrequency = ClassificationMode | "session";
 
+/**
+ * NON_REASONING is optional because it is the opt-in fifth tier: a router that never enabled it
+ * stores no such key, and hydrating one in would send an empty pool the backend rejects.
+ */
 export type ComplexityTiers = {
   SIMPLE: string[];
   MEDIUM: string[];
   COMPLEX: string[];
   REASONING: string[];
+  NON_REASONING?: string[];
 };
 
 export type ClassificationRubric = "legacy" | "agentic" | "chat" | "business";
@@ -378,6 +383,11 @@ export type ComplexityTierLabels = Partial<Record<keyof ComplexityTiers, string>
 
 export interface ComplexityRouterConfigValue {
   tiers: ComplexityTiers;
+  /**
+   * Opt into the NON_REASONING tier below SIMPLE. Off means the router keeps the four-tier ladder
+   * it has always had, so an existing router's rubric and tier decisions cannot move under it.
+   */
+  enable_non_reasoning_tier?: boolean;
   custom_tier_set?: CustomTierSet;
   tier_labels?: ComplexityTierLabels;
   /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
@@ -494,6 +504,11 @@ export const TIER_DESCRIPTIONS: Record<
   keyof ComplexityTiers,
   { label: string; description: string; examples: string }
 > = {
+  NON_REASONING: {
+    label: "Non-reasoning",
+    description: "Operational relay work: passing information along with no judgment about it",
+    examples: '"Reformat this tool output", "Acknowledge the write succeeded"',
+  },
   SIMPLE: {
     label: "Simple",
     description: "Basic questions, greetings, simple factual queries",
@@ -516,7 +531,15 @@ export const TIER_DESCRIPTIONS: Record<
   },
 };
 
+/** Every built-in tier name, including the opt-in one, for label and membership checks. */
 export const TIER_KEYS = Object.keys(TIER_DESCRIPTIONS) as Array<keyof ComplexityTiers>;
+
+/**
+ * The four-tier ladder in ascending severity, which is what a router sends unless it opted into
+ * NON_REASONING. Mirrors TIER_SEVERITY_ORDER in the backend config; use tierOrderFor to get the
+ * ladder one router actually renders.
+ */
+export const BUILT_IN_TIER_ORDER: Array<keyof ComplexityTiers> = ["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"];
 
 export const effectiveTierLabel = (tier: keyof ComplexityTiers, tierLabels: ComplexityTierLabels | undefined): string =>
   tierLabels?.[tier]?.trim() || TIER_DESCRIPTIONS[tier].label;
@@ -528,9 +551,46 @@ export const DEFAULT_HYBRID_BOUNDARY_MARGIN = 0.03;
 
 /**
  * Tiers the heuristic_first threshold may name. The top tier is excluded because it would short
- * circuit every request and leave the classifier unreachable, which the backend rejects.
+ * circuit every request and leave the classifier unreachable, which the backend rejects. So is
+ * NON_REASONING, which the backend refuses alongside heuristic_first because the local scorer
+ * cannot produce it.
  */
-export const HEURISTIC_FIRST_MAX_TIER_KEYS = TIER_KEYS.slice(0, -1);
+export const HEURISTIC_FIRST_MAX_TIER_KEYS = BUILT_IN_TIER_ORDER.slice(0, -1);
+
+/**
+ * The opt-in fifth tier. Only offered on the LLM classification method, matching the backend: the
+ * heuristic scorers cannot produce the tier, so enabling it there would buy a rubric bullet and a
+ * model pool that no request ever reaches.
+ */
+const NonReasoningTierToggle: React.FC<{
+  value: ComplexityRouterConfigValue;
+  onChange: (value: ComplexityRouterConfigValue) => void;
+  available: boolean;
+}> = ({ value, onChange, available }) => (
+  <>
+    <div className="flex items-center gap-2 mt-4 mb-2">
+      <Switch
+        checked={value.enable_non_reasoning_tier === true}
+        disabled={!available}
+        onCheckedChange={(enabled) => {
+          const { NON_REASONING: _dropped, ...keptTiers } = value.tiers;
+          onChange({
+            ...value,
+            enable_non_reasoning_tier: enabled ? true : undefined,
+            tiers: enabled ? { ...keptTiers, NON_REASONING: value.tiers.NON_REASONING ?? [] } : keptTiers,
+          });
+        }}
+        aria-label="Add a non-reasoning tier"
+      />
+      <strong className="font-semibold">Add a non-reasoning tier</strong>
+    </div>
+    <span className="block text-xs mb-3 text-muted-foreground">
+      Adds NON_REASONING below Simple, for operational agent traffic that relays or reformats information rather than
+      reasoning about it. Escalation still moves up out of it when a request needs more.
+      {!available && " Requires the LLM classification method."}
+    </span>
+  </>
+);
 
 const PlanModeOverrideControls: React.FC<{
   value: ComplexityRouterConfigValue;
@@ -741,6 +801,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               </div>
             );
           })}
+
+          {!customTierSet && (
+            <NonReasoningTierToggle value={value} onChange={onChange} available={value.classifier_type === "llm"} />
+          )}
 
           <TierSetToolbar
             editing={editingTiers}

@@ -102,7 +102,7 @@ describe("ComplexityRouterConfig", () => {
     renderWithProviders(<ComplexityRouterConfig {...baseProps} onChange={onChange} />);
 
     await user.click(screen.getByText("Advanced: Response Format"));
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch", { name: "Return raw model name" }));
 
     expect(onChange).toHaveBeenCalledWith({
       ...defaultValue,
@@ -495,7 +495,7 @@ describe("ComplexityRouterConfig", () => {
       />,
     );
     fireEvent.click(screen.getByText("Advanced: Keyword/Semantic Matching"));
-    await user.click(screen.getByRole("switch"));
+    await user.click(screen.getByRole("switch", { name: "Semantic keyword matching" }));
     expect(onSemanticMatchingEnabledChange).toHaveBeenCalledWith(true, expect.anything());
   });
 
