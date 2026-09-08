@@ -584,6 +584,27 @@ class OcrResponse(BaseModel):
 # ---------- spend logs ----------
 
 
+class GuardrailEntityMatch(BaseModel):
+    entity_type: str
+    score: float
+    start: int
+    end: int
+
+
+class GuardrailRunRecord(BaseModel):
+    guardrail_name: str | None = None
+    guardrail_mode: str | None = None
+    guardrail_status: str | None = None
+    guardrail_provider: str | None = None
+    masked_entity_count: dict[str, int] | None = None
+    guardrail_response: object | None = None
+
+
+class SpendLogMetadata(BaseModel):
+    applied_guardrails: list[str] | None = None
+    guardrail_information: list[GuardrailRunRecord] | None = None
+
+
 class SpendLogRow(BaseModel):
     request_id: str | None = None
     api_key: str | None = None
@@ -600,6 +621,7 @@ class SpendLogRow(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     request_tags: list[str] | None = None
+    metadata: SpendLogMetadata | None = None
 
 
 class SpendLogs(RootModel[list[SpendLogRow]]):

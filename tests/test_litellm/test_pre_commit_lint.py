@@ -159,12 +159,12 @@ def _commit_all(repo: Path, message: str) -> None:
     )
 
 
-def _set_base_ref(repo: Path) -> None:
-    subprocess.run(
-        ["git", "update-ref", "refs/remotes/origin/litellm_internal_staging", "HEAD"],
-        cwd=repo,
-        check=True,
-    )
+def _set_base_ref(repo: Path, branch: str = "litellm_internal_staging") -> None:
+    remote = repo.parent / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(remote)], check=True)
+    subprocess.run(["git", "update-ref", f"refs/heads/{branch}", "HEAD"], cwd=remote, check=True)
+    subprocess.run(["git", "symbolic-ref", "HEAD", f"refs/heads/{branch}"], cwd=remote, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(remote)], cwd=repo, check=True)
 
 
 def _stage_file(repo: Path, relative: str, body: str) -> None:
@@ -174,10 +174,11 @@ def _stage_file(repo: Path, relative: str, body: str) -> None:
     subprocess.run(["git", "add", relative], cwd=repo, check=True)
 
 
-def test_nothing_staged_scopes_to_working_tree_diff_and_runs_checks(tmp_path: Path) -> None:
+@pytest.mark.parametrize("branch", ["litellm_internal_staging", "main"])
+def test_nothing_staged_scopes_to_working_tree_diff_and_runs_checks(tmp_path: Path, branch: str) -> None:
     repo, bin_dir = _sandbox(tmp_path)
     _commit_all(repo, "base")
-    _set_base_ref(repo)
+    _set_base_ref(repo, branch)
     (repo / "litellm" / "foo.py").write_text("x = 2\n")
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -261,8 +262,8 @@ def test_nothing_staged_without_a_base_ref_fails_with_a_fetch_hint(tmp_path: Pat
     _commit_all(repo, "base")
     proc = _run(repo, bin_dir, {})
     assert proc.returncode == 1
-    assert "cannot resolve the merge base" in proc.stdout
-    assert "git fetch origin litellm_internal_staging" in proc.stdout
+    assert "Cannot verify the base branch against origin" in proc.stdout
+    assert "explicit base ref" in proc.stdout
     assert "check: FAIL" in proc.stdout
 
 
@@ -622,3 +623,28 @@ def test_failing_run_ends_with_a_fail_verdict(tmp_path: Path) -> None:
     assert proc.returncode == 1
     assert "check: FAIL" in proc.stdout
     assert "check: PASS" not in proc.stdout
+
+
+
+def test_explicit_base_scopes_offline_without_a_remote(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    (repo / "litellm" / "foo.py").write_text("x = 2\n")
+    proc = _run(repo, bin_dir, {"BASE_REF": "HEAD"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "merge base with HEAD" in proc.stdout
+    assert "linting Python" in proc.stdout
+
+
+def test_symlinked_hook_can_resolve_default_branch(tmp_path: Path) -> None:
+    repo, bin_dir = _sandbox(tmp_path)
+    _commit_all(repo, "base")
+    _set_base_ref(repo, "main")
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.symlink_to(SCRIPT)
+    proc = subprocess.run(
+        [str(hook)], cwd=repo, capture_output=True, text=True,
+        env=_env(repo, bin_dir, {}), timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "no branch changes vs origin/main" in proc.stdout

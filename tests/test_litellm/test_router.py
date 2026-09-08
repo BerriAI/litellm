@@ -2387,6 +2387,580 @@ async def test_acompletion_streaming_iterator_preserves_hidden_params():
     assert result._hidden_params.get("_response_ms") == 500.0
 
 
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_preserves_response_headers():
+    """LIT-6767: the returned wrapper must carry the provider's raw response headers.
+
+    Proxy callbacks read ``_response_headers`` off the object the router hands
+    back. The wrapper used to be built without it, so every streaming chat
+    completion reported zero raw provider headers while the non-streaming path
+    reported the full set.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    async def _empty():
+        return
+        yield  # make it an async generator
+
+    provider_headers = {
+        "x-request-id": "req-provider-123",
+        "x-ratelimit-remaining-requests": "42",
+        # a provider must never be able to spoof an internal header
+        "x-litellm-model-id": "spoofed",
+    }
+    source = CustomStreamWrapper(
+        completion_stream=_empty(),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers=provider_headers,
+    )
+
+    result = await router._acompletion_streaming_iterator(
+        model_response=source,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    assert result._response_headers == provider_headers
+    additional_headers = result._hidden_params["additional_headers"]
+    assert additional_headers["llm_provider-x-request-id"] == "req-provider-123"
+    assert additional_headers["llm_provider-x-ratelimit-remaining-requests"] == "42"
+    # internal-header protection survives: the provider value is namespaced, never promoted
+    assert additional_headers["llm_provider-x-litellm-model-id"] == "spoofed"
+    assert "x-litellm-model-id" not in additional_headers
+
+
+def test_completion_streaming_iterator_preserves_response_headers():
+    """LIT-6767, sync counterpart of the async header-preservation test."""
+    from unittest.mock import MagicMock
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    provider_headers = {"x-request-id": "req-provider-sync", "openai-organization": "org-real"}
+    source = CustomStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers=provider_headers,
+    )
+
+    result = router._completion_streaming_iterator(
+        model_response=source,
+        messages=[{"role": "user", "content": "hi"}],
+        initial_kwargs={"model": "gpt-4", "stream": True},
+    )
+
+    assert result._response_headers == provider_headers
+    assert result._hidden_params["additional_headers"]["llm_provider-x-request-id"] == "req-provider-sync"
+
+
+def test_adopt_fallback_response_headers_replaces_rather_than_merges():
+    """LIT-6767: direct unit for FallbackAwareStreamWrapper.adopt_fallback_response_headers.
+
+    Values from the failed attempt must not survive, so the wrapper replaces both
+    ``_response_headers`` and ``_hidden_params`` instead of merging them.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.router import FallbackAwareStreamWrapper, Router
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers={"x-request-id": "req-FAILED"},
+    )
+    wrapper._hidden_params = {
+        "model_id": "failed-deployment",
+        "only_on_failed_attempt": "stale",
+        "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+    }
+
+    fallback = MagicMock()
+    fallback._response_headers = {"x-request-id": "req-FALLBACK"}
+    fallback._hidden_params = {
+        "model_id": "fallback-deployment",
+        "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
+    }
+
+    wrapper.adopt_fallback_response_headers(
+        fallback, Router._prepare_fallback_hidden_params(fallback)
+    )
+
+    assert wrapper._response_headers == {"x-request-id": "req-FALLBACK"}
+    assert wrapper._hidden_params["model_id"] == "fallback-deployment"
+    assert "only_on_failed_attempt" not in wrapper._hidden_params
+    assert wrapper._hidden_params is not fallback._hidden_params
+    # the snapshot CustomStreamWrapper caches at init has to follow, or a chunk built
+    # from it would still be stamped with the deployment that failed
+    assert wrapper._base_hidden_params["model_id"] == "fallback-deployment"
+    # the nested header dict is copied too, so a later mutation on the fallback
+    # response cannot reach headers the proxy has already published
+    assert wrapper._hidden_params["additional_headers"] is not fallback._hidden_params["additional_headers"]
+    fallback._hidden_params["additional_headers"]["llm_provider-x-request-id"] = "req-MUTATED"
+    assert wrapper._hidden_params["additional_headers"] == {"llm_provider-x-request-id": "req-FALLBACK"}
+
+
+def test_adopt_fallback_response_headers_survives_a_collected_wrapper():
+    """LIT-6767: adoption still returns the fallback's params once the wrapper is gone."""
+    import weakref
+    from unittest.mock import MagicMock
+
+    from litellm.router import FallbackAwareStreamWrapper, Router
+
+    fallback: Final = MagicMock()
+    fallback._response_headers = {"x-request-id": "req-FALLBACK"}
+    fallback._hidden_params = {
+        "model_id": "fallback-deployment",
+        "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
+    }
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+    )
+    live_ref: Final = weakref.ref(wrapper)
+    prepared: Final = Router._adopt_fallback_response_headers(live_ref, fallback)
+    assert prepared == (fallback._hidden_params, fallback._hidden_params["additional_headers"])
+    assert wrapper.fallback_headers_adopted is True
+    assert wrapper._response_headers == {"x-request-id": "req-FALLBACK"}
+
+    dead_ref: Final = weakref.ref(wrapper)
+    del wrapper
+    assert dead_ref() is None
+    assert Router._adopt_fallback_response_headers(dead_ref, fallback) == prepared
+
+
+def test_adopt_fallback_response_headers_drops_headers_the_fallback_cannot_replace():
+    """LIT-6767: a fallback that carries no raw provider headers publishes none.
+
+    Keeping the failed attempt's raw headers would hand the client and the callbacks a
+    provider ``x-request-id`` for a request that deployment never served, which is the
+    leak this fix exists to close.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.router import FallbackAwareStreamWrapper, Router
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers={"x-request-id": "req-FAILED"},
+    )
+    wrapper._hidden_params = {"model_id": "failed-deployment", "additional_headers": {}}
+
+    fallback = MagicMock()
+    fallback._response_headers = None
+    fallback._hidden_params = {"model_id": "fallback-deployment"}
+
+    wrapper.adopt_fallback_response_headers(
+        fallback, Router._prepare_fallback_hidden_params(fallback)
+    )
+
+    assert wrapper._response_headers is None
+    assert wrapper._hidden_params["model_id"] == "fallback-deployment"
+    assert wrapper.fallback_headers_adopted is True
+
+
+def test_adopt_fallback_response_headers_keeps_identity_when_fallback_has_none():
+    """A fallback response carrying no hidden params keeps the identity headers.
+
+    Publishing no ``x-litellm-*`` header at all for a request the fallback served is
+    worse than keeping what is there, so only the raw provider headers are dropped.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.router import FallbackAwareStreamWrapper, Router
+
+    wrapper = FallbackAwareStreamWrapper(
+        completion_stream=iter([]),
+        model="gpt-4",
+        custom_llm_provider="openai",
+        logging_obj=MagicMock(),
+        _response_headers={"x-request-id": "req-FAILED"},
+    )
+    hidden_params_before = wrapper._hidden_params
+
+    fallback = object()
+    wrapper.adopt_fallback_response_headers(
+        fallback, Router._prepare_fallback_hidden_params(fallback)
+    )
+
+    assert wrapper._response_headers is None
+    assert wrapper._hidden_params is hidden_params_before
+    assert wrapper.fallback_headers_adopted is True
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_adopts_fallback_response_headers():
+    """LIT-6767: after a successful pre-first-chunk fallback, the wrapper must
+    describe the deployment that served the stream, with no value left over
+    from the attempt that failed."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "api_base": "https://failed.example",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+                "only_on_failed_attempt": "stale",
+            }
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise failed_error
+
+    class FallbackStream:
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-FALLBACK"}
+            self._hidden_params = {
+                "model_id": "fallback-deployment",
+                "api_base": "https://fallback.example",
+                "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
+            }
+            self._chunks = iter([litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "OK"}}])])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    fallback_stream = FallbackStream()
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=fallback_stream,
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        # the failed attempt is what the wrapper is built from
+        assert result._response_headers == {"x-request-id": "req-FAILED"}
+        # the very first chunk the fallback produces must already be published under
+        # the fallback's identity: the proxy commits response headers once that chunk
+        # is buffered, so adopting any later is adopting too late
+        await result.__anext__()
+        assert result._response_headers == {"x-request-id": "req-FALLBACK"}
+        assert result._hidden_params["model_id"] == "fallback-deployment"
+        async for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-FALLBACK"}
+    assert result._hidden_params["model_id"] == "fallback-deployment"
+    assert result._hidden_params["api_base"] == "https://fallback.example"
+    assert result._hidden_params["additional_headers"] == {"llm_provider-x-request-id": "req-FALLBACK"}
+    # stale values are removed, not merged over
+    assert "only_on_failed_attempt" not in result._hidden_params
+    # and the wrapper holds its own copy, so later fallback mutations cannot leak in
+    assert result._hidden_params is not fallback_stream._hidden_params
+
+
+@pytest.mark.asyncio
+async def test_acompletion_streaming_iterator_adopts_the_deployment_that_served_a_nested_fallback():
+    """LIT-6767: a fallback that itself fails over before its first chunk.
+
+    The selected fallback still describes its own failed attempt at selection time, so
+    the wrapper has to re-read it once a chunk exists or it publishes a deployment that
+    produced no output.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error: Final = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+            }
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise failed_error
+
+    class NestedFallbackStream:
+        """A fallback that repoints itself at a third deployment as it yields."""
+
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-MIDDLE"}
+            self._hidden_params = {
+                "model_id": "middle-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-MIDDLE"},
+            }
+            self._chunks = iter([litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "OK"}}])])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                chunk = next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+            self._response_headers = {"x-request-id": "req-SERVED"}
+            self._hidden_params = {
+                "model_id": "served-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-SERVED"},
+            }
+            return chunk
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=NestedFallbackStream(),
+    ):
+        result = await router._acompletion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        first_chunk: Final = await result.__anext__()
+        # the proxy commits response headers once this chunk is buffered
+        assert result._response_headers == {"x-request-id": "req-SERVED"}
+        assert result._hidden_params["model_id"] == "served-deployment"
+        assert result._hidden_params["additional_headers"] == {"llm_provider-x-request-id": "req-SERVED"}
+        # and the chunk itself carries the same deployment
+        assert first_chunk._hidden_params["model_id"] == "served-deployment"
+        async for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-SERVED"}
+    assert result._hidden_params["model_id"] == "served-deployment"
+
+
+def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_nested_fallback():
+    """LIT-6767, sync counterpart of the nested-fallback adoption test."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error: Final = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+            }
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise failed_error
+
+    class NestedFallbackStream:
+        """A fallback that repoints itself at a third deployment as it yields."""
+
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-MIDDLE"}
+            self._hidden_params = {
+                "model_id": "middle-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-MIDDLE"},
+            }
+            self._chunks = iter([litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "OK"}}])])
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            chunk = next(self._chunks)
+            self._response_headers = {"x-request-id": "req-SERVED"}
+            self._hidden_params = {
+                "model_id": "served-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-SERVED"},
+            }
+            return chunk
+
+    with patch.object(router, "function_with_fallbacks", return_value=NestedFallbackStream()):
+        result = router._completion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        first_chunk: Final = next(result)
+        assert result._response_headers == {"x-request-id": "req-SERVED"}
+        assert result._hidden_params["model_id"] == "served-deployment"
+        assert first_chunk._hidden_params["model_id"] == "served-deployment"
+        for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-SERVED"}
+    assert result._hidden_params["model_id"] == "served-deployment"
+
+
+def test_completion_streaming_iterator_adopts_fallback_response_headers():
+    """LIT-6767, sync counterpart of the fallback-adoption test."""
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ],
+    )
+
+    failed_error = MidStreamFallbackError(
+        message="upstream died before the first chunk",
+        model="gpt-4",
+        llm_provider="openai",
+        generated_content="",
+        is_pre_first_chunk=True,
+    )
+
+    class FailedStream:
+        def __init__(self):
+            self.model = "gpt-4"
+            self.custom_llm_provider = "openai"
+            self.logging_obj = MagicMock()
+            self.chunks = []
+            self._response_headers = {"x-request-id": "req-FAILED"}
+            self._hidden_params = {
+                "model_id": "failed-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FAILED"},
+                "only_on_failed_attempt": "stale",
+            }
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            raise failed_error
+
+    class FallbackStream:
+        def __init__(self):
+            self._response_headers = {"x-request-id": "req-FALLBACK"}
+            self._hidden_params = {
+                "model_id": "fallback-deployment",
+                "additional_headers": {"llm_provider-x-request-id": "req-FALLBACK"},
+            }
+
+        def __iter__(self):
+            return iter([])
+
+    with patch.object(router, "function_with_fallbacks", return_value=FallbackStream()):
+        result = router._completion_streaming_iterator(
+            model_response=FailedStream(),
+            messages=[{"role": "user", "content": "hi"}],
+            initial_kwargs={"model": "gpt-4", "stream": True},
+        )
+        assert result._response_headers == {"x-request-id": "req-FAILED"}
+        for _ in result:
+            pass
+
+    assert result._response_headers == {"x-request-id": "req-FALLBACK"}
+    assert result._hidden_params["model_id"] == "fallback-deployment"
+    assert "only_on_failed_attempt" not in result._hidden_params
+
+
 def test_completion_streaming_iterator_fallback_on_429():
     """Sync streaming: MidStreamFallbackError (429 pre-first-chunk) triggers fallback.
 

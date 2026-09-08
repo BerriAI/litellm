@@ -906,6 +906,68 @@ class TestMCPServerManager:
         assert retry_slot.generation > old_generation
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("corrupt_column", ("static_headers", "env"))
+    async def test_database_reload_drops_cached_server_whose_secret_map_stops_decoding(
+        self, monkeypatch, caplog, corrupt_column
+    ):
+        from types import SimpleNamespace
+
+        from litellm.proxy import proxy_server
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_secret_map
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-reload-secret-map-salt")
+        monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "aes-256-gcm"})
+        headers = {"Authorization": "Bearer dummy-header-secret-4f1c"}
+        env = {"UPSTREAM_TOKEN": "dummy-env-secret-9a2b"}
+        stamp = datetime.now()
+        cached = MCPServer(
+            server_id="cached-server",
+            name="cached_server",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            static_headers=dict(headers),
+            env=dict(env),
+            updated_at=stamp,
+        )
+        manager = MCPServerManager()
+        manager.registry[cached.server_id] = cached
+        stored = {"static_headers": encrypt_secret_map(headers), "env": encrypt_secret_map(env)}
+        corrupted = {**stored, corrupt_column: stored[corrupt_column][:-6] + 'AAAAA"'}
+
+        def _row(server_id, maps):
+            row = MagicMock()
+            row.server_id = server_id
+            row.alias = server_id
+            row.model_dump.return_value = {
+                "server_id": server_id,
+                "alias": server_id,
+                "server_name": server_id,
+                "url": "https://up.example.com/mcp",
+                "transport": MCPTransport.http,
+                "updated_at": stamp,
+                **maps,
+            }
+            return row
+
+        table = SimpleNamespace(
+            find_many=AsyncMock(return_value=[_row(cached.server_id, corrupted), _row("healthy-sibling", stored)])
+        )
+        prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table))
+        monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+
+        with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+            await manager.reload_servers_from_database()
+
+        assert set(manager.registry) == {"healthy-sibling"}
+        sibling = manager.registry["healthy-sibling"]
+        assert dict(sibling.static_headers) == headers
+        assert dict(sibling.env) == env
+        logged = "\n".join(caplog.messages)
+        assert cached.server_id in logged
+        for secret in (*headers.values(), *env.values(), *stored.values(), corrupted[corrupt_column]):
+            assert secret not in logged
+
+    @pytest.mark.asyncio
     async def test_lazy_oauth_discovery_preserves_manual_authorization_url_gate(self):
         with patch.dict(os.environ, {"LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP": "false"}):
             manager = MCPServerManager()
