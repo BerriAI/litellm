@@ -9,7 +9,7 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
 
 
@@ -103,7 +103,9 @@ def _relay_logging_result(model: str, endpoint: str, body, status_code: int = 20
         status_code=status_code,
         headers={"content-type": "application/json"},
         content=json.dumps(body).encode("utf-8"),
-        request=httpx.Request("POST", f"https://my-resource.openai.azure.com/{endpoint}?api-version=2025-04-01-preview"),
+        request=httpx.Request(
+            "POST", f"https://my-resource.openai.azure.com/{endpoint}?api-version=2025-04-01-preview"
+        ),
     )
     result = AzurePassthroughConfig().logging_non_streaming_response(
         model=model,
@@ -291,7 +293,11 @@ def _azure_responses_stream_chunks(terminal_event: str | None = "response.comple
             "response.output_text.delta",
             {"type": "response.output_text.delta", "sequence_number": 1, "item_id": "msg_1", "delta": "hi"},
         ),
-    ] + ([(terminal_event, {"type": terminal_event, "sequence_number": 2, "response": RESPONSES_BODY})] if terminal_event else [])
+    ] + (
+        [(terminal_event, {"type": terminal_event, "sequence_number": 2, "response": RESPONSES_BODY})]
+        if terminal_event
+        else []
+    )
     return [line for name, payload in events for line in (f"event: {name}", _sse_line(payload))]
 
 
@@ -307,10 +313,10 @@ def test_azure_passthrough_streaming_responses_chunks_are_costed_per_token():
     )
     info = litellm.get_model_info("azure/gpt-4.1-mini")
 
-    assert isinstance(response, ResponsesAPIResponse)
-    assert response.usage.input_tokens == 1000
+    assert isinstance(response, ResponseCompletedEvent)
+    assert response.response.usage.input_tokens == 1000
     assert logging_obj.call_type == "aresponses"
-    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(
+    assert logging_obj._response_cost_calculator(result=response.response) == pytest.approx(
         1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
     )
 
@@ -373,7 +379,10 @@ def test_azure_passthrough_url_strips_the_leading_router_model_segment():
         litellm_params={},
     )
 
-    assert str(url) == "https://my-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2024-10-21"
+    assert (
+        str(url)
+        == "https://my-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2024-10-21"
+    )
 
 
 def test_azure_passthrough_url_rewrites_the_model_group_only_as_a_whole_segment():
@@ -386,7 +395,10 @@ def test_azure_passthrough_url_rewrites_the_model_group_only_as_a_whole_segment(
         litellm_params={"litellm_metadata": {"model_group": "gpt"}},
     )
 
-    assert str(url) == "https://my-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2024-10-21"
+    assert (
+        str(url)
+        == "https://my-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions?api-version=2024-10-21"
+    )
 
 
 @pytest.mark.parametrize(
@@ -394,4 +406,9 @@ def test_azure_passthrough_url_rewrites_the_model_group_only_as_a_whole_segment(
     [({"stream": True}, True), ({"stream": 1}, True), ({"stream": False}, False), ({}, False)],
 )
 def test_azure_passthrough_is_streaming_request_reads_the_stream_flag(request_data, expected):
-    assert AzurePassthroughConfig().is_streaming_request(endpoint="openai/deployments/x/chat/completions", request_data=request_data) is expected
+    assert (
+        AzurePassthroughConfig().is_streaming_request(
+            endpoint="openai/deployments/x/chat/completions", request_data=request_data
+        )
+        is expected
+    )

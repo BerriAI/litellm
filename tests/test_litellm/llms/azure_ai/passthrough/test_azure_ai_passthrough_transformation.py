@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure_ai.passthrough.transformation import AzureAIPassthroughConfig
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
@@ -14,6 +15,36 @@ from litellm.types.utils import EmbeddingResponse, ImageResponse, LlmProviders, 
 from litellm.utils import ProviderConfigManager
 
 FOUNDRY_BASE = "https://my-resource.services.ai.azure.com"
+RESPONSES_COMPLETED_EVENT = {
+    "type": "response.completed",
+    "sequence_number": 2,
+    "response": {
+        "id": "resp_1",
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-5.4-mini",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100},
+    },
+}
+
+
+class _SpendProbe(CustomLogger):
+    logged_call_type: str | None = None
+    logged_cost: float | None = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_call_type = kwargs["call_type"]
+        self.logged_cost = kwargs["response_cost"]
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +118,9 @@ def test_api_base_that_already_ends_in_models_is_cut_back_to_the_foundry_root():
 
 
 def test_full_url_api_base_that_already_ends_with_the_native_path_is_not_doubled():
-    model_router_url = "https://my-resource.cognitiveservices.azure.com/openai/deployments/model-router/chat/completions"
+    model_router_url = (
+        "https://my-resource.cognitiveservices.azure.com/openai/deployments/model-router/chat/completions"
+    )
 
     url, base = AzureAIPassthroughConfig().get_complete_url(
         api_base=f"{model_router_url}?api-version=2025-01-01-preview",
@@ -267,21 +300,29 @@ def test_non_chat_relay_with_a_non_json_body_logs_the_raw_text():
     assert _non_chat_logging_result(b"page one", "text/plain") == {"response": "page one"}
 
 
-def _relay_logging_obj(model: str, api_base: str) -> Logging:
+def _relay_logging_obj(
+    model: str,
+    api_base: str,
+    stream: bool = False,
+    callbacks: list[CustomLogger] | None = None,
+    endpoint: str = "",
+) -> Logging:
     logging_obj = Logging(
         model=model,
         messages=[],
-        stream=False,
+        stream=stream,
         call_type="allm_passthrough_route",
         start_time=datetime.now(),
         litellm_call_id="call-1",
         function_id="fn-1",
+        dynamic_async_success_callbacks=callbacks,
     )
     logging_obj.update_environment_variables(
         model=model,
         litellm_params={"api_base": api_base, "custom_llm_provider": "azure_ai"},
         optional_params={},
         custom_llm_provider="azure_ai",
+        endpoint=endpoint,
     )
     return logging_obj
 
@@ -509,31 +550,10 @@ def test_streaming_chat_completion_chunks_are_costed_like_azure():
 
 
 def test_streaming_responses_chunks_through_a_router_relay_are_costed_like_azure():
-    completed = {
-        "type": "response.completed",
-        "sequence_number": 2,
-        "response": {
-            "id": "resp_1",
-            "object": "response",
-            "created_at": 1,
-            "status": "completed",
-            "model": "gpt-5.4-mini",
-            "output": [
-                {
-                    "type": "message",
-                    "id": "msg_1",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [{"type": "output_text", "text": "hi", "annotations": []}],
-                }
-            ],
-            "usage": {"input_tokens": 1000, "output_tokens": 100, "total_tokens": 1100},
-        },
-    }
     logging_obj = _relay_logging_obj("gpt-5.4-mini", FOUNDRY_BASE)
 
     response = AzureAIPassthroughConfig().handle_logging_collected_chunks(
-        all_chunks=["event: response.completed", "data: " + json.dumps(completed)],
+        all_chunks=["event: response.completed", "data: " + json.dumps(RESPONSES_COMPLETED_EVENT)],
         litellm_logging_obj=logging_obj,
         model="gpt-5.4-mini",
         custom_llm_provider="azure_ai",
@@ -542,8 +562,24 @@ def test_streaming_responses_chunks_through_a_router_relay_are_costed_like_azure
     info = litellm.get_model_info("azure_ai/gpt-5.4-mini")
 
     assert response is not None
-    assert response.usage.output_tokens == 100
+    assert response.response.usage.output_tokens == 100
     assert logging_obj.call_type == "aresponses"
-    assert logging_obj._response_cost_calculator(result=response) == pytest.approx(
+    assert logging_obj._response_cost_calculator(result=response.response) == pytest.approx(
         1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"]
     )
+
+
+async def test_streaming_responses_relay_flush_reaches_the_success_callbacks_with_a_price():
+    probe = _SpendProbe()
+    logging_obj = _relay_logging_obj(
+        "gpt-5.4-mini", FOUNDRY_BASE, stream=True, callbacks=[probe], endpoint="gpt/openai/responses"
+    )
+    stream = "event: response.completed\ndata: " + json.dumps(RESPONSES_COMPLETED_EVENT) + "\n\n"
+
+    await logging_obj.async_flush_passthrough_collected_chunks(
+        raw_bytes=[stream.encode()], provider_config=AzureAIPassthroughConfig()
+    )
+    info = litellm.get_model_info("azure_ai/gpt-5.4-mini")
+
+    assert probe.logged_call_type == "allm_passthrough_route"
+    assert probe.logged_cost == pytest.approx(1000 * info["input_cost_per_token"] + 100 * info["output_cost_per_token"])

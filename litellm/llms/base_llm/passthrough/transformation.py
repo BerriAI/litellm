@@ -16,14 +16,14 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesTerminalEvent
     from litellm.types.rerank import RerankResponse
     from litellm.types.utils import CostResponseTypes, StandardPassThroughResponseObject
 
     from ..chat.transformation import BaseLLMException
     from ..ocr.transformation import OCRResponse
 
-    LoggedRelayResponse: TypeAlias = CostResponseTypes | RerankResponse | ResponsesAPIResponse
+    LoggedRelayResponse: TypeAlias = CostResponseTypes | RerankResponse | ResponsesAPIResponse | ResponsesTerminalEvent
 
 
 RELAYED_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
