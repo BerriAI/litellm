@@ -148,8 +148,9 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
     endpoint translation hands it the texts it scanned plus the assembled response under
     ``request_data["response"]``; the hook gets that response in the shape its route gives
     non-streaming hooks, an exception it raises ends the stream through the executor's
-    fail/error classification, and a replacement response is re-scanned by the same translation
-    so its texts reach the client through the translation's ended-stream write-back. A
+    fail/error classification, and the response it hands back, or the one it changed in place
+    and returned ``None`` for, is re-scanned by the same translation so its texts reach the
+    client through the translation's ended-stream write-back. A
     replacement whose scanned texts do not line up with the originals, or whose tool calls
     differ from them, is undeliverable, so the executor releases the original chunks."""
 
@@ -175,15 +176,17 @@ class _LegacyHookStreamAdapter(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:
+        hooked: Final = self.endpoint_translation.post_call_hook_response(request_data.get("response"))
         replacement: Final = await self.inner.async_post_call_success_hook(
             data=request_data,
             user_api_key_dict=self.user_api_key_dict,
-            response=self.endpoint_translation.post_call_hook_response(request_data.get("response")),
+            response=hooked,
         )
-        if replacement is None:
+        rewrite: Final = hooked if replacement is None else replacement
+        if rewrite is None:
             return inputs
         scanned: Final = _text_snapshot(inputs.get("texts"))
-        rescanned: Final = await self._rescan(replacement, logging_obj)
+        rescanned: Final = await self._rescan(rewrite, logging_obj)
         if scanned is None or rescanned is None:
             raise UndeliverableStreamRewrite(self.guardrail_name or "unknown")
         rewritten: Final = rescanned.get("texts")
