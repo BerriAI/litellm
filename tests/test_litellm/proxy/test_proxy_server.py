@@ -7542,6 +7542,24 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
 # =====================================================================
 
 
+def test_spend_counter_cache_keeps_active_counters_warm(monkeypatch):
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    cache = InMemoryCache(
+        max_size_in_memory=spend_counter_cache.in_memory_cache.max_size_in_memory,
+        default_ttl=60,
+    )
+    monkeypatch.setattr(spend_counter_cache, "in_memory_cache", cache)
+
+    sentinel = "spend:key:sentinel"
+    cache.set_cache(key=sentinel, value=1.0)
+    for index in range(300):
+        cache.set_cache(key=f"spend:end_user:scope-{index}", value=1.0)
+
+    assert cache.get_cache(key=sentinel) == 1.0
+
+
 @pytest.mark.asyncio
 async def test_get_current_spend_reads_redis_first():
     """get_current_spend should prefer Redis over in-memory."""
