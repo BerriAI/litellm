@@ -19,6 +19,7 @@ import pytest
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -2399,6 +2400,35 @@ def test_ProxyConfig__add_deployment_resolves_env_refs_on_arbitrary_field(monkey
 
     assert added == 1
     assert deployment.litellm_params.some_future_field == "resolved-custom-value"
+
+
+@pytest.mark.parametrize(
+    "stored_drop_params",
+    ["true", "os.environ/DROP_PARAMS_FLAG"],
+)
+def test_ProxyConfig__add_deployment_turns_stored_drop_params_string_into_bool(monkeypatch, stored_drop_params):
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("DROP_PARAMS_FLAG", "true")
+    fake_router = MagicMock()
+    fake_router.upsert_deployment = MagicMock(return_value=True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
+    pc = ProxyConfig()
+    db_model = SimpleNamespace(
+        model_id="model-1",
+        model_name="gpt-5-nano",
+        model_info={"id": "model-1"},
+        litellm_params={
+            "model": encrypt_value_helper(value="openai/gpt-5-nano"),
+            "drop_params": encrypt_value_helper(value=stored_drop_params),
+        },
+        blocked=False,
+    )
+
+    added = pc._add_deployment(db_models=[db_model])
+    deployment = fake_router.upsert_deployment.call_args.kwargs["deployment"]
+
+    assert added == 1
+    assert deployment.litellm_params.drop_params is True
 
 
 # ---------------------------------------------------------------------------

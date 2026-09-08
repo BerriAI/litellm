@@ -29397,7 +29397,7 @@ export interface components {
             /** Default Api Key Tpm Limit */
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
-            drop_params?: boolean | null;
+            drop_params?: boolean | string | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -39570,7 +39570,7 @@ export interface components {
             /** Default Api Key Tpm Limit */
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
-            drop_params?: boolean | null;
+            drop_params?: boolean | string | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */

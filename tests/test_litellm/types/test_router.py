@@ -1,8 +1,10 @@
 import pytest
+from pydantic import ValidationError
 
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
+    GenericLiteLLMParams,
     LiteLLM_Params,
     ModelInfo,
 )
@@ -89,3 +91,24 @@ def test_pricing_strings_are_coerced_to_float():
 def test_invalid_pricing_is_rejected():
     with pytest.raises(ValueError, match='validation error for ModelInfo'):
         ModelInfo(id="x", input_cost_per_token="free")
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (True, True),
+        ("true", True),
+        (" False ", False),
+        ("yes", True),
+        (None, None),
+        ("os.environ/DROP_PARAMS", "os.environ/DROP_PARAMS"),
+        ("v2:gcm:ciphertext-from-a-pre-fix-row", "v2:gcm:ciphertext-from-a-pre-fix-row"),
+    ],
+)
+def test_drop_params_coerces_flags_and_keeps_unresolved_strings(value, expected):
+    assert GenericLiteLLMParams(drop_params=value).drop_params == expected
+
+
+def test_drop_params_rejects_non_flag_non_string_values():
+    with pytest.raises(ValidationError):
+        GenericLiteLLMParams(drop_params=2)

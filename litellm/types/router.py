@@ -315,7 +315,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     timeout: float | str | httpx.Timeout | None = None  # if str, pass in as os.environ/
     stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
     max_retries: int | None = None
-    drop_params: bool | None = None
+    drop_params: bool | str | None = None
     organization: str | None = None  # for openai orgs
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     litellm_credential_name: str | None = None
@@ -408,8 +408,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     @field_validator("drop_params", mode="before")
     @classmethod
-    def coerce_drop_params(cls, value: object) -> bool | None:
-        return normalize_drop_params(value)
+    def coerce_drop_params(cls, value: object) -> object:
+        normalized: Final = normalize_drop_params(value)
+        return value if normalized is None else normalized
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

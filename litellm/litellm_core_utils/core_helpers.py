@@ -5,6 +5,7 @@ from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
@@ -37,16 +38,16 @@ def safe_divide_seconds(seconds: float, denominator: float, default: float | Non
     return float(seconds / denominator)
 
 
+_DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
+
+
 def normalize_drop_params(value: object) -> bool | None:
     if isinstance(value, bool):
         return value
-    if isinstance(value, str):
-        lowered: Final = value.strip().lower()
-        if lowered == "true":
-            return True
-        if lowered == "false":
-            return False
-    return None
+    try:
+        return _DROP_PARAMS_BOOL.validate_python(value.strip() if isinstance(value, str) else value)
+    except ValidationError:
+        return None
 
 
 def safe_divide(
