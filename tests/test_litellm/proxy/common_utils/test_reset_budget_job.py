@@ -13,7 +13,7 @@ import pytest
 
 
 from litellm.caching.dual_cache import DualCache
-from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.proxy._types import Litellm_EntityType, LiteLLM_VerificationToken
 from litellm.proxy.common_utils import reset_budget_job as reset_budget_job_module
 from litellm.constants import (
     PROXY_BUDGET_RESCHEDULER_MIN_TIME,
@@ -3211,12 +3211,17 @@ class TestBudgetWindowResetAtOffsets:
 
     @staticmethod
     async def _expired(window: dict, now: datetime, tz: str = "UTC") -> bool:
+        # The spend-row roll is best effort and wrapped in its own try, so a mock
+        # client here exercises the reset decision without touching a database.
         return await ResetBudgetJob._reset_expired_window(
             window,
             "spend:key:tok-1:window:" + window["budget_duration"],
             DualCache(),
             now,
             BudgetResetSettings(timezone=tz, reset_time_of_day=dt_time(0, 0)),
+            MagicMock(),
+            Litellm_EntityType.KEY,
+            "tok-1",
         )
 
     @pytest.mark.asyncio
@@ -3283,7 +3288,14 @@ class TestBudgetWindowResetAtOffsets:
 
         results = [
             await ResetBudgetJob._reset_expired_window(
-                window, f"spend:key:tok-1:window:{window['budget_duration']}", cache, now, settings
+                window,
+                f"spend:key:tok-1:window:{window['budget_duration']}",
+                cache,
+                now,
+                settings,
+                MagicMock(),
+                Litellm_EntityType.KEY,
+                "tok-1",
             )
             for window in (due, not_due)
         ]
