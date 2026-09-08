@@ -1,5 +1,6 @@
 import asyncio
 import threading
+import time
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -2199,26 +2200,83 @@ async def test_release_non_numeric_counter_reseeds_from_db(spend_counter_state):
 
 
 class _ExpiringRedisCache:
-    def __init__(self) -> None:
+    """In-memory stand-in for RedisCache with real wall-clock key expiry."""
+
+    def __init__(self, default_ttl: float = 60.0) -> None:
+        self.default_ttl = default_ttl
         self.store: dict[str, float] = {}
+        self.expires_at: dict[str, float] = {}
+        self.refresh_count = 0
+
+    def _evict_expired(self, key: str) -> None:
+        if self.expires_at.get(key, float("inf")) <= time.monotonic():
+            self.store.pop(key, None)
+            self.expires_at.pop(key, None)
 
     async def async_get_cache(self, key: str, *args: object, **kwargs: object) -> float | None:
+        self._evict_expired(key)
         return self.store.get(key)
 
     async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
+        self._evict_expired(key)
         self.store[key] = self.store.get(key, 0.0) + float(value)
+        self.expires_at[key] = time.monotonic() + self.default_ttl
         return self.store[key]
 
     async def async_set_max(self, key: str, value: float, **kwargs: object) -> float:
+        self._evict_expired(key)
         self.store[key] = max(self.store.get(key, float("-inf")), float(value))
+        self.expires_at[key] = time.monotonic() + self.default_ttl
         return self.store[key]
 
     async def async_set_cache(self, key: str, value: float, *args: object, **kwargs: object) -> bool:
         self.store[key] = float(value)
+        self.expires_at[key] = time.monotonic() + self.default_ttl
         return True
 
     async def async_delete_cache(self, key: str, *args: object, **kwargs: object) -> None:
         self.store.pop(key, None)
+        self.expires_at.pop(key, None)
+
+    async def async_refresh_ttl(self, key: str, ttl: int | None = None) -> bool:
+        self._evict_expired(key)
+        if key not in self.store:
+            return False
+        self.refresh_count += 1
+        self.expires_at[key] = time.monotonic() + (ttl if ttl is not None else self.default_ttl)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_reservation_survives_redis_counter_ttl_while_request_in_flight(
+    spend_counter_state,
+):
+    """A request that runs longer than the counter TTL must keep its reservation in Redis
+    (so a concurrent request on any worker still sees it), and renewal must stop once the
+    reservation is reconciled so an idle counter still expires on its own."""
+    counter_cache, key_cache = spend_counter_state
+    redis_cache = _ExpiringRedisCache(default_ttl=0.2)
+    counter_cache.redis_cache = redis_cache
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(token="key-lease", spend=0.0, max_budget=1.0)
+    counter_key = "spend:key:key-lease"
+
+    reservation = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+    assert reservation is not None
+
+    await asyncio.sleep(0.5)
+    assert await redis_cache.async_get_cache(key=counter_key) == pytest.approx(0.6)
+    concurrent = await _reserve(valid_token, 0.6, key_cache, proxy_logging_obj)
+    assert concurrent is not None
+    assert concurrent["reserved_cost"] == pytest.approx(0.4)
+
+    await release_budget_reservation(reservation)
+    await release_budget_reservation(concurrent)
+    await asyncio.sleep(0.15)
+    refreshes_after_release = redis_cache.refresh_count
+    await asyncio.sleep(0.35)
+    assert redis_cache.refresh_count == refreshes_after_release
+    assert await redis_cache.async_get_cache(key=counter_key) is None
 
 
 @pytest.mark.asyncio
