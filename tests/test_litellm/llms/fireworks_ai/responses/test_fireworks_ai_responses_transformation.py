@@ -162,7 +162,7 @@ def test_responses_call_forwards_previous_response_id_and_store() -> None:
     assert body["input"][0]["call_id"] == "call_abc123"
 
 
-def test_responses_call_sends_developer_items_as_system_messages() -> None:
+def test_responses_call_hoists_developer_items_into_one_leading_system_message() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
@@ -176,9 +176,75 @@ def test_responses_call_sends_developer_items_as_system_messages() -> None:
         )
     _, _, body = _sent_request(client)
     assert tuple(body["input"]) == (
-        {"role": "user", "content": "Hi there"},
         {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
+        {"role": "user", "content": "Hi there"},
         {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
+    )
+
+
+def test_responses_call_folds_instructions_and_developer_item_into_one_leading_system_message() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/qwen3p8-2p4t-a95b"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
+            instructions="You are a coding agent running in the Codex CLI.",
+            input=[  # mutable-ok: the Responses API takes input as a JSON list
+                {
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "<permissions instructions>read-only</permissions instructions>"}],
+                },
+                {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
+                {"id": "rs_1", "type": "reasoning", "summary": [{"type": "summary_text", "text": "A trivial question."}]},
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Paris is the capital of France.", "annotations": []}],
+                },
+                {"role": "user", "content": [{"type": "input_text", "text": "And of Spain?"}]},
+            ],
+            store=False,
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert "instructions" not in body
+    assert tuple(body["input"]) == (
+        {
+            "role": "system",
+            "content": (
+                "You are a coding agent running in the Codex CLI.\n\n"
+                "<permissions instructions>read-only</permissions instructions>"
+            ),
+            "type": "message",
+        },
+        {"role": "user", "content": [{"type": "input_text", "text": "What is the capital of France?"}]},
+        {"id": "rs_1", "type": "reasoning", "summary": [{"type": "summary_text", "text": "A trivial question."}]},
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Paris is the capital of France.", "annotations": []}],
+        },
+        {"role": "user", "content": [{"type": "input_text", "text": "And of Spain?"}]},
+    )
+
+
+def test_responses_call_turns_string_input_with_instructions_into_system_then_user_messages() -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(
+            model="fireworks_ai/accounts/fireworks/models/kimi-k3",
+            instructions="Answer with exactly one word.",
+            input="What is the capital of France?",
+            api_key="fw-test-key",
+        )
+    _, _, body = _sent_request(client)
+    assert "instructions" not in body
+    assert tuple(body["input"]) == (
+        {"role": "system", "content": "Answer with exactly one word.", "type": "message"},
+        {"role": "user", "content": "What is the capital of France?"},
     )
 
 

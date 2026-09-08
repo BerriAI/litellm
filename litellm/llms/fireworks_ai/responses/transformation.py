@@ -5,6 +5,7 @@ from urllib.parse import unquote
 
 import httpx
 from openai.types.responses import EasyInputMessageParam, ResponseInputItemParam
+from pydantic import TypeAdapter
 
 from litellm.llms.fireworks_ai.common_utils import (
     resolve_fireworks_api_key,
@@ -31,16 +32,32 @@ def _session_params(litellm_params: GenericLiteLLMParams) -> Mapping[str, object
     )
 
 
-def _developer_item_as_system(item: ResponseInputItemParam) -> ResponseInputItemParam:
-    if "role" not in item or item["role"] != "developer":
-        return item
-    return EasyInputMessageParam(role="system", content=item["content"], type="message")
+_instructions_adapter: Final = TypeAdapter[str | None](str | None)
 
 
-def _developer_items_as_system(input: str | ResponseInputParam) -> str | ResponseInputParam:
-    if isinstance(input, str):
+def _instruction_text(item: ResponseInputItemParam) -> str | None:
+    if "role" not in item or (item["role"] != "system" and item["role"] != "developer"):
+        return None
+    content: Final = item["content"]
+    if isinstance(content, str):
+        return content
+    return "\n\n".join(part["text"] for part in content if part["type"] == "input_text")
+
+
+def _with_single_leading_system_item(
+    input: str | ResponseInputParam, instructions: str | None
+) -> str | ResponseInputParam:
+    items: Final = () if isinstance(input, str) else tuple(input)
+    instruction_texts: Final = tuple(text for text in (instructions, *map(_instruction_text, items)) if text)
+    if not instruction_texts:
         return input
-    return [_developer_item_as_system(item) for item in input]
+    leading: Final = EasyInputMessageParam(role="system", content="\n\n".join(instruction_texts), type="message")
+    rest: Final = (
+        (EasyInputMessageParam(role="user", content=input),)
+        if isinstance(input, str)
+        else tuple(item for item in items if _instruction_text(item) is None)
+    )
+    return [leading, *rest]
 
 
 class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -68,9 +85,6 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         base: Final = (api_base or get_secret_str("FIREWORKS_API_BASE") or FIREWORKS_AI_DEFAULT_API_BASE).rstrip("/")
         return f"{base}/responses"
 
-    def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
-        return _developer_items_as_system(super()._validate_input_param(input))
-
     def transform_responses_api_request(
         self,
         model: str,
@@ -79,10 +93,16 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: overrides the base class signature
     ) -> dict:  # mutable-ok: overrides the base class signature
+        instructions: Final = _instructions_adapter.validate_python(
+            response_api_optional_request_params.get("instructions")
+        )
+        folded_params: Final = {  # mutable-ok: the base class takes the optional params as a dict
+            key: value for key, value in response_api_optional_request_params.items() if key != "instructions"
+        }
         return super().transform_responses_api_request(
             model=resolve_fireworks_resource_name(model),
-            input=input,
-            response_api_optional_request_params=response_api_optional_request_params,
+            input=_with_single_leading_system_item(self._validate_input_param(input), instructions),
+            response_api_optional_request_params=folded_params,
             litellm_params=litellm_params,
             headers=headers,
         )
