@@ -362,8 +362,13 @@ async def authenticate_user(
                 code=401,
             )
     else:
+        env_credentials_hint: Final = (
+            "\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file"
+            if is_env_credential_login_enabled(general_settings)
+            else ""
+        )
         raise ProxyException(
-            message="Invalid credentials used to access UI.\nCheck 'UI_USERNAME', 'UI_PASSWORD' in .env file",
+            message=f"Invalid credentials used to access UI.{env_credentials_hint}",
             type=ProxyErrorTypes.auth_error,
             param="invalid_credentials",
             code=401,
