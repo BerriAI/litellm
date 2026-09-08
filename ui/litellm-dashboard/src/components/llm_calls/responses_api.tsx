@@ -312,7 +312,10 @@ export async function makeOpenAIResponsesRequest(
             }
 
             if (usage.cost !== undefined && usage.cost !== null) {
-              usageData.cost = Number(usage.cost);
+              const parsedCost = Number(usage.cost);
+              if (Number.isFinite(parsedCost)) {
+                usageData.cost = parsedCost;
+              }
             }
 
             onUsageData(usageData, mcpToolUsed);
