@@ -685,16 +685,16 @@ async def create_file(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", 500),
             )
     finally:
@@ -993,16 +993,16 @@ async def get_file_content(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -1187,16 +1187,16 @@ async def get_file(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -1399,16 +1399,16 @@ async def delete_file(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", 500),
             )
 
@@ -1601,15 +1601,15 @@ async def list_files(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                type=getattr(e, "type", "invalid_request_error"),
+                param=getattr(e, "param", None),
                 code=getattr(e, "status_code", 500),
             )
