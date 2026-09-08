@@ -414,7 +414,11 @@ def test_qwen37_rerank_explicit_region(provider, host):
 def test_qwen37_rerank_response_logging():
     config = get_dashscope_family_rerank_config("dashscope", "qwen3.7-text-rerank")
     logging = MagicMock()
-    request = {"model": "qwen3.7-text-rerank", "input": {"query": "question", "documents": ["answer"]}, "parameters": {}}
+    request = {
+        "model": "qwen3.7-text-rerank",
+        "input": {"query": "question", "documents": ["answer"]},
+        "parameters": {},
+    }
     payload = {"request_id": "request-id", "output": {"results": [{"index": 0, "relevance_score": 0.88}]}}
 
     response = config.transform_rerank_response(
@@ -490,3 +494,117 @@ async def test_qwen37_rerank_preserves_provider_error(is_async, respx_mock: resp
 
     assert error.value.status_code == 400
     assert "DashscopeException" in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("provider", ["dashscope", "qwencloud", "qwen_ai_platform"])
+@pytest.mark.parametrize("base_case", ["rerank_override", "explicit", "explicit_default", "general_only"])
+async def test_native_rerank_base_precedence(provider, is_async, base_case, respx_mock, monkeypatch):
+    import litellm
+
+    prefix = provider.upper()
+    default_host = "dashscope-intl.aliyuncs.com" if provider == "qwencloud" else "dashscope.aliyuncs.com"
+    monkeypatch.setenv(f"{prefix}_API_BASE", "https://chat.example/compatible-mode/v1")
+    monkeypatch.delenv(f"{prefix}_API_BASE_RERANK", raising=False)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    if base_case != "general_only":
+        monkeypatch.setenv(f"{prefix}_API_BASE_RERANK", "https://rerank.example/api/v1")
+    explicit_base = {
+        "rerank_override": None,
+        "explicit": "https://explicit.example/api/v1",
+        "explicit_default": f"https://{default_host}/compatible-mode/v1",
+        "general_only": None,
+    }[base_case]
+    expected_host = {
+        "rerank_override": "rerank.example",
+        "explicit": "explicit.example",
+        "explicit_default": default_host,
+        "general_only": "chat.example",
+    }[base_case]
+    route = respx_mock.post(f"https://{expected_host}/api/v1/services/rerank/text-rerank/text-rerank")
+    route.respond(
+        200, json={"request_id": "base-precedence", "output": {"results": [{"index": 0, "relevance_score": 0.9}]}}
+    )
+    kwargs = {
+        "model": f"{provider}/qwen3.7-text-rerank",
+        "query": "question",
+        "documents": ["answer"],
+        "api_key": "fake-review-key",
+        "api_base": explicit_base,
+    }
+
+    response = await litellm.arerank(**kwargs) if is_async else litellm.rerank(**kwargs)
+
+    assert json.loads(route.calls[0].request.content)["input"] == {"query": "question", "documents": ["answer"]}
+    assert response.id == "base-precedence"
+    assert response.results == [{"index": 0, "relevance_score": 0.9}]
+
+
+@pytest.mark.parametrize("provider", ["dashscope", "qwencloud", "qwen_ai_platform"])
+@pytest.mark.parametrize("rerank_api", ["native", "compatible"])
+def test_rerank_protocol_uses_runtime_model_metadata(provider, rerank_api, respx_mock, monkeypatch):
+    import litellm
+
+    model = "custom-rerank" if rerank_api == "native" else "qwen3.7-text-rerank"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model if provider == "dashscope" and rerank_api == "native" else f"{provider}/{model}",
+        {
+            "litellm_provider": provider,
+            "mode": "rerank",
+            "provider_specific_entry": {"rerank_api": rerank_api},
+        },
+    )
+    results = [{"index": 0, "relevance_score": 0.9}]
+    url = (
+        "https://proxy.example/api/v1/services/rerank/text-rerank/text-rerank"
+        if rerank_api == "native"
+        else "https://proxy.example/api/v1/reranks"
+    )
+    route = respx_mock.post(url)
+    route.respond(
+        200,
+        json={"request_id": "metadata", "output": {"results": results}}
+        if rerank_api == "native"
+        else {"id": "metadata", "results": results},
+    )
+
+    response = litellm.rerank(
+        model=f"{provider}/{model}",
+        query="question",
+        documents=["answer"],
+        api_key="fake-key",
+        api_base="https://proxy.example/api/v1",
+        return_documents=None,
+    )
+
+    assert json.loads(route.calls[0].request.content) == (
+        {"model": model, "input": {"query": "question", "documents": ["answer"]}, "parameters": {}}
+        if rerank_api == "native"
+        else {"model": model, "query": "question", "documents": ["answer"]}
+    )
+    assert response.id == "metadata"
+    assert response.results == results
+
+
+@pytest.mark.parametrize("provider", ["dashscope", "qwencloud", "qwen_ai_platform"])
+def test_rerank_uses_bundled_metadata_when_remote_map_lacks_model(provider, respx_mock, monkeypatch):
+    import litellm
+
+    for prefix in ("dashscope", "qwencloud", "qwen_ai_platform"):
+        monkeypatch.delitem(litellm.model_cost, f"{prefix}/qwen3.7-text-rerank", raising=False)
+    route = respx_mock.post("https://proxy.example/api/v1/services/rerank/text-rerank/text-rerank")
+    route.respond(200, json={"request_id": "bundled", "output": {"results": [{"index": 0, "relevance_score": 0.9}]}})
+
+    response = litellm.rerank(
+        model=f"{provider}/qwen3.7-text-rerank",
+        query="question",
+        documents=["answer"],
+        api_key="fake-key",
+        api_base="https://proxy.example/api/v1",
+    )
+
+    assert json.loads(route.calls[0].request.content)["input"] == {"query": "question", "documents": ["answer"]}
+    assert response.id == "bundled"
+    assert response.results == [{"index": 0, "relevance_score": 0.9}]

@@ -16,9 +16,9 @@ from .transformation import DashScopeRerankConfig, DashScopeRerankUsage
 
 
 class DashScopeNativeRerankConfig(DashScopeRerankConfig):
-    def __init__(self, provider_config: DashScopeRerankConfig) -> None:
-        # Reuse brand-specific credentials and hosts without duplicating alias subclasses.
+    def __init__(self, provider_config: DashScopeRerankConfig, api_base: str | None = None) -> None:
         self._provider_config: Final = provider_config
+        self._api_base: Final = api_base
 
     def _resolve_api_key(self, api_key: str | None) -> str:
         return self._provider_config._resolve_api_key(api_key)
@@ -32,12 +32,7 @@ class DashScopeNativeRerankConfig(DashScopeRerankConfig):
         model: str,
         optional_params: Mapping[str, object] | None = None,
     ) -> str:
-        # Provider discovery supplies the brand's chat default even when no api_base was passed.
-        # Resolve the rerank-specific environment override before constructing the native path.
-        default_chat_base: Final = self._provider_config.DEFAULT_RERANK_API_BASE.replace(
-            "/compatible-api/v1/reranks", "/compatible-mode/v1"
-        )
-        native_base: Final = self._resolve_rerank_api_base(None if api_base == default_chat_base else api_base)
+        native_base: Final = self._resolve_rerank_api_base(self._api_base or api_base)
         parsed: Final = urlsplit(native_base.rstrip("/"))
         if parsed.path.endswith("/services/rerank/text-rerank/text-rerank"):
             return urlunsplit(parsed)
@@ -79,5 +74,4 @@ class DashScopeNativeRerankConfig(DashScopeRerankConfig):
         output: Final = TypeAdapter(Mapping[str, object]).validate_python(
             response_json.get("output", MappingProxyType({}))
         )
-        # Native usage separates prompt_tokens from total_tokens; keep both provider counters.
         return output.get("results"), response_json.get("request_id"), usage.get("prompt_tokens")

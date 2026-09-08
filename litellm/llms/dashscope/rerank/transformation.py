@@ -25,7 +25,7 @@ Docs - https://help.aliyun.com/zh/model-studio/text-rerank-api
 
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import ClassVar, Final
+from typing import Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -61,11 +61,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
     documents, top_n, return_documents. Response: results[].index,
     results[].relevance_score, optionally results[].document.text (when
     return_documents=true), plus a top-level usage.total_tokens counter.
-
-    Brand aliases supply their own API key and base resolvers.
     """
-
-    DEFAULT_RERANK_API_BASE: ClassVar[str] = DEFAULT_RERANK_URL
 
     def __init__(self) -> None:
         pass
@@ -81,7 +77,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
     def _resolve_rerank_api_base(self, api_base: str | None) -> str:
         if api_base is not None:
             return api_base
-        return get_secret_str("DASHSCOPE_API_BASE_RERANK") or self.DEFAULT_RERANK_API_BASE
+        return get_secret_str("DASHSCOPE_API_BASE_RERANK") or DEFAULT_RERANK_URL
 
     def get_complete_url(
         self,
@@ -136,7 +132,6 @@ class DashScopeRerankConfig(BaseRerankConfig):
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
     ) -> dict[str, object]:
-        # rank_fields and max_*_per_doc have no supported mapping and are omitted.
         params: Final = MappingProxyType(
             {
                 "query": query,
@@ -255,7 +250,6 @@ class DashScopeRerankConfig(BaseRerankConfig):
     def _get_response_fields(
         self, response_json: Mapping[str, object], usage: DashScopeRerankUsage
     ) -> tuple[object, object, int | None]:
-        # The compatible API reports its input count only as total_tokens.
         return response_json.get("results"), response_json.get("id"), usage.get("total_tokens")
 
     def get_error_class(
