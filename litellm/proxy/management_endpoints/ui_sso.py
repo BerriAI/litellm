@@ -16,7 +16,7 @@ import json
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from copy import deepcopy
 from html import escape
 from types import MappingProxyType
@@ -29,6 +29,7 @@ from typing import (
     NoReturn,
     Optional,
     Protocol,
+    TypeAlias,
     Union,
     cast,
     overload,
@@ -70,6 +71,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     SSOIdentityAssertion,
     assertion_from_sso_login,
+    ema_assertion_retention_enabled,
     retain_sso_identity_assertion_for_ema,
 )
 from litellm.proxy._types import (
@@ -89,9 +91,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
-    _has_user_setup_sso,
+    has_user_setup_sso,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
@@ -104,6 +107,9 @@ from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
+from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
+    id_jag_assertion_capture_gap,
+)
 from litellm.proxy.management_endpoints.sso.saml_sso import SAMLAuthHandler
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
@@ -111,6 +117,7 @@ from litellm.proxy.management_endpoints.sso_helper_utils import (
 )
 from litellm.proxy.management_endpoints.team_endpoints import new_team, team_member_add
 from litellm.proxy.management_endpoints.types import (
+    LITELLM_USER_ROLE_HIERARCHY,
     CustomOpenID,
     get_litellm_user_role,
     is_valid_litellm_user_role,
@@ -808,15 +815,6 @@ def normalize_email(email: str | None) -> str | None:
     return email.lower() if isinstance(email, str) else email
 
 
-# Ordered highest to lowest privilege
-LITELLM_USER_ROLE_HIERARCHY: Final = (
-    LitellmUserRoles.PROXY_ADMIN,
-    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    LitellmUserRoles.INTERNAL_USER,
-    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-)
-
-
 def determine_role_from_groups(
     user_groups: list[str],
     role_mappings: "RoleMappings",
@@ -1118,7 +1116,7 @@ async def google_login(
             request=request,
         )
         if sso_redirect is not None:
-            _persist_return_to_cookie(sso_redirect, return_to)
+            _persist_return_to_cookie(sso_redirect, return_to, request)
         return sso_redirect
 
     from fastapi.responses import HTMLResponse
@@ -1138,7 +1136,7 @@ async def google_login(
     # helper the SSO branch uses, so /login can resume the connect flow instead of dead-ending at the
     # dashboard. One implementation → the two sign-in branches cannot diverge (and the login form always
     # renders, since the helper never raises on a bad return_to).
-    _persist_return_to_cookie(form_response, return_to)
+    _persist_return_to_cookie(form_response, return_to, request)
     return form_response
 
 
@@ -1682,6 +1680,46 @@ async def get_generic_sso_response(
         )
     verbose_proxy_logger.debug("generic result: %s", result)
     return result or {}, received_response, access_token_payload, sso_assertion
+
+
+RetentionCheck: TypeAlias = Callable[[], Awaitable[bool]]  # mutable-ok: Callable parameter syntax
+
+
+async def warn_if_id_jag_assertion_uncaptured(
+    assertion: SSOIdentityAssertion | None, *, retention_enabled: RetentionCheck | None = None
+) -> None:
+    """Say, at the one moment it is knowable, that this login gave an ``oauth2_id_jag`` server
+    nothing to spend. Without it the operator only ever sees the per-request failure, which cannot
+    tell a user who has never signed in from a provider that will never capture. Kept strictly
+    diagnostic: a store outage is swallowed, since a login must not fail over a log line."""
+    if assertion is not None:
+        return
+    try:
+        check: Final = retention_enabled if retention_enabled is not None else ema_assertion_retention_enabled
+        if not await check():
+            return
+    except Exception as exc:  # noqa: BLE001  # diagnostics must never break the login
+        verbose_proxy_logger.debug("Could not check for oauth2_id_jag MCP servers after SSO login: %s", exc)
+        return
+    gap: Final = id_jag_assertion_capture_gap()
+    verbose_proxy_logger.warning(
+        "SSO login captured no IdP identity assertion while an oauth2_id_jag MCP server is registered: %s",
+        gap if gap is not None else "the identity provider's token response carried no usable id_token",
+    )
+
+
+async def warn_if_id_jag_capture_gap(*, retention_enabled: RetentionCheck | None = None) -> None:
+    gap: Final = id_jag_assertion_capture_gap()
+    if gap is None:
+        return
+    try:
+        check: Final = retention_enabled if retention_enabled is not None else ema_assertion_retention_enabled
+        if not await check():
+            return
+    except Exception as exc:  # noqa: BLE001  # diagnostics must never break the page they annotate
+        verbose_proxy_logger.debug("Could not check for oauth2_id_jag MCP servers: %s", exc)
+        return
+    verbose_proxy_logger.warning("SSO debug callback ran with an oauth2_id_jag capture gap: %s", gap)
 
 
 async def create_team_member_add_task(team_id, user_info):
@@ -2276,6 +2314,7 @@ async def _complete_cli_sso_callback_session(
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
 
     await retain_sso_identity_assertion_for_ema(user_id=user_info.user_id, assertion=sso_assertion)
+    await warn_if_id_jag_assertion_uncaptured(sso_assertion)
 
     teams: list[str] = []
     if hasattr(user_info, "teams") and user_info.teams:
@@ -2617,7 +2656,7 @@ async def get_ui_settings(request: Request):
     _proxy_base_url: Final = os.getenv("PROXY_BASE_URL", None)
     _logout_url: Final = os.getenv("PROXY_LOGOUT_URL", None)
     _api_doc_base_url: Final = os.getenv("LITELLM_UI_API_DOC_BASE_URL", None)
-    _is_sso_enabled: Final = _has_user_setup_sso()
+    _is_sso_enabled: Final = has_user_setup_sso()
     disable_expensive_db_queries: Final = (
         proxy_state.get_proxy_state_variable("spend_logs_row_count") > MAX_SPENDLOG_ROWS_TO_QUERY
     )
@@ -2741,6 +2780,7 @@ async def _sso_return_to_redirect(
     jwt_token: str,
     redis_usage_cache,
     user_api_key_cache,
+    request: Request,
 ) -> RedirectResponse | None:
     """Resolve the post-SSO redirect for a ``return_to``, or None to fall through to the dashboard.
 
@@ -2759,7 +2799,7 @@ async def _sso_return_to_redirect(
 
     if _is_same_origin_return_path(return_to):
         redirect_response = RedirectResponse(url=return_to, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        set_session_token_cookie(redirect_response, request, jwt_token)
         redirect_response.delete_cookie("litellm_cp_return_to")
         return redirect_response
 
@@ -2782,7 +2822,25 @@ async def _sso_return_to_redirect(
     return None
 
 
-def _persist_return_to_cookie(response: Response, return_to: str | None) -> None:
+def set_session_token_cookie(response: Response, request: Request, jwt_token: str) -> None:
+    """Set the ``token`` session cookie shared by every sign-in path.
+
+    Not HttpOnly: the dashboard reads this cookie via ``document.cookie`` to
+    populate its own Authorization headers (see
+    ``ui/litellm-dashboard/src/utils/cookieUtils.ts``), so marking it
+    HttpOnly would break login. Secure is still required whenever the public
+    origin is HTTPS, resolved the same trust-aware way as every other
+    litellm cookie."""
+    response.set_cookie(
+        key="token",
+        value=jwt_token,
+        secure=IPAddressUtils.is_request_https(request),
+        httponly=False,
+        samesite="lax",
+    )
+
+
+def _persist_return_to_cookie(response: Response, return_to: str | None, request: Request) -> None:
     """Best-effort: persist a SAFE ``return_to`` on ``response`` as the one-shot ``litellm_cp_return_to``
     cookie so ANY sign-in path — SSO / Okta / generic OR the username/password form — can resume there
     afterwards. THIS is the single source of truth, called by every sign-in branch so they cannot
@@ -2803,6 +2861,7 @@ def _persist_return_to_cookie(response: Response, return_to: str | None) -> None
             max_age=600,
             httponly=True,
             samesite="lax",
+            secure=IPAddressUtils.is_request_https(request),
         )
 
 
@@ -3079,8 +3138,11 @@ class SSOAuthenticationHandler:
                     # incoming request is HTTP (local dev).  Without
                     # ``Secure`` the cookie is sent over plain HTTP,
                     # letting a network observer read and replay the
-                    # state value and bypass this protection.
-                    secure_flag: Final = request is None or request.url.scheme == "https"
+                    # state value and bypass this protection. Trust-aware:
+                    # honors PROXY_BASE_URL / a trusted reverse proxy's
+                    # X-Forwarded-Proto instead of only the literal scheme
+                    # litellm sees on the wire.
+                    secure_flag: Final = request is None or IPAddressUtils.is_request_https(request)
                     redirect_response.set_cookie(
                         key="litellm_oauth_state",
                         value=state_value,
@@ -3583,6 +3645,7 @@ class SSOAuthenticationHandler:
 
         if isinstance(user_id, str) and user_id:
             await retain_sso_identity_assertion_for_ema(user_id=user_id, assertion=sso_assertion)
+            await warn_if_id_jag_assertion_uncaptured(sso_assertion)
 
         disabled_non_admin_personal_key_creation: Final = get_disabled_non_admin_personal_key_creation()
         litellm_dashboard_ui = get_custom_url(request_base_url=str(request.base_url), route="ui/")
@@ -3628,6 +3691,7 @@ class SSOAuthenticationHandler:
             jwt_token=jwt_token,
             redis_usage_cache=redis_usage_cache,
             user_api_key_cache=user_api_key_cache,
+            request=request,
         )
         if return_to_redirect is not None:
             return return_to_redirect
@@ -3636,7 +3700,7 @@ class SSOAuthenticationHandler:
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info("Redirecting to %s", litellm_dashboard_ui)
         redirect_response: Final = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        set_session_token_cookie(redirect_response, request, jwt_token)
         return redirect_response
 
     @staticmethod
@@ -4287,14 +4351,7 @@ class MicrosoftSSOHandler:
         listed first. Roles the hierarchy does not rank (org_admin, team, customer)
         resolve by name to stay deterministic
         """
-        resolved: Final = frozenset(
-            role for role in (get_litellm_user_role(role_str) for role_str in app_roles or ()) if role is not None
-        )
-        if not resolved:
-            return None
-
-        ranked: Final = next((role for role in LITELLM_USER_ROLE_HIERARCHY if role in resolved), None)
-        return ranked if ranked is not None else min(resolved, key=lambda role: role.value)
+        return get_litellm_user_role(tuple(app_roles or ()))
 
     @staticmethod
     def get_app_roles_from_id_token(id_token: str | None) -> list[str]:
@@ -4723,6 +4780,7 @@ async def debug_sso_callback(request: Request):
     safe_raw_claims: Final = {k: v for k, v in (received_response or {}).items() if k not in _OAUTH_TOKEN_FIELDS}
     safe_access_token_claims = {k: v for k, v in (access_token_payload or {}).items() if k not in _OAUTH_TOKEN_FIELDS}
 
+    await warn_if_id_jag_capture_gap()
     sso_payload: Final = {
         "parsed_by_proxy": filtered_result,
         "raw_claims": safe_raw_claims,

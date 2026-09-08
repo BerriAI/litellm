@@ -4,9 +4,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
-
-
 from litellm import get_model_info, supports_reasoning, supports_vision
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
@@ -235,6 +234,21 @@ def test_get_fireworks_session_id_prefers_litellm_session_id_over_trace_id():
     )
 
 
+def test_get_fireworks_session_id_ignores_proxy_generated_session_id():
+    """general_settings.missing_session_id: generate stamps a fresh id per request; sending it
+    as x-session-affinity would pin every request to a different node."""
+    assert (
+        get_fireworks_session_id(
+            {
+                "litellm_session_id": "generated-1",
+                "litellm_trace_id": "generated-1",
+                "metadata": {"session_id": "generated-1", SESSION_ID_GENERATED_METADATA_KEY: True},
+            }
+        )
+        is None
+    )
+
+
 def test_handle_message_content_with_tool_calls():
     config = FireworksAIConfig()
     message = Message(
@@ -345,6 +359,27 @@ def test_get_supported_openai_params_parallel_tool_calls():
         "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
     )
     assert "parallel_tool_calls" not in unsupported_params
+
+
+def test_get_supported_openai_params_short_model_name_resolves_account_prefixed_entry():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/deepseek-v4-pro-0813"
+    )
+
+    assert "tool_choice" in supported_params
+    assert "reasoning_effort" in supported_params
+
+
+def test_get_supported_openai_params_preserves_generic_reasoning_fallback():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/accounts/fireworks/models/glm-5p3-flash"
+    )
+
+    assert "reasoning_effort" in supported_params
 
 
 def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(

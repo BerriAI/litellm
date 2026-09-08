@@ -919,6 +919,62 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
 
 
 @pytest.mark.asyncio
+async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    agent.litellm_params = {
+        "custom_llm_provider": "bedrock",
+        "model": "bedrock/agentcore/arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/demo",
+        "api_key": "test-jwt-token",
+    }
+    mock_request = _make_request_mock(
+        "message/send",
+        {
+            "message": {
+                "role": "user",
+                "parts": [{"kind": "text", "text": "Hello"}],
+                "messageId": "msg-1",
+                "contextId": "too-short",
+            }
+        },
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type: data
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(  # test-quality-ok: same proxy_logging_obj injection the sibling failure-hook test uses; no HTTP call is made because the request is rejected before signing
+                "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert response.status_code == 400
+    assert body["id"] == "req-1"
+    assert body["error"]["code"] == -32602
+    assert "Invalid AgentCore runtime session id" in body["error"]["message"]
+    assert "Internal error" not in body["error"]["message"]
+    mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_extended_agent_card_rewrites_url():
     from litellm.proxy._types import UserAPIKeyAuth
 

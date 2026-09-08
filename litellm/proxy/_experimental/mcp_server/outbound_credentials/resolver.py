@@ -46,11 +46,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.result import (
     Ok,
     Result,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_refresher import (
+    default_sso_assertion_store,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.sso_assertion_store import (
     AssertionStoreUnavailable,
-    DbSSOAssertionStore,
     SSOAssertionStore,
-    SSOIdentityAssertion,
+    assertion_expired,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_endpoint import (
     ExchangedToken,
@@ -129,12 +131,12 @@ class UpstreamCredentialProvider:
         self._token_endpoint: TokenEndpointClient = token_endpoint or TokenEndpointClient()
         self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
         self._client_credentials_source = client_credentials_source or ClientCredentialsTokenSource()
-        self._sso_assertion_store: SSOAssertionStore = sso_assertion_store or DbSSOAssertionStore()
+        self._sso_assertion_store: SSOAssertionStore = sso_assertion_store or default_sso_assertion_store()
 
     async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx.Auth, CredError]:
         match server.config:
             case NoneConfig():
-                return Ok(NoOpAuth())
+                return self._none(server)
             case ApiKeyConfig() as config:
                 return self._api_key(config)
             case PassthroughConfig():
@@ -150,6 +152,15 @@ class UpstreamCredentialProvider:
             case AwsSigV4Config():
                 return _not_implemented(AuthSpecKind.aws_sigv4)
         assert_never(server.config)
+
+    def _none(self, server: ServerSpec) -> Result[httpx.Auth, CredError]:
+        try:
+            resource: Final = httpx.URL(server.resource)
+        except httpx.InvalidURL:
+            return Ok(NoOpAuth())
+        if resource.userinfo:
+            return Error(CredError.of_url_credentials_not_allowed())
+        return Ok(NoOpAuth())
 
     async def has_user_token(self, subject: Subject, server: ServerSpec) -> bool:
         """Whether a usable per-user token exists for this server (the preemptive 401's check).
@@ -237,7 +248,7 @@ class UpstreamCredentialProvider:
                     "Sign in through LiteLLM SSO so the gateway captures one."
                 )
             )
-        if _assertion_expired(assertion, datetime.now(timezone.utc)):
+        if assertion_expired(assertion, datetime.now(timezone.utc)):
             return Error(
                 CredError.of_precondition_required(
                     "The stored IdP identity assertion for this user has expired. Sign in through "
@@ -394,19 +405,6 @@ def _id_jag_slot_key(subject: Subject, server: ServerSpec) -> str:
     inbound: Final = subject.inbound_token.get_secret_value() if subject.inbound_token is not None else ""
     material: Final = "\x00".join((subject.tenant_id, subject.subject_id, server.server_id, inbound))
     return hashlib.sha256(material.encode()).hexdigest()
-
-
-def _assertion_expired(assertion: SSOIdentityAssertion, now: datetime) -> bool:
-    """Whether the stored assertion's ``exp`` has passed. An assertion carrying no expiry is
-    treated as usable and left for the IdP to reject, since the store records what the id_token
-    claimed rather than imposing a lifetime of its own. A naive ``expires_at`` is read as UTC so a
-    stored value that lost its offset compares instead of raising.
-    """
-    expires_at: Final = assertion.expires_at
-    if expires_at is None:
-        return False
-    normalized: Final = expires_at if expires_at.tzinfo is not None else expires_at.replace(tzinfo=timezone.utc)
-    return normalized <= now
 
 
 def _id_jag_fingerprint(subject_token: str, server_id: str, config: IdJagConfig) -> str:
