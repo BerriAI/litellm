@@ -1,4 +1,6 @@
 import json
+from collections.abc import Mapping, Sequence
+from typing import Final
 
 import pytest
 
@@ -1478,104 +1480,77 @@ def test_calculate_usage_fills_unknown_split_from_reasoning_estimate(
     assert usage.completion_tokens_details.text_tokens == expected_text_tokens
 
 
-def _empty_choices_chunk(**extra):
-    chunk = {
-        "id": "chatcmpl-empty-choices",
+def _openai_chunk(
+    choices: Sequence[Mapping[str, object]], usage: Mapping[str, int] | None = None
+) -> dict[str, object]:
+    base: Final = {
+        "id": "chatcmpl-lit6552",
         "object": "chat.completion.chunk",
         "created": 1,
-        "model": "claude-opus-4-8",
-        "choices": [],
+        "model": "gpt-5.4-mini",
+        "choices": list(choices),
     }
-    chunk.update(extra)
-    return chunk
+    return base if usage is None else {**base, "usage": dict(usage)}
 
 
 @pytest.mark.parametrize(
     "chunks",
     [
+        pytest.param([_openai_chunk(choices=[]), _openai_chunk(choices=[])], id="all_empty_choices_dicts"),
         pytest.param(
-            [_empty_choices_chunk(), _empty_choices_chunk()],
-            id="all_chunks_have_empty_choices",
-        ),
-        pytest.param(
-            [
-                _empty_choices_chunk(usage={"prompt_tokens": 10}),
-                _empty_choices_chunk(usage={"completion_tokens": 0}),
-            ],
-            id="usage_only_chunks",
+            [ModelResponseStream(model="gpt-5.4-mini", choices=[]) for _ in range(2)],
+            id="all_empty_choices_objects",
         ),
     ],
 )
-def test_build_base_response_handles_empty_choices(chunks):
-    """Empty `choices` arrays must not raise IndexError.
+def test_stream_chunk_builder_survives_all_empty_choices(chunks: Sequence[object]) -> None:
+    response: Final = stream_chunk_builder(chunks=list(chunks))
 
-    `next((c for c in chunks if c.get("choices")), chunk)` used to fall back to the
-    first chunk, whose `choices` may be `[]`, so `["choices"][0]` went out of range.
-    The resulting error is surfaced to the client mid-stream and the request never
-    reaches SpendLogs.
-    """
-    processor = ChunkProcessor(chunks=list(chunks))
-
-    response = processor.build_base_response(list(chunks))
-
+    assert response is not None
     assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].finish_reason == "stop"
+
+
+def test_stream_chunk_builder_keeps_usage_from_usage_only_frames() -> None:
+    usage_frame: Final = _openai_chunk(
+        choices=[], usage={"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10}
+    )
+
+    response: Final = stream_chunk_builder(chunks=[usage_frame])
+
+    assert response is not None
+    assert response.choices[0].message.role == "assistant"
+    assert response.usage.prompt_tokens == 10
+    assert response.usage.total_tokens == 10
 
 
 @pytest.mark.parametrize(
     "delta",
-    [
-        pytest.param({"content": "Hello"}, id="delta_without_role"),
-        pytest.param({}, id="delta_empty_dict"),
-    ],
+    [pytest.param({"content": "Hi"}, id="delta_without_role"), pytest.param({}, id="empty_delta")],
 )
-def test_build_base_response_handles_delta_without_role(delta):
-    """A `delta` that omits `role` must not raise KeyError."""
-    chunks = [
-        {
-            "id": "chatcmpl-no-role",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "claude-opus-4-8",
-            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
-        }
+def test_stream_chunk_builder_defaults_role_when_delta_omits_it(delta: Mapping[str, str]) -> None:
+    chunks: Final = [
+        _openai_chunk(choices=[{"index": 0, "delta": dict(delta), "finish_reason": None}]),
+        _openai_chunk(choices=[{"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}]),
     ]
-    processor = ChunkProcessor(chunks=list(chunks))
 
-    response = processor.build_base_response(list(chunks))
+    response: Final = stream_chunk_builder(chunks=chunks)
 
+    assert response is not None
     assert response.choices[0].message.role == "assistant"
-
-
-def test_build_base_response_still_reads_role_and_finish_reason():
-    """Regression guard: well-formed chunks keep their role and finish_reason."""
-    chunks = [
-        _empty_choices_chunk(),
-        {
-            "id": "chatcmpl-normal",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "claude-opus-4-8",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": "Hi"},
-                    "finish_reason": None,
-                }
-            ],
-        },
-        {
-            "id": "chatcmpl-normal",
-            "object": "chat.completion.chunk",
-            "created": 2,
-            "model": "claude-opus-4-8",
-            "choices": [
-                {"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}
-            ],
-        },
-    ]
-    processor = ChunkProcessor(chunks=list(chunks))
-
-    response = processor.build_base_response(list(chunks))
-
-    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].message.content == delta.get("content", "") + "!"
     assert response.choices[0].finish_reason == "stop"
+
+
+def test_stream_chunk_builder_reads_role_from_first_frame_with_choices() -> None:
+    chunks: Final = [
+        _openai_chunk(choices=[]),
+        _openai_chunk(choices=[{"index": 0, "delta": {"role": "user", "content": "Hi"}, "finish_reason": None}]),
+        _openai_chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.role == "user"
+    assert response.choices[0].message.content == "Hi"
