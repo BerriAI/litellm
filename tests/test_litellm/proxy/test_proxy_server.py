@@ -2952,26 +2952,44 @@ async def test_custom_ui_sso_sign_in_handler_config_loading():
 
 
 @pytest.mark.asyncio
-async def test_load_config_eagerly_initializes_string_success_callback(tmp_path, monkeypatch):
-    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
+async def test_startup_initializes_string_callbacks_after_all_litellm_settings_load(tmp_path, monkeypatch):
+    from litellm.integrations.s3_v2 import S3Logger
+    from litellm.litellm_core_utils import litellm_logging
     from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
 
     config_file = tmp_path / "config.yaml"
     config_file.write_text(
         "model_list: []\n"
         "litellm_settings:\n"
         "  success_callback:\n"
-        "    - generic_api\n"
+        "    - s3_v2\n"
+        "  failure_callback:\n"
+        "    - s3_v2\n"
+        "  s3_callback_params:\n"
+        "    s3_bucket_name: ordering-regression-bucket\n"
+        "    s3_region_name: us-west-2\n"
     )
-    monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", "http://127.0.0.1:8899/")
 
     monkeypatch.setattr(litellm, "success_callback", [])
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "failure_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "s3_callback_params", None)
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
     await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
-    assert any(isinstance(callback, GenericAPILogger) for callback in litellm._async_success_callback)
-    assert "generic_api" not in litellm.success_callback
+    ProxyLogging(user_api_key_cache=MagicMock())._init_litellm_callbacks(llm_router=None)
+
+    success_loggers = [cb for cb in litellm._async_success_callback if isinstance(cb, S3Logger)]
+    failure_loggers = [cb for cb in litellm._async_failure_callback if isinstance(cb, S3Logger)]
+    assert len(success_loggers) == 1
+    assert len(failure_loggers) == 1
+    assert success_loggers[0].s3_bucket_name == "ordering-regression-bucket"
+    assert success_loggers[0].s3_region_name == "us-west-2"
+    assert "s3_v2" not in litellm.success_callback
+    assert "s3_v2" not in litellm.failure_callback
 
 
 @pytest.mark.asyncio
