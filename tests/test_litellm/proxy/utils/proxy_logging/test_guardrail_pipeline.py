@@ -25,6 +25,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.utils import ProxyLogging, _streamable_post_call_pipelines
@@ -2185,3 +2186,106 @@ async def test_per_chunk_streaming_hook_runs_guardrail_whose_pipeline_cannot_str
     assert result is not None
     assert seen["count"] == 1
     assert seen["response"] == "hello "
+
+
+def _mask_tool_call_arguments(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "tool_calls": [
+            {
+                "id": stream_item_field(tool_call, "id"),
+                "type": "function",
+                "function": {
+                    "name": stream_item_field(stream_item_field(tool_call, "function"), "name"),
+                    "arguments": '{"fruit": "[MASKED]"}',
+                },
+            }
+            for tool_call in inputs.get("tool_calls", [])
+        ]
+    }
+
+
+def _anthropic_tool_use_sse_chunks() -> List[bytes]:
+    events = [
+        ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "m", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup_fruit", "input": {}}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"fruit": "persim'}}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": 'mon"}'}}),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
+        ("message_stop", {"type": "message_stop"}),
+    ]
+    return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_delivers_tool_use_rewrite_on_anthropic_sse(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(_mask_tool_call_arguments)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    delivered = [
+        item
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/messages"),
+            response=_async_chunk_iter(_anthropic_tool_use_sse_chunks()),
+            request_data=data,
+        )
+    ]
+
+    raw = b"".join(delivered).decode()
+    assert '{\\"fruit\\": \\"[MASKED]\\"}' in raw
+    assert "persim" not in raw
+    assert '"name": "lookup_fruit"' in raw and '"id": "toolu_1"' in raw
+    assert '"stop_reason": "tool_use"' in raw
+    assert raw.count("event: content_block_delta") == 2
+
+
+def _responses_function_call_events() -> List[Dict[str, Any]]:
+    def item(arguments: str, status: str) -> Dict[str, Any]:
+        return {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "lookup_fruit",
+            "arguments": arguments,
+            "status": status,
+        }
+
+    return [
+        {"type": "response.output_item.added", "output_index": 0, "item": item("", "in_progress")},
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 0, "delta": '{"fruit":'},
+        {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "output_index": 0, "delta": ' "persimmon"}'},
+        {"type": "response.function_call_arguments.done", "item_id": "fc_1", "output_index": 0, "arguments": '{"fruit": "persimmon"}'},
+        {"type": "response.output_item.done", "output_index": 0, "item": item('{"fruit": "persimmon"}', "completed")},
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_1", "created_at": 1, "model": "m", "output": [item('{"fruit": "persimmon"}', "completed")], "status": "completed"},
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_delivers_function_call_rewrite_on_responses_events(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(_mask_tool_call_arguments)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    delivered = [
+        item
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/responses"),
+            response=_async_chunk_iter(_responses_function_call_events()),
+            request_data=data,
+        )
+    ]
+
+    assert [event["type"] for event in delivered] == [event["type"] for event in _responses_function_call_events()]
+    assert [event["delta"] for event in delivered if event["type"] == "response.function_call_arguments.delta"] == ['{"fruit": "[MASKED]"}', ""]
+    assert delivered[3]["arguments"] == '{"fruit": "[MASKED]"}'
+    assert delivered[4]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
+    assert delivered[5]["response"]["output"][0]["arguments"] == '{"fruit": "[MASKED]"}'
+    assert "persimmon" not in json.dumps(delivered)
