@@ -57,6 +57,7 @@ from litellm.utils import (
 def test_cloudflare_model_info_includes_rpm(local_model_cost_map):
     assert litellm.get_model_info("cloudflare/@cf/meta/llama-3.1-8b-instruct-fp8")["rpm"] == 300
     assert litellm.get_model_info("cloudflare/@cf/moonshotai/kimi-k2.6")["rpm"] == 20
+    assert litellm.get_model_info("cloudflare/@cf/openai/whisper-large-v3-turbo")["rpm"] == 720
 
 
 def test_get_utc_datetime_returns_current_aware_utc_time() -> None:
