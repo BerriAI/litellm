@@ -1763,8 +1763,8 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
-SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = int(os.getenv("SPEND_LOG_KEY_METADATA_CACHE_TTL", "600"))
-SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = int(os.getenv("SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS", "10000"))
+SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
+SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS: Final = 10000
 # Short TTL for negative MCP access-group existence lookups. Keeps unauthenticated
 # callers from forcing a DB query per request for unknown names, while bounding
 # staleness so a transient DB error (which surfaces as an empty list) cannot
