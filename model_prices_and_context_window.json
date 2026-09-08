@@ -30856,6 +30856,9 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-05,
+        "reasoning_effort_levels": [
+            "medium"
+        ],
         "source": "https://developers.openai.com/api/docs/models/chat-latest",
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -30873,6 +30876,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -35012,9 +35016,9 @@
         "supports_audio_input": true
     },
     "mistral/voxtral-mini-tts-latest": {
+        "input_cost_per_character": 1.6e-05,
         "litellm_provider": "mistral",
         "mode": "audio_speech",
-        "output_cost_per_character": 1.6e-05,
         "source": "https://docs.mistral.ai/models/model-cards/voxtral-tts-26-03",
         "supported_endpoints": [
             "/v1/audio/speech"
@@ -37290,6 +37294,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -37330,6 +37335,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -37541,6 +37547,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -37581,6 +37588,7 @@
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
@@ -56597,9 +56605,9 @@
         "supports_audio_input": true
     },
     "mistral/voxtral-mini-tts-2603": {
+        "input_cost_per_character": 1.6e-05,
         "litellm_provider": "mistral",
         "mode": "audio_speech",
-        "output_cost_per_character": 1.6e-05,
         "source": "https://docs.mistral.ai/models/model-cards/voxtral-tts-26-03",
         "supported_endpoints": [
             "/v1/audio/speech"

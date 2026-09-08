@@ -1361,6 +1361,22 @@ async def test_patch_guardrail_endpoint(
             assert "Failed to update" in str(mock_logger.warning.call_args)
 
 
+@pytest.mark.asyncio
+async def test_patch_guardrail_rejects_mcp_only_on_violation_with_422(mocker, mock_guardrail_registry):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())  # test-quality-ok: endpoint has no DI seam
+    mocker.patch(  # test-quality-ok: endpoint has no DI seam
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(on_violation="block"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await patch_guardrail("test-guardrail-id", request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert exc_info.value.status_code == 422
+    assert "only supported by guardrail='mcp_security'" in str(exc_info.value.detail)
+    mock_guardrail_registry.update_guardrail_in_db.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "scenario,expected_result,expected_exception",
     [

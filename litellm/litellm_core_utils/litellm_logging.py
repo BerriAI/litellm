@@ -42,6 +42,7 @@ from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    PROVIDER_REQUEST_ID_HEADERS,
     SENTRY_DENYLIST,
     SENTRY_PII_DENYLIST,
 )
@@ -254,6 +255,30 @@ else:
 _in_memory_loggers: Final[list[CustomLogger]] = []
 
 _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = frozenset(StandardLoggingMetadata.__annotations__.keys())
+
+
+def _get_provider_request_id(original_exception: Exception) -> str | None:
+    try:
+        error_response: Final = getattr(original_exception, "response", None)
+        header_sources: Final = (
+            _get_response_headers(original_exception),
+            getattr(error_response, "headers", None),
+            getattr(original_exception, "litellm_response_headers", None),
+        )
+        return next(
+            (
+                str(value)
+                for expected_header_name in PROVIDER_REQUEST_ID_HEADERS
+                for headers in header_sources
+                if isinstance(headers, Mapping)
+                for header_name, value in headers.items()
+                if isinstance(header_name, str) and header_name.lower() == expected_header_name and value
+            ),
+            None,
+        )
+    except Exception:
+        return None
+
 
 ### GLOBAL VARIABLES ###
 
@@ -3909,11 +3934,12 @@ class Logging(LiteLLMLoggingBaseClass):
             LiteLLMResponsesTransformationHandler,
         )
 
+        served_id: Final = _provider_response_id(result)
         try:
-            return LiteLLMResponsesTransformationHandler().transform_response(
+            translated: Final = LiteLLMResponsesTransformationHandler().transform_response(
                 model=self.model,
                 raw_response=result,
-                model_response=litellm.ModelResponse(id=_provider_response_id(result)),
+                model_response=litellm.ModelResponse(id=served_id),
                 logging_obj=self,
                 request_data={},
                 messages=[],
@@ -3921,6 +3947,8 @@ class Logging(LiteLLMLoggingBaseClass):
                 litellm_params={},
                 encoding=litellm.encoding,
             )
+            translated.id = served_id or translated.id
+            return translated
         except Exception as e:
             verbose_logger.debug(
                 "Responses API -> ModelResponse translation failed for "
@@ -3928,7 +3956,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "usage-only ModelResponse to keep the spend_logs row.",
                 str(e),
             )
-            model_response: Final = litellm.ModelResponse(id=_provider_response_id(result))
+            model_response: Final = litellm.ModelResponse(id=served_id)
             model_response.model = self.model
             usage: Final = getattr(result, "usage", None)
             if usage is not None and ResponseAPILoggingUtils._is_response_api_usage(usage):
@@ -5661,6 +5689,7 @@ class StandardLoggingPayloadSetup:
         rate_limit_category: Final = validate_rate_limit_category(getattr(original_exception, "category", None))
         rate_limit_type: Final = validate_rate_limit_type(getattr(original_exception, "rate_limit_type", None))
         budget_error: Final = original_exception if isinstance(original_exception, BudgetExceededError) else None
+        provider_request_id: Final = _get_provider_request_id(original_exception) if original_exception else None
 
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,
@@ -5668,6 +5697,7 @@ class StandardLoggingPayloadSetup:
             llm_provider=_llm_provider_in_exception,
             traceback=_redact_string(traceback_info),
             error_message=_redact_string(error_message),
+            error_provider_request_id=provider_request_id,
             error_rate_limit_category=rate_limit_category,
             error_rate_limit_type=rate_limit_type,
             error_budget_entity_type=budget_error.entity_type if budget_error else None,

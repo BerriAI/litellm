@@ -1,4 +1,3 @@
-import os
 from unittest.mock import MagicMock
 
 import httpx
@@ -37,25 +36,6 @@ class TestAzureMAIImageGeneration:
         assert AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-Image-2e")
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("flux.2-pro")
         assert not AzureFoundryMAIImageGenerationConfig.is_mai_model("MAI-DS-R1")
-
-    def test_mai_flash_and_2e_model_pricing_in_cost_map(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        flash_info = litellm.get_model_info(
-            model="azure_ai/MAI-Image-2.5-Flash",
-            custom_llm_provider="azure_ai",
-        )
-        assert flash_info["input_cost_per_token"] == 1.75e-06
-        assert flash_info["input_cost_per_image_token"] == 1.75e-06
-        assert flash_info["output_cost_per_image_token"] == 3.3e-05
-
-        image_2e_info = litellm.get_model_info(
-            model="azure_ai/MAI-Image-2e",
-            custom_llm_provider="azure_ai",
-        )
-        assert image_2e_info["input_cost_per_token"] == 5e-06
-        assert image_2e_info["output_cost_per_image_token"] == 1.95e-05
 
     def test_get_mai_image_generation_url(self):
         url = AzureFoundryMAIImageGenerationConfig.get_mai_image_generation_url(

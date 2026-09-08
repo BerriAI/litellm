@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 from base64 import urlsafe_b64encode
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,6 +17,57 @@ if TYPE_CHECKING:
     import httpx
 
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+def _stored_grant(access_token="access-token", refresh_token=None, expires_in_seconds=None, expires_at=None):
+    credential = {"type": "oauth2", "access_token": access_token}
+    if refresh_token is not None:
+        credential["refresh_token"] = refresh_token
+    if expires_in_seconds is not None:
+        credential["expires_at"] = (datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)).isoformat()
+    if expires_at is not None:
+        credential["expires_at"] = expires_at
+    return credential
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fields", "egress_has_token"),
+    [
+        (None, False),
+        ({"access_token": "", "refresh_token": "refresh-token"}, False),
+        ({}, True),
+        ({"expires_at": "never"}, True),
+        ({"expires_in_seconds": 600}, True),
+        ({"expires_in_seconds": 30}, False),
+        ({"expires_in_seconds": -300}, False),
+        ({"expires_in_seconds": -300, "refresh_token": ""}, False),
+        ({"expires_in_seconds": 30, "refresh_token": "refresh-token"}, True),
+        ({"expires_in_seconds": -300, "refresh_token": "refresh-token"}, True),
+    ],
+)
+async def test_vendor_credential_state_agrees_with_egress_token_resolution(monkeypatch, fields, egress_has_token):
+    from litellm.proxy._experimental.mcp_server import db as mcp_db
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+
+    monkeypatch.setattr(mcp_db, "MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", 60)
+    credential = _stored_grant(**fields) if fields is not None else None
+    read = AsyncMock(return_value=credential)
+    refresh = AsyncMock(return_value=_stored_grant(access_token="fresh-token", expires_in_seconds=3600))
+    prisma = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr(mcp_db, "get_user_oauth_credential", read)
+    monkeypatch.setattr(mcp_db, "refresh_user_oauth_token", refresh)
+
+    connect = await discoverable_endpoints._vendor_credential_state("user-1", "server-1")
+    read.assert_awaited_once_with(prisma, "user-1", "server-1")
+    refresh.assert_not_awaited()
+    egress = await mcp_db.resolve_valid_user_oauth_token(
+        user_id="user-1", server=MagicMock(), cred=credential, prisma_client=prisma
+    )
+
+    assert (egress is not None) is egress_has_token
+    assert connect == ("present" if egress_has_token else "absent")
 
 
 # Fixture to mock IP address check for all MCP tests
@@ -10340,6 +10392,230 @@ async def test_upstream_resource_sent_on_dcr_bridge_relay_authorize():
     query = await _authorize_query(server)
     assert query["resource"] == ["https://mcp.example.com/mcp"]
     assert query["client_id"] == ["caller-client"]
+
+
+# ---------------------------------------------------------------------------
+# Per-request root_path (SERVER_ROOT_PATHS / PerRequestRootPathMiddleware):
+# one app fronting several client-visible URL path prefixes, each prefix's
+# discovery documents emitting URLs under the prefix the client called
+# (RFC 9728 §3 exact-match). A scalar PROXY_BASE_URL / SERVER_ROOT_PATH can
+# encode at most one prefix per pod; these tests pin the N-prefix case.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _no_proxy_base_url(monkeypatch):
+    """Discovery must derive URLs from the request in these tests, so the
+    scalar env overrides are cleared."""
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+
+
+@pytest.fixture
+def _isolated_mcp_registry():
+    """Fixture-owned registry state: snapshot the shared registry, hand the
+    test an empty one, restore afterwards so nothing leaks between cases."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    saved = dict(global_mcp_server_manager.registry)
+    global_mcp_server_manager.registry.clear()
+    try:
+        yield global_mcp_server_manager.registry
+    finally:
+        global_mcp_server_manager.registry.clear()
+        global_mcp_server_manager.registry.update(saved)
+
+
+def _prefixed_discovery_client(prefixes):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+    from litellm.proxy.middleware.per_request_root_path_middleware import (
+        PerRequestRootPathMiddleware,
+    )
+
+    app = FastAPI()
+    app.include_router(router)
+    app.add_middleware(PerRequestRootPathMiddleware, root_paths=prefixes)
+    return TestClient(app)
+
+
+class TestPerRequestRootPathDiscovery:
+    def test_prefixed_wellknown_not_routable_without_middleware(self, _isolated_mcp_registry):
+        """Control: on a plain app (the only shape a scalar root_path can
+        express), a prefixed well-known request 404s before any discovery
+        builder runs — the routing gap this feature exists to close."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+
+        server = _create_oauth2_server(server_id="srv_a", name="server_a", server_name="server_a", alias="server_a")
+        _isolated_mcp_registry[server.server_id] = server
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        resp = client.get("/tenant-a/.well-known/oauth-protected-resource/mcp/server_a")
+        assert resp.status_code == 404
+
+    def test_two_prefixes_one_app_each_resource_matches_the_called_url(
+        self, _no_proxy_base_url, _isolated_mcp_registry
+    ):
+        """The multi-origin case itself: two prefixes served by the same app,
+        each per-server document's ``resource`` equal to the URL its client
+        called — including the prefix."""
+        for sid, name in (("srv_a", "server_a"), ("srv_b", "server_b")):
+            _isolated_mcp_registry[sid] = _create_oauth2_server(server_id=sid, name=name, server_name=name, alias=name)
+        client = _prefixed_discovery_client(["/tenant-a", "/tenant-b"])
+
+        resp_a = client.get("/tenant-a/.well-known/oauth-protected-resource/mcp/server_a")
+        resp_b = client.get("/tenant-b/.well-known/oauth-protected-resource/mcp/server_b")
+
+        assert resp_a.status_code == 200
+        assert resp_a.json()["resource"] == "http://testserver/tenant-a/mcp/server_a"
+        assert resp_b.status_code == 200
+        assert resp_b.json()["resource"] == "http://testserver/tenant-b/mcp/server_b"
+
+        # Every URL the document advertises stays under the request's
+        # prefix, so it resolves on this same app.
+        for auth_server in resp_a.json()["authorization_servers"]:
+            assert auth_server.startswith("http://testserver/tenant-a/")
+
+    def test_unprefixed_requests_unchanged_on_the_same_app(self, _no_proxy_base_url, _isolated_mcp_registry):
+        """Backward compat on the very same app: a root request emits the
+        document byte-identical to a deployment without the middleware."""
+        server = _create_oauth2_server(server_id="srv_a", name="server_a", server_name="server_a", alias="server_a")
+        _isolated_mcp_registry[server.server_id] = server
+        client = _prefixed_discovery_client(["/tenant-a"])
+        resp = client.get("/.well-known/oauth-protected-resource/mcp/server_a")
+        assert resp.status_code == 200
+        assert resp.json()["resource"] == "http://testserver/mcp/server_a"
+
+    def test_unlisted_prefix_404s(self, _no_proxy_base_url):
+        client = _prefixed_discovery_client(["/tenant-a"])
+        assert client.get("/tenant-c/.well-known/oauth-protected-resource/mcp/server_a").status_code == 404
+
+    def test_aggregate_documents_and_as_endpoints_under_prefix(self, _no_proxy_base_url, _isolated_mcp_registry):
+        """Aggregate PRM/AS documents carry the prefix, and the advertised
+        authorize endpoint actually resolves under it — the 404 trap that
+        invalidated prefixing discovery URLs without per-request routing
+        (#35226 review round 1)."""
+        client = _prefixed_discovery_client(["/tenant-a"])
+
+        prm = client.get("/tenant-a/.well-known/oauth-protected-resource/mcp")
+        asm = client.get("/tenant-a/.well-known/oauth-authorization-server/mcp")
+
+        assert prm.status_code == 200
+        assert prm.json()["resource"] == "http://testserver/tenant-a/mcp"
+        assert prm.json()["authorization_servers"] == ["http://testserver/tenant-a/mcp"]
+
+        assert asm.status_code == 200
+        assert asm.json()["issuer"] == "http://testserver/tenant-a/mcp"
+        assert asm.json()["authorization_endpoint"] == "http://testserver/tenant-a/authorize"
+
+        # The prefixed authorize URL routes to the real handler (not 404):
+        # under per-request root_path the whole app is reachable per-prefix,
+        # so discovery may advertise prefixed AS endpoints safely.
+        assert client.get("/tenant-a/authorize").status_code != 404
+
+    def test_passthrough_challenge_metadata_url_carries_prefix(self, _no_proxy_base_url):
+        """The WWW-Authenticate resource_metadata URL a 401 advertises must
+        land under the request's prefix, or the client is bounced to a
+        document whose ``resource`` cannot match the URL it called."""
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_passthrough_resource_metadata_url,
+        )
+
+        def _scope(path, root_path=None):
+            scope = {
+                "type": "http",
+                "method": "POST",
+                "path": path,
+                "headers": [],
+                "scheme": "http",
+                "server": ("testserver", 80),
+                "client": ("1.2.3.4", 4444),
+            }
+            if root_path is not None:
+                scope["root_path"] = root_path
+            return scope
+
+        prefixed = get_passthrough_resource_metadata_url(
+            scope=_scope("/tenant-a/mcp/github", root_path="/tenant-a"),
+            server_name="github",
+        )
+        assert prefixed == "http://testserver/tenant-a/.well-known/oauth-protected-resource/mcp/github"
+
+        # Regression guard: no root_path → today's URL, unchanged.
+        bare = get_passthrough_resource_metadata_url(
+            scope=_scope("/mcp/github"),
+            server_name="github",
+        )
+        assert bare == "http://testserver/.well-known/oauth-protected-resource/mcp/github"
+
+    def test_user_oauth_challenge_url_routes_and_resource_matches_client_url(
+        self, _no_proxy_base_url, _isolated_mcp_registry
+    ):
+        """The reviewer's expected end-state, pinned end-to-end: an MCP endpoint
+        raising ``raise_user_oauth_challenge`` under a per-request prefix must
+        emit a resource_metadata URL the client can actually fetch, and the
+        document it returns must carry the same prefix the client originally
+        called. If either half breaks the client's discovery is dead."""
+        import re
+
+        from fastapi import FastAPI, HTTPException, Request
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import router
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+            raise_user_oauth_challenge,
+        )
+        from litellm.proxy.middleware.per_request_root_path_middleware import (
+            PerRequestRootPathMiddleware,
+            get_request_root_path,
+        )
+
+        server = _create_oauth2_server(
+            server_id="srv_a", name="server_a", server_name="server_a", alias="server_a"
+        )
+        _isolated_mcp_registry[server.server_id] = server
+
+        app = FastAPI()
+        app.include_router(router)
+
+        @app.post("/mcp/{name}")
+        def _mcp(name: str, request: Request):
+            try:
+                raise_user_oauth_challenge(server, root_path=get_request_root_path())
+            except HTTPException as exc:
+                return {"www_authenticate": exc.headers["WWW-Authenticate"]}
+
+        app.add_middleware(PerRequestRootPathMiddleware, root_paths=["/tenant-a", "/tenant-b"])
+        client = TestClient(app)
+
+        for prefix, mcp_url in (
+            ("/tenant-a", "http://testserver/tenant-a/mcp/server_a"),
+            ("/tenant-b", "http://testserver/tenant-b/mcp/server_a"),
+            ("", "http://testserver/mcp/server_a"),
+        ):
+            call = client.post(f"{prefix}/mcp/server_a")
+            assert call.status_code == 200, call.text
+            www = call.json()["www_authenticate"]
+            match = re.search(r'resource_metadata="([^"]+)"', www)
+            assert match, www
+            discovery = client.get(match.group(1))
+            # The challenge URL must route (a client that can't fetch it has
+            # no way to reach the resource metadata).
+            assert discovery.status_code == 200, (
+                f"challenge URL {match.group(1)} for prefix {prefix!r} 404s; "
+                "the client can't reach the resource metadata."
+            )
+            # And the doc's `resource` must equal the URL the client called
+            # (RFC 9728 §3 exact match): a mismatch bounces a strict client.
+            assert discovery.json()["resource"] == mcp_url, discovery.json()
 
 
 def _s256(verifier: str) -> str:
