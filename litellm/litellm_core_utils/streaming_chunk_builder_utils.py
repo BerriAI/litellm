@@ -759,26 +759,27 @@ class ChunkProcessor:
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         cost: float | None = None
 
-        if "prompt_tokens" in usage_chunk:
-            prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
-        if "completion_tokens" in usage_chunk:
-            completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
-        if "cache_creation_input_tokens" in usage_chunk:
-            cache_creation_input_tokens = usage_chunk.get("cache_creation_input_tokens")
-        if "cache_read_input_tokens" in usage_chunk:
-            cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
-        if "cost" in usage_chunk:
-            cost = usage_chunk.get("cost")
-        if hasattr(usage_chunk, "completion_tokens_details"):
-            if isinstance(usage_chunk.completion_tokens_details, dict):
-                completion_tokens_details = CompletionTokensDetails(**usage_chunk.completion_tokens_details)
-            elif isinstance(usage_chunk.completion_tokens_details, CompletionTokensDetails):
-                completion_tokens_details = usage_chunk.completion_tokens_details
-        if hasattr(usage_chunk, "prompt_tokens_details"):
-            if isinstance(usage_chunk.prompt_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetailsWrapper(**usage_chunk.prompt_tokens_details)
-            elif isinstance(usage_chunk.prompt_tokens_details, PromptTokensDetailsWrapper):
-                prompt_tokens_details = usage_chunk.prompt_tokens_details
+        _get = (
+            usage_chunk.get
+            if isinstance(usage_chunk, dict)
+            else lambda k, default=None: getattr(usage_chunk, k, default)
+        )
+        prompt_tokens = _get("prompt_tokens", 0) or 0
+        completion_tokens = _get("completion_tokens", 0) or 0
+        cache_creation_input_tokens = _get("cache_creation_input_tokens")
+        cache_read_input_tokens = _get("cache_read_input_tokens")
+        cost = _get("cost")
+        raw_completion_details = _get("completion_tokens_details")
+        if isinstance(raw_completion_details, dict):
+            completion_tokens_details = CompletionTokensDetails(**raw_completion_details)
+        elif isinstance(raw_completion_details, CompletionTokensDetails):
+            completion_tokens_details = raw_completion_details
+
+        raw_prompt_details = _get("prompt_tokens_details")
+        if isinstance(raw_prompt_details, dict):
+            prompt_tokens_details = PromptTokensDetailsWrapper(**raw_prompt_details)
+        elif isinstance(raw_prompt_details, PromptTokensDetailsWrapper):
+            prompt_tokens_details = raw_prompt_details
 
         return {
             "prompt_tokens": prompt_tokens,
@@ -1080,6 +1081,14 @@ class ChunkProcessor:
                     returned_usage.completion_tokens_details.text_tokens = (
                         returned_usage.completion_tokens - capped_reasoning_tokens
                     )
+        effective_reasoning_tokens: Final[int | None] = (
+            getattr(returned_usage.completion_tokens_details, "reasoning_tokens", None)
+            if returned_usage.completion_tokens_details is not None
+            else None
+        )
+        if effective_reasoning_tokens is not None and returned_usage.completion_tokens < effective_reasoning_tokens:
+            returned_usage.completion_tokens = max(returned_usage.completion_tokens, effective_reasoning_tokens)
+            returned_usage.total_tokens = returned_usage.prompt_tokens + returned_usage.completion_tokens
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
 
