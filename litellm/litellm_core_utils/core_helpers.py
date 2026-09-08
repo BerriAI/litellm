@@ -42,7 +42,7 @@ _DROP_PARAMS_BOOL: Final = TypeAdapter(bool)
 
 
 def normalize_drop_params(value: object) -> bool | None:
-    if isinstance(value, bool):
+    if value is None or isinstance(value, bool):
         return value
     try:
         return _DROP_PARAMS_BOOL.validate_python(value.strip() if isinstance(value, str) else value)

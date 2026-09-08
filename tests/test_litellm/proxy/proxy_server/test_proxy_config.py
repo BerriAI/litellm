@@ -9,6 +9,7 @@ Pins covered:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from types import SimpleNamespace
@@ -2472,6 +2473,39 @@ async def test_ProxyConfig_load_config_turns_litellm_settings_drop_params_string
     await ProxyConfig().load_config(router=None, config_file_path=str(f))
 
     assert litellm.drop_params is expected
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_resolves_a_litellm_settings_drop_params_env_ref(tmp_path, monkeypatch):
+    f = tmp_path / "c.yaml"
+    f.write_text("model_list: []\nlitellm_settings:\n  drop_params: os.environ/DROP_PARAMS_FROM_ENV\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setenv("DROP_PARAMS_FROM_ENV", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.drop_params is True
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_warns_and_turns_off_a_non_flag_litellm_settings_drop_params(
+    tmp_path, monkeypatch, caplog
+):
+    f = tmp_path / "c.yaml"
+    f.write_text("model_list: []\nlitellm_settings:\n  drop_params: ture\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+
+    assert litellm.drop_params is False
+    assert "litellm_settings.drop_params='ture' is not a flag value, treating it as off" in caplog.text
 
 
 # ---------------------------------------------------------------------------

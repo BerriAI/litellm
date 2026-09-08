@@ -5510,7 +5510,7 @@ class ProxyConfig:
                     parse_budget_reset_time(value)
                     setattr(litellm, key, value)
                 elif key == "drop_params":
-                    litellm.drop_params = bool(normalize_drop_params(value))
+                    litellm.drop_params = _drop_params_from_litellm_settings(value)
                 else:
                     verbose_proxy_logger.debug(
                         "%s setting litellm.%s=%s%s",
@@ -16913,6 +16913,13 @@ def _redact_config_param_value_for_logging(param_name: str | None, param_value: 
     if isinstance(param_value, (dict, list)):
         return _redact_secret_values_in_obj(param_value)
     return param_value
+
+
+def _drop_params_from_litellm_settings(value: object) -> bool:
+    normalized: Final = normalize_drop_params(value)
+    if normalized is None and value is not None:
+        verbose_proxy_logger.warning("litellm_settings.drop_params=%r is not a flag value, treating it as off", value)
+    return bool(normalized)
 
 
 def _redact_general_setting_value(field_name: str, value: JsonValue, is_full_admin: bool) -> JsonValue:

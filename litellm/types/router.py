@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 
@@ -412,7 +413,11 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         normalized: Final = normalize_drop_params(value)
         if normalized is not None:
             return normalized
-        return value if isinstance(value, str) else None
+        if isinstance(value, str):
+            return value
+        if value is not None:
+            verbose_logger.warning("drop_params=%r is not a flag value, treating it as unset", value)
+        return None
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator

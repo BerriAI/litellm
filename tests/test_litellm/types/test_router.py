@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from litellm.types.router import (
@@ -109,5 +111,14 @@ def test_drop_params_coerces_flags_and_keeps_unresolved_strings(value, expected)
 
 
 @pytest.mark.parametrize("value", [2, 2.5, [], {}])
-def test_drop_params_ignores_non_flag_non_string_values(value):
-    assert GenericLiteLLMParams(drop_params=value).drop_params is None
+def test_drop_params_ignores_non_flag_non_string_values_with_a_warning(value, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert GenericLiteLLMParams(drop_params=value).drop_params is None
+    assert f"drop_params={value!r} is not a flag value" in caplog.text
+
+
+@pytest.mark.parametrize("value", [True, "true", None, "os.environ/DROP_PARAMS", "v2:gcm:ciphertext-from-a-pre-fix-row"])
+def test_drop_params_flags_and_strings_log_nothing(value, caplog):
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        GenericLiteLLMParams(drop_params=value)
+    assert caplog.text == ""
