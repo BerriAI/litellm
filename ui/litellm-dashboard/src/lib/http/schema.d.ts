@@ -23089,6 +23089,8 @@ export interface components {
             mcp_tool_permissions?: {
                 [key: string]: string[];
             } | null;
+            /** Mcp Toolsets */
+            mcp_toolsets?: string[] | null;
             /** Models */
             models?: string[] | null;
         };
@@ -25796,7 +25798,7 @@ export interface components {
             disable_auto_add_proxy_admin_to_teams?: boolean | null;
             /**
              * Disable Budget Reservation
-             * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). A proxy-level WARNING is logged on every request while this flag is active as a reminder that hard enforcement is relaxed.
+             * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). An INFO notice is logged once per worker at config load while this flag is active as a reminder that hard enforcement is relaxed.
              */
             disable_budget_reservation?: boolean | null;
             /**
@@ -26557,6 +26559,23 @@ export interface components {
             credential_values: {
                 [key: string]: unknown;
             };
+        };
+        /** CustomDimension */
+        CustomDimension: {
+            /**
+             * Keywords
+             * @default []
+             */
+            keywords: string[];
+            /** Name */
+            name: string;
+            /**
+             * Patterns
+             * @default []
+             */
+            patterns: string[];
+            /** Weight */
+            weight: number;
         };
         /**
          * CustomerResponse
@@ -34871,6 +34890,12 @@ export interface components {
              * @default 0.95
              */
             context_window_escalation_buffer: number;
+            /**
+             * Custom Dimensions
+             * @description Named binary dimensions added to the heuristic-v1 score. Each contributes its inline weight once when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters. Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, backreferences and lookarounds are rejected. Conservative work limits include alternation paths, repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota.
+             * @default []
+             */
+            custom_dimensions: components["schemas"]["CustomDimension"][];
             /**
              * Custom Technical Keywords
              * @description Domain-specific technical keywords appended to the effective base list (technical_keywords if set, otherwise DEFAULT_TECHNICAL_KEYWORDS). Order is preserved; duplicates are removed case-insensitively against the base list and within this list.

@@ -3,6 +3,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 """
 
 import base64
+import logging
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,7 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     check_complete_credentials,
     custom_auth_common_checks_warning,
+    log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
     get_key_mcp_rpm_limit,
@@ -99,6 +101,41 @@ class TestWarnOnceIfCustomAuthSkipsCommonChecks:
             logger=logger,
         )
         assert logger.warning.call_count == 0
+
+
+class TestLogOnceIfBudgetReservationDisabled:
+    @pytest.fixture(autouse=True)
+    def _reset_sentinel(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.constants.budget_reservation_disabled_info_emitted",
+            False,
+        )
+
+    def test_logs_info_only_once_when_enabled(self, caplog):
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            log_once_if_budget_reservation_disabled(disabled=False)
+            assert not any(
+                "disable_budget_reservation is enabled" in record.message
+                for record in caplog.records
+            )
+            for _ in range(3):
+                log_once_if_budget_reservation_disabled(disabled=True)
+
+        records = [
+            record
+            for record in caplog.records
+            if "disable_budget_reservation is enabled" in record.message
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.INFO
+
+    def test_logs_to_injected_logger_only_once(self):
+        logger = MagicMock()
+        log_once_if_budget_reservation_disabled(disabled=False, logger=logger)
+        for _ in range(3):
+            log_once_if_budget_reservation_disabled(disabled=True, logger=logger)
+        assert logger.info.call_count == 1
+        assert "disable_budget_reservation is enabled" in logger.info.call_args[0][0]
 
 
 class TestGetKeyModelRpmLimit:

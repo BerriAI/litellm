@@ -11,7 +11,7 @@ from fastapi import HTTPException, Request, status
 from pydantic import PositiveInt, TypeAdapter, ValidationError
 
 import litellm
-from litellm import Router, provider_list
+from litellm import Router, constants, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
@@ -1388,6 +1388,24 @@ def warn_once_if_custom_auth_skips_common_checks(
         return
     logger.warning(message)
     _custom_auth_common_checks_warning_emitted = True
+
+
+def log_once_if_budget_reservation_disabled(
+    *,
+    disabled: bool,
+    logger: Logger = verbose_proxy_logger,
+) -> None:
+    if constants.budget_reservation_disabled_info_emitted or not disabled:
+        return
+    logger.info(
+        "disable_budget_reservation is enabled: skipping optimistic budget "
+        "reservation. Budget enforcement is read-time only. Concurrent "
+        "requests can each pass the spend check before their cost is recorded, "
+        "so a configured budget may be briefly exceeded under high concurrency. "
+        "Set disable_budget_reservation to False or remove it to restore "
+        "hard per-request budget enforcement."
+    )
+    constants.budget_reservation_disabled_info_emitted = True  # rebind-ok: process-wide one-shot sentinel
 
 
 def is_pass_through_provider_route(route: str) -> bool:
