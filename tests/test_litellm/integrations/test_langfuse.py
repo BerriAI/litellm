@@ -1496,6 +1496,36 @@ def test_every_proxy_session_header_shape_is_classified_as_a_session_alias():
     assert _is_session_header_trace(session, session, {"headers": explicit_trace}) is False
 
 
+@pytest.mark.parametrize(
+    "proxy_server_request",
+    [None, {}, {"headers": None}],
+    ids=["no-proxy-request", "no-headers-key", "null-headers"],
+)
+def test_sdk_caller_without_request_headers_keeps_its_trace(proxy_server_request):
+    """A direct SDK caller has no request headers, so a session-shaped trace id stays the caller's."""
+    logger: Final = _steering_logger()
+    now: Final = datetime.datetime.now()
+
+    result: Final = logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_call_id": "call-0",
+            "litellm_params": {
+                "metadata": {"trace_id": "session-7125", "session_id": "session-7125"},
+                "proxy_server_request": proxy_server_request,
+            },
+            "messages": [{"role": "user", "content": "sdk turn"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(choices=[{"message": {"role": "assistant", "content": "OK"}}]),
+        start_time=now,
+        end_time=now,
+    )
+
+    assert logger.Langfuse.trace.call_args.kwargs["id"] == "session-7125"
+    assert result["trace_id"] == "session-7125"
+
+
 def test_session_header_classifier_survives_non_string_header_keys():
     """A non-string header key must not cost the caller its whole trace."""
     from litellm.integrations.langfuse.langfuse import _is_session_header_trace
