@@ -1,8 +1,10 @@
 #### What this tests ####
 #    This tests litellm.token_counter.token_counter() function
+import asyncio
 import importlib
 import time
 import traceback
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,7 +16,12 @@ import litellm
 from litellm import create_pretrained_tokenizer, decode, encode, get_modified_max_tokens
 from litellm import token_counter as token_counter_old
 import litellm.constants
-from litellm.litellm_core_utils.token_counter import _get_tiktoken_count_function
+from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.token_counter import (
+    _get_exact_count_function,
+    _get_extrapolating_count_function,
+    _get_tiktoken_count_function,
+)
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
 from tests.large_text import text
 from tests.test_litellm.litellm_core_utils.messages_with_counts import (
@@ -117,6 +124,68 @@ def test_valid_chunk_size_config_is_honoured(monkeypatch):
         assert importlib.reload(litellm.constants).TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS == 2048
     finally:
         monkeypatch.delenv("TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS")
+        importlib.reload(litellm.constants)
+
+
+async def _loop_wake_lags(until: asyncio.Event) -> tuple[float, ...]:
+    async def wake_lag() -> float:
+        started: Final = time.perf_counter()
+        await asyncio.sleep(0.001)
+        return time.perf_counter() - started - 0.001
+
+    return tuple([await wake_lag() for _ in iter(until.is_set, True)])
+
+
+async def test_huggingface_count_in_a_worker_thread_leaves_the_event_loop_free():
+    counted: Final = asyncio.Event()
+
+    async def count_off_the_loop() -> tuple[int, float]:
+        started: Final = time.perf_counter()
+        try:
+            tokens: Final = await asyncify(token_counter_new)(model="claude-fable-5", text=text * 100)
+            return tokens, time.perf_counter() - started
+        finally:
+            counted.set()
+
+    (tokens, took), lags = await asyncio.gather(count_off_the_loop(), _loop_wake_lags(counted))
+
+    assert tokens > 0
+    assert max(lags) < took / 4, f"the event loop stalled {max(lags):.3f}s during a {took:.3f}s count"
+
+
+@pytest.mark.parametrize(
+    ("max_exact_chars", "expected"),
+    [(1_000, 10_000), (5_000, 6_000), (10_000, 6_000)],
+)
+def test_count_above_the_cap_scales_the_exact_count_of_the_prefix(max_exact_chars, expected):
+    def count_exactly(chunk: str) -> int:
+        return chunk.count("a") + len(chunk)
+
+    count_tokens: Final = _get_extrapolating_count_function(count_exactly, max_exact_chars=max_exact_chars)
+
+    assert count_tokens("a" * 1_000 + "b" * 4_000) == expected
+
+
+def test_token_counter_applies_the_default_cap():
+    max_exact_chars: Final = litellm.constants.TOKEN_COUNTER_MAX_EXACT_CHARS
+    prefix: Final = ("The quick brown fox jumps over the lazy dog. " * (max_exact_chars // 45 + 1))[:max_exact_chars]
+    over_the_cap: Final = prefix + "a" * 200_000
+    scaled: Final = round(token_counter_new(model="gpt-5.6", text=prefix) * len(over_the_cap) / max_exact_chars)
+
+    assert token_counter_new(model="gpt-5.6", text=over_the_cap) == scaled
+    assert _get_exact_count_function("gpt-5.6")(over_the_cap) != scaled
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("2048", 2048), ("0", 4_000_000), ("not-an-int", 4_000_000)],
+)
+def test_max_exact_chars_config_is_honoured(monkeypatch, configured, expected):
+    monkeypatch.setenv("TOKEN_COUNTER_MAX_EXACT_CHARS", configured)
+    try:
+        assert importlib.reload(litellm.constants).TOKEN_COUNTER_MAX_EXACT_CHARS == expected
+    finally:
+        monkeypatch.delenv("TOKEN_COUNTER_MAX_EXACT_CHARS")
         importlib.reload(litellm.constants)
 
 
