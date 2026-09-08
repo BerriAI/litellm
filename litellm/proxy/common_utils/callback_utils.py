@@ -10,6 +10,7 @@ import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
     ROUTING_REQUEST_TAGS_METADATA_KEY,
@@ -508,6 +509,7 @@ LITELLM_PROXY_INTERNAL_METADATA_KEYS: Final = frozenset(
         PRE_CALL_EXECUTED_GUARDRAILS_KEY,
         SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
         CONSUMED_REQUEST_TAGS_METADATA_KEY,
+        CLIENT_OUTPUT_CEILING_METADATA_KEY,
         ROUTING_REQUEST_TAGS_METADATA_KEY,
         "disable_global_guardrails",
         "disable_global_guardrail",

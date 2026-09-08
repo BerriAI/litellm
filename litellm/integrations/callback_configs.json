@@ -356,6 +356,12 @@
         "description": "OpenTelemetry collector endpoint URL",
         "required": true
       },
+      "otel_traces_endpoint": {
+        "type": "text",
+        "ui_name": "Traces Endpoint URL",
+        "description": "Complete trace export URL used verbatim when the collector does not serve /v1/traces (OTel v2 only)",
+        "required": false
+      },
       "otel_headers": {
         "type": "text",
         "ui_name": "Headers",
