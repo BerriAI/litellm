@@ -2,6 +2,7 @@
 Tests for the Reco guardrail integration.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -93,6 +94,39 @@ class TestRecoGuardrailInitializer:
         assert guardrail.headers == {"X-Reco-Tenant-Id": "22222222-2222-2222-2222-222222222222"}
         assert guardrail.api_base == "https://edge2.eu.reco.ai/beta/litellm_basic_guardrail_api"
 
+    def test_initialize_guardrail_reads_plain_dict_optional_params(self):
+        """Guardrails reconciled from the DB can carry `optional_params` as a
+        plain dict rather than a pydantic object; attribute-only access would
+        silently read None for every field."""
+        litellm_params = SimpleNamespace(
+            optional_params={
+                "reco_tenant_id": "33333333-3333-3333-3333-333333333333",
+                "api_base": "https://edge3.eu.reco.ai",
+            },
+            mode="pre_call",
+            default_on=True,
+        )
+
+        guardrail = initialize_guardrail(litellm_params, {"guardrail_name": "prod-reco"})
+
+        assert guardrail.headers == {"X-Reco-Tenant-Id": "33333333-3333-3333-3333-333333333333"}
+        assert guardrail.api_base == "https://edge3.eu.reco.ai/beta/litellm_basic_guardrail_api"
+
+    def test_initialize_guardrail_resolves_env_var_reference(self, monkeypatch):
+        monkeypatch.setenv("RECO_TEST_TENANT_ID", "44444444-4444-4444-4444-444444444444")
+        litellm_params = SimpleNamespace(
+            optional_params={
+                "reco_tenant_id": "os.environ/RECO_TEST_TENANT_ID",
+                "api_base": "https://edge4.eu.reco.ai",
+            },
+            mode="pre_call",
+            default_on=True,
+        )
+
+        guardrail = initialize_guardrail(litellm_params, {"guardrail_name": "prod-reco"})
+
+        assert guardrail.headers == {"X-Reco-Tenant-Id": "44444444-4444-4444-4444-444444444444"}
+
 
 class TestRecoGuardrailBlocking:
     @pytest.mark.asyncio
@@ -114,6 +148,7 @@ class TestRecoGuardrailBlocking:
 
         assert exc_info.value.guardrail_name == "my-reco-guardrail"
         assert str(exc_info.value) == "Sensitive data detected"
+        assert exc_info.value.blocked_content is True
 
         _, call_kwargs = mock_post.call_args
         assert call_kwargs["headers"]["X-Reco-Tenant-Id"] == "11111111-1111-1111-1111-111111111111"

@@ -1,11 +1,24 @@
 from typing import TYPE_CHECKING, Final
 
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .reco import RecoGuardrail
 
 if TYPE_CHECKING:
     from litellm.types.guardrails import Guardrail, LitellmParams
+
+
+def _get_config_value(optional_params: object, attribute_name: str) -> str | None:
+    """Read one param from a dict or a pydantic object, resolving an
+    ``os.environ/<VAR>`` reference the way guardrail api_key/api_base are resolved."""
+    if isinstance(optional_params, dict):
+        value = optional_params.get(attribute_name)
+    else:
+        value = getattr(optional_params, attribute_name, None)
+    if isinstance(value, str) and value.startswith("os.environ/"):
+        return get_secret_str(value)
+    return value
 
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
@@ -15,8 +28,8 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
     _reco_callback: Final = RecoGuardrail(
         guardrail_name=guardrail.get("guardrail_name", ""),
-        reco_tenant_id=getattr(optional_params, "reco_tenant_id", None),
-        api_base=getattr(optional_params, "api_base", None),
+        reco_tenant_id=_get_config_value(optional_params, "reco_tenant_id"),
+        api_base=_get_config_value(optional_params, "api_base"),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

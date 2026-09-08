@@ -61,6 +61,7 @@ class RecoGuardrail(GenericGuardrailAPI):
                 message=e.message,
                 should_wrap_with_default_message=False,
                 status_code=e.status_code,
+                blocked_content=e.blocked_content,
             ) from e
 
     @staticmethod
