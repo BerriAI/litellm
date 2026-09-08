@@ -69,7 +69,7 @@ describe("VectorStoreForm", () => {
   });
 });
 
-const MONGODB_SIDECAR_URL = "http://mongodb-sidecar:8080";
+const MONGODB_SIDECAR_URL = "http://127.0.0.1:8080";
 
 const MONGODB_REQUIRED_FORM_VALUES = {
   api_base: MONGODB_SIDECAR_URL,

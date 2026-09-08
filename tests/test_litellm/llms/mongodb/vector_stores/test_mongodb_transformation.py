@@ -7,10 +7,10 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.mongodb.vector_stores.transformation import MongoDBVectorStoreConfig
 from litellm.types.utils import EmbeddingResponse
-from litellm.types.vector_stores import VectorStoreSearchOptionalRequestParams
+from litellm.types.vector_stores import VectorStoreSearchOptionalRequestParams, VectorStoreSearchResponse
 
 BASE_PARAMS: Final = {
     "api_base": "https://sidecar.example/prefix",
@@ -131,52 +131,92 @@ def test_invalid_search_is_rejected_before_embedding(
         (200, {**RESULT, "data": [{"score": "wrong"}]}, litellm.ServiceUnavailableError),
         (0, {}, litellm.Timeout),
         (-1, {}, litellm.BadRequestError),
+        (-2, {"api_base": "http://sidecar.example"}, litellm.BadRequestError),
+        (-2, {"api_base": "http://10.0.0.10:8080"}, litellm.BadRequestError),
+        (-2, {"api_base": "http://localhost:8080"}, litellm.BadRequestError),
         (200, RESULT, None),
     ],
 )
-def test_public_sdk_preserves_http_errors_response_and_timeout(
-    status: int, body: Mapping[str, object], error_type: type[Exception] | None
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("timeout", [0.75, 120.0])
+@pytest.mark.parametrize("api_base", ["https://sidecar.example/prefix", "http://127.0.0.1:8080", "http://[::1]:8080"])
+@pytest.mark.asyncio
+async def test_public_sdk_preserves_http_errors_response_and_timeout(
+    status: int,
+    body: Mapping[str, object],
+    error_type: type[Exception] | None,
+    asynchronous: bool,
+    timeout: float,
+    api_base: str,
 ) -> None:
     executor: Final = RecordingEmbeddingExecutor()
     if status == -1:
-        with pytest.raises(litellm.BadRequestError, match="search-only"):
-            litellm.vector_stores.create(custom_llm_provider="mongodb")
-        executor.call.assert_not_called()
+        if asynchronous:
+            with pytest.raises(litellm.BadRequestError, match="search-only"):
+                await litellm.vector_stores.acreate(custom_llm_provider="mongodb")
+        else:
+            with pytest.raises(litellm.BadRequestError, match="search-only"):
+                litellm.vector_stores.create(custom_llm_provider="mongodb")
         return
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        assert request.url == "https://sidecar.example/prefix/v1/vector_stores/policy_index/search"
-        assert request.headers["authorization"] == "Bearer test-sidecar-key"
-        assert request.extensions["timeout"]["read"] == 0.75
-        payload: Final = json.loads(request.content)
-        assert payload["timeout_ms"] == 750
-        assert payload["query_vector"] == [0.1, 0.2, 0.3]
-        if status == 0:
-            raise httpx.ReadTimeout("timed out", request=request)
-        return httpx.Response(status, json=body)
-
-    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
-        client: Final = HTTPHandler(client=transport)
-        if error_type is not None:
-            with pytest.raises(error_type):
+    if status == -2:
+        rejected_params: Final = {**BASE_PARAMS, "api_base": str(body["api_base"])}
+        if asynchronous:
+            with pytest.raises(litellm.BadRequestError, match="requires HTTPS"):
+                await litellm.vector_stores.asearch(
+                    vector_store_id="policy_index",
+                    query="travel policy",
+                    custom_llm_provider="mongodb",
+                    _direct_vector_store_embedding_executor=executor,
+                    **rejected_params,
+                )
+        else:
+            with pytest.raises(litellm.BadRequestError, match="requires HTTPS"):
                 litellm.vector_stores.search(
                     vector_store_id="policy_index",
                     query="travel policy",
                     custom_llm_provider="mongodb",
                     _direct_vector_store_embedding_executor=executor,
-                    client=client,
-                    timeout=0.75,
-                    **BASE_PARAMS,
+                    **rejected_params,
                 )
-        else:
-            result: Final = litellm.vector_stores.search(
-                vector_store_id="policy_index",
-                query="travel policy",
-                custom_llm_provider="mongodb",
-                _direct_vector_store_embedding_executor=executor,
-                client=client,
-                timeout=0.75,
-                **BASE_PARAMS,
-            )
-            assert result == RESULT
+        executor.call.assert_not_called()
+        return
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url == f"{api_base}/v1/vector_stores/policy_index/search"
+        assert request.headers["authorization"] == "Bearer test-sidecar-key"
+        assert request.extensions["timeout"]["read"] == timeout
+        payload: Final = json.loads(request.content)
+        assert payload["timeout_ms"] == int(timeout * 1000)
+        assert payload["query_vector"] == [0.1, 0.2, 0.3]
+        if status == 0:
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(status, json=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as async_transport:
+        with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+            client: Final = AsyncHTTPHandler() if asynchronous else HTTPHandler(client=transport)
+            if isinstance(client, AsyncHTTPHandler):
+                await client.client.aclose()
+                client.client = async_transport
+
+            async def search() -> VectorStoreSearchResponse:
+                kwargs: Final = {
+                    **BASE_PARAMS,
+                    "api_base": api_base,
+                    "vector_store_id": "policy_index",
+                    "query": "travel policy",
+                    "custom_llm_provider": "mongodb",
+                    "_direct_vector_store_embedding_executor": executor,
+                    "client": client,
+                    "timeout": timeout,
+                }
+                if asynchronous:
+                    return await litellm.vector_stores.asearch(**kwargs)
+                return litellm.vector_stores.search(**kwargs)
+
+            if error_type is not None:
+                with pytest.raises(error_type):
+                    await search()
+            else:
+                assert await search() == RESULT
     executor.call.assert_called_once_with("embedding-alias", "travel policy", {})

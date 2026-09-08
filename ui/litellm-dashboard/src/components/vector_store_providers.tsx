@@ -177,8 +177,8 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
     {
       name: "api_base",
       label: "Sidecar URL",
-      tooltip: "The URL of your separately deployed MongoDB sidecar. Configure MongoDB credentials in the sidecar",
-      placeholder: "http://mongodb-sidecar:8080",
+      tooltip: "Use HTTPS for a remote sidecar, or HTTP with a loopback IP for a sidecar on the same host or Pod",
+      placeholder: "http://127.0.0.1:8080",
       required: true,
       type: "text",
     },

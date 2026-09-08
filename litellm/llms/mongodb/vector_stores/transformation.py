@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from ipaddress import ip_address
 from math import isfinite
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
@@ -196,7 +197,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
 
     def get_complete_url(self, api_base: str | None, litellm_params: dict[str, object]) -> str:
         if not api_base:
-            raise config_error("MongoDB sidecar api_base is required, for example http://mongodb-sidecar:8080.")
+            raise config_error("MongoDB sidecar api_base is required, for example http://127.0.0.1:8080.")
         try:
             parsed: Final = urlsplit(api_base)
             valid: Final = parsed.scheme in ("http", "https") and bool(parsed.hostname) and parsed.port != 0
@@ -206,6 +207,17 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             raise config_error(
                 "MongoDB sidecar api_base must be an HTTP or HTTPS URL without credentials, query, or fragment."
             )
+        if parsed.scheme == "http":
+            try:
+                loopback: Final = ip_address(parsed.hostname or "").is_loopback
+            except ValueError:
+                raise config_error(
+                    "MongoDB sidecar requires HTTPS. HTTP is supported only for a loopback IP such as 127.0.0.1."
+                ) from None
+            if not loopback:
+                raise config_error(
+                    "MongoDB sidecar requires HTTPS. HTTP is supported only for a loopback IP such as 127.0.0.1."
+                )
         return api_base.rstrip("/")
 
     @staticmethod
@@ -215,7 +227,10 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             return 30_000
         if not isinstance(seconds, (int, float)) or not isfinite(seconds) or seconds <= 0:
             raise config_error("MongoDB search timeout must be a positive finite number.")
-        return max(1, min(int(seconds * 1000), 30_000))
+        try:
+            return max(1, int(seconds * 1000))
+        except (ValueError, OverflowError):
+            raise config_error("MongoDB search timeout must be a positive finite number.") from None
 
     @classmethod
     def _params(
