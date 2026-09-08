@@ -23,7 +23,7 @@ class RecoGuardrail(GenericGuardrailAPI):
         reco_tenant_id: str | None,
         api_base: str | None,
         headers: Mapping[str, str] | None = None,
-        **kwargs,  # noqa: ANN003  # forwards guardrail_name/event_hook/default_on to CustomGuardrail, whose types are narrower than LitellmParams' own field types
+        **kwargs,  # noqa: ANN003  # kwargs-ok: forwards guardrail_name/event_hook/default_on to CustomGuardrail, whose types are narrower than LitellmParams' own field types
     ) -> None:
         if not reco_tenant_id:
             raise ValueError("reco_tenant_id is required for the Reco guardrail")
