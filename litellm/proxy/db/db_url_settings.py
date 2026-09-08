@@ -64,6 +64,7 @@ DISABLE_PREPARED_STATEMENTS_ENV_VAR: Final = "DATABASE_DISABLE_PREPARED_STATEMEN
 DisablePreparedStatementsFlag = Annotated[
     bool, BeforeValidator(partial(token_auth_flag_enabled, env_var=DISABLE_PREPARED_STATEMENTS_ENV_VAR))
 ]
+MAX_IDLE_CONNECTION_LIFETIME_ENV_VAR: Final = "DATABASE_MAX_IDLE_CONNECTION_LIFETIME"
 
 # schema.prisma pins `provider = "postgresql"`, so these are the only schemes
 # Prisma can actually connect with.
@@ -216,6 +217,9 @@ class DatabaseURLSettings(BaseSettings):
     azure_postgresql_auth: AzureTokenAuthFlag = Field(default=False, validation_alias=AZURE_POSTGRESQL_AUTH_ENV_VAR)
     disable_prepared_statements: DisablePreparedStatementsFlag = Field(
         default=False, validation_alias=DISABLE_PREPARED_STATEMENTS_ENV_VAR
+    )
+    max_idle_connection_lifetime: int | None = Field(
+        default=None, validation_alias=MAX_IDLE_CONNECTION_LIFETIME_ENV_VAR
     )
 
     # Writer
@@ -452,6 +456,12 @@ class DatabaseURLSettings(BaseSettings):
                 url = os.environ.get(env_var)
                 if url:
                     os.environ[env_var] = add_missing_query_params(url, MappingProxyType({"pgbouncer": "true"}))
+
+        lifetime_params: Final = idle_lifetime_params(self.max_idle_connection_lifetime)
+        for env_var in ("DATABASE_URL", "DIRECT_URL"):
+            url = os.environ.get(env_var)
+            if url:
+                os.environ[env_var] = add_missing_query_params(url, lifetime_params)
 
         # The reader inherits the writer's connection params (pool size, timeouts,
         # pgbouncer mode). Without this the reader pool ignores the configured cap
