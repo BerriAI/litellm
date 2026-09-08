@@ -4,6 +4,7 @@ import base64
 from typing import Final
 
 import pytest
+from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.trace import NoOpTracer
 
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
@@ -783,3 +784,18 @@ def test_langfuse_provider_cached_per_key_pair_and_host():
     assert len(cache._providers) == 2
     cache.route_for(default, LANGFUSE_CREDS)
     assert len(cache._providers) == 3
+
+
+def test_langfuse_routed_provider_exports_to_the_key_host():
+    cache: Final = _cache("langfuse_otel")
+    team_b: Final = {**LANGFUSE_CREDS, "langfuse_host": "http://team-b-langfuse:3100"}
+    route: Final = cache.route_for(NoOpTracer(), team_b)
+    assert route.provider is not None
+    otlp: Final = next(
+        processor.span_exporter
+        for processor in route.provider._active_span_processor._span_processors
+        if isinstance(getattr(processor, "span_exporter", None), OTLPSpanExporter)
+    )
+    assert otlp._endpoint == "http://team-b-langfuse:3100/api/public/otel/v1/traces"
+    assert otlp._headers["authorization"] == "Basic " + base64.b64encode(b"pk:sk").decode()
+    route.provider.shutdown()
