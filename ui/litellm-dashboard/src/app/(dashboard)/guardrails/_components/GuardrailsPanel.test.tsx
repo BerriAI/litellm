@@ -1,12 +1,13 @@
 import { type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailsPanel from "./GuardrailsPanel";
-import { getGuardrailsList, deleteGuardrailCall } from "@/components/networking";
+import { getGuardrailsList, deleteGuardrailCall, setGuardrailEnabledCall } from "@/components/networking";
 import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailsList: vi.fn(),
   deleteGuardrailCall: vi.fn(),
+  setGuardrailEnabledCall: vi.fn(),
 }));
 
 vi.mock("./add_guardrail_form", () => ({
@@ -16,7 +17,7 @@ vi.mock("./add_guardrail_form", () => ({
 
 vi.mock("./guardrail_table", () => ({
   __esModule: true,
-  default: ({ guardrailsList, onDeleteClick, onGuardrailClick }: any) => (
+  default: ({ guardrailsList, onDeleteClick, onGuardrailClick, onToggleEnabled }: any) => (
     <div>
       <div>Mock Guardrail Table</div>
       {guardrailsList.length > 0 && (
@@ -29,6 +30,12 @@ vi.mock("./guardrail_table", () => ({
           </button>
           <button data-testid="open-button" onClick={() => onGuardrailClick(guardrailsList[0].guardrail_id)}>
             Open
+          </button>
+          <button
+            data-testid="toggle-button"
+            onClick={() => onToggleEnabled(guardrailsList[0].guardrail_id, !guardrailsList[0].enabled)}
+          >
+            Toggle
           </button>
         </>
       )}
@@ -100,6 +107,7 @@ describe("GuardrailsPanel", () => {
 
   const mockGetGuardrailsList = vi.mocked(getGuardrailsList);
   const mockDeleteGuardrailCall = vi.mocked(deleteGuardrailCall);
+  const mockSetGuardrailEnabledCall = vi.mocked(setGuardrailEnabledCall);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -117,8 +125,24 @@ describe("GuardrailsPanel", () => {
           created_at: "2024-01-01T00:00:00Z",
           updated_at: "2024-01-01T00:00:00Z",
           guardrail_definition_location: "database" as any,
+          enabled: true,
         },
       ],
+    });
+  });
+
+  it("should disable a guardrail through the toggle and refetch the list", async () => {
+    mockSetGuardrailEnabledCall.mockResolvedValue({ guardrail_id: "test-guardrail-1", enabled: false });
+    renderWithProviders(<GuardrailsPanel {...defaultProps} />);
+    fireEvent.click(screen.getByText("Guardrails"));
+
+    fireEvent.click(await screen.findByTestId("toggle-button"));
+
+    await waitFor(() => {
+      expect(mockSetGuardrailEnabledCall).toHaveBeenCalledWith("test-token", "test-guardrail-1", false);
+    });
+    await waitFor(() => {
+      expect(mockGetGuardrailsList).toHaveBeenCalledTimes(2);
     });
   });
 

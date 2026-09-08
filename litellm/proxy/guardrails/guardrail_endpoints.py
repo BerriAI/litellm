@@ -48,6 +48,8 @@ from litellm.types.guardrails import (
     PiiAction,
     PiiEntityType,
     PresidioPresidioConfigModelUserInterface,
+    SetGuardrailEnabledRequest,
+    SetGuardrailEnabledResponse,
     SupportedGuardrailIntegrations,
     ToolPermissionGuardrailConfigModel,
 )
@@ -269,6 +271,7 @@ async def list_guardrails_v2(
                     created_at=guardrail.get("created_at"),
                     updated_at=guardrail.get("updated_at"),
                     guardrail_definition_location="db",
+                    enabled=IN_MEMORY_GUARDRAIL_HANDLER.is_enabled(guardrail.get("guardrail_id") or ""),
                 )
             )
             seen_guardrail_ids.add(guardrail.get("guardrail_id"))
@@ -308,6 +311,7 @@ async def list_guardrails_v2(
                     litellm_params=masked_in_memory_litellm_params_typed,
                     guardrail_info=dict(guardrail.get("guardrail_info") or {}),
                     guardrail_definition_location="config",
+                    enabled=IN_MEMORY_GUARDRAIL_HANDLER.is_enabled(gid),
                 )
             )
             seen_guardrail_ids.add(gid)
@@ -1281,6 +1285,82 @@ async def patch_guardrail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.patch(
+    "/guardrails/{guardrail_id}/enabled",
+    tags=["Guardrails"],
+    response_model=SetGuardrailEnabledResponse,
+)
+async def set_guardrail_enabled(
+    guardrail_id: str,
+    request: SetGuardrailEnabledRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Turn a guardrail off or back on at runtime without editing or deleting it
+
+    Works for guardrails defined in config.yaml as well as ones created in the DB.
+    A disabled guardrail stays registered but skips every request until it is
+    re-enabled. The state is persisted, so it survives restarts and applies to
+    all proxy instances sharing the DB.
+
+    Example Request:
+    ```bash
+    curl -X PATCH "http://localhost:4000/guardrails/123e4567-e89b-12d3-a456-426614174000/enabled" \\
+        -H "Authorization: Bearer <your_api_key>" \\
+        -H "Content-Type: application/json" \\
+        -d '{"enabled": false}'
+    ```
+
+    Example Response:
+    ```json
+    {
+        "guardrail_id": "123e4567-e89b-12d3-a456-426614174000",
+        "guardrail_name": "headroom-compression",
+        "enabled": false
+    }
+    ```
+    """
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required to manage guardrails",
+        )
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    db_guardrail: Final = await GUARDRAIL_REGISTRY.get_guardrail_by_id_from_db(
+        guardrail_id=guardrail_id, prisma_client=prisma_client
+    )
+    config_guardrail: Final = (
+        IN_MEMORY_GUARDRAIL_HANDLER.get_guardrail_by_id(guardrail_id=guardrail_id)
+        if IN_MEMORY_GUARDRAIL_HANDLER.get_source(guardrail_id) == "config"
+        else None
+    )
+    guardrail: Final = db_guardrail if db_guardrail is not None else config_guardrail
+    if guardrail is None:
+        raise HTTPException(status_code=404, detail=f"Guardrail with ID {guardrail_id} not found")
+
+    disabled_guardrail_ids: Final = await GUARDRAIL_REGISTRY.set_guardrail_enabled_in_db(
+        guardrail_id=guardrail_id, enabled=request.enabled, prisma_client=prisma_client
+    )
+    IN_MEMORY_GUARDRAIL_HANDLER.set_disabled_guardrails(disabled_guardrail_ids)
+    verbose_proxy_logger.info(
+        "Guardrail '%s' (ID: %s) %s",
+        guardrail.get("guardrail_name"),
+        guardrail_id,
+        "enabled" if request.enabled else "disabled",
+    )
+    return SetGuardrailEnabledResponse(
+        guardrail_id=guardrail_id,
+        guardrail_name=guardrail.get("guardrail_name") or "",
+        enabled=request.enabled,
+    )
+
+
 @router.get(
     "/guardrails/{guardrail_id}",
     tags=["Guardrails"],
@@ -1369,6 +1449,7 @@ async def get_guardrail_info(guardrail_id: str):
             created_at=result.get("created_at"),
             updated_at=result.get("updated_at"),
             guardrail_definition_location=guardrail_definition_location,
+            enabled=IN_MEMORY_GUARDRAIL_HANDLER.is_enabled(guardrail_id),
         )
     except HTTPException as e:
         raise e

@@ -7,6 +7,7 @@ import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdentityCell, StatusBadge } from "@/components/shared/table_cells";
 import { Guardrail, GuardrailDefinitionLocation } from "@/components/guardrails/types";
 import { buttonVariants } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -66,11 +67,13 @@ function GuardrailRowActions({ guardrail, onDeleteClick }: GuardrailRowActionsPr
 interface GuardrailTableColumnsDeps {
   onGuardrailClick: (guardrailId: string) => void;
   onDeleteClick: (guardrailId: string, guardrailName: string) => void;
+  onToggleEnabled: (guardrailId: string, enabled: boolean) => void;
 }
 
 export const getGuardrailTableColumns = ({
   onGuardrailClick,
   onDeleteClick,
+  onToggleEnabled,
 }: GuardrailTableColumnsDeps): ColumnDef<Guardrail>[] => [
   {
     id: "guardrail_id",
@@ -138,6 +141,22 @@ export const getGuardrailTableColumns = ({
         <StatusBadge tone={isDefaultOn ? "success" : "neutral"} label={isDefaultOn ? "Default On" : "Default Off"} />
       );
     },
+  },
+  {
+    id: "enabled",
+    accessorKey: "enabled",
+    meta: { title: "Enabled" },
+    header: "Enabled",
+    size: 100,
+    enableSorting: false,
+    cell: ({ row }) => (
+      <Switch
+        size="sm"
+        checked={row.original.enabled}
+        aria-label={`Enable ${row.original.guardrail_name || row.original.guardrail_id}`}
+        onCheckedChange={(enabled) => onToggleEnabled(row.original.guardrail_id, enabled)}
+      />
+    ),
   },
   {
     id: "created_at",

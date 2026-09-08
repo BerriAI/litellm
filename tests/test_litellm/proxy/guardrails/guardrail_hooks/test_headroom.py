@@ -2966,3 +2966,37 @@ def test_unusable_timeout_falls_back_to_the_default(configured: float):
 
     assert guardrail.timeout.read == 60.0
     assert guardrail.timeout.connect == 5.0
+
+
+@pytest.mark.asyncio
+async def test_disabled_headroom_guardrail_skips_compress_and_forwards_request_unchanged():
+    """
+    A Headroom guardrail switched off at runtime (PATCH /guardrails/{id}/enabled)
+    must not call /v1/compress at all, even though it is default_on and the
+    request names it explicitly; the proxy pipeline forwards the request as is.
+    """
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    guardrail = _make_guardrail(guardrail_name="headroom-compression-global")
+    data = {"model": "gpt-4o", "messages": ORIGINAL_MESSAGES, "metadata": {"guardrails": ["headroom-compression-global"]}}
+    proxy_logging = ProxyLogging(user_api_key_cache=UserApiKeyCache())
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as post:
+        assert guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call) is True
+
+        guardrail.enabled = False
+        skipped = await proxy_logging._process_guardrail_callback(
+            callback=guardrail,
+            data=data,
+            user_api_key_dict=UserAPIKeyAuth(),
+            call_type="acompletion",
+            event_type=GuardrailEventHooks.pre_call,
+        )
+
+    assert skipped is None
+    post.assert_not_called()
+    assert data["messages"] == ORIGINAL_MESSAGES
+    assert _recorded_guardrail_entries(data) == []
