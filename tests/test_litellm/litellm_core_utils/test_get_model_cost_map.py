@@ -40,8 +40,6 @@ def _bundled_blob_id() -> str:
 
 
 def test_git_blob_id_is_what_git_hash_object_prints():
-    """An operator checks a reported revision with ``git hash-object`` or ``git rev-parse <commit>:<path>``,
-    so the id must be git's blob sha1 of the exact bytes, not a plain sha1 or a hash of the parsed JSON."""
     assert git_blob_id(b'{"gpt-5.4-mini": {"mode": "chat"}}\n') == "18b9a8381e13a3b38a2128f184f631f95829e987"
 
 
@@ -516,9 +514,6 @@ async def test_refetch_respects_local_env_override(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_refetch_records_the_blob_id_of_the_bytes_served_and_the_fetch_etag():
-    """A reload reports which revision of the map it swapped in: the git blob id of the exact bytes the
-    fetch returned, so ``git rev-parse <commit>:model_prices_and_context_window.json`` can confirm it,
-    plus the ETag the fetch returned."""
     body = _real_map_bytes()
     client, _ = _mock_client([httpx.Response(200, headers={"ETag": 'W/"abc123"'}, content=body)])
 
@@ -532,7 +527,6 @@ async def test_refetch_records_the_blob_id_of_the_bytes_served_and_the_fetch_eta
 
 @pytest.mark.asyncio
 async def test_refetch_revision_follows_the_bytes_not_the_url():
-    """Two fetches of the same URL that return different bytes report different revisions."""
     edited = json.loads(_real_map_bytes())
     edited["gpt-5.4-mini"]["input_cost_per_token"] = 0.5
     client, _ = _mock_client(
@@ -549,8 +543,6 @@ async def test_refetch_revision_follows_the_bytes_not_the_url():
 
 @pytest.mark.asyncio
 async def test_refetch_local_override_reports_the_bundled_blob_id_without_an_etag(monkeypatch):
-    """Forcing the bundled backup after a remote reload must report the backup's own blob id and drop the
-    remote ETag, since the map served is no longer the one that ETag identifies."""
     remote, _ = _mock_client([httpx.Response(200, headers={"ETag": 'W/"remote"'}, content=_real_map_bytes())])
     await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=remote)
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -670,8 +662,6 @@ def test_boot_load_records_the_blob_id_of_the_bytes_served_and_the_fetch_etag():
 
 
 def test_boot_load_fallback_to_the_backup_reports_its_blob_id_and_drops_the_remote_etag():
-    """A boot that lands on the bundled backup reports the backup's own blob id and no ETag, even
-    when an earlier load in the same process had fetched the remote map."""
     remote, _ = _mock_client(
         [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_real_map_bytes())], client_cls=httpx.Client
     )
@@ -687,8 +677,6 @@ def test_boot_load_fallback_to_the_backup_reports_its_blob_id_and_drops_the_remo
 
 
 def test_boot_load_that_fails_the_integrity_check_reports_the_backup_not_the_rejected_fetch():
-    """A fetch that succeeds but fails integrity validation is thrown away, so the provenance must
-    describe the backup that got loaded, never the ETag or bytes of the map that was rejected."""
     remote, _ = _mock_client(
         [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_real_map_bytes())], client_cls=httpx.Client
     )

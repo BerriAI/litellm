@@ -50,7 +50,6 @@ def _attach_litellm_config(mock_prisma):
 
 
 def _pin_provenance(monkeypatch):
-    """Fix what this process reports as its cost map revision, independent of the map loaded at import."""
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map_provenance",
         lambda: dict(_PROVENANCE),
@@ -110,8 +109,6 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
 def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every_status_surface(
     client, auth_as, monkeypatch, mock_prisma
 ):
-    """A real refetch through the reload route reports the git blob id of the exact bytes it fetched and
-    the fetch ETag on the reload response, the source route, and the schedule status alike."""
     import httpx
 
     import litellm

@@ -45,7 +45,6 @@ def _count_model_entries(model_cost: dict) -> int:
 
 
 def git_blob_id(body: bytes) -> str:
-    """The sha1 git gives these bytes as a blob, so ``git rev-parse <commit>:<path>`` reproduces it for the file"""
     return hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
 
 
@@ -70,7 +69,6 @@ class GetModelCostMap:
 
     @staticmethod
     def load_local_model_cost_map_with_revision() -> "ModelCostMapReloaded":
-        """The bundled backup map together with the git blob id of the file it was parsed from"""
         body: Final = GetModelCostMap.read_local_model_cost_map_bytes()
         content: Final = json.loads(body)
         return ModelCostMapReloaded(model_cost_map=content, revision=git_blob_id(body))
@@ -413,9 +411,6 @@ class CostMapSourceInfo(CostMapProvenance):
 
 
 def get_model_cost_map_provenance() -> CostMapProvenance:
-    """Which revision of the cost map this process serves: the git blob id of the bytes it loaded, the
-    same id ``git rev-parse <commit>:model_prices_and_context_window.json`` prints for a checkout, plus
-    the ETag the remote fetch returned (None for the bundled backup)"""
     return {
         "source_revision": _cost_map_source_info.source_revision,
         "etag": _cost_map_source_info.etag,
@@ -520,7 +515,6 @@ def _finalize_model_cost_map(model_cost: dict) -> dict:
 
 
 def _finalize_loaded_model_cost_map(loaded: ModelCostMapReloaded) -> ModelCostMapReloaded:
-    """Record which bytes this process now serves, then finalize the map they parsed into"""
     _cost_map_source_info.source_revision = loaded.revision
     _cost_map_source_info.etag = loaded.etag
     return replace(loaded, model_cost_map=_finalize_model_cost_map(loaded.model_cost_map))
