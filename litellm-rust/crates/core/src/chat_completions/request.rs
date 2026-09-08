@@ -64,11 +64,12 @@ pub fn resolve_request(
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn validate_environment(
+    services: &impl crate::providers::auth::AuthorizationServices,
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
     config: &dyn ChatCompletionsProviderConfig,
 ) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), Error> {
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    let env_lookup = |key: &str| services.environment(key);
     let mut headers = string_headers(request.extra_headers.clone())?;
     let auth = config.auth(
         request.api_key,
@@ -119,10 +120,20 @@ fn validate_environment(
 pub fn build_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
-    let (headers, auth) = validate_environment(&request, &request.model, request.config)?;
+    build_provider_request_with_services(
+        crate::providers::auth::native_authorization_services(),
+        request,
+    )
+}
+
+pub fn build_provider_request_with_services(
+    services: &impl crate::providers::auth::AuthorizationServices,
+    request: ResolvedChatCompletionsRequest<'_>,
+) -> Result<ProviderChatCompletionsRequest, Error> {
+    let (headers, auth) = validate_environment(services, &request, &request.model, request.config)?;
     let model = request.model;
     let config = request.config;
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    let env_lookup = |key: &str| services.environment(key);
     let url = config.complete_url(
         request.api_base,
         &model,
@@ -147,18 +158,31 @@ pub fn build_provider_request(
 pub async fn build_pre_call_request(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<super::types::ChatPreCallRequest, Error> {
-    use super::types::{ChatBodySnapshot, ChatEndpoint, ChatPreCallRequest};
-    use crate::lifecycle::RequestBodyBehavior;
+    build_pre_call_request_with_services(
+        crate::providers::auth::native_authorization_services(),
+        request,
+    )
+    .await
+}
 
-    let built = build_provider_request(resolve_request(request)?)?;
+pub async fn build_pre_call_request_with_services(
+    services: &impl crate::providers::auth::AuthorizationServices,
+    request: ChatCompletionsRequest<'_>,
+) -> Result<super::types::ChatPreCallRequest, Error> {
+    use super::types::{ChatEndpoint, ChatPreCallRequest};
+    use crate::lifecycle::{PreCallBody, RequestBodyPolicy, WireBody};
+
+    let built = build_provider_request_with_services(services, resolve_request(request)?)?;
     let endpoint = ChatEndpoint {
         model: built.model.clone(),
         config: built.config,
         url: built.url.clone(),
+        auth: built.auth.clone(),
+        optional_params: built.optional_params.clone(),
         timeout: built.timeout,
     };
-    match built.config.request_body_behavior() {
-        RequestBodyBehavior::STRUCTURED_AT_SEND => {
+    match built.config.request_body_policy() {
+        RequestBodyPolicy::StructuredAtSend => {
             let mut generated = built
                 .body
                 .as_object()
@@ -173,25 +197,40 @@ pub async fn build_pre_call_request(
             for name in &parameter_fields {
                 generated.remove(name);
             }
-            Ok(ChatPreCallRequest::StructuredAtSend {
+            Ok(ChatPreCallRequest {
                 endpoint,
-                generated,
+                body: PreCallBody::StructuredAtSend {
+                    callback: generated,
+                },
                 parameter_fields,
                 headers: built.upstream_headers,
             })
         }
-        RequestBodyBehavior::SERIALIZED_AT_BUILD => {
+        RequestBodyPolicy::SerializedAtBuild => {
             let logging_body = serde_json::to_string(&built.body).map_err(|error| {
                 Error::InvalidRequest(format!("could not encode chat request: {error}"))
             })?;
-            let body = logging_body.as_bytes().to_vec();
-            let headers = super::handler::signed_headers(&built, &body).await?;
-            Ok(ChatPreCallRequest::SerializedAtBuild {
-                snapshot: ChatBodySnapshot { endpoint, body },
-                logging_body,
+            let authorized = built
+                .config
+                .authorize(
+                    services,
+                    built.authorization_context(),
+                    WireBody::from_serialized(logging_body.clone()),
+                )
+                .await?;
+            let headers = authorized.headers().to_vec();
+            Ok(ChatPreCallRequest {
+                endpoint,
+                body: PreCallBody::SerializedAtBuild {
+                    callback: logging_body,
+                    authorized,
+                },
+                parameter_fields: Vec::new(),
                 headers,
             })
         }
-        _ => Err(Error::Unsupported("chat request body behavior")),
+        RequestBodyPolicy::StructuredAtBuild => Err(Error::Unsupported(
+            "chat structured-at-build request body policy",
+        )),
     }
 }

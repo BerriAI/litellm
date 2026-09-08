@@ -62,14 +62,14 @@ pub enum OcrDocumentProjection {
 pub struct OcrPreCallRequest {
     pub endpoint: OcrEndpoint,
     pub headers: Vec<(String, String)>,
-    pub body: Map<String, Value>,
+    pub body: crate::lifecycle::PreCallBody<Map<String, Value>>,
     pub document_projection: OcrDocumentProjection,
     pub parameter_fields: &'static [&'static str],
 }
 
 impl OcrPreCallRequest {
-    pub fn request_body_behavior(&self) -> crate::lifecycle::RequestBodyBehavior {
-        crate::lifecycle::RequestBodyBehavior::STRUCTURED_AT_SEND
+    pub fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        self.body.policy()
     }
 }
 
@@ -97,34 +97,26 @@ impl OcrEndpoint {
         self.timeout_seconds
     }
 
-    pub fn settle(self, headers: Vec<(String, String)>, body: Value) -> SettledOcrRequest {
-        SettledOcrRequest {
+    pub fn settle(
+        self,
+        headers: Vec<(String, String)>,
+        body: crate::lifecycle::PreCallBody<Value>,
+    ) -> Result<SettledOcrRequest, crate::Error> {
+        let crate::lifecycle::PreCallBody::StructuredAtSend { callback } = body else {
+            return Err(crate::Error::Unsupported("OCR request body policy"));
+        };
+        let wire = crate::lifecycle::WireBody::encode(&callback, "OCR request")?;
+        let authorized = crate::lifecycle::AuthorizedBody::new(wire, headers);
+        Ok(SettledOcrRequest {
             endpoint: self,
-            headers,
-            body,
-        }
+            http: authorized.settle(),
+        })
     }
 }
 
 pub struct SettledOcrRequest {
     pub(super) endpoint: OcrEndpoint,
-    pub(super) headers: Vec<(String, String)>,
-    pub(super) body: Value,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct OcrTransportRequest {
-    pub url: String,
-    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
-    pub body: Vec<u8>,
-    pub timeout_seconds: f64,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct OcrTransportResponse {
-    pub status: u16,
-    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
-    pub content: Vec<u8>,
+    pub(super) http: crate::lifecycle::SettledHttpRequest,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

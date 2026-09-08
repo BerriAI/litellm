@@ -20,18 +20,17 @@ pub struct ProviderMessagesRequest {
     pub(super) model: String,
     pub(super) config: &'static dyn AnthropicMessagesProviderConfig,
     pub(super) url: String,
-    pub(super) body: Value,
-    pub(super) upstream_headers: Vec<(String, String)>,
+    pub(super) http: crate::lifecycle::SettledHttpRequest,
     pub(super) timeout: Option<Duration>,
 }
 
 impl ProviderMessagesRequest {
-    pub fn body(&self) -> &Value {
-        &self.body
+    pub fn body(&self) -> &[u8] {
+        self.http.body()
     }
 
     pub fn headers(&self) -> &[(String, String)] {
-        &self.upstream_headers
+        self.http.headers()
     }
 }
 
@@ -53,11 +52,9 @@ pub struct MessagesEndpoint {
     pub(super) timeout: Option<Duration>,
 }
 
-pub struct MessagesBodySnapshot(Value);
-
 impl MessagesEndpoint {
-    pub fn request_body_behavior(&self) -> crate::lifecycle::RequestBodyBehavior {
-        crate::lifecycle::RequestBodyBehavior::STRUCTURED_AT_BUILD
+    pub fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        self.config.request_body_policy()
     }
 
     pub fn url(&self) -> &str {
@@ -71,17 +68,36 @@ impl MessagesEndpoint {
     pub fn capture_buffered_body(
         &self,
         mut body: Value,
-    ) -> Result<MessagesBodySnapshot, crate::Error> {
+    ) -> Result<crate::lifecycle::PreCallBody<Value>, crate::Error> {
+        let callback = body.clone();
         let object = body.as_object_mut().ok_or_else(|| {
             crate::Error::InvalidRequest("messages body must be an object".into())
         })?;
         object.remove("stream");
-        Ok(MessagesBodySnapshot(body))
+        let authorized = self.capture_body(body)?;
+        Ok(crate::lifecycle::PreCallBody::StructuredAtBuild {
+            callback,
+            authorized,
+        })
+    }
+
+    pub fn capture_body(
+        &self,
+        body: Value,
+    ) -> Result<crate::lifecycle::AuthorizedBody, crate::Error> {
+        if self.request_body_policy() != crate::lifecycle::RequestBodyPolicy::StructuredAtBuild {
+            return Err(crate::Error::Unsupported("messages request body policy"));
+        }
+        let wire = crate::lifecycle::WireBody::encode(&body, "messages request")?;
+        Ok(crate::lifecycle::AuthorizedBody::new(
+            wire,
+            self.headers.clone(),
+        ))
     }
 
     pub fn settle(
         self,
-        body: MessagesBodySnapshot,
+        body: crate::lifecycle::AuthorizedBody,
         headers: Vec<(String, String)>,
     ) -> ProviderMessagesRequest {
         ProviderMessagesRequest {
@@ -89,8 +105,7 @@ impl MessagesEndpoint {
             model: self.model,
             config: self.config,
             url: self.url,
-            body: body.0,
-            upstream_headers: headers,
+            http: body.settle_headers(headers),
             timeout: self.timeout,
         }
     }

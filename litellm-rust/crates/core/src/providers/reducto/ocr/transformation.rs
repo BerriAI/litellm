@@ -323,6 +323,10 @@ pub fn transform_reducto_response(
 }
 
 impl OcrProviderConfig for ReductoParseV3Config {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtSend
+    }
+
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         PARSE_V3_SUPPORTED_OCR_PARAMS
     }
@@ -365,6 +369,10 @@ impl OcrProviderConfig for ReductoParseV3Config {
 }
 
 impl OcrProviderConfig for ReductoParseLegacyConfig {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtSend
+    }
+
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         PARSE_LEGACY_SUPPORTED_OCR_PARAMS
     }

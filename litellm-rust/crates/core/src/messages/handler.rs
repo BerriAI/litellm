@@ -1,9 +1,8 @@
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::Error;
-use crate::http_utils::http_request;
+use crate::http_utils::{HttpClientProfile, http_client, http_request};
 use crate::lifecycle::{StreamingMetadata, StreamingSource};
 
-use super::client::http_client;
 use super::common_utils::truncate_error_body;
 use super::request::build_provider_request;
 use super::types::{AnthropicMessagesResponse, MessagesRequest};
@@ -19,13 +18,26 @@ pub(super) async fn execute_messages_provider_call(
 pub async fn execute_provider_messages_request(
     request: super::types::ProviderMessagesRequest,
 ) -> Result<AnthropicMessagesResponse, Error> {
-    let mut request_builder = http_client().post(&request.url).json(&request.body);
-    for (key, value) in &request.upstream_headers {
-        request_builder = request_builder.header(key, value);
-    }
-    if let Some(duration) = request.timeout {
-        request_builder = request_builder.timeout(duration);
-    }
+    let super::types::ProviderMessagesRequest {
+        model,
+        config,
+        url,
+        http,
+        timeout,
+        ..
+    } = request;
+    let (body, headers) = http.into_parts();
+    let client = http_client(HttpClientProfile::Standard)
+        .map_err(|error| Error::Network(error.to_string()))?;
+    let request_builder = headers
+        .into_iter()
+        .fold(client.post(&url).body(body), |builder, (key, value)| {
+            builder.header(key, value)
+        });
+    let request_builder = match timeout {
+        Some(timeout) => request_builder.timeout(timeout),
+        None => request_builder,
+    };
 
     let response = http_request(request_builder)
         .await
@@ -46,7 +58,7 @@ pub async fn execute_provider_messages_request(
 
     let response = serde_json::from_str(&text)
         .map_err(|err| Error::InvalidResponse(format!("invalid messages response JSON: {err}")))?;
-    request.config.transform_response(&request.model, response)
+    config.transform_response(&model, response)
 }
 
 pub(super) async fn execute_messages_provider_stream(
@@ -59,13 +71,21 @@ pub(super) async fn execute_messages_provider_stream(
         ));
     }
 
-    let mut request_builder = http_client().post(&request.url).json(&request.body);
-    for (key, value) in &request.upstream_headers {
-        request_builder = request_builder.header(key, value);
-    }
-    if let Some(duration) = request.timeout {
-        request_builder = request_builder.timeout(duration);
-    }
+    let super::types::ProviderMessagesRequest {
+        url, http, timeout, ..
+    } = request;
+    let (body, headers) = http.into_parts();
+    let client = http_client(HttpClientProfile::Standard)
+        .map_err(|error| Error::Network(error.to_string()))?;
+    let request_builder = headers
+        .into_iter()
+        .fold(client.post(&url).body(body), |builder, (key, value)| {
+            builder.header(key, value)
+        });
+    let request_builder = match timeout {
+        Some(timeout) => request_builder.timeout(timeout),
+        None => request_builder,
+    };
 
     let response = http_request(request_builder)
         .await

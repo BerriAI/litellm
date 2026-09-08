@@ -9,6 +9,10 @@ pub struct AnthropicMessagesConfig;
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
 impl AnthropicMessagesProviderConfig for AnthropicMessagesConfig {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtBuild
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,

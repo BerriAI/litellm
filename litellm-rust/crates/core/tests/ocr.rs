@@ -31,7 +31,7 @@ fn request() -> OcrRequest {
 }
 
 fn body(built: &OcrPreCallRequest) -> Value {
-    let mut body = built.body.clone();
+    let mut body = built.body.structured_callback().unwrap().clone();
     body.insert(
         "document".into(),
         json!({"type": "document_url", "document_url": "data:application/pdf;base64,cGRm"}),
@@ -50,7 +50,10 @@ async fn ocr(
     let provider = built.endpoint.custom_llm_provider().to_string();
     let response = litellm_core::ocr::ocr(
         &DefaultOcrServices,
-        built.endpoint.settle(headers, body),
+        built.endpoint.settle(
+            headers,
+            litellm_core::lifecycle::PreCallBody::StructuredAtSend { callback: body },
+        )?,
         Default::default(),
         CallLifecycleContext::new("ocr", model, provider, "test-call"),
     )
@@ -73,15 +76,15 @@ fn builds_provider_template_auth_and_url() {
     assert_eq!(built.endpoint.url(), "https://ocr.example/v1/ocr");
     assert_eq!(built.endpoint.timeout_seconds(), 2.0);
     assert_eq!(
-        built.request_body_behavior(),
-        litellm_core::lifecycle::RequestBodyBehavior::STRUCTURED_AT_SEND
+        built.request_body_policy(),
+        litellm_core::lifecycle::RequestBodyPolicy::StructuredAtSend
     );
     assert_eq!(
         built.document_projection,
         OcrDocumentProjection::RetainedDocument
     );
     assert_eq!(
-        Value::Object(built.body),
+        Value::Object(built.body.structured_callback().unwrap().clone()),
         json!({"model": "mistral-ocr-latest", "document": {"type": "document_url", "document_url": "data:application/pdf;base64,cGRm"}})
     );
     assert_eq!(
@@ -342,7 +345,7 @@ async fn cloud_providers_use_existing_auth_urls_and_request_response_transforms(
             ..request()
         })
         .unwrap();
-        let mut body = Value::Object(built.body.clone());
+        let mut body = Value::Object(built.body.structured_callback().unwrap().clone());
         body[if deepseek {
             "temperature"
         } else {
@@ -389,12 +392,26 @@ fn server(
     response_body: &str,
     delay: Duration,
 ) -> (String, thread::JoinHandle<(String, Value)>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
     let response = format!(
         "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{response_body}",
         response_body.len()
     );
+    let (base, handle) = raw_server(response, delay);
+    (
+        base,
+        thread::spawn(move || {
+            let (headers, body) = handle.join().unwrap();
+            (headers, serde_json::from_slice(&body).unwrap())
+        }),
+    )
+}
+
+fn raw_server(
+    response: String,
+    delay: Duration,
+) -> (String, thread::JoinHandle<(String, Vec<u8>)>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
     let handle = thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -441,7 +458,7 @@ fn server(
             assert_ne!(count, 0);
             received.extend_from_slice(&buffer[..count]);
         }
-        let body = serde_json::from_slice(&received[header_end..header_end + length]).unwrap();
+        let body = received[header_end..header_end + length].to_vec();
         thread::sleep(delay);
         let _ = stream.write_all(response.as_bytes());
         (headers, body)
@@ -616,6 +633,13 @@ async fn handles_errors_compression_and_timeout_without_exposing_payloads() {
         ),
         (
             200,
+            "Content-Encoding: identity\r\nContent-Encoding: br\r\n",
+            "{}",
+            Duration::ZERO,
+            Error::Unsupported("compressed OCR response"),
+        ),
+        (
+            200,
             "Content-Encoding: identity, br\r\n",
             "{}",
             Duration::ZERO,
@@ -661,5 +685,94 @@ async fn normalizes_missing_fields_and_accepts_identity_response() {
             "pages": [], "model": "mistral-ocr-latest", "document_annotation": null,
             "usage_info": null, "object": "ocr"
         })
+    );
+}
+
+#[tokio::test]
+async fn invalid_headers_and_timeouts_never_reach_the_server() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    for timeout_seconds in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+        let result = build_pre_call_request(OcrRequest {
+            api_base: Some(base.clone()),
+            timeout_seconds,
+            ..request()
+        });
+        assert!(matches!(result, Err(Error::InvalidRequest(message))
+            if message == "timeout must be positive and finite"));
+    }
+    for (name, value, expected) in [
+        ("private\nname", "secret", "invalid header name"),
+        ("x-proof", "private\nvalue", "invalid header value"),
+    ] {
+        let built = build_pre_call_request(OcrRequest {
+            api_base: Some(base.clone()),
+            ..request()
+        })
+        .unwrap();
+        let body = body(&built);
+        let headers = vec![(name.into(), value.into())];
+        assert_eq!(
+            ocr(built, headers, body).await.unwrap_err(),
+            Error::InvalidRequest(expected.into())
+        );
+    }
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[tokio::test]
+async fn body_read_failure_precedes_status_and_encoding_errors() {
+    for status in [200, 401] {
+        let (base, handle) = raw_server(
+            format!(
+                "HTTP/1.1 {status} Test\r\nContent-Length: 100\r\nContent-Encoding: gzip\r\nConnection: close\r\n\r\nprivate"
+            ),
+            Duration::ZERO,
+        );
+        let built = build_pre_call_request(OcrRequest {
+            api_base: Some(base),
+            ..request()
+        })
+        .unwrap();
+        let body = body(&built);
+        let headers = built.headers.clone();
+        assert_eq!(
+            ocr(built, headers, body).await.unwrap_err(),
+            Error::Network("could not read response".into())
+        );
+        handle.join().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn sends_exact_settled_json_bytes_and_preserves_duplicate_headers() {
+    let (base, handle) = raw_server(
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".into(),
+        Duration::ZERO,
+    );
+    let built = build_pre_call_request(OcrRequest {
+        api_base: Some(base),
+        ..request()
+    })
+    .unwrap();
+    let body = body(&built);
+    let expected = serde_json::to_vec(&body).unwrap();
+    let headers = vec![
+        ("x-proof".into(), "one".into()),
+        ("X-Proof".into(), "two".into()),
+    ];
+    ocr(built, headers, body).await.unwrap();
+    let (headers, sent) = handle.join().unwrap();
+    assert_eq!(sent, expected);
+    assert_eq!(
+        headers
+            .lines()
+            .filter(|line| line.starts_with("x-proof:"))
+            .collect::<Vec<_>>(),
+        vec!["x-proof: one", "x-proof: two"]
     );
 }

@@ -1,10 +1,10 @@
 use crate::Error;
-use crate::lifecycle::RequestBodyBehavior;
+use crate::lifecycle::{AuthorizedBody, RequestBodyPolicy, WireBody};
 use serde_json::{Map, Value};
 
 use super::types::{
-    ChatCompletionsResponse, ChatMessage, ChatMessageContent, ProviderChatRequestData,
-    ProviderChatResponseData,
+    ChatAuthorizationContext, ChatCompletionsResponse, ChatMessage, ChatMessageContent,
+    ProviderChatRequestData, ProviderChatResponseData,
 };
 
 /// How the upstream call is authenticated. API-key strategies are resolved in
@@ -35,22 +35,24 @@ const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 pub trait ChatCompletionsProviderConfig: Sync {
     fn authorize<'a>(
         &'a self,
-        request: &'a super::types::ProviderChatCompletionsRequest,
-        _body: &'a [u8],
+        _services: &'a dyn crate::providers::auth::AuthorizationServices,
+        request: ChatAuthorizationContext<'a>,
+        body: WireBody,
     ) -> crate::providers::AuthorizationFuture<'a> {
         Box::pin(async move {
-            match &request.auth {
+            match request.auth() {
                 ChatCompletionsAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
                     "AWS SigV4 requires the bedrock-auth feature",
                 )),
-                _ => Ok(request.upstream_headers.clone()),
+                _ => Ok(AuthorizedBody::new(
+                    body,
+                    request.upstream_headers().to_vec(),
+                )),
             }
         })
     }
 
-    fn request_body_behavior(&self) -> RequestBodyBehavior {
-        RequestBodyBehavior::STRUCTURED_AT_SEND
-    }
+    fn request_body_policy(&self) -> RequestBodyPolicy;
 
     fn complete_url(
         &self,

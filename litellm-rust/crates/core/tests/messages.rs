@@ -73,8 +73,8 @@ fn messages_capture_the_structured_body_during_request_building() {
     })
     .expect("endpoint");
     assert_eq!(
-        endpoint.request_body_behavior(),
-        litellm_core::lifecycle::RequestBodyBehavior::STRUCTURED_AT_BUILD
+        endpoint.request_body_policy(),
+        litellm_core::lifecycle::RequestBodyPolicy::StructuredAtBuild
     );
 }
 

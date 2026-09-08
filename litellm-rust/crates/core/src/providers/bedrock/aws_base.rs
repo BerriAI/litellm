@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::error::Error;
@@ -22,7 +21,48 @@ const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
 const AMBIENT_CREDENTIALS_TTL: Duration = Duration::from_secs(600);
 const MAX_CACHED_CREDENTIALS: usize = 200;
 
-static IAM_CREDENTIALS: OnceLock<CredentialState<NativeCredentialRuntime>> = OnceLock::new();
+pub type AwsCredentialFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<Credentials, Error>> + Send + 'a>>;
+
+pub trait AwsCredentialService: Send + Sync {
+    fn resolve<'a>(
+        &'a self,
+        config: AwsAuthConfig,
+        env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    ) -> AwsCredentialFuture<'a>;
+}
+
+pub struct NativeAwsCredentialService {
+    state: CredentialState<NativeCredentialRuntime>,
+}
+
+impl NativeAwsCredentialService {
+    pub fn new() -> Self {
+        Self {
+            state: CredentialState::new(NativeCredentialRuntime, MAX_CACHED_CREDENTIALS),
+        }
+    }
+}
+
+impl Default for NativeAwsCredentialService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AwsCredentialService for NativeAwsCredentialService {
+    fn resolve<'a>(
+        &'a self,
+        config: AwsAuthConfig,
+        env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
+    ) -> AwsCredentialFuture<'a> {
+        Box::pin(resolve_credentials_with_state(
+            config,
+            env_lookup,
+            &self.state,
+        ))
+    }
+}
 
 fn credential_cache_ttl(flow: &AwsAuthFlow) -> Option<Duration> {
     match flow {
@@ -215,15 +255,6 @@ pub fn classify_auth(
         };
     }
     AwsAuthFlow::DefaultChain
-}
-
-pub async fn resolve_credentials(
-    config: AwsAuthConfig,
-    env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Credentials, Error> {
-    let state = IAM_CREDENTIALS
-        .get_or_init(|| CredentialState::new(NativeCredentialRuntime, MAX_CACHED_CREDENTIALS));
-    resolve_credentials_with_state(config, env_lookup, state).await
 }
 
 async fn resolve_credentials_with_state<R, C>(
@@ -654,17 +685,19 @@ mod tests {
 
     #[tokio::test]
     async fn static_credentials_do_not_use_network() {
-        let credentials = resolve_credentials(
-            AwsAuthConfig {
-                access_key_id: Some("ak".into()),
-                secret_access_key: Some("sk".into()),
-                region_name: Some("us-east-1".into()),
-                ..Default::default()
-            },
-            &no_env,
-        )
-        .await
-        .expect("static credentials");
+        let service = NativeAwsCredentialService::new();
+        let credentials = service
+            .resolve(
+                AwsAuthConfig {
+                    access_key_id: Some("ak".into()),
+                    secret_access_key: Some("sk".into()),
+                    region_name: Some("us-east-1".into()),
+                    ..Default::default()
+                },
+                &no_env,
+            )
+            .await
+            .expect("static credentials");
         assert_eq!(credentials.access_key_id(), "ak");
         assert_eq!(credentials.session_token(), None);
     }
@@ -825,16 +858,17 @@ mod tests {
         let body = br#"{"anthropic_version":"bedrock-2023-05-31","max_tokens":1,"messages":[{"role":"user","content":[{"type":"text","text":"ping"}]}]}"#.to_vec();
         let headers =
             BTreeMap::from([("Content-Type".to_string(), "application/json".to_string())]);
-        let credentials = resolve_credentials(
-            AwsAuthConfig {
-                access_key_id: Some(access_key_id),
-                secret_access_key: Some(secret_access_key),
-                region_name: Some("us-west-2".to_string()),
-                ..Default::default()
-            },
-            &no_env,
-        )
-        .await?;
+        let credentials = NativeAwsCredentialService::new()
+            .resolve(
+                AwsAuthConfig {
+                    access_key_id: Some(access_key_id),
+                    secret_access_key: Some(secret_access_key),
+                    region_name: Some("us-west-2".to_string()),
+                    ..Default::default()
+                },
+                &no_env,
+            )
+            .await?;
         let client = reqwest::Client::new();
         let mut failures = Vec::new();
 

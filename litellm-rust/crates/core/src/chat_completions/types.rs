@@ -45,6 +45,42 @@ pub struct ProviderChatCompletionsRequest {
     pub timeout: Option<Duration>,
 }
 
+pub struct ChatAuthorizationContext<'a> {
+    url: &'a str,
+    upstream_headers: &'a [(String, String)],
+    auth: &'a ChatCompletionsAuth,
+    optional_params: &'a Map<String, Value>,
+}
+
+impl ChatAuthorizationContext<'_> {
+    pub(crate) fn url(&self) -> &str {
+        self.url
+    }
+
+    pub(crate) fn upstream_headers(&self) -> &[(String, String)] {
+        self.upstream_headers
+    }
+
+    pub(crate) fn auth(&self) -> &ChatCompletionsAuth {
+        self.auth
+    }
+
+    pub(crate) fn optional_params(&self) -> &Map<String, Value> {
+        self.optional_params
+    }
+}
+
+impl ProviderChatCompletionsRequest {
+    pub(super) fn authorization_context(&self) -> ChatAuthorizationContext<'_> {
+        ChatAuthorizationContext {
+            url: &self.url,
+            upstream_headers: &self.upstream_headers,
+            auth: &self.auth,
+            optional_params: &self.optional_params,
+        }
+    }
+}
+
 /// The provider-shaped request body a config produces. Named rather than a bare
 /// `Value` so the transform contract stays a typed one, mirroring
 /// [`crate::audio_transcription::types::AudioTranscriptionRequestData`].
@@ -56,61 +92,62 @@ pub struct ChatEndpoint {
     pub(super) model: String,
     pub(super) config: &'static dyn ChatCompletionsProviderConfig,
     pub(super) url: String,
+    pub(super) auth: ChatCompletionsAuth,
+    pub(super) optional_params: Map<String, Value>,
     pub(super) timeout: Option<Duration>,
 }
 
-pub struct ChatBodySnapshot {
-    pub(super) endpoint: ChatEndpoint,
-    pub(super) body: Vec<u8>,
-}
-
 pub struct SettledChatRequest {
-    pub(super) snapshot: ChatBodySnapshot,
-    pub(super) headers: Vec<(String, String)>,
+    pub(super) endpoint: ChatEndpoint,
+    pub(super) http: crate::lifecycle::SettledHttpRequest,
 }
 
-pub enum ChatPreCallRequest {
-    StructuredAtSend {
-        endpoint: ChatEndpoint,
-        generated: Map<String, Value>,
-        parameter_fields: Vec<String>,
-        headers: Vec<(String, String)>,
-    },
-    SerializedAtBuild {
-        snapshot: ChatBodySnapshot,
-        logging_body: String,
-        headers: Vec<(String, String)>,
-    },
+pub struct ChatPreCallRequest {
+    pub endpoint: ChatEndpoint,
+    pub body: crate::lifecycle::PreCallBody<Map<String, Value>>,
+    pub parameter_fields: Vec<String>,
+    pub headers: Vec<(String, String)>,
 }
 
 impl ChatEndpoint {
-    pub fn capture_body(self, body: Value) -> Result<ChatBodySnapshot, crate::Error> {
-        let body = serde_json::to_vec(&body).map_err(|error| {
-            crate::Error::InvalidRequest(format!("could not encode chat request: {error}"))
-        })?;
-        Ok(ChatBodySnapshot {
+    pub async fn authorize(
+        self,
+        services: &dyn crate::providers::auth::AuthorizationServices,
+        body: crate::lifecycle::WireBody,
+        headers: Vec<(String, String)>,
+    ) -> Result<SettledChatRequest, crate::Error> {
+        let context = ChatAuthorizationContext {
+            url: &self.url,
+            upstream_headers: &headers,
+            auth: &self.auth,
+            optional_params: &self.optional_params,
+        };
+        let authorized = self.config.authorize(services, context, body).await?;
+        Ok(SettledChatRequest {
             endpoint: self,
-            body,
+            http: authorized.settle(),
         })
     }
-}
 
-impl ChatBodySnapshot {
-    pub fn settle_headers(self, headers: Vec<(String, String)>) -> SettledChatRequest {
+    pub fn settle_authorized(
+        self,
+        authorized: crate::lifecycle::AuthorizedBody,
+        headers: Vec<(String, String)>,
+    ) -> SettledChatRequest {
         SettledChatRequest {
-            snapshot: self,
-            headers,
+            endpoint: self,
+            http: authorized.settle_headers(headers),
         }
     }
 }
 
 impl SettledChatRequest {
     pub fn body(&self) -> &[u8] {
-        &self.snapshot.body
+        self.http.body()
     }
 
     pub fn headers(&self) -> &[(String, String)] {
-        &self.headers
+        self.http.headers()
     }
 }
 

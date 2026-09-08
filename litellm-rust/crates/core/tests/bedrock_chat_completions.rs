@@ -46,8 +46,8 @@ fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
 #[test]
 fn builds_the_converse_body_python_builds() {
     assert_eq!(
-        BEDROCK_CHAT_COMPLETIONS_CONFIG.request_body_behavior(),
-        litellm_core::lifecycle::RequestBodyBehavior::SERIALIZED_AT_BUILD
+        BEDROCK_CHAT_COMPLETIONS_CONFIG.request_body_policy(),
+        litellm_core::lifecycle::RequestBodyPolicy::SerializedAtBuild
     );
     let body = transform(
         json!([

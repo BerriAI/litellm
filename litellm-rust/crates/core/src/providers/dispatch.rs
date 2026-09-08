@@ -101,6 +101,7 @@ pub(crate) fn resolve_audio_route_provider<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lifecycle::RequestBodyPolicy;
     use crate::ocr::transformation::OcrResponseHandling;
 
     #[test]
@@ -131,6 +132,52 @@ mod tests {
         assert_eq!(
             audio_transcription_provider_config("bedrock").is_some(),
             cfg!(feature = "bedrock-auth")
+        );
+    }
+
+    #[test]
+    fn every_buffered_provider_declares_its_body_policy() {
+        assert_eq!(
+            chat_completions_provider_config("anthropic")
+                .unwrap()
+                .request_body_policy(),
+            RequestBodyPolicy::StructuredAtSend
+        );
+        #[cfg(feature = "bedrock-auth")]
+        assert_eq!(
+            chat_completions_provider_config("bedrock")
+                .unwrap()
+                .request_body_policy(),
+            RequestBodyPolicy::SerializedAtBuild
+        );
+        for provider in ["anthropic", "azure_ai"] {
+            assert_eq!(
+                messages_provider_config(provider)
+                    .unwrap()
+                    .request_body_policy(),
+                RequestBodyPolicy::StructuredAtBuild
+            );
+        }
+        for (provider, model) in [
+            ("mistral", "mistral-ocr-latest"),
+            ("azure_ai", "mistral"),
+            ("azure_ai", "doc-intelligence/prebuilt-layout"),
+            ("vertex_ai", "mistral"),
+            ("vertex_ai", "deepseek"),
+        ] {
+            assert_eq!(
+                ocr_provider_config(provider, model)
+                    .unwrap()
+                    .request_body_policy(),
+                RequestBodyPolicy::StructuredAtSend
+            );
+        }
+        #[cfg(feature = "bedrock-auth")]
+        assert_eq!(
+            audio_transcription_provider_config("bedrock")
+                .unwrap()
+                .request_body_policy(),
+            RequestBodyPolicy::StructuredAtBuild
         );
     }
 

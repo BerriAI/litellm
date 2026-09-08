@@ -39,12 +39,11 @@ core/src/messages/
   transformation.rs  # the provider template trait
   request.rs         # provider resolution, auth headers, URL and body construction
   handler.rs         # the provider call
-  client.rs          # the shared reqwest client
 ```
 
-`ocr` prepares callback-visible headers and body in `prepare.rs`, settles those
-authoritative roots into a native request after callbacks, and sends it through
-`http_utils::buffered_post`. Reducto upload, Azure Document Intelligence polling,
+`ocr` prepares callback-visible headers and body, settles those authoritative
+roots into a native request after callbacks, and sends it through the shared
+`http_utils::http_request` function. Reducto upload, Azure Document Intelligence polling,
 and HTTP document URL conversion are declined at admission until they have an
 implementation on this settled-request path. Audio transcription provider I/O,
 realtime WebSocket dialing and splicing, and Responses WebSocket dialing and
@@ -88,7 +87,7 @@ realtime resolves its existing optional provider prefix through dispatch
 
 Capabilities are supplied through focused trait implementations. Route-specific
 requirements traits (an `OcrServices` bundle) declare exactly what a route needs
-(transport, calls, clock, ...); they are not host contexts, and core is never
+(calls, clock, ...); they are not host contexts, and core is never
 passed a catch-all gateway environment. The ordinary Rust client supplies native
 defaults; callers override implementations at construction.
 
@@ -151,3 +150,17 @@ exactly one terminal record after the committed session completes or fails.
 Realtime pool warmup is not a user call and must emit zero terminal records on
 both success and failure. A warmed connection transfers into `realtime`; only
 that serving session owns completion and terminal dispatch.
+
+## Shared HTTP execution
+
+`http_utils` owns cached reqwest clients and the traced HTTP send function for
+chat completions, messages, transcription and OCR. Client profiles preserve
+connection, timeout, redirect and decompression settings. Provider adapters own
+URLs, credentials, authorization, payloads and response transformations. Routes
+own lifecycle sequencing and response body or stream consumption
+
+HTTP execution receives settled bytes and never reserializes or reauthorizes
+them. OCR uses reqwest requests and responses directly; `OcrTransport`,
+`OcrTransportRequest`, `OcrTransportResponse` and the public `buffered_post` module
+have been removed without compatibility aliases. `OcrServices` now requires
+only `Clock` and `TerminalDispatcher`; its route signature is unchanged

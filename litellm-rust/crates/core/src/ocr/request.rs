@@ -116,6 +116,10 @@ pub fn build_pre_call_request(request: OcrAdmissionRequest) -> Result<OcrPreCall
     let Value::Object(body) = template.data else {
         return Err(Error::Unsupported("non-object OCR request template"));
     };
+    let body_policy = config.request_body_policy();
+    if body_policy != crate::lifecycle::RequestBodyPolicy::StructuredAtSend {
+        return Err(Error::Unsupported("OCR request body policy"));
+    }
     Ok(OcrPreCallRequest {
         endpoint: OcrEndpoint {
             model: provider.model.to_string(),
@@ -124,7 +128,7 @@ pub fn build_pre_call_request(request: OcrAdmissionRequest) -> Result<OcrPreCall
             timeout_seconds: request.timeout_seconds,
         },
         headers,
-        body,
+        body: crate::lifecycle::PreCallBody::StructuredAtSend { callback: body },
         document_projection: config.document_projection(),
         parameter_fields: config.supported_ocr_params(),
     })

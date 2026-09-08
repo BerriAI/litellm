@@ -70,6 +70,10 @@ pub struct MistralOcrConfig;
 pub const MISTRAL_OCR_CONFIG: MistralOcrConfig = MistralOcrConfig;
 
 impl OcrProviderConfig for MistralOcrConfig {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtSend
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn supported_ocr_params(&self) -> &'static [&'static str] {
         SUPPORTED_OCR_PARAMS

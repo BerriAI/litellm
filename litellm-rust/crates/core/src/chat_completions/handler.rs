@@ -1,54 +1,58 @@
 use serde_json::Value;
 
 use crate::error::Error;
-use crate::http_utils::{http_request, truncate_error_body};
+use crate::http_utils::{HttpClientProfile, http_client, http_request, truncate_error_body};
 
-use super::client::http_client;
-use super::request::build_provider_request;
+use super::request::build_provider_request_with_services;
 use super::types::{
-    ChatBodySnapshot, ChatCompletionsResponse, ChatEndpoint, ProviderChatCompletionsRequest,
+    ChatCompletionsResponse, ChatEndpoint, ProviderChatCompletionsRequest,
     ProviderChatResponseData, ResolvedChatCompletionsRequest, SettledChatRequest,
 };
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(super) async fn execute_chat_completions_provider_call(
+pub(super) async fn execute_chat_completions_provider_call<S>(
+    services: &S,
     request: ResolvedChatCompletionsRequest<'_>,
-) -> Result<ChatCompletionsResponse, Error> {
-    let request = build_provider_request(request)?;
-    let body = serde_json::to_vec(&request.body).map_err(|err| {
-        Error::InvalidRequest(format!(
-            "failed to serialize chat completions request: {err}"
-        ))
-    })?;
-    let headers = signed_headers(&request, &body).await?;
-    execute_settled_request(
-        ChatBodySnapshot {
-            endpoint: ChatEndpoint {
-                model: request.model,
-                config: request.config,
-                url: request.url,
-                timeout: request.timeout,
-            },
-            body,
-        }
-        .settle_headers(headers),
-    )
+) -> Result<ChatCompletionsResponse, Error>
+where
+    S: crate::providers::auth::AuthorizationServices,
+{
+    let request = build_provider_request_with_services(services, request)?;
+    let body = crate::lifecycle::WireBody::encode(&request.body, "chat completions request")?;
+    let authorized = request
+        .config
+        .authorize(services, request.authorization_context(), body)
+        .await?;
+    let endpoint = ChatEndpoint {
+        model: request.model,
+        config: request.config,
+        url: request.url,
+        auth: request.auth,
+        optional_params: request.optional_params,
+        timeout: request.timeout,
+    };
+    execute_settled_request(SettledChatRequest {
+        endpoint,
+        http: authorized.settle(),
+    })
     .await
 }
 
 pub(super) async fn execute_settled_request(
     request: SettledChatRequest,
 ) -> Result<ChatCompletionsResponse, Error> {
-    let endpoint = request.snapshot.endpoint;
-    let mut request_builder = http_client()
-        .post(&endpoint.url)
-        .body(request.snapshot.body);
-    for (key, value) in &request.headers {
-        request_builder = request_builder.header(key, value);
-    }
-    if let Some(duration) = endpoint.timeout {
-        request_builder = request_builder.timeout(duration);
-    }
+    let SettledChatRequest { endpoint, http } = request;
+    let (body, headers) = http.into_parts();
+    let client = http_client(HttpClientProfile::Standard)
+        .map_err(|error| Error::Connect(error.to_string()))?;
+    let request_builder = headers.into_iter().fold(
+        client.post(&endpoint.url).body(body),
+        |builder, (key, value)| builder.header(key, value),
+    );
+    let request_builder = match endpoint.timeout {
+        Some(timeout) => request_builder.timeout(timeout),
+        None => request_builder,
+    };
 
     let response = http_request(request_builder).await.map_err(|err| {
         // Failing to establish the connection means the request never went out,
@@ -103,5 +107,29 @@ pub async fn signed_headers(
     request: &ProviderChatCompletionsRequest,
     body: &[u8],
 ) -> Result<Vec<(String, String)>, Error> {
-    request.config.authorize(request, body).await
+    signed_headers_with_services(
+        crate::providers::auth::native_authorization_services(),
+        request,
+        body,
+    )
+    .await
+}
+
+pub async fn signed_headers_with_services<S>(
+    services: &S,
+    request: &ProviderChatCompletionsRequest,
+    body: &[u8],
+) -> Result<Vec<(String, String)>, Error>
+where
+    S: crate::providers::auth::AuthorizationServices,
+{
+    request
+        .config
+        .authorize(
+            services,
+            request.authorization_context(),
+            crate::lifecycle::WireBody::from_bytes(body.to_vec()),
+        )
+        .await
+        .map(|authorized| authorized.headers().to_vec())
 }

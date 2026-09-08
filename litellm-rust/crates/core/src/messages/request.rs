@@ -24,15 +24,9 @@ pub fn build_provider_request(request: MessagesRequest) -> Result<ProviderMessag
             "failed to serialize Anthropic messages request: {err}"
         ))
     })?;
-    Ok(ProviderMessagesRequest {
-        provider: endpoint.provider,
-        model: endpoint.model,
-        config: endpoint.config,
-        url: endpoint.url,
-        body,
-        upstream_headers: endpoint.headers,
-        timeout: endpoint.timeout,
-    })
+    let authorized = endpoint.capture_body(body)?;
+    let headers = authorized.headers().to_vec();
+    Ok(endpoint.settle(authorized, headers))
 }
 
 pub fn build_endpoint(request: MessagesOptions) -> Result<MessagesEndpoint, Error> {

@@ -57,8 +57,8 @@ fn resolves_the_provider_from_the_model_prefix() {
     assert_eq!(built.url, "https://api.anthropic.com/v1/messages");
     assert_eq!(built.body["model"], json!("claude-sonnet-4-5"));
     assert_eq!(
-        built.config.request_body_behavior(),
-        litellm_core::lifecycle::RequestBodyBehavior::STRUCTURED_AT_SEND
+        built.config.request_body_policy(),
+        litellm_core::lifecycle::RequestBodyPolicy::StructuredAtSend
     );
 }
 
@@ -879,5 +879,79 @@ async fn provider_authorization_signs_the_supplied_bytes_without_reserializing()
         expected
             .iter()
             .all(|(name, value)| signed.get(name) == Some(value))
+    }));
+}
+
+#[cfg(feature = "bedrock-auth")]
+#[tokio::test]
+async fn provider_authorization_uses_supplied_credential_and_clock_services() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use litellm_auth_aws::static_credentials;
+    use litellm_core::providers::auth::AuthorizationServices;
+    use litellm_core::providers::bedrock::aws_base::{AwsAuthConfig, AwsCredentialFuture};
+
+    struct Credentials(AtomicUsize);
+
+    impl Credentials {
+        fn resolve<'a>(&'a self, config: AwsAuthConfig) -> AwsCredentialFuture<'a> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async move {
+                assert_eq!(config.profile_name.as_deref(), Some("injected-profile"));
+                Ok(static_credentials("injected-access", "injected-secret"))
+            })
+        }
+    }
+
+    struct Services {
+        credentials: Credentials,
+        environment_calls: AtomicUsize,
+        signing_time: SystemTime,
+    }
+
+    impl AuthorizationServices for Services {
+        fn environment(&self, _: &str) -> Option<String> {
+            self.environment_calls.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+
+        fn signing_time(&self) -> SystemTime {
+            self.signing_time
+        }
+
+        fn resolve_aws_credentials<'a>(&'a self, config: AwsAuthConfig) -> AwsCredentialFuture<'a> {
+            self.credentials.resolve(config)
+        }
+    }
+
+    let mut call = request(
+        "bedrock/us-east-1/anthropic.claude-v2",
+        None,
+        json!([{"role": "user", "content": "hi"}]),
+        json!({"maxTokens": 16, "aws_profile_name": "injected-profile"}),
+    );
+    call.api_key = None;
+    let built = build_chat_completions_request(call).unwrap();
+    let services = Services {
+        credentials: Credentials(AtomicUsize::new(0)),
+        environment_calls: AtomicUsize::new(0),
+        signing_time: UNIX_EPOCH + Duration::from_secs(1_704_164_645),
+    };
+    let signed = litellm_core::chat_completions::signed_headers_with_services(
+        &services,
+        &built,
+        br#"{"settled":true}"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(services.credentials.0.load(Ordering::Relaxed), 1);
+    assert!(services.environment_calls.load(Ordering::Relaxed) > 0);
+    assert!(signed.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("authorization") && value.contains("Credential=injected-access/")
+    }));
+    assert!(signed.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("x-amz-date") && value == "20240102T030405Z"
     }));
 }

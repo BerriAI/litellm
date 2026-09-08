@@ -220,6 +220,10 @@ fn ocr_data_from_content(content: Value, usage: Option<Value>, model: &str) -> V
 }
 
 impl OcrProviderConfig for VertexAiOcrConfig {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtSend
+    }
+
     fn has_configured_credentials(
         &self,
         _request: &crate::ocr::types::OcrAdmissionRequest,
@@ -285,6 +289,10 @@ impl OcrProviderConfig for VertexAiOcrConfig {
 }
 
 impl OcrProviderConfig for VertexAiDeepSeekOcrConfig {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtSend
+    }
+
     fn has_configured_credentials(
         &self,
         request: &crate::ocr::types::OcrAdmissionRequest,

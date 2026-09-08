@@ -45,7 +45,44 @@ pub struct ProviderAudioTranscriptionRequest {
     pub(crate) timeout: Option<Duration>,
 }
 
+pub struct AudioAuthorizationContext<'a> {
+    url: &'a str,
+    upstream_headers: &'a [(String, String)],
+    auth: &'a AudioTranscriptionAuth,
+    #[cfg(feature = "bedrock-auth")]
+    optional_params: &'a Map<String, Value>,
+}
+
+impl AudioAuthorizationContext<'_> {
+    pub(crate) fn url(&self) -> &str {
+        self.url
+    }
+
+    pub(crate) fn upstream_headers(&self) -> &[(String, String)] {
+        self.upstream_headers
+    }
+
+    pub(crate) fn auth(&self) -> &AudioTranscriptionAuth {
+        self.auth
+    }
+
+    #[cfg(feature = "bedrock-auth")]
+    pub(crate) fn optional_params(&self) -> &Map<String, Value> {
+        self.optional_params
+    }
+}
+
 impl ProviderAudioTranscriptionRequest {
+    pub(crate) fn authorization_context(&self) -> AudioAuthorizationContext<'_> {
+        AudioAuthorizationContext {
+            url: &self.url,
+            upstream_headers: &self.upstream_headers,
+            auth: &self.auth,
+            #[cfg(feature = "bedrock-auth")]
+            optional_params: &self.optional_params,
+        }
+    }
+
     pub fn model(&self) -> &str {
         &self.model
     }

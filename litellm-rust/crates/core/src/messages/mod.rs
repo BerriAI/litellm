@@ -8,7 +8,6 @@
 
 use crate::Error;
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
-mod client;
 pub mod common_utils;
 mod handler;
 pub mod lifecycle;

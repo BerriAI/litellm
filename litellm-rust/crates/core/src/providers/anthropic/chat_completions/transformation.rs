@@ -71,6 +71,10 @@ fn anthropic_body(model: &str, conversation: &Conversation, params: Map<String, 
 }
 
 impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtSend
+    }
+
     fn complete_url(
         &self,
         api_base: Option<&str>,

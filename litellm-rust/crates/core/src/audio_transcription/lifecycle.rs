@@ -24,13 +24,16 @@ use super::types::{
     AudioRouteRequest, AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
 };
 
-pub trait AudioServices: TerminalDispatcher + Clock {
+pub trait AudioServices:
+    TerminalDispatcher + Clock + crate::providers::auth::AuthorizationServices
+{
     fn guardrails(&self) -> CustomGuardrailRunner;
 }
 
 pub struct DefaultAudioServices {
     dispatcher: CustomLoggerRunner,
     guardrails: CustomGuardrailRunner,
+    authorization: Arc<crate::providers::auth::NativeAuthorizationServices>,
 }
 
 impl DefaultAudioServices {
@@ -38,9 +41,22 @@ impl DefaultAudioServices {
         callbacks: Vec<Arc<dyn CustomLogger>>,
         guardrails: Vec<Arc<dyn CustomGuardrail>>,
     ) -> Self {
+        Self::with_authorization(
+            callbacks,
+            guardrails,
+            crate::providers::auth::shared_native_authorization_services().clone(),
+        )
+    }
+
+    pub fn with_authorization(
+        callbacks: Vec<Arc<dyn CustomLogger>>,
+        guardrails: Vec<Arc<dyn CustomGuardrail>>,
+        authorization: Arc<crate::providers::auth::NativeAuthorizationServices>,
+    ) -> Self {
         Self {
             dispatcher: CustomLoggerRunner::new(callbacks),
             guardrails: CustomGuardrailRunner::new(guardrails),
+            authorization,
         }
     }
 }
@@ -54,6 +70,24 @@ impl Clock for DefaultAudioServices {
 impl TerminalDispatcher for DefaultAudioServices {
     fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
         self.dispatcher.dispatch(terminal)
+    }
+}
+
+impl crate::providers::auth::AuthorizationServices for DefaultAudioServices {
+    fn environment(&self, key: &str) -> Option<String> {
+        self.authorization.environment(key)
+    }
+
+    fn signing_time(&self) -> SystemTime {
+        self.authorization.signing_time()
+    }
+
+    #[cfg(feature = "bedrock-auth")]
+    fn resolve_aws_credentials<'a>(
+        &'a self,
+        config: crate::providers::bedrock::aws_base::AwsAuthConfig,
+    ) -> crate::providers::bedrock::aws_base::AwsCredentialFuture<'a> {
+        self.authorization.resolve_aws_credentials(config)
     }
 }
 
@@ -96,14 +130,9 @@ impl AudioRoute {
             timeout: request.timeout,
         };
         CallLifecycle
-            .run(
-                context,
-                prepared,
-                &policy,
-                services,
-                services,
-                execute_audio_transcription_provider_call,
-            )
+            .run(context, prepared, &policy, services, services, |request| {
+                execute_audio_transcription_provider_call(services, request)
+            })
             .await
     }
 }

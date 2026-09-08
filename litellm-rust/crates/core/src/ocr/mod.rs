@@ -3,16 +3,16 @@ pub mod transformation;
 pub mod types;
 
 use serde_json::Value;
-use std::future::Future;
-use std::pin::Pin;
+use std::time::Duration;
+
+use reqwest::header::{CONTENT_ENCODING, HeaderMap, HeaderName, HeaderValue};
 
 use crate::Error;
 use crate::error::json_type_name;
-use crate::http_utils::{buffered_post, has_header};
+use crate::http_utils::{HttpClientProfile, has_header, http_client, http_request};
 
 pub use types::{
-    OcrAdmissionRequest, OcrEndpoint, OcrPreCallRequest, OcrResponseData, OcrTransportRequest,
-    OcrTransportResponse, SettledOcrRequest,
+    OcrAdmissionRequest, OcrEndpoint, OcrPreCallRequest, OcrResponseData, SettledOcrRequest,
 };
 use types::{OcrDocument, OcrDocumentProjection};
 
@@ -20,16 +20,9 @@ use crate::lifecycle::{
     CallLifecycle, CallLifecycleContext, Clock, ExecutedCall, TerminalDispatcher,
 };
 
-pub trait OcrTransport {
-    fn send(
-        &self,
-        request: OcrTransportRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<OcrTransportResponse, Error>> + Send + '_>>;
-}
+pub trait OcrServices: TerminalDispatcher + Clock {}
 
-pub trait OcrServices: TerminalDispatcher + Clock + OcrTransport {}
-
-impl<T> OcrServices for T where T: TerminalDispatcher + Clock + OcrTransport {}
+impl<T> OcrServices for T where T: TerminalDispatcher + Clock {}
 
 pub struct DefaultOcrServices;
 
@@ -54,28 +47,6 @@ impl TerminalDispatcher for DefaultOcrServices {
     }
 }
 
-impl OcrTransport for DefaultOcrServices {
-    fn send(
-        &self,
-        request: OcrTransportRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<OcrTransportResponse, Error>> + Send + '_>> {
-        Box::pin(async move {
-            let response = buffered_post::send(buffered_post::Request {
-                url: request.url,
-                headers: request.headers,
-                body: request.body,
-                timeout_seconds: request.timeout_seconds,
-            })
-            .await?;
-            Ok(OcrTransportResponse {
-                status: response.status,
-                headers: response.headers,
-                content: response.content,
-            })
-        })
-    }
-}
-
 pub async fn ocr<S: OcrServices>(
     services: &S,
     request: SettledOcrRequest,
@@ -89,11 +60,7 @@ pub async fn ocr<S: OcrServices>(
             &SettledOcrPolicy,
             services,
             services,
-            |request| async move {
-                send(services, request)
-                    .await
-                    .map(OcrResponseData::into_json)
-            },
+            |request| async move { send(request).await.map(OcrResponseData::into_json) },
         )
         .await
 }
@@ -127,15 +94,10 @@ impl crate::lifecycle::RequestPolicy<SettledOcrRequest, SettledOcrRequest> for S
     }
 }
 
-pub(crate) async fn send<S: OcrTransport>(
-    transport: &S,
-    request: SettledOcrRequest,
-) -> Result<OcrResponseData, Error> {
-    let SettledOcrRequest {
-        endpoint,
-        headers,
-        body,
-    } = request;
+pub(crate) async fn send(request: SettledOcrRequest) -> Result<OcrResponseData, Error> {
+    let SettledOcrRequest { endpoint, http } = request;
+    let body: Value = serde_json::from_slice(http.body())
+        .map_err(|_| Error::InvalidRequest("could not decode settled OCR request".into()))?;
     let config = request::provider_config(&endpoint.custom_llm_provider, &endpoint.model)?;
     request::validate_capabilities(config)?;
     let object = body.as_object().ok_or_else(|| Error::InvalidType {
@@ -153,12 +115,13 @@ pub(crate) async fn send<S: OcrTransport>(
     if object.get("stream").and_then(Value::as_bool) == Some(true) {
         return Err(Error::Unsupported("OCR streaming response handling"));
     }
-    if headers.iter().any(|(name, value)| {
+    if http.headers().iter().any(|(name, value)| {
         name.eq_ignore_ascii_case("content-encoding") && !value.eq_ignore_ascii_case("identity")
     }) {
         return Err(Error::Unsupported("compressed OCR request"));
     }
-    let headers = headers
+    let headers = http
+        .headers()
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .chain(
@@ -167,108 +130,111 @@ pub(crate) async fn send<S: OcrTransport>(
                 ("Accept-Encoding", "identity"),
             ]
             .into_iter()
-            .filter(|(name, _)| !has_header(&headers, name)),
+            .filter(|(name, _)| !has_header(http.headers(), name)),
         )
-        .map(|(name, value)| (name.as_bytes().to_vec(), value.as_bytes().to_vec()))
+        .map(|(name, value)| (name.to_string(), value.to_string()))
         .collect();
-    let body = serde_json::to_vec(&body)
-        .map_err(|_| Error::InvalidRequest("could not encode OCR request".into()))?;
-    let response = transport
-        .send(OcrTransportRequest {
-            url: endpoint.url,
-            headers,
-            body,
-            timeout_seconds: endpoint.timeout_seconds,
-        })
-        .await?;
-    if !(200..300).contains(&response.status) {
+    let timeout = Duration::try_from_secs_f64(endpoint.timeout_seconds)
+        .ok()
+        .filter(|timeout| !timeout.is_zero())
+        .ok_or_else(|| Error::InvalidRequest("timeout must be positive and finite".into()))?;
+    let (body, headers) = http.replace_headers(headers).into_parts();
+    let headers = headers
+        .into_iter()
+        .try_fold(HeaderMap::new(), |mut map, (name, value)| {
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|_| Error::InvalidRequest("invalid header name".into()))?;
+            let value = HeaderValue::from_bytes(value.as_bytes())
+                .map_err(|_| Error::InvalidRequest("invalid header value".into()))?;
+            map.append(name, value);
+            Ok::<_, Error>(map)
+        })?;
+    let client = http_client(HttpClientProfile::NoRedirectsOrDecompression)
+        .map_err(|_| Error::Network("could not initialize HTTP client".into()))?;
+    let response = http_request(
+        client
+            .post(&endpoint.url)
+            .headers(headers)
+            .body(body)
+            .timeout(timeout),
+    )
+    .await
+    .map_err(|_| Error::Network("transport failed".into()))?;
+    let status = response.status();
+    let response_headers = response.headers().clone();
+    let content = response
+        .bytes()
+        .await
+        .map_err(|_| Error::Network("could not read response".into()))?;
+    if !status.is_success() {
         return Err(Error::Http {
-            status: response.status,
+            status: status.as_u16(),
             body: "OCR provider request failed".into(),
         });
     }
-    if response.headers.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case(b"content-encoding")
-            && value
+    if response_headers
+        .get_all(CONTENT_ENCODING)
+        .iter()
+        .any(|value| {
+            value
+                .as_bytes()
                 .split(|byte| *byte == b',')
                 .any(|encoding| !encoding.trim_ascii().eq_ignore_ascii_case(b"identity"))
-    }) {
+        })
+    {
         return Err(Error::Unsupported("compressed OCR response"));
     }
-    let response_json = serde_json::from_slice(&response.content)
+    let response_json = serde_json::from_slice(&content)
         .map_err(|_| Error::InvalidResponse("invalid OCR JSON response".into()))?;
     config.transform_ocr_response(&endpoint.model, response_json)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
-    use serde_json::json;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpListener;
 
     use super::*;
-
-    struct RecordingTransport {
-        request: Mutex<Option<OcrTransportRequest>>,
-    }
-
-    impl OcrTransport for RecordingTransport {
-        fn send(
-            &self,
-            request: OcrTransportRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<OcrTransportResponse, Error>> + Send + '_>>
-        {
-            Box::pin(async move {
-                *self.request.lock().unwrap() = Some(request);
-                Ok(OcrTransportResponse {
-                    status: 200,
-                    headers: vec![],
-                    content: serde_json::to_vec(&json!({
-                        "pages": [],
-                        "model": "mistral-ocr-latest"
-                    }))
-                    .unwrap(),
-                })
-            })
-        }
-    }
+    use crate::lifecycle::{AuthorizedBody, WireBody};
 
     #[tokio::test]
-    async fn delegates_provider_io_to_transport() {
-        let transport = RecordingTransport {
-            request: Mutex::new(None),
-        };
+    async fn validation_does_not_reserialize_settled_bytes() {
+        let bytes = "{ \"document\": {\"type\":\"document_url\",\"document_url\":\"data:application/pdf;base64,cGRm\"}, \"model\": \"mistral-ocr-latest\" }\n";
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/ocr", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                assert_ne!(socket.read_line(&mut line).await.unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut received = vec![0; bytes.len()];
+            socket.read_exact(&mut received).await.unwrap();
+            assert_eq!(received, bytes.as_bytes());
+            socket
+                .get_mut()
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .unwrap();
+        });
         let request = SettledOcrRequest {
             endpoint: OcrEndpoint {
                 model: "mistral-ocr-latest".into(),
                 custom_llm_provider: "mistral".into(),
-                url: "https://ocr.example/v1/ocr".into(),
-                timeout_seconds: 3.0,
+                url,
+                timeout_seconds: 2.0,
             },
-            headers: vec![("Authorization".into(), "Bearer test-key".into())],
-            body: json!({
-                "model": "mistral-ocr-latest",
-                "document": {
-                    "type": "document_url",
-                    "document_url": "data:application/pdf;base64,cGRm"
-                }
-            }),
+            http: AuthorizedBody::new(WireBody::from_serialized(bytes.into()), vec![]).settle(),
         };
-
-        let response = send(&transport, request).await.unwrap();
-        let recorded = transport.request.into_inner().unwrap().unwrap();
-
-        assert_eq!(response.model, "mistral-ocr-latest");
-        assert_eq!(recorded.url, "https://ocr.example/v1/ocr");
-        assert_eq!(recorded.timeout_seconds, 3.0);
-        assert!(
-            recorded
-                .headers
-                .contains(&(b"Accept-Encoding".to_vec(), b"identity".to_vec()))
-        );
-        assert_eq!(
-            serde_json::from_slice::<Value>(&recorded.body).unwrap()["model"],
-            "mistral-ocr-latest"
-        );
+        send(request).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 }

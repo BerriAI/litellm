@@ -7,7 +7,6 @@
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
 use crate::Error;
-mod client;
 mod common_utils;
 pub mod conversation;
 pub(crate) mod handler;
@@ -20,7 +19,7 @@ pub mod types;
 use serde_json::{Map, Value};
 
 use handler::execute_chat_completions_provider_call;
-pub use handler::{as_response_error, signed_headers};
+pub use handler::{as_response_error, signed_headers, signed_headers_with_services};
 use request::{parse_messages, resolve_provider_config, resolve_request};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
@@ -34,7 +33,21 @@ use crate::lifecycle::{
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    execute_chat_completions_provider_call(resolve_request(request)?).await
+    chat_completions_with_services(
+        crate::providers::auth::native_authorization_services(),
+        request,
+    )
+    .await
+}
+
+pub async fn chat_completions_with_services<S>(
+    services: &S,
+    request: ChatCompletionsRequest<'_>,
+) -> Result<ChatCompletionsResponse, Error>
+where
+    S: crate::providers::auth::AuthorizationServices,
+{
+    execute_chat_completions_provider_call(services, resolve_request(request)?).await
 }
 
 pub async fn chat_completions_with_terminal(

@@ -142,6 +142,10 @@ fn fold_system_role_messages(request: AnthropicMessagesRequest) -> AnthropicMess
 }
 
 impl AnthropicMessagesProviderConfig for AzureAnthropicMessagesConfig {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtBuild
+    }
+
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
     fn complete_url(
         &self,

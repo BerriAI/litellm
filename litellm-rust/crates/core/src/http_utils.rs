@@ -1,6 +1,8 @@
 //! Header and upstream-body helpers shared by every route module.
 
-pub mod buffered_post;
+mod client;
+
+pub(crate) use client::{HttpClientProfile, http_client};
 
 use serde_json::{Map, Value};
 

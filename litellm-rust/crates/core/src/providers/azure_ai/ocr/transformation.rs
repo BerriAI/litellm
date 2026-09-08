@@ -516,6 +516,10 @@ fn transform_document_intelligence_response(
 }
 
 impl OcrProviderConfig for AzureAiOcrConfig {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtSend
+    }
+
     fn has_configured_credentials(
         &self,
         request: &crate::ocr::types::OcrAdmissionRequest,
@@ -594,6 +598,10 @@ impl OcrProviderConfig for AzureAiOcrConfig {
 }
 
 impl OcrProviderConfig for AzureDocumentIntelligenceOcrConfig {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtSend
+    }
+
     fn has_configured_credentials(
         &self,
         request: &crate::ocr::types::OcrAdmissionRequest,

@@ -1,4 +1,4 @@
-use crate::audio_transcription::types::ProviderAudioTranscriptionRequest;
+use crate::audio_transcription::types::AudioAuthorizationContext;
 use serde_json::{Map, Value, json};
 
 use crate::audio_transcription::transformation::{
@@ -49,10 +49,15 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
     fn authorize<'a>(
         &'a self,
-        request: &'a ProviderAudioTranscriptionRequest,
-        body: &'a [u8],
+        services: &'a dyn crate::providers::auth::AuthorizationServices,
+        request: AudioAuthorizationContext<'a>,
+        body: crate::lifecycle::WireBody,
     ) -> crate::providers::AuthorizationFuture<'a> {
-        Box::pin(signed_headers(request, body))
+        Box::pin(signed_headers(services, request, body))
+    }
+
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::StructuredAtBuild
     }
 
     #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -155,34 +160,39 @@ impl AudioTranscriptionProviderConfig for BedrockAudioTranscriptionConfig {
 }
 
 async fn signed_headers(
-    request: &ProviderAudioTranscriptionRequest,
-    body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
+    services: &dyn crate::providers::auth::AuthorizationServices,
+    request: AudioAuthorizationContext<'_>,
+    body: crate::lifecycle::WireBody,
+) -> Result<crate::lifecycle::AuthorizedBody, Error> {
     use std::collections::BTreeMap;
-    use std::time::SystemTime;
 
     use crate::audio_transcription::transformation::AudioTranscriptionAuth;
-    use crate::providers::bedrock::aws_base::{resolve_credentials, sign_bedrock_post};
+    use crate::providers::bedrock::aws_base::sign_bedrock_post;
 
-    let AudioTranscriptionAuth::AwsSigV4 { region, .. } = &request.auth else {
-        return Ok(request.upstream_headers.clone());
+    let AudioTranscriptionAuth::AwsSigV4 { region, .. } = request.auth() else {
+        return Ok(crate::lifecycle::AuthorizedBody::new(
+            body,
+            request.upstream_headers().to_vec(),
+        ));
     };
-    let env_lookup = |key: &str| std::env::var(key).ok();
-    let credentials = resolve_credentials(
-        aws_auth_config(&request.optional_params, &env_lookup),
-        &env_lookup,
-    )
-    .await?;
-    let unsigned: BTreeMap<String, String> = request.upstream_headers.iter().cloned().collect();
+    let credentials = services
+        .resolve_aws_credentials(aws_auth_config(request.optional_params(), &|key| {
+            services.environment(key)
+        }))
+        .await?;
+    let unsigned: BTreeMap<String, String> = request.upstream_headers().iter().cloned().collect();
     let signature = sign_bedrock_post(
-        &request.url,
-        body,
+        request.url(),
+        body.as_bytes(),
         &unsigned,
         region,
         &credentials,
-        SystemTime::now(),
+        services.signing_time(),
     )?;
-    Ok(unsigned.into_iter().chain(signature).collect())
+    Ok(crate::lifecycle::AuthorizedBody::new(
+        body,
+        unsigned.into_iter().chain(signature).collect(),
+    ))
 }
 
 #[cfg(test)]

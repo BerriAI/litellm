@@ -1,4 +1,4 @@
-use crate::chat_completions::types::ProviderChatCompletionsRequest;
+use crate::chat_completions::types::ChatAuthorizationContext;
 use serde_json::{Map, Value, json};
 
 use crate::chat_completions::conversation::{Conversation, TurnRole, build_conversation};
@@ -108,14 +108,15 @@ fn has_blank_text(message: &ChatMessage) -> bool {
 impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
     fn authorize<'a>(
         &'a self,
-        request: &'a ProviderChatCompletionsRequest,
-        body: &'a [u8],
+        services: &'a dyn crate::providers::auth::AuthorizationServices,
+        request: ChatAuthorizationContext<'a>,
+        body: crate::lifecycle::WireBody,
     ) -> crate::providers::AuthorizationFuture<'a> {
-        Box::pin(signed_headers(request, body))
+        Box::pin(signed_headers(services, request, body))
     }
 
-    fn request_body_behavior(&self) -> crate::lifecycle::RequestBodyBehavior {
-        crate::lifecycle::RequestBodyBehavior::SERIALIZED_AT_BUILD
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
+        crate::lifecycle::RequestBodyPolicy::SerializedAtBuild
     }
 
     fn complete_url(
@@ -313,26 +314,29 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
 }
 
 async fn signed_headers(
-    request: &ProviderChatCompletionsRequest,
-    body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
+    services: &dyn crate::providers::auth::AuthorizationServices,
+    request: ChatAuthorizationContext<'_>,
+    body: crate::lifecycle::WireBody,
+) -> Result<crate::lifecycle::AuthorizedBody, Error> {
     use std::collections::BTreeMap;
-    use std::time::SystemTime;
 
     use crate::providers::bedrock::aws_base::{
         aws_auth_config, aws_signature_headers, host_supplied_credentials,
-        is_sigv4_computed_header, resolve_credentials, sign_bedrock_post,
+        is_sigv4_computed_header, sign_bedrock_post,
     };
 
-    let ChatCompletionsAuth::AwsSigV4 { region } = &request.auth else {
-        return Ok(request.upstream_headers.clone());
+    let ChatCompletionsAuth::AwsSigV4 { region } = request.auth() else {
+        return Ok(crate::lifecycle::AuthorizedBody::new(
+            body,
+            request.upstream_headers().to_vec(),
+        ));
     };
     // Reattaching a header the signer also emits would put both copies on the
     // wire, and Bedrock rejects that pair. Python instead drops the caller's
     // copy and prefers a forwarded Authorization over the signature, so leave
     // the request to Python rather than serving it a different way here.
     if request
-        .upstream_headers
+        .upstream_headers()
         .iter()
         .any(|(name, _)| is_sigv4_computed_header(name))
     {
@@ -340,30 +344,31 @@ async fn signed_headers(
             "request forwards a header AWS SigV4 computes",
         ));
     }
-    let env_lookup = |key: &str| std::env::var(key).ok();
-    let unsigned: BTreeMap<String, String> = request.upstream_headers.iter().cloned().collect();
+    let env_lookup = |key: &str| services.environment(key);
+    let unsigned: BTreeMap<String, String> = request.upstream_headers().iter().cloned().collect();
     // A host with its own resolution chain hands the result down; only fall
     // back to deriving credentials here when it supplied none.
-    let credentials = match host_supplied_credentials(&request.optional_params) {
+    let credentials = match host_supplied_credentials(request.optional_params()) {
         Some(credentials) => credentials,
         None => {
-            resolve_credentials(
-                aws_auth_config(&request.optional_params, &env_lookup),
-                &env_lookup,
-            )
-            .await?
+            services
+                .resolve_aws_credentials(aws_auth_config(request.optional_params(), &env_lookup))
+                .await?
         }
     };
     let signature = sign_bedrock_post(
-        &request.url,
-        body,
+        request.url(),
+        body.as_bytes(),
         &aws_signature_headers(&unsigned),
         region,
         &credentials,
-        SystemTime::now(),
+        services.signing_time(),
     )?;
     // Every original header goes back on the wire alongside the computed ones,
     // as Python reattaches them. The guard above already rejected the names
     // that would collide, so no name appears twice.
-    Ok(unsigned.into_iter().chain(signature).collect())
+    Ok(crate::lifecycle::AuthorizedBody::new(
+        body,
+        unsigned.into_iter().chain(signature).collect(),
+    ))
 }

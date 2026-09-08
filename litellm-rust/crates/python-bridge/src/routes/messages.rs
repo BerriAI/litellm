@@ -3,9 +3,7 @@ use litellm_core::lifecycle::{ErrorDisposition, Lifecycle, Outcome};
 use litellm_core::messages::execute_provider_messages_request;
 use litellm_core::messages::lifecycle::{MessagesRoute, Observations, Operation, Options, machine};
 use litellm_core::messages::request::build_endpoint;
-use litellm_core::messages::types::{
-    MessagesBodySnapshot, MessagesEndpoint, MessagesOptions, ProviderMessagesRequest,
-};
+use litellm_core::messages::types::{MessagesEndpoint, MessagesOptions, ProviderMessagesRequest};
 use litellm_python_interop::{Pythonized, from_py, run_async_value, run_sync_value};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -24,7 +22,10 @@ struct MessagesState {
     roots: Option<RequestRoots>,
     logging: Option<Py<PyAny>>,
     pre_call: Option<Py<PyDict>>,
-    pending: Option<(MessagesEndpoint, MessagesBodySnapshot)>,
+    pending: Option<(
+        MessagesEndpoint,
+        litellm_core::lifecycle::PreCallBody<Value>,
+    )>,
 }
 
 #[pymethods]
@@ -166,8 +167,9 @@ fn build_request(
         .get_item("body")?
         .ok_or_else(|| PyValueError::new_err("messages requires body"))?
         .cast_into::<PyDict>()?;
+    let callback_body: Value = from_py(body.as_any())?;
     let snapshot = endpoint
-        .capture_buffered_body(from_py(body.as_any())?)
+        .capture_buffered_body(callback_body)
         .map_err(core_error_to_pyerr)?;
     let headers = PyDict::new(py);
     for (name, value) in endpoint.headers() {
@@ -223,7 +225,7 @@ fn pre_call(py: Python<'_>, state: Py<MessagesState>) -> PyResult<()> {
 }
 
 fn take_request(py: Python<'_>, state: &Py<MessagesState>) -> PyResult<ProviderMessagesRequest> {
-    let ((endpoint, snapshot), headers) = {
+    let ((endpoint, pre_call_body), headers) = {
         let mut state = state.borrow_mut(py);
         let pending = state.pending.take().ok_or_else(|| {
             PyRuntimeError::new_err("messages request was already sent or cleared")
@@ -239,7 +241,13 @@ fn take_request(py: Python<'_>, state: &Py<MessagesState>) -> PyResult<ProviderM
         .iter()
         .map(|(name, value)| Ok((name.extract()?, value.extract()?)))
         .collect::<PyResult<_>>()?;
-    Ok(endpoint.settle(snapshot, headers))
+    let litellm_core::lifecycle::PreCallBody::StructuredAtBuild { authorized, .. } = pre_call_body
+    else {
+        return Err(PyRuntimeError::new_err(
+            "messages requires a structured-at-build body",
+        ));
+    };
+    Ok(endpoint.settle(authorized, headers))
 }
 
 fn validate_arguments(arguments: &Bound<'_, PyDict>) -> PyResult<()> {
@@ -354,7 +362,9 @@ mod tests {
     #[pyfunction]
     fn snapshot(py: Python<'_>, state: Py<MessagesState>) -> PyResult<Py<PyAny>> {
         let request = take_request(py, &state)?;
-        litellm_python_interop::to_py(py, &(request.body(), request.headers()))
+        let body: Value = serde_json::from_slice(request.body())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        litellm_python_interop::to_py(py, &(body, request.headers()))
     }
 
     #[test]

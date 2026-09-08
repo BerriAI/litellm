@@ -2,7 +2,7 @@ use litellm_core::Error;
 use std::future::Future;
 
 use litellm_core::audio_transcription::{
-    AudioTranscriptionRequest, audio_transcription as run_audio_transcription,
+    AudioTranscriptionRequest, DefaultAudioServices, audio_transcription_with_services,
 };
 use pyo3::prelude::*;
 use serde_json::Value;
@@ -44,16 +44,24 @@ fn prepare_transcription(
             extra_headers,
             timeout,
         } = options;
-        run_audio_transcription(AudioTranscriptionRequest {
-            model: &model,
-            audio,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            optional_params,
-            timeout,
-        })
+        let services = DefaultAudioServices::with_authorization(
+            Vec::new(),
+            Vec::new(),
+            crate::runtime::authorization_services().clone(),
+        );
+        audio_transcription_with_services(
+            &services,
+            AudioTranscriptionRequest {
+                model: &model,
+                audio,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                optional_params,
+                timeout,
+            },
+        )
         .await
     })
 }

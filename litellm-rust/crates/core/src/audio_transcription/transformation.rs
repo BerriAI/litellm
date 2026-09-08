@@ -1,7 +1,10 @@
 use crate::Error;
+use crate::lifecycle::{AuthorizedBody, RequestBodyPolicy, WireBody};
 use serde_json::{Map, Value};
 
-use super::types::{AudioTranscriptionRequestData, AudioTranscriptionResponseData};
+use super::types::{
+    AudioAuthorizationContext, AudioTranscriptionRequestData, AudioTranscriptionResponseData,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioTranscriptionAuth {
@@ -15,18 +18,24 @@ pub enum AudioTranscriptionAuth {
 pub trait AudioTranscriptionProviderConfig: Sync {
     fn authorize<'a>(
         &'a self,
-        request: &'a super::types::ProviderAudioTranscriptionRequest,
-        _body: &'a [u8],
+        _services: &'a dyn crate::providers::auth::AuthorizationServices,
+        request: AudioAuthorizationContext<'a>,
+        body: WireBody,
     ) -> crate::providers::AuthorizationFuture<'a> {
         Box::pin(async move {
-            match &request.auth {
+            match request.auth() {
                 AudioTranscriptionAuth::AwsSigV4 { .. } => Err(Error::Unsupported(
                     "AWS SigV4 requires the bedrock-auth feature",
                 )),
-                _ => Ok(request.upstream_headers.clone()),
+                _ => Ok(AuthorizedBody::new(
+                    body,
+                    request.upstream_headers().to_vec(),
+                )),
             }
         })
     }
+
+    fn request_body_policy(&self) -> RequestBodyPolicy;
 
     fn supported_transcription_params(&self) -> &'static [&'static str];
 

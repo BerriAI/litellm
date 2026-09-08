@@ -338,7 +338,16 @@ fn build_request(
         body: draft_body,
         document_projection,
         parameter_fields,
+        ..
     } = pre_call_request;
+    let litellm_core::lifecycle::PreCallBody::StructuredAtSend {
+        callback: draft_body,
+    } = draft_body
+    else {
+        return Err(PyRuntimeError::new_err(
+            "OCR requires a structured-at-send body",
+        ));
+    };
     let body = PyDict::new(py);
     for (name, value) in &draft_body {
         match (name.as_str(), document_projection) {
@@ -444,7 +453,14 @@ fn request(py: Python<'_>, state: &Py<OcrState>) -> PyResult<OcrWireRequest> {
     };
     let model = endpoint.model().to_string();
     let provider = endpoint.custom_llm_provider().to_string();
-    let request = endpoint.settle(header_pairs(headers.cast::<PyDict>()?)?, from_py(&body)?);
+    let request = endpoint
+        .settle(
+            header_pairs(headers.cast::<PyDict>()?)?,
+            litellm_core::lifecycle::PreCallBody::StructuredAtSend {
+                callback: from_py(&body)?,
+            },
+        )
+        .map_err(core_error_to_pyerr)?;
     Ok((request, model, provider, asynchronous))
 }
 

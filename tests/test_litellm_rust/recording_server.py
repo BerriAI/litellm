@@ -17,6 +17,7 @@ class RecordedRequest:
     method: str
     path: str
     headers: dict[str, str]
+    raw_body: bytes
     body: object | None
 
 
@@ -66,6 +67,7 @@ def recording_service() -> Iterator[RecordingServer]:
                     method=self.command,
                     path=self.path,
                     headers={name.lower(): value for name, value in self.headers.items()},
+                    raw_body=raw_body,
                     body=body,
                 )
             )

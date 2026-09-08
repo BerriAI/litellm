@@ -17,7 +17,9 @@ pub use execution::{
 };
 pub use machine::{Lifecycle, LifecycleRoute};
 pub use program::{Commitment, FailureStage};
-pub use request_body::{BodyReadPoint, CallbackBodyView, RequestBodyBehavior};
+pub use request_body::{
+    AuthorizedBody, PreCallBody, RequestBodyPolicy, SettledHttpRequest, WireBody,
+};
 pub use streaming::{
     BytesStream, StreamingCall, StreamingCompletion, StreamingMetadata, StreamingObserver,
     StreamingSource,

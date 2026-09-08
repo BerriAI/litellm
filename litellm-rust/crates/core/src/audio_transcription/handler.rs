@@ -1,25 +1,46 @@
 use serde_json::Value;
 
 use crate::error::Error;
-use crate::http_utils::{http_request, truncate_error_body};
+use crate::http_utils::{HttpClientProfile, http_client, http_request, truncate_error_body};
 
-use super::client::http_client;
 use super::types::ProviderAudioTranscriptionRequest;
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub(super) async fn execute_audio_transcription_provider_call(
+pub(super) async fn execute_audio_transcription_provider_call<S>(
+    services: &S,
     request: ProviderAudioTranscriptionRequest,
-) -> Result<Value, Error> {
-    let body = serde_json::to_vec(&request.body)
-        .map_err(|error| Error::InvalidRequest(format!("invalid audio request body: {error}")))?;
-    let headers = signed_headers(&request, &body).await?;
-    let mut request_builder = http_client().post(&request.url).body(body);
-    for (key, value) in headers {
-        request_builder = request_builder.header(key, value);
+) -> Result<Value, Error>
+where
+    S: crate::providers::auth::AuthorizationServices,
+{
+    if request.config.request_body_policy()
+        != crate::lifecycle::RequestBodyPolicy::StructuredAtBuild
+    {
+        return Err(Error::Unsupported(
+            "audio transcription request body policy",
+        ));
     }
-    if let Some(duration) = request.timeout {
-        request_builder = request_builder.timeout(duration);
-    }
+    let body = crate::lifecycle::WireBody::encode(&request.body, "audio request body")?;
+    let authorized = signed_body(services, &request, body).await?;
+    let pre_call = crate::lifecycle::PreCallBody::StructuredAtBuild {
+        callback: request.body,
+        authorized,
+    };
+    let crate::lifecycle::PreCallBody::StructuredAtBuild { authorized, .. } = pre_call else {
+        unreachable!("audio body policy was checked before capture")
+    };
+    let settled = authorized.settle();
+    let (body, headers) = settled.into_parts();
+    let client = http_client(HttpClientProfile::NoConnectTimeout)
+        .map_err(|error| Error::Network(error.to_string()))?;
+    let request_builder = headers.into_iter().fold(
+        client.post(&request.url).body(body),
+        |builder, (key, value)| builder.header(key, value),
+    );
+    let request_builder = match request.timeout {
+        Some(timeout) => request_builder.timeout(timeout),
+        None => request_builder,
+    };
     let response = http_request(request_builder)
         .await
         .map_err(|error| Error::Network(error.to_string()))?;
@@ -42,9 +63,16 @@ pub(super) async fn execute_audio_transcription_provider_call(
         .into_json())
 }
 
-async fn signed_headers(
+async fn signed_body<S>(
+    services: &S,
     request: &ProviderAudioTranscriptionRequest,
-    body: &[u8],
-) -> Result<Vec<(String, String)>, Error> {
-    request.config.authorize(request, body).await
+    body: crate::lifecycle::WireBody,
+) -> Result<crate::lifecycle::AuthorizedBody, Error>
+where
+    S: crate::providers::auth::AuthorizationServices,
+{
+    request
+        .config
+        .authorize(services, request.authorization_context(), body)
+        .await
 }

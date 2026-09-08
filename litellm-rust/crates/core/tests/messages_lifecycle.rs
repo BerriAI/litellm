@@ -291,17 +291,27 @@ async fn stream_consumer_drop_dispatches_cancellation_exactly_once() {
     let services = Arc::new(Services::default());
     let mut stream_request = request(api_base);
     stream_request.body["stream"] = json!(true);
-    let call = litellm_core::messages::lifecycle::messages_stream(
-        services.clone(),
-        stream_request,
-        Options::default(),
-        context(),
+    let call = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        litellm_core::messages::lifecycle::messages_stream(
+            services.clone(),
+            stream_request,
+            Options::default(),
+            context(),
+        ),
     )
     .await
+    .expect("headers arrive before the response finishes")
     .expect("stream starts");
     let completion = call.completion.register();
     let mut stream = call.stream;
-    assert!(stream.next().await.expect("first chunk exists").is_ok());
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+        .await
+        .expect("first chunk arrives before the response finishes")
+        .expect("first chunk exists")
+        .unwrap();
+    assert_eq!(chunk.as_ref(), b"data:");
+    assert!(!server.is_finished());
     drop(stream);
 
     let terminal = completion.await.expect("completion task succeeds");

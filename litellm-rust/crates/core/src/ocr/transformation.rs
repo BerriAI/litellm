@@ -25,6 +25,8 @@ pub enum OcrResponseHandling {
 }
 
 pub trait OcrProviderConfig: Sync {
+    fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy;
+
     fn document_projection(&self) -> OcrDocumentProjection {
         OcrDocumentProjection::RetainedDocument
     }

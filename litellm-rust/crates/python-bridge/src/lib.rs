@@ -6,6 +6,7 @@ mod errors;
 mod marshal;
 mod retained;
 mod routes;
+mod runtime;
 #[cfg(feature = "trace-parity")]
 mod trace_parity;
 
