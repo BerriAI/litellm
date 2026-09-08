@@ -40,6 +40,12 @@ pytestmark = pytest.mark.requires_rust_extension
 FAILURE_RESPONSE: Final = ResponseSpec(body={"message": "provider unavailable"}, status=500)
 
 
+class LoggingOnlyContentFilter(ContentFilterGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [*super().get_supported_event_hooks(), GuardrailEventHooks.logging_only]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", ASYNC_ROUTES, ids=route_id)
 async def test_generic_api_logger_exports_success_over_http(route: Route, provider: RecordingServer) -> None:
@@ -122,6 +128,7 @@ async def test_generic_guardrail_logging_only_verdict_is_exported_over_http(
     guardrail: Final = GenericGuardrailAPI(
         api_base=provider.base_url,
         guardrail_name="http-review",
+        supported_event_hooks=[*GenericGuardrailAPI.get_supported_event_hooks(), GuardrailEventHooks.logging_only],
         event_hook=GuardrailEventHooks.logging_only,
         default_on=True,
     )
@@ -158,7 +165,7 @@ async def test_generic_guardrail_logging_only_verdict_is_exported_over_http(
 async def test_content_filter_logging_only_detects_real_content_without_changing_response(
     route: Route, provider: RecordingServer, action: ContentFilterAction
 ) -> None:
-    guardrail: Final = ContentFilterGuardrail(
+    guardrail: Final = LoggingOnlyContentFilter(
         guardrail_name="content-review",
         event_hook=GuardrailEventHooks.logging_only,
         default_on=True,
