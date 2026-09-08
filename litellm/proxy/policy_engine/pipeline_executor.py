@@ -7,19 +7,21 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 
 import copy
 import time
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal
+from collections.abc import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar
 
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import LOGS_GUARDRAIL_INFORMATION_MARKER
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import independent_snapshot
+from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -72,13 +74,23 @@ def _rewrote(sent: tuple[object, ...] | None, returned: tuple[object, ...] | Non
     return sent is not None and returned is not None and returned != sent
 
 
+_GuardrailMethodT = TypeVar("_GuardrailMethodT", bound=Callable[..., object])
+
+
+def _logged_by_inner_guardrail(method: _GuardrailMethodT) -> _GuardrailMethodT:
+    vars(method)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True  # rebind-ok: stamps the method the class body just defined
+    return method
+
+
 class _StreamRewriteObserver(CustomGuardrail):
     """Stand-in handed to the endpoint translation in place of a streaming pipeline step's
     guardrail. It records whether the guardrail returned different output than it was given,
     which for guardrails like Bedrock's ANONYMIZED action is only known at runtime. Text
     rewrites are deliverable on translations that write them back across the buffered chunks
     (``delivers_ended_stream_text_rewrites``); tool-call rewrites and text rewrites on any
-    other translation are discarded by the executor, which releases the original chunks."""
+    other translation are discarded by the executor, which releases the original chunks.
+    The inner guardrail's ``apply_guardrail`` already records the guardrail information
+    and span, so the observer's stays out of ``log_guardrail_information``."""
 
     def __init__(self, inner: CustomGuardrail) -> None:
         super().__init__(guardrail_name=inner.guardrail_name)
@@ -89,6 +101,7 @@ class _StreamRewriteObserver(CustomGuardrail):
     def structured_messages_cover_full_request(self) -> bool:
         return self.inner.structured_messages_cover_full_request()
 
+    @_logged_by_inner_guardrail
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -305,9 +318,11 @@ class PipelineExecutor:
                 )
         except UndeliverableStreamRewrite:
             _release_original_chunks(step.guardrail, streaming_chunks, originals)
-            return
-        if observer.rewrote_tool_calls or (observer.rewrote_texts and not deliver_rewrites):
-            _release_original_chunks(step.guardrail, streaming_chunks, originals)
+        else:
+            if observer.rewrote_tool_calls or (observer.rewrote_texts and not deliver_rewrites):
+                _release_original_chunks(step.guardrail, streaming_chunks, originals)
+        if not callback.records_own_guardrail_information:
+            add_guardrail_to_applied_guardrails_header(request_data=hook_input, guardrail_name=step.guardrail)
 
     @staticmethod
     async def _run_step(

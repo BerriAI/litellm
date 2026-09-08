@@ -1099,6 +1099,50 @@ async def test_streaming_step_discards_tool_call_rewrite_and_restores_written_te
     assert chunks == [_chunk()]
 
 
+class _BlockingStreamGuardrail(CustomGuardrail):
+    def __init__(self):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        raise HTTPException(status_code=400, detail={"error": "output blocked"})
+
+
+def _recorded_guardrail_statuses(result):
+    return [
+        entry["guardrail_status"]
+        for entry in result.modified_data["metadata"]["standard_logging_guardrail_information"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_records_guardrail_information_once_on_mask(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["hello [MASKED]"])])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert result.terminal_action == "allow"
+    assert _recorded_guardrail_statuses(result) == ["success"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_records_the_guardrail_in_the_applied_guardrails_header(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["hello [MASKED]"])])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_records_guardrail_information_once_on_block(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_BlockingStreamGuardrail()])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert [step.outcome for step in result.step_results] == ["fail"]
+    assert _recorded_guardrail_statuses(result) == ["guardrail_intervened"]
+
+
 @pytest.mark.asyncio
 async def test_streaming_step_restores_chunks_when_translation_refuses_the_rewrite(monkeypatch, caplog):
     monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["hello [MASKED]"])])
