@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Final, Literal
 
 from e2e_config import POLL_INTERVAL, POLL_TIMEOUT, settle_propagation, unique_marker
 from e2e_http import NoBody, Result, StreamingResponse, Success, unwrap
@@ -403,6 +403,26 @@ class GuardrailsClient:
 
 def build_client(proxy: ProxyClient) -> GuardrailsClient:
     return GuardrailsClient(proxy=proxy)
+
+
+def poll_until_guardrail_applied(
+    call: Callable[[], StreamingResponse],
+    guardrail_name: str,
+    *,
+    timeout: float = POLL_TIMEOUT,
+    interval: float = POLL_INTERVAL,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> StreamingResponse:
+    deadline: Final = now() + timeout
+    while (
+        (result := call()).ok
+        and guardrail_name
+        not in (name.strip() for name in result.headers.get("x-litellm-applied-guardrails", "").split(","))
+        and (remaining := deadline - now()) > 0
+    ):
+        sleep(min(interval, remaining))
+    return result
 
 
 def poll_until_blocked[R: BaseModel](call: Callable[[], Result[R]]) -> Result[R]:
