@@ -238,9 +238,14 @@ pub async fn messages<S: MessagesServices>(
     context: CallLifecycleContext,
 ) -> ExecutedCall<AnthropicMessagesResponse, Error> {
     CallLifecycle
-        .run_with_clock(context, request, services, services, |request| async move {
-            execute_messages_provider_call(request).await
-        })
+        .run(
+            context,
+            request,
+            services,
+            services,
+            services,
+            |request| async move { execute_messages_provider_call(request).await },
+        )
         .await
 }
 

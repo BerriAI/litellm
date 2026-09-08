@@ -1,5 +1,9 @@
-pub mod lifecycle;
+mod client;
+mod common_utils;
+mod handler;
+mod hooks;
 pub mod prepare;
+mod runtime_types;
 pub mod transformation;
 pub mod types;
 
@@ -9,19 +13,167 @@ use crate::Error;
 use crate::error::json_type_name;
 use crate::http_utils::{buffered_post, has_header};
 
+pub use runtime_types::{OcrRequest, OcrRouteRequest};
+pub use types::{OcrAdmissionRequest, OcrResponseData, PreparedOcr, PreparedOcrCall};
 use types::{OcrDocument, OcrDocumentProjection};
-pub use types::{OcrRequest, OcrResponseData, PreparedOcr};
 
-pub fn terminal_callbacks(asynchronous: bool, success: bool) -> &'static [&'static str] {
-    match (asynchronous, success) {
-        (false, true) => &["sync_success"],
-        (true, true) => &["async_success", "sync_success_if_needed"],
-        (false, false) => &["sync_failure"],
-        (true, false) => &["sync_failure", "async_failure"],
+use crate::integrations::custom_guardrail::CustomGuardrailRunner;
+use crate::integrations::custom_logger::CustomLoggerRunner;
+use crate::lifecycle::{
+    CallLifecycle, CallLifecycleContext, Clock, ExecutedCall, TerminalDispatcher,
+};
+use hooks::OcrRequestPolicy;
+use runtime_types::PreparedOcrRequest;
+
+pub trait OcrServices: TerminalDispatcher + Clock {}
+
+impl<T> OcrServices for T where T: TerminalDispatcher + Clock {}
+
+pub struct DefaultOcrServices {
+    dispatcher: CustomLoggerRunner,
+}
+
+pub struct NoopOcrServices;
+
+impl Default for NoopOcrServices {
+    fn default() -> Self {
+        Self
     }
 }
 
-pub async fn ocr(
+impl DefaultOcrServices {
+    pub fn new(request: &OcrRequest<'_>) -> Self {
+        Self {
+            dispatcher: CustomLoggerRunner::new(request.callbacks.clone()),
+        }
+    }
+}
+
+impl Clock for DefaultOcrServices {
+    fn now(&self) -> f64 {
+        crate::lifecycle::SystemClock.now()
+    }
+}
+
+impl TerminalDispatcher for DefaultOcrServices {
+    fn dispatch<'a>(
+        &'a self,
+        terminal: &'a crate::lifecycle::TerminalRecord,
+    ) -> crate::integrations::custom_logger::LogFuture<'a> {
+        self.dispatcher.dispatch(terminal)
+    }
+}
+
+impl Clock for NoopOcrServices {
+    fn now(&self) -> f64 {
+        crate::lifecycle::SystemClock.now()
+    }
+}
+
+impl TerminalDispatcher for NoopOcrServices {
+    fn dispatch<'a>(
+        &'a self,
+        _: &'a crate::lifecycle::TerminalRecord,
+    ) -> crate::integrations::custom_logger::LogFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+pub async fn ocr<S: OcrServices>(
+    services: &S,
+    request: OcrRouteRequest<'_>,
+    _options: crate::lifecycle::ocr::Options,
+    context: CallLifecycleContext,
+) -> ExecutedCall<Value, Error> {
+    let OcrRouteRequest::Native(request) = request else {
+        let OcrRouteRequest::Prepared(request) = request else {
+            unreachable!()
+        };
+        return CallLifecycle
+            .run(
+                context,
+                request,
+                &PreparedOcrPolicy,
+                services,
+                services,
+                |request| async move {
+                    send_prepared(request.prepared, request.headers, request.body)
+                        .await
+                        .map(OcrResponseData::into_json)
+                },
+            )
+            .await;
+    };
+    let policy = OcrRequestPolicy::new(
+        CustomGuardrailRunner::new(request.guardrails.clone()),
+        request.request_metadata.clone(),
+    );
+    let provider = crate::routing_utils::provider::get_custom_llm_provider(
+        request.model,
+        request.custom_llm_provider,
+    );
+    let config = provider
+        .as_ref()
+        .ok_or_else(|| Error::InvalidProvider("unable to resolve OCR provider".into()))
+        .and_then(|provider| {
+            common_utils::ocr_provider_config(provider.custom_llm_provider, provider.model)
+                .ok_or_else(|| Error::InvalidProvider("unsupported OCR provider".into()))
+        });
+    let provider_model = provider.as_ref().map_or(request.model, |value| value.model);
+    let provider_name = provider
+        .as_ref()
+        .map_or(request.custom_llm_provider.unwrap_or(""), |value| {
+            value.custom_llm_provider
+        });
+    let prepared = PreparedOcrRequest {
+        config,
+        model: provider_model.to_string(),
+        custom_llm_provider: provider_name.to_string(),
+        litellm_call_id: context.litellm_call_id.clone(),
+        document: request.document,
+        api_key: request.api_key.map(str::to_string),
+        api_base: request.api_base.map(str::to_string),
+        extra_headers: request.extra_headers,
+        optional_params: request.optional_params,
+        timeout: request.timeout,
+    };
+    CallLifecycle
+        .run(context, prepared, &policy, services, services, |request| {
+            handler::execute_ocr_provider_call(request, &policy)
+        })
+        .await
+}
+
+struct PreparedOcrPolicy;
+
+impl crate::lifecycle::RequestPolicy<PreparedOcrCall, PreparedOcrCall> for PreparedOcrPolicy {
+    type PreCallFuture<'a>
+        = std::future::Ready<crate::lifecycle::ActionResult<PreparedOcrCall, Error>>
+    where
+        Self: 'a;
+    type DuringCallFuture<'a>
+        = std::future::Ready<crate::lifecycle::ActionResult<PreparedOcrCall, Error>>
+    where
+        Self: 'a;
+
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: PreparedOcrCall,
+    ) -> Self::PreCallFuture<'a> {
+        std::future::ready(crate::lifecycle::ActionResult::Continue(request))
+    }
+
+    fn async_during_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: PreparedOcrCall,
+    ) -> Self::DuringCallFuture<'a> {
+        std::future::ready(crate::lifecycle::ActionResult::Continue(request))
+    }
+}
+
+pub(crate) async fn send_prepared(
     prepared: PreparedOcr,
     headers: Vec<(String, String)>,
     body: Value,

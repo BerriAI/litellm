@@ -1,5 +1,5 @@
 use crate::Error;
-use crate::ocr::{OcrRequest, prepare};
+use crate::ocr::{OcrAdmissionRequest, prepare};
 
 use super::{
     ActionBinding, ActionKind, Delivery, ErrorDisposition, FailurePolicy, LifecycleRoute, Outcome,
@@ -89,7 +89,10 @@ pub struct OcrRoute;
 pub type Lifecycle = super::Lifecycle<OcrRoute>;
 
 impl Lifecycle {
-    pub fn new(admission: &OcrRequest, options: Options) -> Result<NativeOutcome<Self>, Error> {
+    pub fn new(
+        admission: &OcrAdmissionRequest,
+        options: Options,
+    ) -> Result<NativeOutcome<Self>, Error> {
         <super::Lifecycle<OcrRoute>>::admit(admission, options).map(|admission| match admission {
             Ok(lifecycle) => NativeOutcome::Completed(lifecycle),
             Err(decline) => NativeOutcome::Declined(decline),
@@ -102,7 +105,7 @@ impl Lifecycle {
 }
 
 impl LifecycleRoute for OcrRoute {
-    type Admission = OcrRequest;
+    type Admission = OcrAdmissionRequest;
     type Options = Options;
     type Context = Observations;
     type Operation = Operation;
@@ -261,4 +264,313 @@ fn generate_call_id() -> String {
         &hex[16..20],
         &hex[20..]
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use super::*;
+    use crate::ocr::types::OcrDocument;
+
+    fn request() -> OcrAdmissionRequest {
+        OcrAdmissionRequest {
+            model: "mistral/requested-model".into(),
+            custom_llm_provider: None,
+            api_key: Some("test-key".into()),
+            api_base: Some("https://example.test".into()),
+            extra_headers: vec![],
+            timeout_seconds: 2.0,
+            request_format: None,
+            document: OcrDocument::DocumentUrl {
+                document_url: "https://example.test/doc.pdf".into(),
+            },
+            azure_ad_token: None,
+            vertex_project: None,
+            vertex_location: None,
+            stream: false,
+        }
+    }
+
+    fn machine(asynchronous: bool) -> Lifecycle {
+        let NativeOutcome::Completed(supplied) = Lifecycle::new(
+            &request(),
+            Options {
+                asynchronous,
+                ..Options::default()
+            },
+        )
+        .unwrap() else {
+            panic!("expected admission")
+        };
+        supplied
+    }
+
+    fn observed() -> Observations {
+        Observations {
+            logger_available: true,
+            has_fallbacks: false,
+        }
+    }
+
+    fn reach(machine: &mut Lifecycle, operation: Operation) {
+        for _ in 0..12 {
+            if machine.operation() == operation {
+                return;
+            }
+            machine.advance(Outcome::Success, observed()).unwrap();
+        }
+        panic!("operation not reached: {operation:?}")
+    }
+
+    #[test]
+    fn success_sequences_and_completion_are_core_selected() {
+        use Operation::*;
+        for (asynchronous, expected) in [
+            (false, vec![Setup, Prepare, Send, SyncSuccess, Restore]),
+            (
+                true,
+                vec![
+                    Setup,
+                    DeploymentPre,
+                    Prepare,
+                    Send,
+                    DeploymentSuccess,
+                    AsyncSuccess,
+                    SyncSuccessIfNeeded,
+                    Restore,
+                ],
+            ),
+        ] {
+            let mut machine = machine(asynchronous);
+            for operation in expected {
+                assert_eq!(machine.operation(), operation);
+                assert_eq!(
+                    machine.advance(Outcome::Success, observed()).unwrap().error,
+                    ErrorDisposition::Preserve
+                );
+            }
+            assert_eq!(machine.operation(), Complete(Outcome::Success));
+            assert!(machine.advance(Outcome::Success, observed()).is_err());
+        }
+    }
+
+    #[test]
+    fn failures_and_cancellation_transition_without_recursion() {
+        use Operation::*;
+        for asynchronous in [false, true] {
+            let stages = if asynchronous {
+                vec![
+                    Setup,
+                    DeploymentPre,
+                    Prepare,
+                    Send,
+                    DeploymentSuccess,
+                    AsyncSuccess,
+                    SyncSuccessIfNeeded,
+                ]
+            } else {
+                vec![Setup, Prepare, Send, SyncSuccess]
+            };
+            for stage in stages {
+                for outcome in [Outcome::Failure, Outcome::Abort] {
+                    let mut machine = machine(asynchronous);
+                    reach(&mut machine, stage);
+                    let transition = machine.advance(outcome, observed()).unwrap();
+                    assert_eq!(transition.error, ErrorDisposition::Replace);
+                    let expected = if outcome == Outcome::Abort {
+                        Restore
+                    } else if asynchronous && matches!(stage, Prepare | Send) {
+                        DeploymentFailure
+                    } else {
+                        SyncFailure
+                    };
+                    assert_eq!(transition.operation, expected, "{stage:?}, {outcome:?}");
+                    if expected == DeploymentFailure {
+                        assert_eq!(
+                            machine
+                                .advance(Outcome::Success, observed())
+                                .unwrap()
+                                .operation,
+                            SyncFailure
+                        );
+                    }
+                    if outcome == Outcome::Failure {
+                        assert_eq!(
+                            machine
+                                .advance(Outcome::Success, observed())
+                                .unwrap()
+                                .operation,
+                            if asynchronous { AsyncFailure } else { Restore }
+                        );
+                        if asynchronous {
+                            assert_eq!(
+                                machine
+                                    .advance(Outcome::Success, observed())
+                                    .unwrap()
+                                    .operation,
+                                Restore
+                            );
+                        }
+                    }
+                    assert_eq!(
+                        machine
+                            .advance(Outcome::Success, observed())
+                            .unwrap()
+                            .operation,
+                        Complete(outcome)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deployment_failure_observer_preserves_the_original_error() {
+        for observer_outcome in [Outcome::Success, Outcome::Failure, Outcome::Abort] {
+            let mut machine = machine(true);
+            reach(&mut machine, Operation::Send);
+            let original = Rc::new("original opaque error");
+            let mut retained = Rc::clone(&original);
+            assert_eq!(
+                machine
+                    .advance(Outcome::Failure, observed())
+                    .unwrap()
+                    .operation,
+                Operation::DeploymentFailure
+            );
+            let transition = machine.advance(observer_outcome, observed()).unwrap();
+            if transition.error == ErrorDisposition::Replace {
+                retained = Rc::new("observer error");
+            }
+            assert!(Rc::ptr_eq(&original, &retained));
+            assert_eq!(transition.operation, Operation::SyncFailure);
+        }
+    }
+
+    #[test]
+    fn logger_availability_internal_calls_and_fallbacks_control_logging_only() {
+        let mut failed_setup = machine(true);
+        assert_eq!(
+            failed_setup
+                .advance(Outcome::Failure, Observations::default())
+                .unwrap()
+                .operation,
+            Operation::Restore
+        );
+        for internal_call in [false, true] {
+            for has_fallbacks in [false, true] {
+                let NativeOutcome::Completed(mut machine) = Lifecycle::new(
+                    &request(),
+                    Options {
+                        asynchronous: true,
+                        internal_call,
+                        ..Options::default()
+                    },
+                )
+                .unwrap() else {
+                    panic!("expected admission")
+                };
+                reach(&mut machine, Operation::DeploymentSuccess);
+                assert_eq!(
+                    machine
+                        .advance(
+                            Outcome::Success,
+                            Observations {
+                                has_fallbacks,
+                                ..observed()
+                            },
+                        )
+                        .unwrap()
+                        .operation,
+                    if internal_call || has_fallbacks {
+                        Operation::SyncSuccessIfNeeded
+                    } else {
+                        Operation::AsyncSuccess
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn admission_declines_unsupported_requests_without_effects() {
+        for request in [
+            OcrAdmissionRequest {
+                document: OcrDocument::File,
+                ..request()
+            },
+            OcrAdmissionRequest {
+                document: OcrDocument::Unsupported,
+                ..request()
+            },
+            OcrAdmissionRequest {
+                stream: true,
+                ..request()
+            },
+            OcrAdmissionRequest {
+                request_format: Some("native".into()),
+                ..request()
+            },
+            OcrAdmissionRequest {
+                model: "openai/model".into(),
+                ..request()
+            },
+        ] {
+            assert!(matches!(
+                Lifecycle::new(&request, Options::default()),
+                Ok(NativeOutcome::Declined(_))
+            ));
+        }
+        assert!(matches!(
+            Lifecycle::new(
+                &request(),
+                Options {
+                    credential_method: CredentialMethod::Acquisition,
+                    ..Options::default()
+                }
+            ),
+            Ok(NativeOutcome::Declined(_))
+        ));
+        assert!(matches!(
+            Lifecycle::new(
+                &OcrAdmissionRequest {
+                    timeout_seconds: f64::NAN,
+                    ..request()
+                },
+                Options::default()
+            ),
+            Err(Error::InvalidRequest(_))
+        ));
+    }
+
+    #[test]
+    fn identity_preserves_supplied_provenance_and_generates_uuid_v4() {
+        let NativeOutcome::Completed(supplied) = Lifecycle::new(
+            &request(),
+            Options {
+                call_id: Some("logical-call".into()),
+                trace_id: Some("trace".into()),
+                ..Options::default()
+            },
+        )
+        .unwrap() else {
+            panic!("expected admission")
+        };
+        assert_eq!(
+            supplied.identity(),
+            &Identity {
+                requested_model: "mistral/requested-model".into(),
+                call_id: "logical-call".into(),
+                trace_id: Some("trace".into()),
+                generated_call_id: false,
+            }
+        );
+        let first = machine(false);
+        let second = machine(false);
+        assert!(first.identity().generated_call_id);
+        assert_eq!(first.identity().call_id.len(), 36);
+        assert_eq!(&first.identity().call_id[14..15], "4");
+        assert_ne!(first.identity().call_id, second.identity().call_id);
+    }
 }

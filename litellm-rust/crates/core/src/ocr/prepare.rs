@@ -9,11 +9,11 @@ use crate::providers::vertex_ai::ocr::transformation as vertex_ai;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::transformation::{OcrProviderConfig, OcrResponseHandling};
-use super::types::OcrRequest;
+use super::types::OcrAdmissionRequest;
 pub use super::types::PreparedOcr;
 
 fn request_config(
-    request: &OcrRequest,
+    request: &OcrAdmissionRequest,
 ) -> Result<(CustomLlmProvider<'_>, &'static dyn OcrProviderConfig), Error> {
     match request.request_format.as_deref() {
         None | Some("litellm") => {}
@@ -38,12 +38,12 @@ fn request_config(
     Ok((provider, config))
 }
 
-pub(crate) fn admission_capabilities(request: &OcrRequest) -> Result<(), Error> {
+pub(crate) fn admission_capabilities(request: &OcrAdmissionRequest) -> Result<(), Error> {
     check_admission_capabilities(request, &|key| std::env::var(key).ok())
 }
 
 fn check_admission_capabilities(
-    request: &OcrRequest,
+    request: &OcrAdmissionRequest,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(), Error> {
     let (provider, config) = request_config(request)?;
@@ -81,7 +81,7 @@ fn check_admission_capabilities(
     Ok(())
 }
 
-pub fn prepare(request: OcrRequest) -> Result<PreparedOcr, Error> {
+pub fn prepare(request: OcrAdmissionRequest) -> Result<PreparedOcr, Error> {
     let (provider, config) = request_config(&request)?;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let headers = config
@@ -169,8 +169,8 @@ mod tests {
     use super::*;
     use crate::ocr::types::OcrDocument;
 
-    fn request() -> OcrRequest {
-        OcrRequest {
+    fn request() -> OcrAdmissionRequest {
+        OcrAdmissionRequest {
             model: "mistral/mistral-ocr-latest".into(),
             custom_llm_provider: None,
             api_key: Some("test-key".into()),
@@ -207,7 +207,7 @@ mod tests {
         #[case] format: Option<&str>,
         #[case] expected: &str,
     ) {
-        let request = OcrRequest {
+        let request = OcrAdmissionRequest {
             model: model.into(),
             request_format: format.map(str::to_owned),
             stream: true,
@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn admission_does_not_validate_credentials_or_resolve_headers() {
-        let request = OcrRequest {
+        let request = OcrAdmissionRequest {
             api_key: None,
             ..request()
         };
@@ -265,7 +265,7 @@ mod tests {
         #[case] model: &str,
         #[case] env_name: &str,
     ) {
-        let request = OcrRequest {
+        let request = OcrAdmissionRequest {
             model: model.into(),
             api_key: None,
             document: OcrDocument::ImageUrl {
@@ -286,7 +286,7 @@ mod tests {
                 .then(|| "configured".into()))
             .is_ok()
         );
-        let request = OcrRequest {
+        let request = OcrAdmissionRequest {
             extra_headers: vec![("AUTHORIZATION".into(), "inert".into())],
             ..request
         };

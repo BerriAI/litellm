@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use futures_util::{Sink, Stream};
 use litellm_core::Error;
-use litellm_core::lifecycle::{CallLifecycle, CallLifecycleContext};
+use litellm_core::lifecycle::{CallLifecycle, CallLifecycleContext, SystemClock};
 use litellm_core::responses::instrumentation::{
     ResponsesWsCallbackPayload, ResponsesWsInstrumentation, ResponsesWsLogOutcome,
     ResponsesWsMetadata,
@@ -56,23 +56,31 @@ where
     ));
     let observer_instrumentation = Arc::clone(&instrumentation);
     let context = CallLifecycleContext::new("responses_websocket", model, "openai", call_id);
-    let result = CallLifecycle::default()
-        .run_result(context, (), instrumentation.as_ref(), |_| async move {
-            crate::io::responses_ws::async_responses_websocket(
-                provider_model,
-                params.api_key.as_deref(),
-                params.api_base.as_deref(),
-                first_frame,
-                idle_timeout,
-                move |event| {
-                    observer_instrumentation.observe(event);
-                },
-                client_in,
-                client_out,
-            )
-            .await
-        })
-        .await;
+    let result = CallLifecycle
+        .run(
+            context,
+            (),
+            instrumentation.as_ref(),
+            instrumentation.as_ref(),
+            &SystemClock,
+            |_| async move {
+                crate::io::responses_ws::async_responses_websocket(
+                    provider_model,
+                    params.api_key.as_deref(),
+                    params.api_base.as_deref(),
+                    first_frame,
+                    idle_timeout,
+                    move |event| {
+                        observer_instrumentation.observe(event);
+                    },
+                    client_in,
+                    client_out,
+                )
+                .await
+            },
+        )
+        .await
+        .into_result();
     let outcome = instrumentation.take_or_build_outcome(result.is_ok());
     dispatch_outcome(loggers, outcome).await;
     result

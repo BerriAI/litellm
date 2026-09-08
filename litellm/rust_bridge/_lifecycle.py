@@ -13,10 +13,11 @@ def invoke_terminal(
     action: str,
     roots: object,
     logger: object,
+    record: dict[str, object] | None,
     value: object,
     start_time: datetime,
     end_time: datetime,
 ) -> object:
     from litellm.rust_bridge.ocr import invoke_terminal as invoke_ocr_terminal
 
-    return invoke_ocr_terminal(action, roots, logger, value, start_time, end_time)
+    return invoke_ocr_terminal(action, roots, logger, record, value, start_time, end_time)

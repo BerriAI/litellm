@@ -1,7 +1,5 @@
 use crate::error::Error;
-use crate::lifecycle::{
-    ActionResult, CallLifecycleContext, RequestPolicy, TerminalDispatcher, TerminalRecord,
-};
+use crate::lifecycle::{ActionResult, CallLifecycleContext, RequestPolicy};
 use crate::providers::reducto::ocr::transformation::{
     build_upload_request, extract_document_source, extract_upload_file_id,
 };
@@ -15,25 +13,22 @@ use super::runtime_types::{PreparedOcrRequest, ProviderOcrRequest};
 use crate::integrations::custom_guardrail::{
     CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
 };
-use crate::integrations::custom_logger::{CallType, CustomLoggerRunner, LogFuture};
+use crate::integrations::custom_logger::CallType;
 use crate::integrations::types::RequestMetadata;
 
-pub(crate) struct OcrLifecycleHooks {
-    logger_runner: CustomLoggerRunner,
+pub(crate) struct OcrRequestPolicy {
     guardrail_runner: CustomGuardrailRunner,
     request_metadata: RequestMetadata,
 }
 
 type OcrFuture<'a, T> = Pin<Box<dyn Future<Output = ActionResult<T, Error>> + Send + 'a>>;
 
-impl OcrLifecycleHooks {
+impl OcrRequestPolicy {
     pub(crate) fn new(
-        logger_runner: CustomLoggerRunner,
         guardrail_runner: CustomGuardrailRunner,
         request_metadata: RequestMetadata,
     ) -> Self {
         Self {
-            logger_runner,
             guardrail_runner,
             request_metadata,
         }
@@ -153,7 +148,6 @@ impl OcrLifecycleHooks {
             .map_err(guardrail_error_to_core_error)?;
         parse_ocr_during_call_guardrail_request(guardrail_request)
     }
-
 }
 
 async fn upload_reducto_document(
@@ -213,7 +207,7 @@ async fn upload_reducto_document(
     Ok(json!({"type": "document_url", "document_url": file_id}))
 }
 
-impl RequestPolicy<PreparedOcrRequest, PreparedOcrRequest> for OcrLifecycleHooks {
+impl RequestPolicy<PreparedOcrRequest, PreparedOcrRequest> for OcrRequestPolicy {
     type PreCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
     type DuringCallFuture<'a> = OcrFuture<'a, PreparedOcrRequest>;
 
@@ -236,23 +230,6 @@ impl RequestPolicy<PreparedOcrRequest, PreparedOcrRequest> for OcrLifecycleHooks
         request: PreparedOcrRequest,
     ) -> Self::DuringCallFuture<'a> {
         Box::pin(async move { ActionResult::Continue(request) })
-    }
-}
-
-impl TerminalDispatcher for OcrLifecycleHooks {
-    fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
-        let mut terminal = terminal.clone();
-        terminal.cost_inputs.metadata = request_metadata(&self.request_metadata);
-        Box::pin(async move { self.logger_runner.dispatch(&terminal).await })
-    }
-}
-
-fn request_metadata(metadata: &RequestMetadata) -> crate::integrations::types::StandardLoggingMetadata {
-    crate::integrations::types::StandardLoggingMetadata {
-        user_api_key_hash: metadata.user_api_key_hash.clone(),
-        user_api_key_user_id: metadata.user_api_key_user_id.clone(),
-        user_api_key_team_id: metadata.user_api_key_team_id.clone(),
-        ..Default::default()
     }
 }
 
@@ -303,20 +280,4 @@ fn parse_ocr_during_call_guardrail_request(request: GuardrailRequest) -> Result<
 
 fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
     Error::InvalidRequest(format!("{}: {}", error.kind, error.message))
-}
-
-fn core_error_kind(error: &Error) -> &'static str {
-    match error {
-        Error::Auth(_) => "AuthError",
-        Error::InvalidProvider(_) => "InvalidProvider",
-        Error::InvalidRequest(_) => "InvalidRequest",
-        Error::InvalidType { .. } => "InvalidType",
-        Error::MissingField(_) => "MissingField",
-        Error::Http { .. } => "HttpError",
-        Error::InvalidResponse(_) => "InvalidResponse",
-        Error::Network(_) => "NetworkError",
-        Error::Connect(_) => "ConnectError",
-        Error::Routing(_) => "RoutingError",
-        Error::Unsupported(_) => "UnsupportedRequest",
-    }
 }

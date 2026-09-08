@@ -191,13 +191,26 @@ def initialize_logging(arguments: dict[str, object], asynchronous: bool, route: 
 
 
 def invoke_terminal(
-    action: str, roots: object, logger: object, value: object, start_time: datetime, end_time: datetime
+    action: str,
+    roots: object,
+    logger: object,
+    record: dict[str, object] | None,
+    value: object,
+    fallback_start_time: datetime,
+    fallback_end_time: datetime,
 ) -> object:
     from litellm import utils
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
     logging: Final = cast(Logging, logger)  # cast-ok: Rust passes the logger returned by initialize_logging
+    timing: Final = cast(dict[str, object], record["timing"]) if record is not None else None
+    start_time: Final = (
+        datetime.fromtimestamp(cast(float, timing["start_time"])) if timing is not None else fallback_start_time
+    )
+    end_time: Final = (
+        datetime.fromtimestamp(cast(float, timing["end_time"])) if timing is not None else fallback_end_time
+    )
     if action == "sync_success":
 
         def run() -> None:
@@ -221,7 +234,7 @@ def invoke_terminal(
         return None
     if action == "sync_success_if_needed":
         if logging._should_run_sync_callbacks_for_async_calls():  # pyright: ignore[reportPrivateUsage]  # preserves Logging's async callback policy
-            return invoke_terminal("sync_success", roots, logger, value, start_time, end_time)
+            return invoke_terminal("sync_success", roots, logger, record, value, fallback_start_time, fallback_end_time)
         return None
     exception: Final = cast(Exception, value)  # cast-ok: Rust routes terminal failure values as Python exceptions
     trace: Final = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))

@@ -5,6 +5,7 @@ use crate::lifecycle::{CallLifecycleContext, CallLifecycleRequest};
 use crate::ocr::transformation::OcrProviderConfig;
 use serde_json::{Map, Value};
 
+use super::types::PreparedOcrCall;
 use crate::integrations::custom_guardrail::CustomGuardrail;
 use crate::integrations::custom_logger::CustomLogger;
 use crate::integrations::types::RequestMetadata;
@@ -22,6 +23,23 @@ pub struct OcrRequest<'a> {
     pub guardrails: Vec<Arc<dyn CustomGuardrail>>,
     pub request_metadata: RequestMetadata,
     pub litellm_call_id: Option<&'a str>,
+}
+
+pub enum OcrRouteRequest<'a> {
+    Native(OcrRequest<'a>),
+    Prepared(PreparedOcrCall),
+}
+
+impl<'a> From<OcrRequest<'a>> for OcrRouteRequest<'a> {
+    fn from(request: OcrRequest<'a>) -> Self {
+        Self::Native(request)
+    }
+}
+
+impl From<PreparedOcrCall> for OcrRouteRequest<'static> {
+    fn from(request: PreparedOcrCall) -> Self {
+        Self::Prepared(request)
+    }
 }
 
 pub(crate) struct PreparedOcrRequest {

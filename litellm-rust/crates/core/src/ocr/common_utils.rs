@@ -1,19 +1,19 @@
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
+use crate::error::Error;
+use crate::ocr::transformation::OcrProviderConfig;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use litellm_core::error::Error;
-use litellm_core::ocr::transformation::OcrProviderConfig;
 use reqwest::Url;
 use serde_json::{Map, Value};
 
-use litellm_core::providers::azure_ai::ocr::transformation as azure_ai;
-use litellm_core::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
-use litellm_core::providers::reducto::ocr::transformation as reducto;
-use litellm_core::providers::vertex_ai::ocr::transformation as vertex_ai;
+use crate::providers::azure_ai::ocr::transformation as azure_ai;
+use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
+use crate::providers::reducto::ocr::transformation as reducto;
+use crate::providers::vertex_ai::ocr::transformation as vertex_ai;
 
-use crate::client::http_client;
+use super::client::http_client;
 
 const ERROR_BODY_MAX_CHARS: usize = 256;
 const AZURE_DOCUMENT_INTELLIGENCE_POLL_TIMEOUT_SECS: u64 = 120;
@@ -55,7 +55,7 @@ pub(super) fn string_headers(
                 .ok_or_else(|| {
                     Error::InvalidRequest(format!(
                         "OCR extra_headers.{key} must be a string, got {}",
-                        litellm_core::error::json_type_name(&value)
+                        crate::error::json_type_name(&value)
                     ))
                 })
         })
@@ -381,7 +381,7 @@ pub(super) async fn poll_document_intelligence(
 
 #[cfg(test)]
 mod tests {
-    use litellm_core::ocr::transformation::OcrResponseHandling;
+    use crate::ocr::transformation::OcrResponseHandling;
     use serde_json::json;
 
     use super::*;

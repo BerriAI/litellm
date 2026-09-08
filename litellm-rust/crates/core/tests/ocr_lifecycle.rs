@@ -10,9 +10,10 @@ use litellm_core::integrations::custom_logger::{
     CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
 };
 use litellm_core::integrations::types::RequestMetadata;
+use litellm_core::lifecycle::CallLifecycleContext;
 #[cfg(feature = "observability")]
 use litellm_core::observability::FunctionTrace;
-use litellm_core::ocr::{OcrRequest, ocr};
+use litellm_core::ocr::{DefaultOcrServices, OcrRequest};
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -33,6 +34,30 @@ async fn read_http_headers(socket: &mut TcpStream) -> String {
         }
     }
     String::from_utf8(request).expect("request is utf8")
+}
+
+async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
+    let services = DefaultOcrServices::new(&request);
+    let provider = request
+        .custom_llm_provider
+        .or_else(|| request.model.split_once('/').map(|(provider, _)| provider))
+        .unwrap_or("");
+    let metadata = litellm_core::integrations::types::StandardLoggingMetadata {
+        user_api_key_hash: request.request_metadata.user_api_key_hash.clone(),
+        user_api_key_user_id: request.request_metadata.user_api_key_user_id.clone(),
+        user_api_key_team_id: request.request_metadata.user_api_key_team_id.clone(),
+        ..Default::default()
+    };
+    let context = CallLifecycleContext::new(
+        "ocr",
+        request.model,
+        provider,
+        request.litellm_call_id.unwrap_or(""),
+    )
+    .with_metadata(metadata);
+    litellm_core::ocr::ocr(&services, request.into(), Default::default(), context)
+        .await
+        .into_result()
 }
 
 async fn read_http_request(socket: &mut TcpStream) -> String {

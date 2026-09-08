@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-pub struct OcrRequest {
+pub struct OcrAdmissionRequest {
     pub model: String,
     pub custom_llm_provider: Option<String>,
     pub api_key: Option<String>,
@@ -14,6 +14,12 @@ pub struct OcrRequest {
     pub vertex_project: Option<String>,
     pub vertex_location: Option<String>,
     pub stream: bool,
+}
+
+pub struct PreparedOcrCall {
+    pub prepared: PreparedOcr,
+    pub headers: Vec<(String, String)>,
+    pub body: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -80,10 +86,14 @@ pub struct OcrRequestData {
 pub struct OcrResponseData {
     pub pages: Vec<Value>,
     pub model: String,
+    #[serde(default)]
     pub document_annotation: Option<Value>,
+    #[serde(default)]
     pub usage_info: Option<Value>,
     pub object: String,
+    #[serde(flatten)]
     pub extra_fields: Map<String, Value>,
+    #[serde(default)]
     pub provider_native_response: Option<Value>,
 }
 

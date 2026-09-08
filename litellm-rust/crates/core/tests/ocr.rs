@@ -5,9 +5,12 @@ use std::thread;
 use std::time::Duration;
 
 use litellm_core::Error;
+use litellm_core::lifecycle::CallLifecycleContext;
 use litellm_core::ocr::prepare::prepare;
 use litellm_core::ocr::types::{OcrDocument, OcrDocumentProjection};
-use litellm_core::ocr::{OcrRequest, PreparedOcr, ocr};
+use litellm_core::ocr::{
+    NoopOcrServices, OcrAdmissionRequest as OcrRequest, PreparedOcr, PreparedOcrCall,
+};
 use serde_json::{Value, json};
 
 fn request() -> OcrRequest {
@@ -38,6 +41,29 @@ fn body(prepared: &PreparedOcr) -> Value {
     body.insert("include_image_base64".into(), json!(true));
     body.insert("pages".into(), json!([0, 2]));
     Value::Object(body)
+}
+
+async fn ocr(
+    prepared: PreparedOcr,
+    headers: Vec<(String, String)>,
+    body: Value,
+) -> Result<litellm_core::ocr::OcrResponseData, Error> {
+    let model = prepared.model.clone();
+    let provider = prepared.custom_llm_provider.clone();
+    let response = litellm_core::ocr::ocr(
+        &NoopOcrServices,
+        PreparedOcrCall {
+            prepared,
+            headers,
+            body,
+        }
+        .into(),
+        Default::default(),
+        CallLifecycleContext::new("ocr", model, provider, "test-call"),
+    )
+    .await
+    .into_result()?;
+    serde_json::from_value(response).map_err(|error| Error::InvalidResponse(error.to_string()))
 }
 
 #[test]

@@ -121,28 +121,12 @@ impl Clock for SystemClock {
 pub struct CallLifecycle;
 
 impl CallLifecycle {
-    pub async fn run<InitialReq, ProviderReq, Resp, Policy, ProviderCall, ProviderFuture>(
-        &self,
-        context: CallLifecycleContext,
-        request: InitialReq,
-        policy: &Policy,
-        provider_call: ProviderCall,
-    ) -> ExecutedCall<Resp, Error>
-    where
-        Resp: Serialize,
-        Policy: RequestPolicy<InitialReq, ProviderReq> + TerminalDispatcher,
-        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
-        ProviderFuture: Future<Output = Result<Resp, Error>>,
-    {
-        self.run_with_clock(context, request, policy, &SystemClock, provider_call)
-            .await
-    }
-
-    pub async fn run_with_clock<
+    pub async fn run<
         InitialReq,
         ProviderReq,
         Resp,
         Policy,
+        Dispatcher,
         ClockImpl,
         ProviderCall,
         ProviderFuture,
@@ -151,12 +135,14 @@ impl CallLifecycle {
         context: CallLifecycleContext,
         request: InitialReq,
         policy: &Policy,
+        dispatcher: &Dispatcher,
         clock: &ClockImpl,
         provider_call: ProviderCall,
     ) -> ExecutedCall<Resp, Error>
     where
         Resp: Serialize,
-        Policy: RequestPolicy<InitialReq, ProviderReq> + TerminalDispatcher,
+        Policy: RequestPolicy<InitialReq, ProviderReq>,
+        Dispatcher: TerminalDispatcher,
         ClockImpl: Clock,
         ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
         ProviderFuture: Future<Output = Result<Resp, Error>>,
@@ -165,13 +151,13 @@ impl CallLifecycle {
         let request = match policy.async_pre_call_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
-                return failure(policy, clock, &context, error, start_time).await;
+                return failure(dispatcher, clock, &context, error, start_time).await;
             }
         };
         let provider_request = match policy.async_during_call_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
-                return failure(policy, clock, &context, error, start_time).await;
+                return failure(dispatcher, clock, &context, error, start_time).await;
             }
         };
         match provider_call(provider_request).await {
@@ -181,54 +167,11 @@ impl CallLifecycle {
                     TerminalClassification::Success,
                     serde_json::to_value(&response).unwrap_or(Value::Null),
                 );
-                let _ = policy.dispatch(&terminal).await;
+                let _ = dispatcher.dispatch(&terminal).await;
                 ExecutedCall::Success { response, terminal }
             }
-            Err(error) => failure(policy, clock, &context, error, start_time).await,
+            Err(error) => failure(dispatcher, clock, &context, error, start_time).await,
         }
-    }
-
-    pub async fn run_result<InitialReq, ProviderReq, Resp, Policy, ProviderCall, ProviderFuture>(
-        &self,
-        context: CallLifecycleContext,
-        request: InitialReq,
-        policy: &Policy,
-        provider_call: ProviderCall,
-    ) -> Result<Resp, Error>
-    where
-        Resp: Serialize,
-        Policy: RequestPolicy<InitialReq, ProviderReq> + TerminalDispatcher,
-        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
-        ProviderFuture: Future<Output = Result<Resp, Error>>,
-    {
-        self.run(context, request, policy, provider_call)
-            .await
-            .into_result()
-    }
-
-    pub async fn run_request_result<
-        InitialReq,
-        ProviderReq,
-        Resp,
-        Policy,
-        ProviderCall,
-        ProviderFuture,
-    >(
-        &self,
-        request: InitialReq,
-        policy: &Policy,
-        provider_call: ProviderCall,
-    ) -> Result<Resp, Error>
-    where
-        InitialReq: CallLifecycleRequest,
-        Resp: Serialize,
-        Policy: RequestPolicy<InitialReq, ProviderReq> + TerminalDispatcher,
-        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
-        ProviderFuture: Future<Output = Result<Resp, Error>>,
-    {
-        let context = request.lifecycle_context();
-        self.run_result(context, request, policy, provider_call)
-            .await
     }
 }
 
@@ -350,6 +293,8 @@ mod tests {
                 CallLifecycleContext::new("ocr", "model", "provider", "call-1"),
                 "request".to_string(),
                 &policy,
+                &policy,
+                &SystemClock,
                 |request| async move {
                     assert_eq!(request, "request:pre:during");
                     Ok(request)
@@ -375,6 +320,8 @@ mod tests {
                 CallLifecycleContext::new("ocr", "model", "provider", "call-2"),
                 "request".to_string(),
                 &policy,
+                &policy,
+                &SystemClock,
                 |request| async move { Ok(request) },
             )
             .await;

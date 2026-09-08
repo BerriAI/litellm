@@ -313,7 +313,7 @@ class Host:
         await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'amessages')
 
     def terminal(self, action, value):
-        return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, value, self.start, self.end)
+        return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, None, value, self.start, self.end)
 
     def sync_success(self): return self.terminal('sync_success', self.response)
     def async_success(self): return self.terminal('async_success', self.response)

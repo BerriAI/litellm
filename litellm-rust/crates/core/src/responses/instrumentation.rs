@@ -330,6 +330,8 @@ mod tests {
                 ),
                 (),
                 &instrumentation,
+                &instrumentation,
+                &crate::lifecycle::SystemClock,
                 |_| async { Ok::<(), Error>(()) },
             )
             .await;

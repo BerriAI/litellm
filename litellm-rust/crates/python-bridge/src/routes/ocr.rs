@@ -3,10 +3,14 @@
 //! callbacks; no Python preparation, auth, encoding, or provider transforms run.
 
 use litellm_core::error::Error;
-use litellm_core::ocr::lifecycle::{
-    ErrorDisposition, Lifecycle, NativeOutcome, Observations, Operation, Options, Outcome,
+use litellm_core::lifecycle::ocr::{NativeOutcome, Observations, OcrRoute, Operation, Options};
+use litellm_core::lifecycle::{
+    CallLifecycleContext, ErrorDisposition, ExecutedCall, Lifecycle, Outcome, TerminalRecord,
 };
-use litellm_core::ocr::types::{OcrDocumentProjection, OcrRequest, PreparedOcr};
+use litellm_core::ocr::NoopOcrServices;
+use litellm_core::ocr::types::{
+    OcrAdmissionRequest, OcrDocumentProjection, PreparedOcr, PreparedOcrCall,
+};
 use litellm_core::routing_utils::provider::get_custom_llm_provider;
 use litellm_python_interop::{Pythonized, from_py, to_py};
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
@@ -26,6 +30,7 @@ struct OcrState {
     headers: Option<Py<PyDict>>,
     logging: Option<Py<PyAny>>,
     prepared: Option<PreparedOcr>,
+    terminal: Option<TerminalRecord>,
 }
 
 #[pymethods]
@@ -45,6 +50,7 @@ impl OcrState {
                 state.body.take(),
                 state.headers.take(),
                 state.logging.take(),
+                state.terminal.take(),
             )
         };
         drop(roots);
@@ -123,7 +129,7 @@ fn header_pairs(headers: &Bound<'_, PyDict>) -> PyResult<Vec<(String, String)>> 
         .collect()
 }
 
-fn decode_request(py: Python<'_>, bag: &Bound<'_, PyDict>) -> PyResult<OcrRequest> {
+fn decode_request(py: Python<'_>, bag: &Bound<'_, PyDict>) -> PyResult<OcrAdmissionRequest> {
     let document = bag
         .get_item("document")?
         .ok_or_else(|| PyValueError::new_err("OCR requires document"))?
@@ -153,7 +159,7 @@ fn decode_request(py: Python<'_>, bag: &Bound<'_, PyDict>) -> PyResult<OcrReques
             document_input.set_item(name, value)?;
         }
     }
-    Ok(OcrRequest {
+    Ok(OcrAdmissionRequest {
         model,
         custom_llm_provider,
         api_key: scalar(bag, "api_key")?,
@@ -193,7 +199,7 @@ fn request_error_to_pyerr(
 
 #[pyclass]
 struct OcrLifecycle {
-    machine: Lifecycle,
+    machine: Lifecycle<OcrRoute>,
     asynchronous: bool,
 }
 
@@ -399,6 +405,7 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
             headers: Some(headers.unbind()),
             logging: Some(logging),
             prepared: Some(prepared),
+            terminal: None,
         },
     )
 }
@@ -435,16 +442,47 @@ fn request(py: Python<'_>, state: &Py<OcrState>) -> PyResult<OcrWireRequest> {
 fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
     let (prepared, headers, body) = request(py, &state)?;
     litellm_python_interop::run_async_py(py, async move {
-        let _state = state;
         let model = prepared.model.clone();
         let provider = prepared.custom_llm_provider.clone();
-        let response = run_async_value(
-            async move { Ok(litellm_core::ocr::ocr(prepared, headers, body).await) },
-            core_error_to_pyerr,
+        let error_model = model.clone();
+        let error_provider = provider.clone();
+        let call_id = Python::attach(|py| {
+            state
+                .borrow(py)
+                .arguments
+                .as_ref()
+                .and_then(|arguments| scalar(arguments.bind(py), "litellm_call_id").ok().flatten())
+                .unwrap_or_default()
+        });
+        let executed = run_async_value(
+            async move {
+                let services = NoopOcrServices;
+                Ok::<_, std::convert::Infallible>(
+                    litellm_core::ocr::ocr(
+                        &services,
+                        PreparedOcrCall {
+                            prepared,
+                            headers,
+                            body,
+                        }
+                        .into(),
+                        Options::default(),
+                        CallLifecycleContext::new("ocr", &model, &provider, call_id),
+                    )
+                    .await,
+                )
+            },
+            |never| match never {},
         )
-        .await?
-        .map_err(|error| Python::attach(|py| ocr_error_to_pyerr(py, error, &model, &provider)))?;
-        Ok(Pythonized(response.into_json()))
+        .await?;
+        let terminal = executed.terminal().clone();
+        Python::attach(|py| state.borrow_mut(py).terminal = Some(terminal));
+        match executed {
+            ExecutedCall::Success { response, .. } => Ok(Pythonized(response)),
+            ExecutedCall::Failure { error, .. } => Err(Python::attach(|py| {
+                ocr_error_to_pyerr(py, error, &error_model, &error_provider)
+            })),
+        }
     })
 }
 
@@ -473,18 +511,56 @@ fn send_sync(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
     let (prepared, headers, body) = request(py, &state)?;
     let model = prepared.model.clone();
     let provider = prepared.custom_llm_provider.clone();
-    let response = run_sync_value(
+    let error_model = model.clone();
+    let error_provider = provider.clone();
+    let call_id = state
+        .borrow(py)
+        .arguments
+        .as_ref()
+        .and_then(|arguments| scalar(arguments.bind(py), "litellm_call_id").ok().flatten())
+        .unwrap_or_default();
+    let executed = run_sync_value(
         py,
-        async move { Ok(litellm_core::ocr::ocr(prepared, headers, body).await) },
-        core_error_to_pyerr,
-    )?
-    .map_err(|error| ocr_error_to_pyerr(py, error, &model, &provider))?;
-    let fields = to_py(py, &response.into_json())?
-        .into_bound(py)
-        .cast_into::<PyDict>()?;
+        async move {
+            let services = NoopOcrServices;
+            Ok::<_, std::convert::Infallible>(
+                litellm_core::ocr::ocr(
+                    &services,
+                    PreparedOcrCall {
+                        prepared,
+                        headers,
+                        body,
+                    }
+                    .into(),
+                    Options::default(),
+                    CallLifecycleContext::new("ocr", &model, &provider, call_id),
+                )
+                .await,
+            )
+        },
+        |never| match never {},
+    )?;
+    state.borrow_mut(py).terminal = Some(executed.terminal().clone());
+    let response = match executed {
+        ExecutedCall::Success { response, .. } => response,
+        ExecutedCall::Failure { error, .. } => {
+            return Err(ocr_error_to_pyerr(py, error, &error_model, &error_provider));
+        }
+    };
+    let fields = to_py(py, &response)?.into_bound(py).cast_into::<PyDict>()?;
     let response = finish(py, fields.unbind());
     drop(state);
     response
+}
+
+#[pyfunction]
+fn terminal_record(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
+    let terminal = state
+        .borrow(py)
+        .terminal
+        .clone()
+        .ok_or_else(|| PyRuntimeError::new_err("OCR terminal record is unavailable"))?;
+    to_py(py, &terminal)
 }
 
 #[pyfunction]
@@ -558,7 +634,8 @@ class Host:
         await utils.async_post_call_failure_deployment_hook(self.current, self.error, 'aocr')
 
     def terminal(self, action, value):
-        return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, value, self.start, self.end)
+        record = _terminal_record(self.state) if self.state is not None else None
+        return invoke_terminal(action, (self.arguments, self.current, self.state), self.logger, record, value, self.start, self.end)
 
     def sync_success(self):
         return self.terminal('sync_success', self.response)
@@ -600,6 +677,10 @@ class Host:
     module.add("_send", wrap_pyfunction!(send, &module)?)?;
     module.add("_send_sync", wrap_pyfunction!(send_sync, &module)?)?;
     module.add("_finish", wrap_pyfunction!(finish, &module)?)?;
+    module.add(
+        "_terminal_record",
+        wrap_pyfunction!(terminal_record, &module)?,
+    )?;
     Ok(DRIVER.get_or_init(py, || module.unbind()).bind(py))
 }
 
@@ -617,6 +698,10 @@ pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use litellm_core::integrations::custom_logger::CallbackTiming;
+    use litellm_core::integrations::types::Usage;
+    use litellm_core::lifecycle::{RouteProjection, TerminalClassification};
+    use serde_json::json;
 
     #[test]
     #[ignore = "requires the Python SDK and its dependencies on PYTHONPATH"]
@@ -726,6 +811,58 @@ mod tests {
                     .extract::<String>()
                     .unwrap(),
                 "native"
+            );
+        });
+    }
+
+    #[test]
+    fn terminal_record_exports_core_timing() {
+        Python::initialize();
+        Python::attach(|py| {
+            let state = Py::new(
+                py,
+                OcrState {
+                    arguments: None,
+                    body: None,
+                    headers: None,
+                    logging: None,
+                    prepared: None,
+                    terminal: Some(TerminalRecord {
+                        call_id: "call-1".into(),
+                        trace_id: None,
+                        attempt: 1,
+                        call_type: "ocr".into(),
+                        model: "model".into(),
+                        provider: "mistral".into(),
+                        timing: CallbackTiming::new(10.25, 12.5),
+                        usage: Usage::default(),
+                        cost_inputs: Default::default(),
+                        classification: TerminalClassification::Success,
+                        projection: RouteProjection::Ocr {
+                            value: json!({"pages": []}),
+                        },
+                    }),
+                },
+            )
+            .unwrap();
+
+            let record = terminal_record(py, state).unwrap();
+            let timing = record.bind(py).get_item("timing").unwrap();
+            assert_eq!(
+                timing
+                    .get_item("start_time")
+                    .unwrap()
+                    .extract::<f64>()
+                    .unwrap(),
+                10.25
+            );
+            assert_eq!(
+                timing
+                    .get_item("end_time")
+                    .unwrap()
+                    .extract::<f64>()
+                    .unwrap(),
+                12.5
             );
         });
     }
