@@ -59,7 +59,6 @@ from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
@@ -121,7 +120,6 @@ from litellm.types.llms.openai import (
     CreateBatchRequest,
     CreateFileRequest,
     FileContentRequest,
-    FileListPage,
     HttpxBinaryResponseContent,
     OpenAIFileObject,
     ResponseInputParam,
@@ -4901,7 +4899,7 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> FileListPage | Coroutine[object, object, FileListPage]:
+    ) -> list[OpenAIFileObject] | Coroutine[object, object, list[OpenAIFileObject]]:
         """
         List all files
         """
@@ -4956,10 +4954,9 @@ class BaseLLMHTTPHandler:
         files_per_page: Final = self._files_per_listing_page(
             response, provider_config, logging_obj, litellm_params, headers, sync_httpx_client, timeout
         )
-        listed_files: Final = [  # mutable-ok: build_list_page takes the list the files contract returns
+        return [  # mutable-ok: the files contract returns the listing as a list
             listed_file for page_files in files_per_page for listed_file in page_files
         ]
-        return FileListPage(**build_list_page(listed_files))
 
     async def async_list_files(
         self,
@@ -4970,7 +4967,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> FileListPage:
+    ) -> list[OpenAIFileObject]:
         """
         Async list all files
         """
@@ -5014,10 +5011,9 @@ class BaseLLMHTTPHandler:
         files_per_page: Final = self._files_per_async_listing_page(
             response, provider_config, logging_obj, litellm_params, headers, async_httpx_client, timeout
         )
-        listed_files: Final = [  # mutable-ok: build_list_page takes the list the files contract returns
+        return [  # mutable-ok: the files contract returns the listing as a list
             listed_file async for page_files in files_per_page for listed_file in page_files
         ]
-        return FileListPage(**build_list_page(listed_files))
 
     def _files_per_listing_page(
         self,
