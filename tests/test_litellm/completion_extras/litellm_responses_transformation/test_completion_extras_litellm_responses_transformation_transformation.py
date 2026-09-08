@@ -1093,7 +1093,6 @@ def test_streamed_tool_calls_with_empty_terminal_output(
     reason: str | None,
     expected: str,
 ) -> None:
-    """Retain streamed tool calls without overriding incomplete responses or leaking state."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
     )
