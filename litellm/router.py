@@ -1523,8 +1523,32 @@ class Router:
                 self._override_selectors[strategy] = self._build_strategy_selector(
                     strategy=strategy,
                     routing_strategy_args={},
+                    register_callbacks=False,
                 )
             return self._override_selectors[strategy]
+
+    def _override_selector_pre_call_check(
+        self, strategy: str | None, selector: RouterStrategySelector | None, deployment: dict
+    ) -> None:
+        """
+        Override selectors are not in `litellm.callbacks`, so the pre-call check that
+        `routing_strategy_pre_call_checks` runs for the router's own selectors (rpm
+        accounting for `usage-based-routing-v2`) runs here, for the overriding request only.
+        """
+        if selector is None or strategy is None or selector is not self._override_selectors.get(strategy):
+            return
+        selector.pre_call_check(deployment)
+
+    async def _async_override_selector_pre_call_check(
+        self,
+        strategy: str | None,
+        selector: RouterStrategySelector | None,
+        deployment: dict,
+        parent_otel_span: Span | None,
+    ) -> None:
+        if selector is None or strategy is None or selector is not self._override_selectors.get(strategy):
+            return
+        await selector.async_pre_call_check(deployment, parent_otel_span)
 
     def _get_routing_context(
         self, model: str, request_kwargs: dict | None = None
@@ -12717,6 +12741,9 @@ class Router:
                     parent_otel_span=parent_otel_span,
                 )
                 raise exception
+            await self._async_override_selector_pre_call_check(
+                strategy, strategy_selector, deployment, parent_otel_span
+            )
             verbose_router_logger.info(
                 "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
                 model,
@@ -12853,6 +12880,9 @@ class Router:
                     parent_otel_span=parent_otel_span,
                 )
                 raise exception
+            await self._async_override_selector_pre_call_check(
+                strategy, strategy_selector, deployment, parent_otel_span
+            )
 
             verbose_router_logger.info(
                 "async_get_available_deployment_for_pass_through model: %s, selected deployment: %s",
@@ -13543,6 +13573,7 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
             )
+        self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
         verbose_router_logger.info(
             "get_available_deployment for model: %s, Selected deployment: %s for model: %s",
             model,
@@ -13687,6 +13718,7 @@ class Router:
                 enable_pre_call_checks=self.enable_pre_call_checks,
                 cooldown_list=_cooldown_list,
             )
+        self._override_selector_pre_call_check(strategy, strategy_selector, deployment)
 
         verbose_router_logger.info(
             "get_available_deployment_for_pass_through model: %s, selected deployment: %s",
