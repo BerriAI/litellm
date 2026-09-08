@@ -12,6 +12,7 @@ import time
 import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import reduce
 from datetime import datetime
 from types import MappingProxyType
 from typing import Final
@@ -296,9 +297,14 @@ def await_everywhere[T](
     """`_last_answer` against every replica in turn, each with the full budget, so a
     write counts as visible only once the last replica reflects it, and stop at the
     first replica that never converges. Clock and sleep are injected."""
-    answers: dict[str, T] = {}
-    for replica, read in reads.items():
-        answer = _last_answer(
+    def read_replica(
+        outcome: EverywhereConverged[T] | NeverConvergedOn[T],
+        item: tuple[str, ReplicaRead[T]],
+    ) -> EverywhereConverged[T] | NeverConvergedOn[T]:
+        if isinstance(outcome, NeverConvergedOn):
+            return outcome
+        replica, read = item
+        answer: Final = _last_answer(
             read,
             settled=settled,
             timeout=timeout,
@@ -309,8 +315,10 @@ def await_everywhere[T](
         )
         if not settled(answer):
             return NeverConvergedOn(replica=replica, last=answer)
-        answers[replica] = answer
-    return EverywhereConverged(answers=MappingProxyType(answers))
+        return EverywhereConverged(answers=MappingProxyType({**outcome.answers, replica: answer}))
+
+    initial: Final[EverywhereConverged[T] | NeverConvergedOn[T]] = EverywhereConverged(answers=MappingProxyType({}))
+    return reduce(read_replica, reads.items(), initial)
 
 
 def _is_not_found[R: BaseModel](result: Result[R]) -> bool:

@@ -136,14 +136,14 @@ async def update_mcp_toolset(
     tool list, so a null ``toolset_name`` or ``tools`` is a no-op rather than a clear;
     emptying the tool selection is an explicit ``[]``, which cannot be mistaken for a
     caller that left the field out."""
-    data_dict: Final = data.model_dump(exclude_unset=True, exclude={"toolset_id"})
-    if data_dict.get("toolset_name", "") is None:
-        _ = data_dict.pop("toolset_name")
-    if data_dict.get("tools", "") is None:
-        _ = data_dict.pop("tools")
-    if "tools" in data_dict:
-        data_dict["tools"] = json.dumps(data_dict["tools"])
-    data_dict["updated_by"] = touched_by
+    data_dict: Final = dict(  # mutable-ok: Prisma requires a plain dict for JSON query serialization
+        (
+            (field, json.dumps(value) if field == "tools" else value)
+            for field, value in data.model_dump(exclude_unset=True).items()
+            if field != "toolset_id" and (field not in ("toolset_name", "tools") or value is not None)
+        ),
+        updated_by=touched_by,
+    )
     try:
         row: Final = await _toolset_table(prisma_client).update(
             where={"toolset_id": data.toolset_id},

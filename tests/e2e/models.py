@@ -607,7 +607,7 @@ class ToolsetRow(BaseModel):
     toolset_id: str
     toolset_name: str
     description: str | None = None
-    tools: list[ToolsetTool] = []
+    tools: list[ToolsetTool] = Field(default_factory=list)
 
 
 class ToolsetListResponse(RootModel[list[ToolsetRow]]):
