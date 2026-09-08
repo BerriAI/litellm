@@ -6418,14 +6418,14 @@ class TestOpenTelemetryNonInferenceUsage(unittest.TestCase):
     def test_background_cost_poll_read_still_records_the_token_usage_histogram(self):
         self.assertEqual(self._token_histogram_calls("aget_responses", self.BACKGROUND_POLL), 2)
 
-    def test_background_response_read_still_reports_its_tokens_on_the_span(self):
+    def test_background_response_read_does_not_report_its_tokens_on_the_span(self):
         self.assertEqual(
             self._token_attributes_on_span("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ),
-            set(self.TOKEN_KEYS),
+            set(),
         )
 
-    def test_background_response_read_still_records_the_token_usage_histogram(self):
-        self.assertEqual(self._token_histogram_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 2)
+    def test_background_response_read_does_not_record_the_token_usage_histogram(self):
+        self.assertEqual(self._token_histogram_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 0)
 
     def test_inference_call_still_records_time_per_output_token(self):
         self.assertEqual(self._time_per_output_token_calls("acompletion"), 1)
@@ -6433,7 +6433,7 @@ class TestOpenTelemetryNonInferenceUsage(unittest.TestCase):
     def test_response_read_does_not_divide_its_latency_by_the_retrieved_token_count(self):
         self.assertEqual(self._time_per_output_token_calls("aget_responses"), 0)
 
-    def test_background_response_read_still_records_time_per_output_token(self):
+    def test_background_response_read_does_not_record_time_per_output_token(self):
         self.assertEqual(
-            self._time_per_output_token_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 1
+            self._time_per_output_token_calls("aget_responses", response_obj=self.BACKGROUND_RESPONSE_OBJ), 0
         )

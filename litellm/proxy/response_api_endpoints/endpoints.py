@@ -397,6 +397,7 @@ async def responses_api(
                             model_object_id=response.id,
                             file_purpose="response",
                             user_api_key_dict=user_api_key_dict,
+                            persist_attribution=True,
                         )
 
                         verbose_proxy_logger.info(

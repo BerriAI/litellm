@@ -1647,7 +1647,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             if (
                 self._token_usage_histogram
                 and response_obj
-                and not is_unbilled_non_inference_call_from_params(kwargs.get("call_type"), params, response_obj)
+                and not is_unbilled_non_inference_call_from_params(kwargs.get("call_type"), params)
                 and (usage := response_obj.get("usage"))
             ):
                 in_attrs: Final = {**common_attrs, TOKEN_TYPE_ATTRIBUTE: "input"}
@@ -1725,9 +1725,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if not self._time_per_output_token_histogram:
             return
 
-        if is_unbilled_non_inference_call_from_params(
-            kwargs.get("call_type"), kwargs.get("litellm_params"), response_obj
-        ):
+        if is_unbilled_non_inference_call_from_params(kwargs.get("call_type"), kwargs.get("litellm_params")):
             return
 
         # Get completion tokens from response_obj
@@ -2502,9 +2500,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             usage: Final = (
                 response_obj.get("usage")
                 if response_obj
-                and not is_unbilled_non_inference_call_from_params(
-                    kwargs.get("call_type"), litellm_params, response_obj
-                )
+                and not is_unbilled_non_inference_call_from_params(kwargs.get("call_type"), litellm_params)
                 else None
             )
             if usage:

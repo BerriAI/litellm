@@ -159,6 +159,8 @@ class CheckResponsesCost:
                 litellm_metadata = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+                    **({"user_api_key_team_id": job.team_id} if job.team_id else {}),
+                    **({"user_api_key": job.api_key, "user_api_key_hash": job.api_key} if job.api_key else {}),
                 }
                 
                 # Add model information if available
@@ -196,4 +198,3 @@ class CheckResponsesCost:
             verbose_proxy_logger.info(
                 f"Marked {len(completed_jobs)} response jobs as completed"
             )
-

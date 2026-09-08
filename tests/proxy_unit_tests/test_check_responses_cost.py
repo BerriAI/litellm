@@ -732,6 +732,8 @@ class TestCheckResponsesCost:
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_no_model"
         mock_job.created_by = "test-user"
+        mock_job.team_id = None
+        mock_job.api_key = None
         mock_job.id = "job-no-model"
         mock_job.file_object = {}  # no "model" key → model_name=None branch
 
@@ -753,6 +755,9 @@ class TestCheckResponsesCost:
         call_kwargs = mock_aget.call_args[1]
         assert "model" not in call_kwargs.get("litellm_metadata", {})
         assert "model_group" not in call_kwargs.get("litellm_metadata", {})
+        assert "user_api_key_team_id" not in call_kwargs["litellm_metadata"]
+        assert "user_api_key" not in call_kwargs["litellm_metadata"]
+        assert "user_api_key_hash" not in call_kwargs["litellm_metadata"]
 
     @pytest.mark.asyncio
     async def test_poll_stamps_internal_call_origin_so_the_read_is_billed(
@@ -769,6 +774,8 @@ class TestCheckResponsesCost:
         mock_job = MagicMock()
         mock_job.unified_object_id = "resp_test_billed"
         mock_job.created_by = "test-user"
+        mock_job.team_id = "team-billed"
+        mock_job.api_key = "sk-billed"
         mock_job.id = "job-billed"
         mock_job.file_object = {"model": "gpt-5", "id": "resp_test_billed"}
 
@@ -787,7 +794,9 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         metadata = mock_aget.call_args[1]["litellm_metadata"]
-        foreground_read = {"background": False}
         assert metadata[INTERNAL_CALL_ORIGIN_METADATA_KEY] == "background_response_cost_poll"
-        assert is_unbilled_non_inference_call("aget_responses", metadata, foreground_read) is False
-        assert is_unbilled_non_inference_call("aget_responses", None, foreground_read) is True
+        assert metadata["user_api_key_team_id"] == "team-billed"
+        assert metadata["user_api_key"] == "sk-billed"
+        assert metadata["user_api_key_hash"] == "sk-billed"
+        assert is_unbilled_non_inference_call("aget_responses", metadata) is False
+        assert is_unbilled_non_inference_call("aget_responses", None) is True

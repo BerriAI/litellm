@@ -81,6 +81,7 @@ class TestResponsesBackgroundCostTracking:
                         model_object_id=response.id,
                         file_purpose="response",
                         user_api_key_dict=user_api_key_dict,
+                        persist_attribution=True,
                     )
 
         # Verify store_unified_object_id was called
@@ -92,6 +93,7 @@ class TestResponsesBackgroundCostTracking:
         assert call_args[1]["model_object_id"] == response.id
         assert call_args[1]["file_purpose"] == "response"
         assert call_args[1]["user_api_key_dict"] == user_api_key_dict
+        assert call_args[1]["persist_attribution"] is True
 
     @pytest.mark.asyncio
     async def test_no_storage_for_non_background_requests(
