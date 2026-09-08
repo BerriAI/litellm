@@ -823,6 +823,29 @@ async def test_override_selector_pre_call_check_only_runs_for_override_selectors
     default_router._override_selector_pre_call_check(None, None, deployment)
 
 
+@pytest.mark.asyncio
+async def test_usage_based_v2_override_enforces_rpm_when_a_specific_deployment_is_requested():
+    router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
+    kwargs = {"model": "deploy-3", "messages": [{"role": "user", "content": "hi"}], "mock_response": "ok"}
+
+    first = await router.acompletion(**kwargs, routing_strategy="usage-based-routing-v2")
+    assert first.choices[0].message.content == "ok"
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(**kwargs, routing_strategy="usage-based-routing-v2")
+    assert (await router.acompletion(**kwargs)).choices[0].message.content == "ok"
+
+
+def test_sync_usage_based_v2_override_enforces_rpm_when_a_specific_deployment_is_requested():
+    router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
+    kwargs = {"model": "deploy-3", "messages": [{"role": "user", "content": "hi"}], "mock_response": "ok"}
+
+    first = router.completion(**kwargs, routing_strategy="usage-based-routing-v2")
+    assert first.choices[0].message.content == "ok"
+    with pytest.raises(litellm.RateLimitError):
+        router.completion(**kwargs, routing_strategy="usage-based-routing-v2")
+    assert router.completion(**kwargs).choices[0].message.content == "ok"
+
+
 def _quality_group(strategy="latency-based-routing"):
     return [{"group_name": "quality", "models": ["filtered-model", "other-model"], "routing_strategy": strategy}]
 
