@@ -2002,6 +2002,9 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.responses.transformation import (
         HostedVLLMResponsesAPIConfig as HostedVLLMResponsesAPIConfig,
     )
+    from .llms.fireworks_ai.responses.transformation import (
+        FireworksAIResponsesAPIConfig as FireworksAIResponsesAPIConfig,
+    )
     from .llms.github_copilot.chat.transformation import (
         GithubCopilotConfig as GithubCopilotConfig,
     )
