@@ -9,6 +9,7 @@ Pins covered:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from types import SimpleNamespace
@@ -1631,6 +1632,32 @@ async def test_ProxyConfig_load_config_minimal_yaml(tmp_path, monkeypatch):
         "config_loaded": True,
         "model_list_key_present": True,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", ["true", "false", "null", "'true'", None])
+async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monkeypatch, caplog, setting):
+    config_file = tmp_path / "budget.yaml"
+    flag = f"  disable_budget_reservation: {setting}\n" if setting is not None else ""
+    config_file.write_text(
+        "model_list: []\nlitellm_settings: {}\ngeneral_settings:\n"
+        "  master_key: null\n" + flag
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.setattr("litellm.constants.budget_reservation_disabled_info_emitted", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+    config = ProxyConfig()
+
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+        for _ in range(3):
+            await config.load_config(router=None, config_file_path=str(config_file))
+
+    records = [
+        record for record in caplog.records
+        if "disable_budget_reservation is enabled" in record.message
+    ]
+    assert [record.levelno for record in records] == ([logging.INFO] if setting == "true" else [])
 
 
 @pytest.mark.asyncio
