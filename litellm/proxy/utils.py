@@ -2647,9 +2647,9 @@ class ProxyLogging:
         if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
             return False
 
-        return isinstance(
-            original_exception, (HTTPException, ProxyException, GuardrailRaisedException)
-        ) or (error_type == ProxyErrorTypes.auth_error)
+        return isinstance(original_exception, (HTTPException, ProxyException, GuardrailRaisedException)) or (
+            error_type == ProxyErrorTypes.auth_error
+        )
 
     async def _handle_logging_proxy_only_error(
         self,
@@ -3292,9 +3292,7 @@ class ProxyLogging:
         _deferred_cb: Final[Callable[..., Coroutine[object, object, object]] | None] = getattr(
             logging_obj, "_on_deferred_stream_complete", None
         )
-        _args: Final[tuple[object, ...] | None] = getattr(
-            logging_obj, "_deferred_stream_complete_args", None
-        )
+        _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
         if _deferred_cb is None or _args is None:
             return
         assembled: Final = _args[0]
