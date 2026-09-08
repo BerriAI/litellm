@@ -248,7 +248,7 @@ async def list_guardrails_v2(
         guardrail_configs: Final[list[GuardrailInfoResponse]] = []
         seen_guardrail_ids: Final[set] = excluded_guardrail_ids.copy()
         for guardrail in guardrails:
-            db_guardrail_id: Final[str | None] = guardrail.get("guardrail_id")
+            db_guardrail_id: str | None = guardrail.get("guardrail_id")
             litellm_params: LitellmParams | dict | None = guardrail.get("litellm_params")
             litellm_params_dict = (
                 litellm_params.model_dump(exclude_none=True)
