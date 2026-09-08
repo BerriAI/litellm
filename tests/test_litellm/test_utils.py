@@ -21,7 +21,6 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.get_model_cost_map import RESERVED_TOP_LEVEL_KEYS
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     CallTypes,
@@ -1219,12 +1218,15 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
     with open(prod_json, "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
     assert isinstance(actual_json, dict)
-    model_entries: Final = {
-        key: value for key, value in actual_json.items() if key not in RESERVED_TOP_LEVEL_KEYS
-    }
+    actual_json.pop(
+        "sample_spec", None
+    )  # remove the sample, whose schema is inconsistent with the real data
+    actual_json.pop(
+        "fallback_generalizations", None
+    )  # reserved meta key, not a model entry
 
     # Validate schema
-    validate(model_entries, INTENDED_SCHEMA)
+    validate(actual_json, INTENDED_SCHEMA)
 
     # Validate cost values
     # Define exceptions for models that are allowed to have costs > 1
@@ -1235,7 +1237,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
     ]
 
-    is_valid, violations = validate_model_cost_values(model_entries, exceptions)
+    is_valid, violations = validate_model_cost_values(actual_json, exceptions)
 
     if not is_valid:
         error_message = "Cost validation failed:\n" + "\n".join(violations)
@@ -1266,7 +1268,8 @@ def test_max_tokens_consistency():
     inconsistencies = []
 
     for model_name, config in models.items():
-        if model_name in RESERVED_TOP_LEVEL_KEYS:
+        # Skip the sample_spec
+        if model_name == "sample_spec":
             continue
 
         # Check if both max_tokens and max_output_tokens exist

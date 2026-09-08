@@ -8685,7 +8685,7 @@ export interface paths {
          *     - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
          *     - fallback_reason: human-readable reason why remote failed (null on success)
          *     - loaded_at: when this pod last loaded the map
-         *     - generated_at, source_revision: the _metadata stamp inside the loaded file
+         *     - source_revision: git blob id of the loaded file, what git rev-parse <commit>:<path> prints for it
          *     - etag: the ETag of the remote fetch (null for the bundled backup)
          *     - model_count: number of models in the currently loaded cost map
          */

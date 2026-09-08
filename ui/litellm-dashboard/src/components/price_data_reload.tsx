@@ -50,7 +50,6 @@ interface CostMapSourceInfo {
   is_env_forced: boolean;
   fallback_reason: string | null;
   loaded_at: string | null;
-  generated_at: string | null;
   source_revision: string | null;
   etag: string | null;
   model_count: number;
@@ -105,13 +104,6 @@ const formatDateTime = (dateTimeString: string | null) => {
 
 const CostMapProvenanceRows: React.FC<{ sourceInfo: CostMapSourceInfo }> = ({ sourceInfo }) => (
   <>
-    {sourceInfo.generated_at && (
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">Generated at:</span>
-        <span className="font-medium">{formatDateTime(sourceInfo.generated_at)}</span>
-      </div>
-    )}
-
     {sourceInfo.source_revision && (
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="text-muted-foreground">Source revision:</span>

@@ -17,11 +17,11 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 from litellm.litellm_core_utils.get_model_cost_map import (
     FALLBACK_GENERALIZATIONS_KEY,
-    METADATA_KEY,
     GetModelCostMap,
     _count_model_entries,
     _finalize_model_cost_map,
     get_model_cost_map_provenance,
+    git_blob_id,
 )
 
 
@@ -33,18 +33,16 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-def _load_bundled_stamp() -> dict:
-    path = os.path.join(
-        os.path.dirname(__file__), "../../../litellm/model_prices_and_context_window_backup.json"
-    )
-    with open(path) as f:
-        return json.load(f)[METADATA_KEY]
+def _bundled_blob_id() -> str:
+    path = os.path.join(os.path.dirname(__file__), "../../../litellm/model_prices_and_context_window_backup.json")
+    with open(path, "rb") as f:
+        return git_blob_id(f.read())
 
 
-_STAMP = {
-    "generated_at": "2026-09-07T00:00:00Z",
-    "source_revision": "0123456789abcdef0123456789abcdef01234567",
-}
+def test_git_blob_id_is_what_git_hash_object_prints():
+    """An operator checks a reported revision with ``git hash-object`` or ``git rev-parse <commit>:<path>``,
+    so the id must be git's blob sha1 of the exact bytes, not a plain sha1 or a hash of the parsed JSON."""
+    assert git_blob_id(b'{"gpt-5.4-mini": {"mode": "chat"}}\n') == "18b9a8381e13a3b38a2128f184f631f95829e987"
 
 
 def _make_models(n: int) -> dict:
@@ -57,7 +55,6 @@ def test_count_model_entries_excludes_reserved_keys():
     m = _make_models(3)
     m["sample_spec"] = {"foo": "bar"}
     m[FALLBACK_GENERALIZATIONS_KEY] = {"rules": []}
-    m[METADATA_KEY] = dict(_STAMP)
     assert _count_model_entries(m) == 3
 
 
@@ -141,39 +138,6 @@ def test_finalize_with_no_block_clears_rules():
         assert match_capability_generalizations("x-1") is None
     finally:
         set_fallback_generalizations(previous)
-
-
-def test_finalize_pops_metadata_and_records_provenance():
-    finalized = _finalize_model_cost_map({**_make_models(2), METADATA_KEY: dict(_STAMP)})
-
-    assert METADATA_KEY not in finalized
-    assert len(finalized) == 2
-    provenance = get_model_cost_map_provenance()
-    assert provenance["generated_at"] == _STAMP["generated_at"]
-    assert provenance["source_revision"] == _STAMP["source_revision"]
-
-
-def test_finalize_without_metadata_clears_the_previous_stamp():
-    _finalize_model_cost_map({**_make_models(2), METADATA_KEY: dict(_STAMP)})
-
-    _finalize_model_cost_map(_make_models(2))
-
-    provenance = get_model_cost_map_provenance()
-    assert provenance["generated_at"] is None
-    assert provenance["source_revision"] is None
-
-
-@pytest.mark.parametrize(
-    "raw",
-    ["2026-09-07T00:00:00Z", {"generated_at": 42}, ["2026-09-07T00:00:00Z"]],
-    ids=["string", "wrong_field_type", "list"],
-)
-def test_finalize_tolerates_a_malformed_metadata_block(raw):
-    finalized = _finalize_model_cost_map({**_make_models(2), METADATA_KEY: raw})
-
-    assert METADATA_KEY not in finalized
-    assert len(finalized) == 2
-    assert get_model_cost_map_provenance()["generated_at"] is None
 
 
 def test_shipped_backup_carries_the_claude_routing_rules():
@@ -390,10 +354,6 @@ def _real_map_bytes() -> bytes:
     return json.dumps(_load_root_cost_map()).encode()
 
 
-def _stamped_map_bytes(stamp: dict) -> bytes:
-    return json.dumps({**_load_root_cost_map(), METADATA_KEY: stamp}).encode()
-
-
 class _SleepRecorder:
     """Injected in place of asyncio.sleep so tests assert waits without real delay."""
 
@@ -555,40 +515,51 @@ async def test_refetch_respects_local_env_override(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_refetch_records_the_file_stamp_and_the_fetch_etag():
-    """A reload reports which revision of the map it swapped in: the ``_metadata`` stamp the file
-    carries plus the ETag the fetch returned, with the stamp itself kept out of the model map."""
-    client, _ = _mock_client(
-        [httpx.Response(200, headers={"ETag": 'W/"abc123"'}, content=_stamped_map_bytes(_STAMP))]
-    )
+async def test_refetch_records_the_blob_id_of_the_bytes_served_and_the_fetch_etag():
+    """A reload reports which revision of the map it swapped in: the git blob id of the exact bytes the
+    fetch returned, so ``git rev-parse <commit>:model_prices_and_context_window.json`` can confirm it,
+    plus the ETag the fetch returned."""
+    body = _real_map_bytes()
+    client, _ = _mock_client([httpx.Response(200, headers={"ETag": 'W/"abc123"'}, content=body)])
 
     result = await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client)
 
     assert isinstance(result, ModelCostMapReloaded)
+    assert result.revision == git_blob_id(body)
     assert result.etag == 'W/"abc123"'
-    assert METADATA_KEY not in result.model_cost_map
-    assert get_model_cost_map_provenance() == {
-        "generated_at": _STAMP["generated_at"],
-        "source_revision": _STAMP["source_revision"],
-        "etag": 'W/"abc123"',
-    }
+    assert get_model_cost_map_provenance() == {"source_revision": git_blob_id(body), "etag": 'W/"abc123"'}
 
 
 @pytest.mark.asyncio
-async def test_refetch_local_override_reports_the_bundled_stamp_without_an_etag(monkeypatch):
-    """Forcing the bundled backup after a remote reload must drop the remote ETag, since the map
-    served is no longer the one that ETag identifies."""
-    remote, _ = _mock_client(
-        [httpx.Response(200, headers={"ETag": 'W/"remote"'}, content=_stamped_map_bytes(_STAMP))]
+async def test_refetch_revision_follows_the_bytes_not_the_url():
+    """Two fetches of the same URL that return different bytes report different revisions."""
+    edited = json.loads(_real_map_bytes())
+    edited["gpt-5.4-mini"]["input_cost_per_token"] = 0.5
+    client, _ = _mock_client(
+        [httpx.Response(200, content=_real_map_bytes()), httpx.Response(200, content=json.dumps(edited).encode())]
     )
+
+    first = await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client)
+    second = await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=client)
+
+    assert isinstance(first, ModelCostMapReloaded) and isinstance(second, ModelCostMapReloaded)
+    assert first.revision != second.revision
+    assert get_model_cost_map_provenance()["source_revision"] == second.revision
+
+
+@pytest.mark.asyncio
+async def test_refetch_local_override_reports_the_bundled_blob_id_without_an_etag(monkeypatch):
+    """Forcing the bundled backup after a remote reload must report the backup's own blob id and drop the
+    remote ETag, since the map served is no longer the one that ETag identifies."""
+    remote, _ = _mock_client([httpx.Response(200, headers={"ETag": 'W/"remote"'}, content=_real_map_bytes())])
     await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0), client=remote)
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
     result = await refetch_model_cost_map(url=_URL, sleep=_SleepRecorder(), rng=random.Random(0))
 
     assert isinstance(result, ModelCostMapReloaded)
-    assert METADATA_KEY not in result.model_cost_map
-    assert get_model_cost_map_provenance() == {**_load_bundled_stamp(), "etag": None}
+    assert result.revision == _bundled_blob_id()
+    assert get_model_cost_map_provenance() == {"source_revision": _bundled_blob_id(), "etag": None}
 
 
 # ---------------------------------------------------------------------------
@@ -633,7 +604,7 @@ def test_boot_load_retries_transient_failures_instead_of_falling_back():
     source = get_model_cost_map_source_info()
     assert source["source"] == "remote"
     assert source["fallback_reason"] is None
-    assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY, METADATA_KEY}
+    assert cost_map.keys() >= _load_root_cost_map().keys() - {"sample_spec", FALLBACK_GENERALIZATIONS_KEY}
 
 
 def test_boot_load_honors_retry_after_then_falls_back_after_max_attempts():
@@ -685,37 +656,31 @@ def test_boot_load_respects_local_env_override(monkeypatch):
     assert get_model_cost_map_source_info()["is_env_forced"] is True
 
 
-def test_boot_load_records_the_file_stamp_and_the_fetch_etag():
-    client, _ = _mock_client(
-        [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_stamped_map_bytes(_STAMP))],
-        client_cls=httpx.Client,
-    )
+def test_boot_load_records_the_blob_id_of_the_bytes_served_and_the_fetch_etag():
+    body = _real_map_bytes()
+    client, _ = _mock_client([httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=body)], client_cls=httpx.Client)
 
-    cost_map = get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=client)
+    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=client)
 
-    assert METADATA_KEY not in cost_map
     source = get_model_cost_map_source_info()
     assert source["source"] == "remote"
     assert source["etag"] == 'W/"boot"'
-    assert source["generated_at"] == _STAMP["generated_at"]
-    assert source["source_revision"] == _STAMP["source_revision"]
+    assert source["source_revision"] == git_blob_id(body)
     assert source["loaded_at"] is not None
 
 
-def test_boot_load_fallback_to_the_backup_drops_the_remote_etag():
-    """A boot that lands on the bundled backup reports the backup's own stamp and no ETag, even
+def test_boot_load_fallback_to_the_backup_reports_its_blob_id_and_drops_the_remote_etag():
+    """A boot that lands on the bundled backup reports the backup's own blob id and no ETag, even
     when an earlier load in the same process had fetched the remote map."""
     remote, _ = _mock_client(
-        [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_stamped_map_bytes(_STAMP))],
-        client_cls=httpx.Client,
+        [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_real_map_bytes())], client_cls=httpx.Client
     )
     get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=remote)
     failing, _ = _mock_client([httpx.Response(404)], client_cls=httpx.Client)
 
-    cost_map = get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=failing)
+    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=failing)
 
-    assert METADATA_KEY not in cost_map
     source = get_model_cost_map_source_info()
     assert source["source"] == "local"
     assert source["etag"] is None
-    assert {"generated_at": source["generated_at"], "source_revision": source["source_revision"]} == _load_bundled_stamp()
+    assert source["source_revision"] == _bundled_blob_id()

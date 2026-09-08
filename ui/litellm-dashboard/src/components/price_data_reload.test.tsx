@@ -33,15 +33,13 @@ const remoteSource = {
   is_env_forced: false,
   fallback_reason: null,
   loaded_at: null,
-  generated_at: null,
   source_revision: null,
   etag: null,
   model_count: 1234,
 };
 const provenance = {
   loaded_at: "2026-09-07T10:00:00Z",
-  generated_at: "2026-09-06T23:38:47Z",
-  source_revision: "cd681a573fd9f5b6f15a1355f46178e4e9d374d2",
+  source_revision: "4273ec544726bf255ea920533e209e6022653bb4",
   etag: 'W/"eb8e9a53f4cc284b"',
 };
 
@@ -66,24 +64,22 @@ describe("PriceDataReload", () => {
     render(<PriceDataReload accessToken="sk-test" />);
 
     expect(await screen.findByText("Source revision:")).toBeInTheDocument();
-    expect(screen.getByText("cd681a573fd9")).toBeInTheDocument();
+    expect(screen.getByText("4273ec544726")).toBeInTheDocument();
     expect(screen.getByText("ETag:")).toBeInTheDocument();
     expect(screen.getByText('W/"eb8e9a53f4cc284b"')).toBeInTheDocument();
-    expect(screen.getByText("Generated at:")).toBeInTheDocument();
-    expect(screen.getByText(new Date(provenance.generated_at).toLocaleString())).toBeInTheDocument();
     expect(screen.getByText("Loaded at:")).toBeInTheDocument();
     expect(screen.getByText(new Date(provenance.loaded_at).toLocaleString())).toBeInTheDocument();
   });
 
-  it("shows a malformed generated_at stamp as-is instead of Invalid Date", async () => {
+  it("shows a malformed loaded_at as-is instead of Invalid Date", async () => {
     vi.mocked(getModelCostMapSource).mockResolvedValue({
       ...remoteSource,
       ...provenance,
-      generated_at: "yesterday-ish",
+      loaded_at: "yesterday-ish",
     } as never);
     render(<PriceDataReload accessToken="sk-test" />);
 
-    expect(await screen.findByText("Generated at:")).toBeInTheDocument();
+    expect(await screen.findByText("Loaded at:")).toBeInTheDocument();
     expect(screen.getByText("yesterday-ish")).toBeInTheDocument();
     expect(screen.queryByText("Invalid Date")).not.toBeInTheDocument();
   });
@@ -92,7 +88,6 @@ describe("PriceDataReload", () => {
     render(<PriceDataReload accessToken="sk-test" />);
 
     expect(await screen.findByText("Pricing Data Source")).toBeInTheDocument();
-    expect(screen.queryByText("Generated at:")).not.toBeInTheDocument();
     expect(screen.queryByText("Source revision:")).not.toBeInTheDocument();
     expect(screen.queryByText("ETag:")).not.toBeInTheDocument();
     expect(screen.queryByText("Loaded at:")).not.toBeInTheDocument();

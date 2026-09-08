@@ -1,8 +1,4 @@
 {
-    "_metadata": {
-        "generated_at": "2026-09-07T23:38:47Z",
-        "source_revision": "cd681a573fd9f5b6f15a1355f46178e4e9d374d2"
-    },
     "sample_spec": {
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,

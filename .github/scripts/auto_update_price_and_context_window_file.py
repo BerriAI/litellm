@@ -1,9 +1,6 @@
 import asyncio
 import aiohttp
 import json
-import os
-import subprocess
-from datetime import datetime, timezone
 
 # Asynchronously fetch data from a given URL
 async def fetch_data(url):
@@ -34,28 +31,13 @@ def sync_local_data_with_remote(local_data, remote_data):
     for key in (set(remote_data) - set(local_data)):
         local_data[key] = remote_data[key]
 
-def utc_now_iso():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def source_revision():
-    from_env = os.environ.get("GITHUB_SHA")
-    if from_env:
-        return from_env
-    return subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
-
-
-def stamp_metadata(data, generated_at, revision):
-    return {**data, "_metadata": {"generated_at": generated_at, "source_revision": revision}}
-
-
 # Write data to the json file
 def write_to_file(file_path, data):
     try:
         # Open the file in write mode
         with open(file_path, "w") as file:
             # Dump the data as JSON into the file
-            file.write(json.dumps(data, indent=4) + "\n")
+            json.dump(data, file, indent=4)
         print("Values updated successfully.")
     except Exception as e:
         # Print an error message if writing to file fails
@@ -167,13 +149,8 @@ def main():
 
     # If both local and openrouter data are available, synchronize and save
     if local_data and all_remote_data:
-        before = json.dumps(local_data, sort_keys=True)
         sync_local_data_with_remote(local_data, all_remote_data)
-        changed = json.dumps(local_data, sort_keys=True) != before
-        write_to_file(
-            local_file_path,
-            stamp_metadata(local_data, utc_now_iso(), source_revision()) if changed else local_data,
-        )
+        write_to_file(local_file_path, local_data)
     else:
         print("Failed to fetch model data from either local file or URL.")
 

@@ -1,6 +1,5 @@
 import importlib.util
 import json
-import re
 from pathlib import Path
 from types import MappingProxyType
 
@@ -368,58 +367,6 @@ def test_sync_is_idempotent_over_the_repo_cost_map() -> None:
     second = sync.compute_sync(first.cost_map, RECORDED_CATALOG, RECORDED_DOC)
     assert not second.has_changes
     assert second.cost_map == first.cost_map
-
-
-def test_stamp_metadata_adds_the_provenance_block_without_touching_models() -> None:
-    cost_map = {"sample_spec": {"input_cost_per_token": "USD"}, "together_ai/acme/x": {"mode": "chat"}}
-
-    stamped = sync.stamp_metadata(cost_map, "2026-09-07T00:00:00Z", "feedface")
-
-    assert stamped["_metadata"] == {"generated_at": "2026-09-07T00:00:00Z", "source_revision": "feedface"}
-    assert {key: value for key, value in stamped.items() if key != "_metadata"} == cost_map
-    assert "_metadata" not in cost_map
-
-
-def _write_registry(repo_root: Path, cost_map: dict) -> None:
-    for relpath in sync.COST_MAP_RELPATHS:
-        target = repo_root / relpath
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(cost_map, indent=4) + "\n")
-
-
-def _read_registries(repo_root: Path) -> tuple[dict, ...]:
-    return tuple(json.loads((repo_root / relpath).read_text()) for relpath in sync.COST_MAP_RELPATHS)
-
-
-def test_write_stamps_provenance_into_both_files_only_when_the_sync_changed_them(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("GITHUB_SHA", "feedface")
-    cost_map = json.loads((ROOT / "model_prices_and_context_window.json").read_text())
-    dropped = next(f"together_ai/{model.id}" for model in RECORDED_CATALOG if f"together_ai/{model.id}" in cost_map)
-    _write_registry(tmp_path, {key: value for key, value in cost_map.items() if key not in {dropped, "_metadata"}})
-    argv = (
-        "--write",
-        "--models-json",
-        str(FIXTURES / "models_serverless.json"),
-        "--deprecations-md",
-        str(FIXTURES / "deprecations.md"),
-        "--repo-root",
-        str(tmp_path),
-    )
-
-    assert sync.main(argv) == 0
-
-    written = _read_registries(tmp_path)
-    assert written[0] == written[1]
-    assert dropped in written[0]
-    assert written[0]["_metadata"]["source_revision"] == "feedface"
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", written[0]["_metadata"]["generated_at"])
-
-    sentinel = {**written[0], "_metadata": {**written[0]["_metadata"], "generated_at": "2000-01-01T00:00:00Z"}}
-    _write_registry(tmp_path, sentinel)
-
-    assert sync.main(argv) == 0
-
-    assert _read_registries(tmp_path) == (sentinel, sentinel)
 
 
 def test_pr_body_lists_every_section_and_the_skipped_types() -> None:

@@ -22,7 +22,6 @@ from .conftest import VOLATILE_KEYS, normalize
 _VOLATILE = VOLATILE_KEYS | frozenset({"timestamp"})
 
 _PROVENANCE = {
-    "generated_at": "2026-09-07T00:00:00Z",
     "source_revision": "0123456789abcdef0123456789abcdef01234567",
     "etag": 'W/"cost-map-etag"',
 }
@@ -108,22 +107,24 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
     assert update_payload["reload_revision"] == {"increment": 1}
 
 
-def test_reload_model_cost_map_surfaces_provenance_and_keeps_metadata_out_of_the_model_list(
+def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every_status_surface(
     client, auth_as, monkeypatch, mock_prisma
 ):
-    """A real refetch through the reload route reports the file's stamp and the fetch ETag on every
-    status surface, while the ``_metadata`` block never shows up as a model anywhere."""
+    """A real refetch through the reload route reports the git blob id of the exact bytes it fetched and
+    the fetch ETag on the reload response, the source route, and the schedule status alike."""
     import httpx
 
     import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import git_blob_id
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
     _attach_litellm_config(mock_prisma)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
     monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
-    stamped = {**json.loads(_ROOT_COST_MAP.read_text()), "_metadata": {k: v for k, v in _PROVENANCE.items() if k != "etag"}}
-    served = httpx.Response(200, headers={"ETag": _PROVENANCE["etag"]}, content=json.dumps(stamped).encode())
+    body = _ROOT_COST_MAP.read_bytes()
+    expected = {"source_revision": git_blob_id(body), "etag": _PROVENANCE["etag"]}
+    served = httpx.Response(200, headers={"ETag": _PROVENANCE["etag"]}, content=body)
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map._default_reload_client",
         lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: served)),
@@ -144,18 +145,15 @@ def test_reload_model_cost_map_surfaces_provenance_and_keeps_metadata_out_of_the
 
     assert reload_response.status_code == 200
     reload_body = reload_response.json()
-    assert {key: reload_body[key] for key in _PROVENANCE} == _PROVENANCE
+    assert {key: reload_body[key] for key in expected} == expected
     assert source_response.status_code == 200
     source_body = source_response.json()
-    assert {key: source_body[key] for key in _PROVENANCE} == _PROVENANCE
+    assert {key: source_body[key] for key in expected} == expected
     assert source_body["source"] == "remote"
     assert status_response.status_code == 200
-    assert {key: status_response.json()[key] for key in _PROVENANCE} == _PROVENANCE
+    assert {key: status_response.json()[key] for key in expected} == expected
     assert public_response.status_code == 200
-    public_body = public_response.json()
-    assert "_metadata" not in public_body
-    assert "_metadata" not in litellm.model_cost
-    assert "gpt-4o" in public_body
+    assert "gpt-4o" in public_response.json()
     assert reload_body["models_count"] == len(litellm.model_cost)
 
 
