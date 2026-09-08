@@ -450,6 +450,30 @@ def test_streaming_responses_call_hits_native_endpoint_and_yields_every_firework
         True,
         True,
     )
-    assert tuple(event.type for event in received) == tuple(event["type"] for event in FIREWORKS_SSE_EVENTS)
+    assert tuple(event.type for event in received) == (
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.reasoning_summary_text.delta",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    )
+    upstream_events: Final = tuple(received[index] for index in (0, 2, 3, 4, 6, 7, 11))
+    assert tuple(event.type for event in upstream_events) == tuple(event["type"] for event in FIREWORKS_SSE_EVENTS)
+    assert tuple(event.sequence_number for event in upstream_events) == tuple(range(len(FIREWORKS_SSE_EVENTS)))
+    assert received[0].response.id == received[1].response.id == received[-1].response.id
+    assert received[2].item.type == "reasoning"
+    assert received[3].delta == "pong"
+    assert received[8].text == "pong"
+    assert received[9].part.text == "pong"
+    assert received[10].item.type == "message"
+    assert received[10].item.id == "msg_1"
+    assert received[10].output_index == 1
     assert "".join(event.delta for event in received if event.type == "response.output_text.delta") == "pong"
     assert received[-1].response.usage.output_tokens == 89

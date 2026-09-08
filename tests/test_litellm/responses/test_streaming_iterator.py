@@ -829,7 +829,8 @@ async def test_truncated_function_call_stream_synthesizes_item_lifecycle():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
-async def test_complete_gpt_5_6_reasoning_stream_preserves_item_lifecycle(sync: bool) -> None:
+@pytest.mark.parametrize("complete_reasoning", [False, True], ids=["truncated-reasoning", "complete-reasoning"])
+async def test_gpt_5_6_reasoning_stream_preserves_item_lifecycle(sync: bool, complete_reasoning: bool) -> None:
     reasoning_events = [
         {
             "type": "response.output_item.added",
@@ -862,15 +863,18 @@ async def test_complete_gpt_5_6_reasoning_stream_preserves_item_lifecycle(sync: 
         },
     ]
     message_events = [
-        {**event, **({"output_index": 1} if "output_index" in event else {})}
-        for event in _FULL_TEXT_EVENTS[2:]
+        {**event, **({"output_index": 1} if "output_index" in event else {})} for event in _FULL_TEXT_EVENTS[2:]
     ]
     events = [
         {
             **event,
             **({"response": {**event["response"], "model": "gpt-5.6"}} if "response" in event else {}),
         }
-        for event in [*_FULL_TEXT_EVENTS[:2], *reasoning_events, *message_events]
+        for event in [
+            *_FULL_TEXT_EVENTS[:2],
+            *(reasoning_events if complete_reasoning else reasoning_events[:2]),
+            *message_events,
+        ]
     ]
     collected = await _drive(events, sync=sync, model="gpt-5.6")
 
@@ -878,14 +882,26 @@ async def test_complete_gpt_5_6_reasoning_stream_preserves_item_lifecycle(sync: 
     assert collected[2].item.id == "rs_1"
     assert collected[2].item.type == "reasoning"
     assert collected[3].delta == "Thinking"
-    assert collected[4].text == "Thinking"
-    assert collected[5].item.type == "reasoning"
-    assert collected[6].output_index == 1
-    assert collected[6].item.id == "msg_1"
-    assert collected[8].delta == "Hello world"
-    assert collected[9].text == "Hello world"
+    if complete_reasoning:
+        assert collected[4].text == "Thinking"
+        assert collected[5].item.type == "reasoning"
+    message_start = 6 if complete_reasoning else 4
+    assert collected[message_start].output_index == 1
+    assert collected[message_start].item.id == "msg_1"
+    assert collected[message_start + 2].delta == "Hello world"
+    assert collected[message_start + 3].text == "Hello world"
     assert collected[-1].response.model == "gpt-5.6"
     assert E.FUNCTION_CALL_ARGUMENTS_DONE not in _types(collected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_stream_without_item_events_preserves_response_status_events(sync: bool) -> None:
+    events = [_FULL_TEXT_EVENTS[0], _FULL_TEXT_EVENTS[-1]]
+    collected = await _drive(events, sync=sync)
+
+    assert _types(collected) == [E.RESPONSE_CREATED, E.RESPONSE_COMPLETED]
+    assert collected[0].response.id == collected[1].response.id
 
 
 @pytest.mark.asyncio

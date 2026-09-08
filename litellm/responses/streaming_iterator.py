@@ -6,7 +6,7 @@ import time
 import traceback
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -280,14 +280,14 @@ def _build_bag(
     return model_cls(**fields)
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class _ResponsesStreamItemState:
     """Per-``output_index`` lifecycle bookkeeping for one streamed output item."""
 
     item_id: str
     output_index: int
     content_index: int = 0
-    has_content_part: bool = True  # message/refusal have a content part; function_call does not
+    item_type: Literal["message", "function_call"] = "message"
     part_kind: str = "output_text"  # "output_text" | "refusal"
     accumulated_text: str = ""
     output_item_added_seen: bool = False
@@ -296,8 +296,12 @@ class _ResponsesStreamItemState:
     content_part_done_seen: bool = False
     output_item_done_seen: bool = False
 
+    @property
+    def has_content_part(self) -> bool:
+        return self.item_type == "message"
 
-_ItemStateMap = dict[int, _ResponsesStreamItemState]
+
+_ItemStateMap = Mapping[int, _ResponsesStreamItemState]
 
 
 class _ResponsesLifecycleGapFiller:
@@ -322,8 +326,7 @@ class _ResponsesLifecycleGapFiller:
         self._response_id = response_id
         self._created_seen = False
         self._in_progress_seen = False
-        # Per-output-index lifecycle state accumulated across streamed SSE chunks.
-        self._items: _ItemStateMap = {}  # mutable-ok: per-chunk streaming state
+        self._items: _ItemStateMap = MappingProxyType({})
 
     def expand(self, event: ResponsesAPIStreamingResponse) -> tuple[ResponsesAPIStreamingResponse, ...]:
         """
@@ -336,12 +339,10 @@ class _ResponsesLifecycleGapFiller:
         ev = ResponsesAPIStreamEvents
         etype = _obj_get(event, "type")
 
-        if etype == ev.RESPONSE_CREATED:
+        if etype in (ev.RESPONSE_CREATED, ev.RESPONSE_IN_PROGRESS):
+            self._response_id = _safe_str(_obj_get(_obj_get(event, "response"), "id"), self._response_id)
             self._created_seen = True
-            return (event,)
-        if etype == ev.RESPONSE_IN_PROGRESS:
-            self._created_seen = True
-            self._in_progress_seen = True
+            self._in_progress_seen = self._in_progress_seen or etype == ev.RESPONSE_IN_PROGRESS
             return (event,)
         if etype == ev.OUTPUT_ITEM_ADDED:
             openers = self._response_openers()
@@ -379,7 +380,7 @@ class _ResponsesLifecycleGapFiller:
             self._observe_output_item_done(event)
             return (event,)
         if etype in (ev.RESPONSE_COMPLETED, ev.RESPONSE_INCOMPLETE, ev.RESPONSE_FAILED):
-            openers = self._response_openers() if (self._items or self._created_seen) else ()
+            openers = self._response_openers() if self._items else ()
             return (*openers, *self._teardown(), event)
         return (event,)
 
@@ -415,68 +416,90 @@ class _ResponsesLifecycleGapFiller:
         return ResponseInProgressEvent(type=ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, response=response)
 
     def _item_for(self, event: object) -> _ResponsesStreamItemState:
-        output_index = _safe_int(_obj_get(event, "output_index", 0), 0)
-        existing = self._items.get(output_index)
+        output_index: Final = _safe_int(_obj_get(event, "output_index", 0), 0)
+        existing: Final = self._items.get(output_index)
         if existing is not None:
             return existing
-        state = _ResponsesStreamItemState(
+        state: Final = _ResponsesStreamItemState(
             item_id=_safe_str(_obj_get(event, "item_id", ""), "") or self._response_id,
             output_index=output_index,
             content_index=_safe_int(_obj_get(event, "content_index", 0), 0),
         )
-        self._items[output_index] = state
+        return self._store_item(state)
+
+    def _store_item(self, state: _ResponsesStreamItemState) -> _ResponsesStreamItemState:
+        self._items = MappingProxyType({**self._items, state.output_index: state})
         return state
 
     def _ensure_message_item(self, event: object, *, is_refusal: bool) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
-        state = self._item_for(event)
-        state.has_content_part = True
-        state.part_kind = "refusal" if is_refusal else "output_text"
-        need_item = not state.output_item_added_seen
-        need_part = not state.content_part_added_seen
-        state.output_item_added_seen = True
-        state.content_part_added_seen = True
+        previous: Final = self._item_for(event)
+        need_item: Final = not previous.output_item_added_seen
+        need_part: Final = not previous.content_part_added_seen
+        state: Final = self._store_item(
+            replace(
+                previous,
+                item_type="message",
+                part_kind="refusal" if is_refusal else "output_text",
+                output_item_added_seen=True,
+                content_part_added_seen=True,
+            )
+        )
         return (
             *((self._build_output_item_added(state),) if need_item else ()),
             *((self._build_content_part_added(state),) if need_part else ()),
         )
 
     def _ensure_function_call_item(self, event: object) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
-        state = self._item_for(event)
-        state.has_content_part = False
-        if state.output_item_added_seen:
-            return ()
-        state.output_item_added_seen = True
-        return (self._build_output_item_added(state),)
+        previous: Final = self._item_for(event)
+        state: Final = self._store_item(replace(previous, item_type="function_call", output_item_added_seen=True))
+        return () if previous.output_item_added_seen else (self._build_output_item_added(state),)
 
     def _accumulate(self, event: object, delta: str) -> None:
-        self._item_for(event).accumulated_text += delta
+        state: Final = self._item_for(event)
+        self._store_item(replace(state, accumulated_text=state.accumulated_text + delta))
 
-    def _mark_seen(self, event: object, flag: str) -> None:
-        setattr(self._item_for(event), flag, True)
+    def _mark_seen(self, event: object, flag: Literal["leaf_done_seen", "content_part_done_seen"]) -> None:
+        state: Final = self._item_for(event)
+        self._store_item(
+            replace(
+                state,
+                leaf_done_seen=state.leaf_done_seen or flag == "leaf_done_seen",
+                content_part_done_seen=state.content_part_done_seen or flag == "content_part_done_seen",
+            )
+        )
 
     def _observe_output_item_added(self, event: object) -> None:
-        output_index = _safe_int(_obj_get(event, "output_index", 0), 0)
-        item = _obj_get(event, "item")
-        item_id = (
+        output_index: Final = _safe_int(_obj_get(event, "output_index", 0), 0)
+        item: Final = _obj_get(event, "item")
+        item_type: Final = _obj_get(item, "type")
+        # Reasoning and server-side tools have separate lifecycles; never synthesize function calls for them.
+        if item_type not in ("message", "refusal", "function_call"):
+            return
+        item_id: Final = (
             _safe_str(_obj_get(item, "id", ""), "")
             or _safe_str(_obj_get(event, "item_id", ""), "")
             or self._response_id
         )
-        state = self._items.get(output_index) or _ResponsesStreamItemState(item_id=item_id, output_index=output_index)
-        state.output_item_added_seen = True
-        item_type = _obj_get(item, "type")
-        if item_type is not None:
-            state.has_content_part = item_type in ("message", "refusal")
-        self._items[output_index] = state
+        state: Final = self._items.get(output_index) or _ResponsesStreamItemState(
+            item_id=item_id, output_index=output_index
+        )
+        self._store_item(
+            replace(
+                state,
+                item_id=item_id,
+                item_type="function_call" if item_type == "function_call" else "message",
+                output_item_added_seen=True,
+            )
+        )
 
     def _observe_content_part_added(self, event: object) -> None:
-        self._item_for(event).content_part_added_seen = True
+        self._store_item(replace(self._item_for(event), content_part_added_seen=True))
 
     def _observe_output_item_done(self, event: object) -> None:
-        output_index = _safe_int(_obj_get(event, "output_index", 0), 0)
-        state = self._items.get(output_index)
+        output_index: Final = _safe_int(_obj_get(event, "output_index", 0), 0)
+        state: Final = self._items.get(output_index)
         if state is not None:
-            state.output_item_done_seen = True
+            self._store_item(replace(state, output_item_done_seen=True))
 
     def _teardown(self) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
         return tuple(event for _, state in sorted(self._items.items()) for event in self._item_teardown(state))
@@ -484,11 +507,9 @@ class _ResponsesLifecycleGapFiller:
     def _item_teardown(self, state: _ResponsesStreamItemState) -> tuple[BaseLiteLLMOpenAIResponseObject, ...]:
         if state.output_item_done_seen:
             return ()
-        need_leaf = not state.leaf_done_seen
-        need_content_part = state.has_content_part and not state.content_part_done_seen
-        state.leaf_done_seen = True
-        state.content_part_done_seen = True
-        state.output_item_done_seen = True
+        need_leaf: Final = not state.leaf_done_seen
+        need_content_part: Final = state.has_content_part and not state.content_part_done_seen
+        self._store_item(replace(state, leaf_done_seen=True, content_part_done_seen=True, output_item_done_seen=True))
         return (
             *((self._build_leaf_done(state),) if need_leaf else ()),
             *((self._build_content_part_done(state),) if need_content_part else ()),
