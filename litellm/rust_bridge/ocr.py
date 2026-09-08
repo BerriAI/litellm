@@ -227,9 +227,9 @@ def invoke_terminal(
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-    if not isinstance(logger, Logging):
-        raise TypeError(f"expected Logging, got {type(logger).__name__}")
-    logging: Final = logger
+    logging: Final = cast(  # cast-ok: callers may supply a Logging-compatible test or plugin implementation
+        Logging, logger
+    )
     timing_value: Final = record.get("timing") if record is not None else None
     timing: Final = timing_value if isinstance(timing_value, Mapping) else None
     start_value: Final = timing.get("start_time") if timing is not None else None

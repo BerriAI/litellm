@@ -332,6 +332,7 @@ test-rust-python: install-rust-python-test-deps
 	PYO3_PYTHON="$$python" \
 	PYTHONPATH="$(CURDIR):$$site_packages$${PYTHONPATH:+:$$PYTHONPATH}" \
 	LITELLM_LOCAL_MODEL_COST_MAP=True \
+	RUST_TEST_THREADS=1 \
 	cargo test --manifest-path litellm-rust/Cargo.toml \
 		-p litellm-python-interop -p litellm-python-bridge --tests --locked -- --include-ignored
 

@@ -935,7 +935,7 @@ async def exercise():
             model='mistral/mistral-ocr-latest', api_key='test-key', timeout=5.0,
             api_base=f'http://127.0.0.1:{port}', litellm_logging_obj=logger,
             document={'type': 'document_url', 'document_url': 'https://example.test/doc.pdf'},
-        ))
+        ), logger, True)
         pending = native.send(state)
         del state, logger
         try:
@@ -1039,7 +1039,7 @@ logger = Logger()
 arguments = dict(model='mistral/mistral-ocr-latest', document=document,
                  api_key='test-key', pages=pages, metadata=metadata,
                  opaque=opaque, litellm_logging_obj=logger, timeout=Timeout())
-state = native.prepare(arguments)
+state = native.prepare(arguments, logger, False)
 native.pre_call(state)
 assert logger.calls == ['update', 'pre']
 roots = gc.get_referents(state)
