@@ -479,6 +479,89 @@ async def test_native_messages_stream_logging_fires_when_guardrail_blocks_after_
     assert logging_obj._deferred_stream_complete_args is None
 
 
+@pytest.mark.asyncio
+async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_success(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    On /chat/completions streams the CSW shape parks
+    ``(assembled ModelResponse, cache_hit)`` as the deferred args. A guardrail
+    that raises ``GuardrailRaisedException`` at end of stream must NOT dispatch
+    that deferred success logging - the request is logged via the failure path
+    instead, with the consumed usage carried over so the failure row bills
+    correctly.
+    """
+    from litellm.exceptions import GuardrailRaisedException
+    from litellm.types.utils import Usage
+
+    events: List[Any] = []
+    request_data: Dict[str, Any] = {"metadata": {}}
+    logging_obj = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test_chat_stream_guardrail_block",
+        function_id="test_chat_stream_guardrail_block",
+    )
+    logging_obj.optional_params = {}
+    logging_obj.litellm_params = {}
+    logging_obj.standard_built_in_tools_params = None
+
+    async def _dispatch_deferred_logging(*args):
+        events.append("success_dispatched")
+
+    logging_obj._on_deferred_stream_complete = _dispatch_deferred_logging
+    request_data["litellm_logging_obj"] = logging_obj
+
+    assembled = litellm.ModelResponse(
+        model="gpt-4o-mini",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "BANANA"}}],
+        usage=Usage(prompt_tokens=3, completion_tokens=5, total_tokens=8),
+    )
+
+    async def _upstream():
+        yield {"id": "c1", "choices": [{"index": 0, "delta": {"content": "BAN"}}]}
+        yield {"id": "c1", "choices": [{"index": 0, "delta": {"content": "ANA"}}]}
+        logging_obj._deferred_stream_complete_args = (assembled, False)
+
+    class _BlockingGuardrail(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+            async for chunk in response:
+                yield chunk
+            raise GuardrailRaisedException(
+                guardrail_name="g", message="blocked", blocked_content=True
+            )
+
+    monkeypatch.setattr(litellm, "callbacks", [_BlockingGuardrail()])
+
+    with pytest.raises(GuardrailRaisedException):
+        async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=_upstream(),
+            user_api_key_dict=make_user_api_key_auth(),
+            request_data=request_data,
+        ):
+            pass
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    snapshot = {
+        "events": events,
+        "callback_cleared": logging_obj._on_deferred_stream_complete is None,
+        "args_cleared": logging_obj._deferred_stream_complete_args is None,
+        "combined_usage_total_tokens": logging_obj.model_call_details["combined_usage_object"].total_tokens,
+        "response_cost_positive": logging_obj.model_call_details["response_cost"] > 0,
+    }
+    assert snapshot == {
+        "events": [],
+        "callback_cleared": True,
+        "args_cleared": True,
+        "combined_usage_total_tokens": 8,
+        "response_cost_positive": True,
+    }
+
+
 # ---------------------------------------------------------------------------
 # _fire_deferred_stream_logging
 # ---------------------------------------------------------------------------
