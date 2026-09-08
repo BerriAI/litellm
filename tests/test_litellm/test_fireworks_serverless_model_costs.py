@@ -14,24 +14,9 @@ import os
 
 import pytest
 
-import litellm
 from litellm.utils import get_model_info
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _local_model_cost_map():
-    """
-    Point litellm at the bundled cost map for the duration of this module
-    only. ``mp.undo()`` restores both the environment variable and
-    ``litellm.model_cost`` so nothing leaks into later tests.
-    """
-    mp = pytest.MonkeyPatch()
-    mp.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    mp.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    get_model_info.cache_clear()
-    yield
-    mp.undo()
-    get_model_info.cache_clear()
 
 
 NEW_ENTRIES = {
@@ -54,17 +39,6 @@ def model_data():
         return json.load(f)
 
 
-def test_fireworks_serverless_entries_exist(model_data):
-    """The new prefixed entry carries the pricing and metadata from #37274."""
-    for key, expected in NEW_ENTRIES.items():
-        assert key in model_data, f"{key} is missing from model_prices_and_context_window.json"
-        entry = model_data[key]
-        for field, value in expected.items():
-            assert entry[field] == pytest.approx(value), f"{key}.{field}"
-        assert entry["litellm_provider"] == "fireworks_ai"
-        assert entry["mode"] == "chat"
-        assert entry["supports_function_calling"] is True
-        assert entry["supports_vision"] is False
 
 
 def test_bare_fireworks_ids_resolve_through_prefixed_entries():

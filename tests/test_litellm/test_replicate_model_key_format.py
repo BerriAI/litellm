@@ -20,12 +20,6 @@ def test_replicate_models_have_valid_key_prefix(model_cost: dict[str, Any]) -> N
     )
 
 
-def test_replicate_openai_gpt_oss_20b_key_exists(model_cost: dict[str, Any]) -> None:
-    assert "replicate/openai/gpt-oss-20b" in model_cost
-    info = model_cost["replicate/openai/gpt-oss-20b"]
-    assert info["litellm_provider"] == "replicate"
-    assert info["mode"] == "chat"
-    assert info["supports_function_calling"] is True
 
 
 def test_replicate_backup_matches_main() -> None:

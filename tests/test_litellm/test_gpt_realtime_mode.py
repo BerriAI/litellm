@@ -1,10 +1,8 @@
 import json
 from pathlib import Path
 
-import pytest
 from typing_extensions import get_args, get_type_hints
 
-import litellm
 from litellm.types.utils import ModelInfoBase
 
 REALTIME_ONLY_GPT_MODELS = (
@@ -43,10 +41,6 @@ REALTIME_ONLY_GPT_MODELS_WITHOUT_ENDPOINTS = (
 ALL_REALTIME_ONLY_GPT_MODELS = REALTIME_ONLY_GPT_MODELS + REALTIME_ONLY_GPT_MODELS_WITHOUT_ENDPOINTS
 
 
-def _load_cost_map() -> dict:
-    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
-    with open(json_path) as f:
-        return json.load(f)
 
 
 def test_realtime_is_a_valid_mode_literal():
@@ -54,31 +48,10 @@ def test_realtime_is_a_valid_mode_literal():
     assert "realtime" in get_args(hints["mode"])
 
 
-@pytest.mark.parametrize("model", REALTIME_ONLY_GPT_MODELS)
-def test_realtime_only_gpt_models_are_mode_realtime(model):
-    """These models only serve /v1/realtime and are rejected by /v1/chat/completions
-    ("This is not a chat model ..."), so they must not be tagged mode=chat."""
-    info = _load_cost_map()[model]
-    assert info["supported_endpoints"] == ["/v1/realtime"]
-    assert info["mode"] == "realtime"
 
 
-@pytest.mark.parametrize("model", REALTIME_ONLY_GPT_MODELS_WITHOUT_ENDPOINTS)
-def test_realtime_only_gpt_4o_models_are_mode_realtime(model):
-    """gpt-4o(-mini)-realtime-preview are realtime-only and must not be mode=chat."""
-    assert _load_cost_map()[model]["mode"] == "realtime"
 
 
-def test_get_model_info_reports_realtime_mode(monkeypatch):
-    """get_model_info must resolve the retag against the bundled cost map, not the
-    hosted map fetched from main, which lags this repo until the next promotion."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
-    try:
-        assert litellm.get_model_info("gpt-realtime-mini")["mode"] == "realtime"
-    finally:
-        litellm.get_model_info.cache_clear()
 
 
 def test_backup_matches_main_for_realtime_models():

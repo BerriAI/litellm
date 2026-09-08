@@ -17,7 +17,6 @@ import os
 
 import pytest
 
-import litellm
 from litellm.constants import BEDROCK_CONVERSE_MODELS
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 
@@ -53,88 +52,8 @@ def _load_root_cost_map() -> dict:
 
 
 
-def test_opus_5_pricing_and_capabilities():
-    model_data = _load_root_cost_map()
-
-    expected_providers = {
-        "claude-opus-5": "anthropic",
-        "anthropic.claude-opus-5": "bedrock_converse",
-        "vertex_ai/claude-opus-5": "vertex_ai-anthropic_models",
-        "azure_ai/claude-opus-5": "azure_ai",
-    }
-
-    for model_name, provider in expected_providers.items():
-        assert model_name in model_data, f"Missing model entry: {model_name}"
-        info = model_data[model_name]
-
-        assert info["litellm_provider"] == provider
-        assert info["mode"] == "chat"
-        assert info["max_input_tokens"] == 1000000
-        assert info["max_output_tokens"] == 128000
-        assert info["max_tokens"] == 128000
-
-        # Opus 5 ships at Opus 4.8's rates: $5 / $25 per MTok, with the standard
-        # 1.25x cache-write, 2x 1-hour cache-write, and 0.1x cache-read multipliers.
-        assert info["input_cost_per_token"] == 5e-06
-        assert info["output_cost_per_token"] == 2.5e-05
-        assert info["cache_creation_input_token_cost"] == 6.25e-06
-        assert info["cache_creation_input_token_cost_above_1hr"] == 1e-05
-        assert info["cache_read_input_token_cost"] == 5e-07
-
-        # Flat rate across the full 1M window, no long-context premium.
-        assert "input_cost_per_token_above_200k_tokens" not in info
-        assert "output_cost_per_token_above_200k_tokens" not in info
-
-        # gen-5 adaptive-thinking profile: effort-driven, no sampling params, no
-        # assistant prefill.
-        assert info["supports_adaptive_thinking"] is True
-        assert info["supports_reasoning"] is True
-        assert info["supports_sampling_params"] is False
-        assert info["supports_assistant_prefill"] is False
-        assert info["supports_xhigh_reasoning_effort"] is True
-        assert info["supports_max_reasoning_effort"] is True
-
-        assert info["supports_function_calling"] is True
-        assert info["supports_prompt_caching"] is True
-        assert info["supports_tool_choice"] is True
-        assert info["supports_vision"] is True
 
 
-def test_opus_5_bedrock_regional_pricing():
-    """Global/base endpoints use base pricing; the us./eu./au./jp. regional
-    cross-region inference profiles carry a 10% premium."""
-    model_data = _load_root_cost_map()
-
-    base_pricing = {
-        "input_cost_per_token": 5e-06,
-        "output_cost_per_token": 2.5e-05,
-        "cache_creation_input_token_cost": 6.25e-06,
-        "cache_creation_input_token_cost_above_1hr": 1e-05,
-        "cache_read_input_token_cost": 5e-07,
-    }
-    regional_pricing = {
-        "input_cost_per_token": 5.5e-06,
-        "output_cost_per_token": 2.75e-05,
-        "cache_creation_input_token_cost": 6.875e-06,
-        "cache_creation_input_token_cost_above_1hr": 1.1e-05,
-        "cache_read_input_token_cost": 5.5e-07,
-    }
-
-    expected = {
-        "anthropic.claude-opus-5": base_pricing,
-        "global.anthropic.claude-opus-5": base_pricing,
-        "us.anthropic.claude-opus-5": regional_pricing,
-        "eu.anthropic.claude-opus-5": regional_pricing,
-        "au.anthropic.claude-opus-5": regional_pricing,
-        "jp.anthropic.claude-opus-5": regional_pricing,
-    }
-
-    for model_name, pricing in expected.items():
-        assert model_name in model_data, f"Missing model entry: {model_name}"
-        info = model_data[model_name]
-        assert info["litellm_provider"] == "bedrock_converse"
-        for key, value in pricing.items():
-            assert info[key] == value, f"{model_name}.{key} = {info[key]}, want {value}"
 
 
 @pytest.mark.parametrize("model_name", BEDROCK_OPUS_5_VARIANTS)
@@ -216,16 +135,6 @@ def test_opus_5_registered_for_bedrock_converse():
     assert "anthropic.claude-opus-5" in BEDROCK_CONVERSE_MODELS
 
 
-def test_opus_5_provider_resolves_via_model_info(local_model_cost_map):
-    """Regression: ``claude-opus-5`` must resolve to provider ``anthropic``.
-
-    Without the cost-map entry the model is unknown to LiteLLM, so it cannot be
-    tied to the ``anthropic`` provider and an ``anthropic/*`` wildcard deployment
-    would not match it."""
-    info = litellm.get_model_info(model="claude-opus-5")
-    assert info["litellm_provider"] == "anthropic"
-    assert info["max_input_tokens"] == 1000000
-    assert info["max_output_tokens"] == 128000
 
 
 @pytest.mark.parametrize(

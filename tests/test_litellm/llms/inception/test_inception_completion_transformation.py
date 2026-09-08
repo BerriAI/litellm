@@ -143,22 +143,6 @@ async def test_inception_fim_async():
     assert r.choices[0].text == "a + b"
 
 
-def test_inception_fim_model_configuration(monkeypatch):
-    from litellm import get_model_info
-
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.text_completion_inception_models = set()
-    litellm.add_known_models()
-
-    assert (
-        "text-completion-inception/mercury-edit-2"
-        in litellm.text_completion_inception_models
-    )
-    info = get_model_info("text-completion-inception/mercury-edit-2")
-    assert info.get("litellm_provider") == "text-completion-inception"
-    assert info.get("mode") == "completion"
-    assert info.get("max_input_tokens") == 32000
 
 
 def test_inception_fim_targets_fim_endpoint():

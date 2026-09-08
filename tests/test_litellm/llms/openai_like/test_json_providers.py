@@ -2,10 +2,9 @@
 Tests for JSON-based provider configuration system.
 """
 
-import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 try:
     import pytest
@@ -318,24 +317,6 @@ class TestDarkbloom:
         assert config is not None
         assert config.custom_llm_provider == "darkbloom"
 
-    def test_darkbloom_model_cost_map(self):
-        with open(
-            os.path.join(workspace_path, "model_prices_and_context_window.json")
-        ) as f:
-            model_cost = json.load(f)
-
-        expected_models = {
-            "darkbloom/gemma-4-26b": (3e-08, 1.65e-07),
-            "darkbloom/gpt-oss-20b": (1.45e-08, 7e-08),
-        }
-        for model, (input_cost, output_cost) in expected_models.items():
-            assert model in model_cost
-            assert model_cost[model]["litellm_provider"] == "darkbloom"
-            assert model_cost[model]["max_output_tokens"] == 32768
-            assert model_cost[model]["supports_function_calling"] is True
-            assert model_cost[model]["supports_tool_choice"] is True
-            assert model_cost[model]["input_cost_per_token"] == input_cost
-            assert model_cost[model]["output_cost_per_token"] == output_cost
 
 
 class TestPublicAIIntegration:

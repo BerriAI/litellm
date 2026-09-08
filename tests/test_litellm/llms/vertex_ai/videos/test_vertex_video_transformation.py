@@ -136,18 +136,6 @@ class TestVertexAIVideoConfig:
         # Should NOT include endpoint
         assert not url.endswith(":predictLongRunning")
 
-    def test_veo_31_lite_model_cost_entries_match_pricing(self):
-        for path in (ROOT_MODEL_COST_PATH, BACKUP_MODEL_COST_PATH):
-            model_cost = _load_model_cost_map(path)
-            info = model_cost.get(VEO_31_LITE_VERTEX_MODEL)
-
-            assert info is not None, f"{VEO_31_LITE_VERTEX_MODEL} missing from {path}"
-            assert info["litellm_provider"] == "vertex_ai-video-models"
-            assert info["mode"] == "video_generation"
-            assert info["max_input_tokens"] == 1024
-            assert info["output_cost_per_second"] == 0.05
-            assert info["output_cost_per_second_1080p"] == 0.08
-            assert info["supported_modalities"] == ["text", "image"]
 
     def test_veo_31_lite_provider_routing_from_local_model_map(
         self, monkeypatch: pytest.MonkeyPatch

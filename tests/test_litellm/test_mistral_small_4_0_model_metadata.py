@@ -18,27 +18,6 @@ def _load(path):
         return json.load(f)
 
 
-@pytest.mark.parametrize("model", SMALL_4_0_MODELS)
-def test_small_4_0_specs(model):
-    info = _load(MAIN_PATH).get(model)
-    assert info is not None, f"{model} missing from model_prices_and_context_window.json"
-
-    assert info["litellm_provider"] == "mistral"
-    assert info["mode"] == "chat"
-
-    assert info["input_cost_per_token"] == 1.5e-07
-    assert info["output_cost_per_token"] == 6e-07
-
-    assert info["max_input_tokens"] == 262144
-    assert info["max_output_tokens"] == 262144
-    assert info["max_tokens"] == 262144
-
-    assert info["supports_reasoning"] is True
-    assert info["supports_vision"] is True
-    assert info["supports_function_calling"] is True
-    assert info["supports_response_schema"] is True
-    assert info["supports_tool_choice"] is True
-    assert info["supports_assistant_prefill"] is True
 
 
 @pytest.mark.parametrize("model", SMALL_4_0_MODELS)

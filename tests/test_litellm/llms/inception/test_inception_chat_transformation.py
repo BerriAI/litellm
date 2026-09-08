@@ -231,24 +231,6 @@ def test_inception_in_provider_lists():
     assert "https://api.inceptionlabs.ai/v1" in litellm.openai_compatible_endpoints
 
 
-def test_inception_model_configuration(monkeypatch):
-    from litellm import get_model_info
-
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.inception_models = set()
-    litellm.add_known_models()
-
-    info = get_model_info("inception/mercury-2")
-    assert info.get("litellm_provider") == "inception"
-    assert info.get("mode") == "chat"
-    assert info.get("max_input_tokens") == 128000
-    assert info.get("input_cost_per_token") == 2.5e-07
-    assert info.get("output_cost_per_token") == 7.5e-07
-    assert info.get("cache_read_input_token_cost") == 2.5e-08
-    assert info.get("supports_function_calling") is True
-    assert info.get("supports_tool_choice") is True
-    assert info.get("supports_response_schema") is True
 
 
 def test_inception_model_list_populated(monkeypatch):

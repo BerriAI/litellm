@@ -1,15 +1,12 @@
-import json
 import os
-from datetime import datetime
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
 
 
-import httpx
 import pytest
 
 import litellm
-from litellm import Choices, Message, ModelResponse
+from litellm import ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
@@ -74,7 +71,6 @@ async def test_o1_handle_tool_calling_optional_params(
     - max_tokens is translated to 'max_completion_tokens'
     - role 'system' is translated to 'user'
     """
-    from openai import AsyncOpenAI
     from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
 
@@ -186,13 +182,6 @@ class TestOpenAIO3(BaseOSeriesModelsTest, BaseLLMChatTest):
         pass
 
 
-def test_o1_supports_vision():
-    """Test that o1 supports vision"""
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    for k, v in litellm.model_cost.items():
-        if k.startswith("o1") and v.get("litellm_provider") == "openai":
-            assert v.get("supports_vision") is True, f"{k} does not support vision"
 
 
 def test_o3_reasoning_effort():

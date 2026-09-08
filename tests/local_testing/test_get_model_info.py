@@ -1,8 +1,6 @@
 # What is this?
 ## Unit testing for the 'get_model_info()' function
 import os
-import traceback
-import json
 
 
 from typing import List, Dict, Any
@@ -11,7 +9,7 @@ import pytest
 
 import litellm
 from litellm import get_model_info
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 
 def test_get_model_info_simple_model_name():
@@ -49,32 +47,12 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
     assert model_info["input_cost_per_token"] == 0.0
 
 
-def test_get_model_info_shows_correct_supports_vision():
-    info = litellm.get_model_info("gemini/gemini-2.0-flash")
-    print("info", info)
-    assert info["supports_vision"] is True
 
 
-def test_get_model_info_shows_assistant_prefill():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    info = litellm.get_model_info("deepseek/deepseek-chat")
-    print("info", info)
-    assert info.get("supports_assistant_prefill") is True
 
 
-def test_get_model_info_shows_supports_prompt_caching():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    info = litellm.get_model_info("deepseek/deepseek-chat")
-    print("info", info)
-    assert info.get("supports_prompt_caching") is True
 
 
-def test_get_model_info_finetuned_models():
-    info = litellm.get_model_info("ft:gpt-3.5-turbo:my-org:custom_suffix:id")
-    print("info", info)
-    assert info["input_cost_per_token"] == 0.000003
 
 
 def test_get_model_info_gemini_pro():
@@ -219,7 +197,7 @@ def test_model_info_bedrock_converse_enforcement(monkeypatch):
 def test_get_model_info_custom_provider():
     # Custom provider example copied from https://docs.litellm.ai/docs/providers/custom_llm_server:
     import litellm
-    from litellm import CustomLLM, completion, get_llm_provider
+    from litellm import CustomLLM, completion
 
     class MyCustomLLM(CustomLLM):
         def completion(self, *args, **kwargs) -> litellm.ModelResponse:

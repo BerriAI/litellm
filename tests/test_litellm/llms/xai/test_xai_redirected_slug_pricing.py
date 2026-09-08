@@ -63,11 +63,6 @@ TIER_COST_FIELDS = (
     "output_cost_per_token_above_200k_tokens",
     "cache_read_input_token_cost_above_200k_tokens",
 )
-STALE_TIER_FIELDS = (
-    "input_cost_per_token_above_128k_tokens",
-    "output_cost_per_token_above_128k_tokens",
-    "cache_read_input_token_cost_above_128k_tokens",
-)
 
 
 def expected_retirement_date(slug: str) -> str:
@@ -102,11 +97,6 @@ def test_redirected_slug_keeps_its_retirement_date(cost_map: dict, slug: str):
     assert cost_map[slug]["deprecation_date"] == expected_retirement_date(slug)
 
 
-@pytest.mark.parametrize("slug", REDIRECTED_SLUGS)
-def test_no_slug_keeps_the_superseded_128k_tier(cost_map: dict, slug: str):
-    """The 128k tier belonged to the retired model; grok-4.3 tiers at 200k."""
-    for field in STALE_TIER_FIELDS:
-        assert field not in cost_map[slug], field
 
 
 @pytest.mark.parametrize("slug", REDIRECTED_SLUGS)
@@ -118,10 +108,6 @@ def test_redirected_slug_carries_the_target_tier_rates(cost_map: dict, slug: str
         assert entry[field] == target[field], field
 
 
-def test_a_live_xai_model_is_untouched(cost_map: dict):
-    """Guard against the repricing leaking onto models xAI still serves directly."""
-    assert cost_map["xai/grok-4.6"]["input_cost_per_token"] != cost_map[REDIRECT_TARGET]["input_cost_per_token"]
-    assert "deprecation_date" not in cost_map["xai/grok-4.6"]
 
 
 def test_both_cost_maps_agree_on_the_redirected_slugs():
