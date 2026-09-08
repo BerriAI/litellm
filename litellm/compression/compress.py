@@ -205,21 +205,54 @@ def _extract_anthropic_tool_exchange_spans(
     return spans, None
 
 
+def _message_has_cache_control(message: Mapping[str, object]) -> bool:
+    """True if ``message`` carries an Anthropic ``cache_control`` breakpoint.
+
+    A breakpoint can sit directly on the message dict, or on any part of a
+    list-of-parts ``content`` (the shape Anthropic's own messages use). Either
+    placement pins the provider's KV-cache prefix to this row's exact bytes, so
+    either placement must protect the row the same way.
+    """
+    if message.get("cache_control") is not None:
+        return True
+    content: Final = message.get("content")
+    if isinstance(content, list):
+        return any(isinstance(part, Mapping) and part.get("cache_control") is not None for part in content)
+    return False
+
+
 def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
     """
     Return indices of messages that must never be compressed:
     - All system messages
     - The last user message
     - The last assistant message
+    - Any message carrying an Anthropic cache_control breakpoint
 
     The last user message is what the model is being asked to act on right now,
     so compressing it replaces the live instruction with a marker. Compression
     guardrails share this policy; see the Headroom guardrail.
+
+    A cache_control breakpoint pins the provider's prompt-cache prefix to that
+    row's exact bytes. Rewriting the row (even leaving the marker in place)
+    changes those bytes, so the next request misses the cache it thinks it is
+    reusing and silently pays a cache write instead of a cache read. This is
+    not limited to the last user/assistant row: a marker several turns back
+    (e.g. on a large cached tool result) needs the same protection.
     """
     system_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
     last_user: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
     last_assistant = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")[-1:]
-    return system_indices + last_user + last_assistant
+    cache_control_indices: Final = tuple(
+        index for index, msg in enumerate(messages) if _message_has_cache_control(msg)
+    )
+    seen: Final[set[int]] = set()
+    ordered: Final[list[int]] = []
+    for index in system_indices + last_user + last_assistant + cache_control_indices:
+        if index not in seen:
+            seen.add(index)
+            ordered.append(index)
+    return tuple(ordered)
 
 
 def _combine_scores(
