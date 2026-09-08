@@ -822,16 +822,16 @@ def _mock_scheduled_proxy_config() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_initialize_scheduled_jobs_credentials(monkeypatch):
-    """
-    Test that get_credentials is only called when store_model_in_db is True
-    """
+async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
     monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
     from litellm.proxy.proxy_server import ProxyStartupEvent
     from litellm.proxy.utils import ProxyLogging
 
-    # Mock dependencies
     mock_prisma_client = MagicMock()
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
@@ -841,25 +841,6 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
         patch("litellm.proxy.proxy_server.store_model_in_db", False),
-    ):  # set store_model_in_db to False
-        # Test when store_model_in_db is False
-        await ProxyStartupEvent.initialize_scheduled_background_jobs(
-            general_settings={},
-            prisma_client=mock_prisma_client,
-            proxy_budget_rescheduler_min_time=1,
-            proxy_budget_rescheduler_max_time=2,
-            proxy_batch_write_at=5,
-            proxy_logging_obj=mock_proxy_logging,
-        )
-
-        # Verify get_credentials was not called
-        mock_proxy_config.get_credentials.assert_not_called()
-
-    # Now test with store_model_in_db = True
-    with (
-        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
-        patch("litellm.proxy.proxy_server.store_model_in_db", True),
-        patch("litellm.proxy.proxy_server.get_secret_bool", return_value=True),
     ):
         await ProxyStartupEvent.initialize_scheduled_background_jobs(
             general_settings={},
@@ -870,12 +851,31 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
             proxy_logging_obj=mock_proxy_logging,
         )
 
-        # Verify get_credentials was called both directly and scheduled
-        assert mock_proxy_config.get_credentials.call_count == 1  # Direct call
+        mock_proxy_config.get_credentials.assert_not_called()
+        mock_proxy_config.add_deployment.assert_not_called()
 
-        # Verify a scheduled job was added for get_credentials
-        mock_scheduler_calls = [call[0] for call in mock_proxy_config.get_credentials.mock_calls]
-        assert len(mock_scheduler_calls) > 0
+    scheduler = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+
+        assert scheduler.get_job("get_credentials_job") is None
+        assert scheduler.get_job("add_deployment_job") is not None
+        mock_proxy_config.get_credentials.assert_not_called()
+        assert mock_proxy_config.add_deployment.call_count == 1
+    finally:
+        scheduler.shutdown(wait=False)
 
 
 @pytest.mark.asyncio
@@ -924,7 +924,7 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
 @pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
     """
-    The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
+    The DB config-reload job (add_deployment) that keeps multi-pod
     deployments in sync must be scheduled at the configured
     proxy_config_reload_interval_seconds, not a hardcoded value.
     """
@@ -967,7 +967,7 @@ async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(
         if "id" in job_call.kwargs
     }
     assert scheduled_seconds["add_deployment_job"] == configured_interval
-    assert scheduled_seconds["get_credentials_job"] == configured_interval
+    assert "get_credentials_job" not in scheduled_seconds
 
 
 @pytest.mark.asyncio
@@ -1011,7 +1011,7 @@ async def test_initialize_scheduled_jobs_rejects_non_positive_config_reload_inte
         if "id" in job_call.kwargs
     }
     assert scheduled_seconds["add_deployment_job"] == 30
-    assert scheduled_seconds["get_credentials_job"] == 30
+    assert "get_credentials_job" not in scheduled_seconds
 
 
 @pytest.mark.asyncio
@@ -7446,10 +7446,8 @@ async def test_store_model_in_db_db_override_when_config_false():
         # store_model_in_db should now be True (overridden by DB)
         assert ps.store_model_in_db is True
 
-        # add_deployment and get_credentials should have been called
-        # since store_model_in_db is now True
         assert mock_proxy_config.add_deployment.call_count == 1
-        assert mock_proxy_config.get_credentials.call_count == 1
+        mock_proxy_config.get_credentials.assert_not_called()
 
 
 @pytest.mark.asyncio
