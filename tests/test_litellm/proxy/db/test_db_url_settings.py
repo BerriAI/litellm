@@ -849,15 +849,7 @@ def test_libpq_ssl_translation_covers_direct_url_and_read_replica(monkeypatch):
         }, env_var
 
 
-# ---------------------------------------------------------------------------
-# DATABASE_MAX_IDLE_CONNECTION_LIFETIME
-# ---------------------------------------------------------------------------
-
-
 def test_default_idle_lifetime_applied_to_pinned_writer_and_direct_url(monkeypatch):
-    """The componentized entrypoints (gateway / backend / migrations) hand Prisma
-    the URLs written here; without the default, quaint keeps idle connections for
-    300s and dead sockets surface as ``Error { kind: Closed }``."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
     monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@direct.example.com:5432/litellm_db")
 
@@ -908,9 +900,6 @@ def test_env_knob_rejects_a_non_integer_value(monkeypatch):
 
 @pytest.mark.parametrize(("knob", "expected"), [(None, "60"), ("45", "45")])
 def test_reader_inherits_the_writer_idle_lifetime(monkeypatch, knob, expected):
-    """The reader is its own pool, so it needs the lifetime too. It copies the
-    writer's params, which means the default (or knob) has to land on the writer
-    before the reader is assembled."""
     if knob is not None:
         monkeypatch.setenv("DATABASE_MAX_IDLE_CONNECTION_LIFETIME", knob)
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
