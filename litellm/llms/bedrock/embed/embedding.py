@@ -357,7 +357,8 @@ class BedrockEmbedding(BaseAWSLLM):
             if extra_headers is not None:
                 headers = {"Content-Type": "application/json", **extra_headers}
 
-            prepped = self.get_request_headers(
+            prepped = await asyncio.to_thread(
+                self.get_request_headers,
                 credentials=credentials,
                 aws_region_name=aws_region_name,
                 extra_headers=extra_headers,

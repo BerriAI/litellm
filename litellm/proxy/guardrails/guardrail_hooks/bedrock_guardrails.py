@@ -917,7 +917,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 source,
             )
             return BedrockGuardrailResponse()
-        credentials, aws_region_name = self._load_credentials(bearer_token=bedrock_bearer_token(api_key))
+        credentials, aws_region_name = await asyncio.to_thread(
+            self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
+        )
         allow_chunking: Final = not self._content_uses_contextual_grounding(content)
 
         completed_chunk_usages: Final[list[BedrockGuardrailUsage]] = []  # mutable-ok: billed-chunk usage accumulator
@@ -1178,7 +1180,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             **base_request_data,
             "content": content,
         }  # mutable-ok: outbound JSON request body
-        prepared_request: Final = self._prepare_request(
+        prepared_request: Final = await asyncio.to_thread(
+            self._prepare_request,
             credentials=credentials,
             data=bedrock_request_data,
             optional_params=self.optional_params,
@@ -1875,10 +1878,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             return BedrockGuardrailResponse()
 
         api_key: Final[str | None] = request_data.get("api_key") if request_data else None
-        credentials, aws_region_name = self._load_credentials(bearer_token=bedrock_bearer_token(api_key))
+        credentials, aws_region_name = await asyncio.to_thread(
+            self._load_credentials, bearer_token=bedrock_bearer_token(api_key)
+        )
         body: Final[dict[str, object]] = {"messages": checks_messages, "checks": self.checks}
 
-        prepared_request: Final = self._prepare_request(
+        prepared_request: Final = await asyncio.to_thread(
+            self._prepare_request,
             credentials=credentials,
             data=body,
             optional_params=self.optional_params,

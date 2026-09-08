@@ -81,7 +81,11 @@ class AwsAuthError(Exception):
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
-class BaseAWSLLM:
+class SignsRequestsWithAWS:
+    pass
+
+
+class BaseAWSLLM(SignsRequestsWithAWS):
     # Process-wide IAM credential cache (shared across instances — Bedrock passthrough is per-request).
     # Storage is in-process memory only: no Redis backend unless attached elsewhere. Entry TTL: static
     # access-key + secret + region use ``_get_default_ttl_for_boto3_credentials`` (~59 minutes); ambient
@@ -1701,6 +1705,6 @@ async def sign_request_off_loop_if_aws(
     *args: _SignParams.args,
     **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped sign_request signature
 ) -> _SignedRequest:
-    if isinstance(provider_config, BaseAWSLLM):
+    if isinstance(provider_config, SignsRequestsWithAWS):
         return await asyncio.to_thread(sign_request, *args, **kwargs)
     return sign_request(*args, **kwargs)
