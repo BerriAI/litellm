@@ -666,10 +666,18 @@ async def _reconcile_budget_reservation_before_db_update(
         await reconcile_budget_reservation(
             budget_reservation=budget_reservation, actual_cost=response_cost, finalize=False
         )
-    except Exception:
-        verbose_proxy_logger.debug(
-            "Budget reservation reconcile before DB update failed; deferring to counter update", exc_info=True
+    except Exception:  # noqa: BLE001  # a failed reconcile must not block the spend write; the counters are dropped instead
+        verbose_proxy_logger.warning(
+            "Failed to reconcile budget reservation before persisting spend; invalidating reserved counters"
         )
+        try:
+            await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+        except Exception:  # noqa: BLE001  # nothing left to try; the finalized stamp below keeps it from being reprocessed
+            verbose_proxy_logger.exception(
+                "Failed to invalidate budget reservation counters after pre-persist reconcile failed"
+            )
+        finally:
+            budget_reservation["finalized"] = True
 
 
 async def _release_budget_reservation(budget_reservation: dict | None) -> None:
