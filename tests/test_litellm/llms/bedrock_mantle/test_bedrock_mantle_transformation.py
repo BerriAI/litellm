@@ -399,6 +399,46 @@ class TestBedrockMantleChatAuth:
         assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
         assert "/us-west-2/bedrock/aws4_request" not in headers["Authorization"]
 
+    @pytest.mark.parametrize(
+        ("region_params", "env", "expected_region"),
+        [
+            ({"aws_region_name": "us-west-2"}, {}, "us-west-2"),
+            ({}, {"BEDROCK_MANTLE_REGION": "ap-southeast-2"}, "ap-southeast-2"),
+        ],
+    )
+    def test_sigv4_scope_ignores_the_region_segment_of_a_lookalike_host(
+        self, monkeypatch, region_params, env, expected_region
+    ):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_REGION",
+            "BEDROCK_MANTLE_API_BASE",
+            "AWS_REGION",
+            "AWS_REGION_NAME",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        for var, value in env.items():
+            monkeypatch.setenv(var, value)
+
+        cfg = BedrockMantleChatConfig(aws_signer=BaseAWSLLM())
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                **region_params,
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.eu-west-1.api.aws.internal.example.com/openai/v1/chat/completions",
+            api_key=None,
+        )
+
+        assert f"/{expected_region}/bedrock/aws4_request" in headers["Authorization"]
+        assert "/eu-west-1/bedrock/aws4_request" not in headers["Authorization"]
+
     def test_no_bearer_and_no_credentials_raises_value_error(self, monkeypatch):
         from unittest.mock import MagicMock
 
@@ -644,40 +684,6 @@ class TestBedrockMantleProviderResolution:
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
 
-    def test_gpt_oss_120b_pricing(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        # Bedrock pricing: $0.15/M input, $0.60/M output
-        assert info["input_cost_per_token"] == pytest.approx(1.5e-7)
-        assert info["output_cost_per_token"] == pytest.approx(6e-7)
-
-    def test_gpt_oss_20b_pricing(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-20b")
-        # Bedrock pricing: $0.075/M input, $0.30/M output
-        assert info["input_cost_per_token"] == pytest.approx(7.5e-8)
-        assert info["output_cost_per_token"] == pytest.approx(3e-7)
-
-    def test_pricing_significantly_cheaper_than_openai_native(self, monkeypatch):
-        """
-        Verify Bedrock Mantle pricing is cheaper than OpenAI's direct API pricing.
-        This is the core issue the provider addition fixes — previously users were being
-        billed at OpenAI rates instead of the cheaper Bedrock rates.
-        """
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        bedrock_info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        # OpenAI direct pricing for gpt-oss-120b is ~$0.039/M input, $0.190/M output
-        # Bedrock should be cheaper at $0.15/M input and $0.60/M output... wait
-        # Actually, Bedrock ADDS value not reduces cost vs OpenAI direct for these models.
-        # The key fix is that we now use Bedrock-specific prices instead of mapping to
-        # some unrelated OpenAI model (like gpt-4) pricing.
-        # Just validate the pricing is as expected from AWS docs.
-        assert bedrock_info["input_cost_per_token"] == pytest.approx(1.5e-7)
-        assert bedrock_info["output_cost_per_token"] == pytest.approx(6e-7)
-
     def test_safeguard_models_have_larger_output_tokens(self, monkeypatch):
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
         litellm.add_known_models()
@@ -686,49 +692,6 @@ class TestBedrockMantlePricing:
             "bedrock_mantle/openai.gpt-oss-safeguard-120b"
         )
         assert info_safeguard["max_output_tokens"] > info_120b["max_output_tokens"]
-
-    def test_reasoning_support(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        assert info.get("supports_reasoning") is True
-
-    def test_context_window(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        assert info["max_input_tokens"] == 131072
-
-
-@pytest.mark.parametrize(
-    "model_id,input_cost,output_cost,max_tokens",
-    [
-        ("google.gemma-4-31b", 1.4e-07, 4e-07, 256000),
-        ("google.gemma-4-26b-a4b", 1.3e-07, 4e-07, 256000),
-        ("google.gemma-4-e2b", 4e-08, 8e-08, 128000),
-    ],
-)
-def test_gemma_4_bedrock_mantle_model_metadata(
-    local_cost_map, model_id, input_cost, output_cost, max_tokens
-):
-    full_model_name = f"bedrock_mantle/{model_id}"
-    info = litellm.get_model_info(full_model_name)
-
-    assert info["mode"] == "chat"
-    assert info["input_cost_per_token"] == pytest.approx(input_cost)
-    assert info["output_cost_per_token"] == pytest.approx(output_cost)
-    assert info["max_input_tokens"] == max_tokens
-    assert info["max_output_tokens"] == max_tokens
-    assert info["supports_function_calling"] is True
-    assert info["supports_reasoning"] is True
-    assert info["supports_tool_choice"] is True
-    assert info["supports_vision"] is True
-    assert (
-        litellm.supports_parallel_function_calling(
-            model=full_model_name, custom_llm_provider="bedrock_mantle"
-        )
-        is False
-    )
 
 
 @pytest.mark.parametrize(

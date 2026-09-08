@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias, assert_never
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+
+from typing_extensions import assert_never
 
 if TYPE_CHECKING:
     from .strategy import CaseSpec, StrategyDefinition

@@ -40,7 +40,7 @@ ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG: Final[frozenset[str]] = frozenset(
         "router_general_settings",
         "ignore_invalid_deployments",
         "fallback_access_check",
-        "heuristic_v2_router_limit",
+        "auto_router_capability_limit",
     }
 )
 DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
@@ -55,6 +55,7 @@ S3_PREFIX_DIGEST_CHARS: Final = 16
 MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = int(os.getenv("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1))
+budget_reservation_disabled_info_emitted = False
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = int(os.getenv("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1))
 DEFAULT_SQS_BATCH_SIZE: Final = int(os.getenv("DEFAULT_SQS_BATCH_SIZE", 512))
 SQS_SEND_MESSAGE_ACTION: Final = "SendMessage"
@@ -89,6 +90,7 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = (
 # Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = int(os.getenv("MAX_BASE64_LENGTH_FOR_LOGGING", 64))
+BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
 REDACTED_BY_LITELLM: Final = "redacted-by-litellm"
 # in-memory stand-in handed to provider converters for redacted arguments; never stored
 REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER: Final = "{}"
@@ -214,6 +216,9 @@ MAX_CALLBACKS: Final = get_env_int("LITELLM_MAX_CALLBACKS", 100)
 # Metadata key recording which pre_call guardrails the proxy loop already ran,
 # so the deployment-level hook does not re-run them for the same request
 PRE_CALL_EXECUTED_GUARDRAILS_KEY: Final = "_pre_call_executed_guardrails"
+
+# Attribute stamped on log_guardrail_information wrappers so __init_subclass__ does not wrap them again
+LOGS_GUARDRAIL_INFORMATION_MARKER: Final = "_litellm_logs_guardrail_information"
 
 # Generic fallback for unknown models
 DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
@@ -1895,6 +1900,16 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
         "proxy-authenticate",
         "proxy-authorization",
     }
+)
+
+PROVIDER_REQUEST_ID_HEADERS: Final[tuple[str, ...]] = (
+    "x-amzn-requestid",
+    "x-request-id",
+    "request-id",
+    "x-ms-request-id",
+    "apim-request-id",
+    "x-goog-request-id",
+    "cf-ray",
 )
 
 # Browser-facing security headers that a malicious or misconfigured upstream

@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 
 import urllib.parse
+from importlib import import_module
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -2604,8 +2605,8 @@ def test_completion_forwards_store_and_prompt_cache_key_to_mcp_gateway():
     prompt_cache_key are named params, so they no longer travel via **kwargs and
     must be forwarded explicitly like safety_identifier and service_tier.
     """
-    with patch(
-        "litellm.responses.mcp.chat_completions_handler.acompletion_with_mcp"
+    with patch.object(
+        import_module("litellm.responses.mcp.chat_completions_handler"), "acompletion_with_mcp"
     ) as mock_mcp:
         result = litellm.completion(
             model="openai/gpt-4o",
@@ -3348,6 +3349,52 @@ def test_stream_chunk_builder_leaves_xai_reported_cost_to_the_calculator(monkeyp
     assert getattr(response.usage, "cost", None) == pytest.approx(0.42)
     assert response._hidden_params.get("response_cost") is None
     assert logging_obj._response_cost_calculator(result=response) == pytest.approx(0.63)
+
+
+def test_speech_mistral_dispatches_and_decodes_audio(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    audio_bytes: Final = b"ID3-fake-mp3-bytes"
+    mock_route: Final = respx_mock.post("https://api.mistral.ai/v1/audio/speech").mock(
+        return_value=httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+    )
+
+    response: Final = litellm.speech(
+        model="mistral/voxtral-mini-tts-2603",
+        input="hello from litellm",
+        voice="en_paul_neutral",
+        response_format="wav",
+        speed=2,
+        instructions="sound cheerful",
+    )
+
+    assert mock_route.called
+    request_body: Final = json.loads(mock_route.calls.last.request.content)
+    assert request_body == {
+        "model": "voxtral-mini-tts-2603",
+        "input": "hello from litellm",
+        "voice_id": "en_paul_neutral",
+        "response_format": "wav",
+    }
+    assert mock_route.calls.last.request.headers["authorization"] == "Bearer sk-mistral-test"
+    assert response.content == audio_bytes
+
+
+def test_speech_mistral_routes_to_configured_api_base(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("MISTRAL_API_KEY", "sk-mistral-test")
+    audio_bytes: Final = b"ID3-gateway-bytes"
+    gateway_route: Final = respx_mock.post("https://mistral.gateway.internal/v1/audio/speech").mock(
+        return_value=httpx.Response(200, json={"audio_data": base64.b64encode(audio_bytes).decode()})
+    )
+
+    response: Final = litellm.speech(
+        model="mistral/voxtral-mini-tts-2603",
+        input="hello from litellm",
+        voice="en_paul_neutral",
+        api_base="https://mistral.gateway.internal",
+    )
+
+    assert gateway_route.called
+    assert response.content == audio_bytes
 
 
 FOUNDRY_HOST: Final = "https://my-project.services.ai.azure.com"

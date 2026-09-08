@@ -386,6 +386,7 @@ class LLMCallSpanData:
     # keeps routes the convention folds into one operation distinguishable.
     output_type: GenAIOutputType | None = None
     call_type: str | None = None
+    request_route: str | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -393,6 +394,7 @@ class LLMCallSpanData:
         payload: StandardLoggingPayload,
         capture_content: bool = False,
         time_to_first_chunk_seconds: float | None = None,
+        request_route: str | None = None,
     ) -> LLMCallSpanData:
         params: Final = cast(Mapping[str, object], payload.get("model_parameters") or {})
         # The single parse of the request's metadata — the request-vs-provider
@@ -433,6 +435,7 @@ class LLMCallSpanData:
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
             output_type=resolve_output_type(call_type),
             call_type=call_type or None,
+            request_route=request_route or context.identity.request_route,
         )
 
 
