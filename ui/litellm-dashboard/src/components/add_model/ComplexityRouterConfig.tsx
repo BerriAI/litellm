@@ -659,6 +659,10 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
       <Card>
         <CardContent>
+          {!customTierSet && (
+            <NonReasoningTierToggle value={value} onChange={onChange} available={value.classifier_type === "llm"} />
+          )}
+
           {tierRows.map((row, index) => {
             const tierInfo = builtInTierInfo(row.id);
             const label = tierRowLabel(row, value.tier_labels);
@@ -738,10 +742,6 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               </div>
             );
           })}
-
-          {!customTierSet && (
-            <NonReasoningTierToggle value={value} onChange={onChange} available={value.classifier_type === "llm"} />
-          )}
 
           <TierSetToolbar
             editing={editingTiers}

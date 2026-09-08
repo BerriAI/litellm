@@ -1,5 +1,6 @@
 import React from "react";
 
+import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
@@ -28,7 +29,7 @@ const NonReasoningTierToggle: React.FC<{
 
   return (
     <>
-      <div className="flex items-center gap-2 mt-4 mb-2">
+      <div className="flex items-center gap-2 mb-2">
         <Switch
           checked={value.enable_non_reasoning_tier === true}
           disabled={!available}
@@ -37,11 +38,12 @@ const NonReasoningTierToggle: React.FC<{
         />
         <strong className="font-semibold">Add a non-reasoning tier</strong>
       </div>
-      <span className="block text-xs mb-3 text-muted-foreground">
+      <span className="block text-xs text-muted-foreground">
         Adds NON_REASONING below Simple, for operational agent traffic that relays or reformats information rather than
         reasoning about it. Escalation still moves up out of it when a request needs more.
         {!available && " Requires the LLM classification method."}
       </span>
+      <Separator className="my-4" />
     </>
   );
 };
