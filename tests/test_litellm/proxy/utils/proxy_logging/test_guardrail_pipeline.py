@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any, Callable, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -24,9 +25,9 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
-from litellm.proxy.utils import ProxyLogging, _raise_for_streaming_post_call_pipelines
+from litellm.proxy.utils import ProxyLogging, _streamable_post_call_pipelines
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
@@ -1384,76 +1385,87 @@ async def test_pre_call_pipeline_managed_parallel_guardrail_runs_exactly_once(
     assert seen["count"] == 1
 
 
+def _warnings(caplog: pytest.LogCaptureFixture) -> List[str]:
+    return [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
+
+
 @pytest.mark.asyncio
-async def test_pre_call_hook_rejects_streaming_request_with_post_call_pipeline(
-    proxy_logging, make_user_api_key_auth, monkeypatch
+async def test_streaming_request_whose_pipeline_guardrail_is_missing_streams_verbatim(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
 ):
     monkeypatch.setattr(litellm, "callbacks", [])
     data = _post_call_pipeline_data(stream=True)
+    chunks = _stream_chunks()
+    delivered: List[Any] = []
 
-    with pytest.raises(HTTPException) as info:
-        await proxy_logging.pre_call_hook(
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        out = await proxy_logging.pre_call_hook(
             user_api_key_dict=make_user_api_key_auth(),
             data=data,
             call_type="completion",
             guardrails_only=True,
         )
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+            response=_async_chunk_iter(chunks),
+            request_data=data,
+        ):
+            delivered.append(item)
 
-    assert info.value.status_code == 400
-    assert info.value.detail["error"]["policies"] == ("response-governance",)
-    assert info.value.detail["error"]["guardrails"] == ("gr-post",)
-    assert "stream=false" in info.value.detail["error"]["message"]
+    assert out is not None
+    assert out.get("stream") is True
+    assert [item is chunk for item, chunk in zip(delivered, chunks)] == [True, True]
+    assert len(delivered) == 2
+    assert any("response-governance" in message and "gr-post" in message for message in _warnings(caplog))
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_rejects_background_request_with_post_call_pipeline(
-    proxy_logging, make_user_api_key_auth, monkeypatch
+async def test_pre_call_hook_accepts_background_request_with_post_call_pipeline(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
 ):
     monkeypatch.setattr(litellm, "callbacks", [])
     data = _post_call_pipeline_data(background=True)
 
-    with pytest.raises(HTTPException) as info:
-        await proxy_logging.pre_call_hook(
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        out = await proxy_logging.pre_call_hook(
             user_api_key_dict=make_user_api_key_auth(),
             data=data,
             call_type="aresponses",
             guardrails_only=True,
         )
 
-    assert info.value.status_code == 400
-    assert info.value.detail["error"]["policies"] == ("response-governance",)
-    assert "background=false" in info.value.detail["error"]["message"]
+    assert out is not None
+    assert out.get("background") is True
+    assert any("response-governance" in message and "background" in message for message in _warnings(caplog))
 
 
-def test_raise_for_streaming_post_call_pipelines_ignores_non_streaming_and_pre_call(make_user_api_key_auth):
-    post_call = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="g", on_fail="block")])
-    pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="g", on_fail="block")])
-    auth = make_user_api_key_auth(request_route="/custom/stream")
+@pytest.mark.asyncio
+async def test_pre_call_hook_stays_quiet_on_background_request_without_post_call_pipeline(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
+):
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen)])
+    pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="gr-post", on_fail="block")])
+    data = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hi"}],
+        "background": True,
+        "metadata": {
+            "_guardrail_pipelines": [("request-governance", pre_call)],
+            "_pipeline_managed_guardrails": {"gr-post"},
+        },
+    }
 
-    assert (
-        _raise_for_streaming_post_call_pipelines(
-            {"stream": False, "metadata": {"_guardrail_pipelines": [("p", post_call)]}}, auth
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        out = await proxy_logging.pre_call_hook(
+            user_api_key_dict=make_user_api_key_auth(),
+            data=data,
+            call_type="aresponses",
+            guardrails_only=True,
         )
-        is None
-    )
-    assert (
-        _raise_for_streaming_post_call_pipelines(
-            {"background": False, "metadata": {"_guardrail_pipelines": [("p", post_call)]}}, auth
-        )
-        is None
-    )
-    assert (
-        _raise_for_streaming_post_call_pipelines({"metadata": {"_guardrail_pipelines": [("p", post_call)]}}, auth)
-        is None
-    )
-    assert (
-        _raise_for_streaming_post_call_pipelines(
-            {"stream": True, "metadata": {"_guardrail_pipelines": [("p", pre_call)]}}, auth
-        )
-        is None
-    )
-    assert _raise_for_streaming_post_call_pipelines({"stream": True}, auth) is None
-    assert _raise_for_streaming_post_call_pipelines({"background": True}, auth) is None
+
+    assert out is not None
+    assert not any("background" in message for message in _warnings(caplog))
 
 
 # ---------------------------------------------------------------------------
@@ -1485,6 +1497,56 @@ async def _async_chunk_iter(chunks: List[Any]):
         yield chunk
 
 
+def test_streamable_post_call_pipelines_keeps_supported_and_drops_unsupported(
+    make_user_api_key_auth, monkeypatch, caplog
+):
+    class NativeOnlyGuardrail(CustomGuardrail):
+        pass
+
+    supported = _unified_stream_guardrail({})
+    native_only = NativeOnlyGuardrail(guardrail_name="gr-native", event_hook=GuardrailEventHooks.post_call)
+    monkeypatch.setattr(litellm, "callbacks", [supported, native_only])
+    governed = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="gr-post", on_fail="block")])
+    ungoverned = GuardrailPipeline(
+        mode="post_call",
+        steps=[PipelineStep(guardrail="gr-post", on_fail="next"), PipelineStep(guardrail="gr-native", on_fail="block")],
+    )
+    pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="gr-native", on_fail="block")])
+    data = {"metadata": {"_guardrail_pipelines": [("governed", governed), ("ungoverned", ungoverned), ("req", pre_call)]}}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        streamable = _streamable_post_call_pipelines(data, make_user_api_key_auth(request_route="/v1/chat/completions"))
+
+    assert streamable == (("governed", governed),)
+    assert any("'ungoverned'" in message and "gr-native" in message for message in _warnings(caplog))
+    assert not any("'governed'" in message for message in _warnings(caplog))
+
+
+def test_streamable_post_call_pipelines_is_empty_on_route_without_translation(
+    make_user_api_key_auth, monkeypatch, caplog
+):
+    monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail({})])
+    governed = GuardrailPipeline(mode="post_call", steps=[PipelineStep(guardrail="gr-post", on_fail="block")])
+    data = {"metadata": {"_guardrail_pipelines": [("governed", governed)]}}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        streamable = _streamable_post_call_pipelines(data, make_user_api_key_auth(request_route="/custom/stream"))
+
+    assert streamable == ()
+    assert any("/custom/stream" in message and "governed" in message for message in _warnings(caplog))
+
+
+def test_streamable_post_call_pipelines_is_empty_without_post_call_pipelines(make_user_api_key_auth, caplog):
+    pre_call = GuardrailPipeline(mode="pre_call", steps=[PipelineStep(guardrail="g", on_fail="block")])
+    auth = make_user_api_key_auth(request_route="/custom/stream")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        assert _streamable_post_call_pipelines({"metadata": {"_guardrail_pipelines": [("p", pre_call)]}}, auth) == ()
+        assert _streamable_post_call_pipelines({"stream": True}, auth) == ()
+
+    assert _warnings(caplog) == []
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("request_route", [None, "/v1/chat/completions"])
 async def test_pre_call_hook_allows_streaming_when_pipeline_guardrail_supports_unified(
@@ -1507,21 +1569,25 @@ async def test_pre_call_hook_allows_streaming_when_pipeline_guardrail_supports_u
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native_lifecycle", [False, True])
-async def test_pre_call_hook_rejects_streaming_when_pipeline_guardrail_lacks_unified_support(
-    proxy_logging, make_user_api_key_auth, monkeypatch, native_lifecycle
+async def test_streaming_iterator_hook_releases_stream_when_pipeline_guardrail_lacks_unified_support(
+    proxy_logging, make_user_api_key_auth, monkeypatch, native_lifecycle, caplog
 ):
+    seen: Dict[str, Any] = {}
     if native_lifecycle:
 
         class NativeOnlyGuardrail(CustomGuardrail):
             use_native_lifecycle_hooks = True
 
             async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                seen["count"] = seen.get("count", 0) + 1
                 return inputs
 
     else:
 
         class NativeOnlyGuardrail(CustomGuardrail):
-            pass
+            async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+                seen["count"] = seen.get("count", 0) + 1
+                return response
 
     monkeypatch.setattr(
         litellm,
@@ -1529,18 +1595,29 @@ async def test_pre_call_hook_rejects_streaming_when_pipeline_guardrail_lacks_uni
         [NativeOnlyGuardrail(guardrail_name="gr-post", event_hook=GuardrailEventHooks.post_call, default_on=False)],
     )
     data = _post_call_pipeline_data(stream=True)
+    chunks = _stream_chunks()
+    delivered: List[Any] = []
 
-    with pytest.raises(HTTPException) as info:
-        await proxy_logging.pre_call_hook(
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        out = await proxy_logging.pre_call_hook(
             user_api_key_dict=make_user_api_key_auth(),
             data=data,
             call_type="completion",
             guardrails_only=True,
         )
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+            response=_async_chunk_iter(chunks),
+            request_data=data,
+        ):
+            delivered.append(item)
 
-    assert info.value.status_code == 400
-    assert info.value.detail["error"]["guardrails"] == ("gr-post",)
-    assert "apply_guardrail" in info.value.detail["error"]["message"]
+    assert out is not None
+    assert out.get("stream") is True
+    assert [item is chunk for item, chunk in zip(delivered, chunks)] == [True, True]
+    assert len(delivered) == 2
+    assert seen.get("count") is None
+    assert any("'response-governance'" in message and "gr-post" in message for message in _warnings(caplog))
 
 
 @pytest.mark.asyncio
@@ -1614,25 +1691,34 @@ async def test_pre_call_hook_allows_streaming_when_content_filter_category_masks
 
 
 @pytest.mark.asyncio
-async def test_pre_call_hook_rejects_streaming_when_route_has_no_guardrail_translation(
-    proxy_logging, make_user_api_key_auth, monkeypatch
+async def test_streaming_iterator_hook_releases_stream_when_route_has_no_guardrail_translation(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
 ):
     seen: Dict[str, Any] = {}
     monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen)])
     data = _post_call_pipeline_data(stream=True)
+    chunks = _stream_chunks()
+    delivered: List[Any] = []
 
-    with pytest.raises(HTTPException) as info:
-        await proxy_logging.pre_call_hook(
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        out = await proxy_logging.pre_call_hook(
             user_api_key_dict=make_user_api_key_auth(request_route="/custom/stream"),
             data=data,
             call_type="completion",
             guardrails_only=True,
         )
+        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=make_user_api_key_auth(request_route="/custom/stream"),
+            response=_async_chunk_iter(chunks),
+            request_data=data,
+        ):
+            delivered.append(item)
 
-    assert info.value.status_code == 400
-    assert info.value.detail["error"]["policies"] == ("response-governance",)
-    assert "/custom/stream" in info.value.detail["error"]["message"]
+    assert out is not None
+    assert [item is chunk for item, chunk in zip(delivered, chunks)] == [True, True]
+    assert len(delivered) == 2
     assert seen.get("count") is None
+    assert any("/custom/stream" in message and "response-governance" in message for message in _warnings(caplog))
 
 
 @pytest.mark.asyncio
@@ -1714,8 +1800,8 @@ def _echoed_tool_call_dicts(arguments: str) -> List[Dict[str, Any]]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("on_fail, on_error", [("block", None), ("next", "next")])
-async def test_streaming_iterator_hook_pipeline_withholds_runtime_tool_call_rewrite(
-    proxy_logging, make_user_api_key_auth, monkeypatch, on_fail, on_error
+async def test_streaming_iterator_hook_pipeline_releases_originals_on_runtime_tool_call_rewrite(
+    proxy_logging, make_user_api_key_auth, monkeypatch, on_fail, on_error, caplog
 ):
     transform = lambda inputs: {"tool_calls": _echoed_tool_call_dicts('{"ssn": "[MASKED]"}')}  # noqa: E731
     monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(transform)])
@@ -1724,7 +1810,7 @@ async def test_streaming_iterator_hook_pipeline_withholds_runtime_tool_call_rewr
     data = _post_call_pipeline_data(step=step, stream=True)
     delivered: List[Any] = []
 
-    async def _drain() -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         async for item in proxy_logging.async_post_call_streaming_iterator_hook(
             user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
             response=_async_chunk_iter(_tool_call_stream_chunks()),
@@ -1732,16 +1818,10 @@ async def test_streaming_iterator_hook_pipeline_withholds_runtime_tool_call_rewr
         ):
             delivered.append(item)
 
-    with pytest.raises(HTTPException) as info:
-        await _drain()
-
-    error = info.value.detail["error"]
-    assert delivered == []
-    assert info.value.status_code == 400
-    assert error["type"] == "guardrail_pipeline_error"
-    assert error["policies"] == ("response-governance",)
-    assert error["guardrails"] == ("gr-post",)
-    assert "stream=false" in error["message"]
+    assert len(delivered) == 2
+    assert delivered[0].choices[0].delta.tool_calls[0].function.arguments == '{"ssn": "123"}'
+    assert delivered[1].choices[0].finish_reason == "tool_calls"
+    assert any("'gr-post'" in message and "discarded" in message for message in _warnings(caplog))
 
 
 @pytest.mark.asyncio
@@ -1849,30 +1929,28 @@ async def test_streaming_iterator_hook_pipeline_releases_stream_echoed_in_anothe
 
 
 @pytest.mark.asyncio
-async def test_streaming_iterator_hook_pipeline_withholds_unresolvable_response_shape(
-    proxy_logging, make_user_api_key_auth, monkeypatch
+async def test_streaming_iterator_hook_pipeline_releases_originals_on_unresolvable_response_shape(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
 ):
     seen: Dict[str, Any] = {}
     monkeypatch.setattr(litellm, "callbacks", [_unified_stream_guardrail(seen)])
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
     data = _post_call_pipeline_data(stream=True)
+    chunks = [object(), object()]
     delivered: List[Any] = []
 
-    async def _drain() -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         async for item in proxy_logging.async_post_call_streaming_iterator_hook(
             user_api_key_dict=make_user_api_key_auth(),
-            response=_async_chunk_iter([object(), object()]),
+            response=_async_chunk_iter(chunks),
             request_data=data,
         ):
             delivered.append(item)
 
-    with pytest.raises(ProxyException) as info:
-        await _drain()
-
-    assert delivered == []
-    assert info.value.code == "500"
-    assert "withheld" in info.value.message
+    assert [item is chunk for item, chunk in zip(delivered, chunks)] == [True, True]
+    assert len(delivered) == 2
     assert seen.get("count") is None
+    assert any("response-governance" in message and "shape" in message for message in _warnings(caplog))
 
 
 def _anthropic_sse_chunks() -> List[bytes]:
@@ -1953,9 +2031,9 @@ async def test_streaming_iterator_hook_pipeline_delivers_text_rewrite_on_anthrop
 
 
 @pytest.mark.asyncio
-async def test_pipeline_executor_withholds_text_rewrite_when_translation_lacks_write_back(monkeypatch):
+async def test_pipeline_executor_discards_text_rewrite_when_translation_lacks_write_back(monkeypatch, caplog):
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-    from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor, UndeliverableStreamRewrite
+    from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 
     class NoWriteBackTranslation(BaseTranslation):
         async def process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj):
@@ -1984,45 +2062,23 @@ async def test_pipeline_executor_withholds_text_rewrite_when_translation_lacks_w
 
     transform = lambda inputs: {"texts": ["hello [MASKED]"]}  # noqa: E731
     monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(transform)])
+    chunks = _stream_chunks()
 
-    with pytest.raises(UndeliverableStreamRewrite):
-        await PipelineExecutor.execute_steps(
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await PipelineExecutor.execute_steps(
             steps=[PipelineStep(guardrail="gr-post", on_pass="allow", on_fail="block")],
             mode="post_call",
             data={"metadata": {}},
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
             call_type="acompletion",
             policy_name="response-governance",
-            streaming_chunks=_stream_chunks(),
+            streaming_chunks=chunks,
             endpoint_translation=NoWriteBackTranslation(),
         )
 
-
-@pytest.mark.asyncio
-async def test_streaming_iterator_hook_pipeline_gates_without_iterator_overrides(
-    proxy_logging, make_user_api_key_auth, monkeypatch
-):
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
-    data = _post_call_pipeline_data(stream=True)
-    delivered: List[Any] = []
-
-    async def _drain() -> None:
-        async for item in proxy_logging.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
-            response=_async_chunk_iter(_stream_chunks()),
-            request_data=data,
-        ):
-            delivered.append(item)
-
-    with pytest.raises(HTTPException) as info:
-        await _drain()
-
-    assert delivered == []
-    assert info.value.status_code == 400
-    assert info.value.detail["error"]["pipeline_context"]["step_results"] == [
-        {"guardrail": "gr-post", "outcome": "error", "action": "block"}
-    ]
+    assert result.terminal_action == "allow"
+    assert [chunk.choices[0].delta.content for chunk in chunks] == ["hello ", "world"]
+    assert any("'gr-post'" in message and "discarded" in message for message in _warnings(caplog))
 
 
 @pytest.mark.asyncio

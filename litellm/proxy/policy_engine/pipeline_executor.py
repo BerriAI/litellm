@@ -5,6 +5,7 @@ Runs guardrails sequentially per pipeline step definitions, handling
 pass/fail actions (allow, block, next, modify_response) and data forwarding.
 """
 
+import copy
 import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal
@@ -77,7 +78,7 @@ class _StreamRewriteObserver(CustomGuardrail):
     which for guardrails like Bedrock's ANONYMIZED action is only known at runtime. Text
     rewrites are deliverable on translations that write them back across the buffered chunks
     (``delivers_ended_stream_text_rewrites``); tool-call rewrites and text rewrites on any
-    other translation make the gate withhold the stream."""
+    other translation are discarded by the executor, which releases the original chunks."""
 
     def __init__(self, inner: CustomGuardrail) -> None:
         super().__init__(guardrail_name=inner.guardrail_name)
@@ -131,6 +132,19 @@ def _prepare_hook_input(
     if hook_input is not data:
         hook_input.setdefault("metadata", {})["guardrails"] = [step.guardrail]  # mutable-ok: request metadata shape
     return hook_input, scans_raw_request
+
+
+def _release_original_chunks(
+    guardrail_name: str,
+    streaming_chunks: list[object],  # mutable-ok: shared buffered-stream chunks, restored in place
+    originals: Sequence[object],
+) -> None:
+    streaming_chunks[:] = originals  # rebind-ok: the caller's buffer is the stream the client receives
+    verbose_proxy_logger.warning(
+        "Pipeline: guardrail '%s' rewrote the streamed response in a way this endpoint's streaming "
+        "pipeline cannot deliver yet; the rewrite was discarded and the original stream released",
+        guardrail_name,
+    )
 
 
 class PipelineExecutor:
@@ -263,29 +277,37 @@ class PipelineExecutor:
         litellm_logging_obj: "LiteLLMLoggingObj | None",
     ) -> None:
         """Run one streaming post_call step through the endpoint translation, delivering
-        text rewrites on translations that support ended-stream write-back and raising
-        ``UndeliverableStreamRewrite`` for any rewrite that cannot reach the client."""
+        text rewrites on translations that support ended-stream write-back. A rewrite that
+        cannot reach the client yet (a tool-call rewrite, a text rewrite on a translation
+        without write-back, or one the translation refused with
+        ``UndeliverableStreamRewrite``) is discarded: the buffered chunks go back to the
+        originals and the step passes, so the client gets the stream the merge base sent."""
         observer: Final = _StreamRewriteObserver(callback)
         deliver_rewrites: Final = type(endpoint_translation).delivers_ended_stream_text_rewrites
-        if deliver_rewrites:
-            await endpoint_translation.process_output_streaming_response(
-                responses_so_far=streaming_chunks,
-                guardrail_to_apply=observer,
-                litellm_logging_obj=litellm_logging_obj,
-                user_api_key_dict=user_api_key_dict,
-                request_data=hook_input,
-                deliver_ended_stream_rewrites=True,
-            )
-        else:
-            await endpoint_translation.process_output_streaming_response(
-                responses_so_far=streaming_chunks,
-                guardrail_to_apply=observer,
-                litellm_logging_obj=litellm_logging_obj,
-                user_api_key_dict=user_api_key_dict,
-                request_data=hook_input,
-            )
+        originals: Final = copy.deepcopy(streaming_chunks)
+        try:
+            if deliver_rewrites:
+                await endpoint_translation.process_output_streaming_response(
+                    responses_so_far=streaming_chunks,
+                    guardrail_to_apply=observer,
+                    litellm_logging_obj=litellm_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=hook_input,
+                    deliver_ended_stream_rewrites=True,
+                )
+            else:
+                await endpoint_translation.process_output_streaming_response(
+                    responses_so_far=streaming_chunks,
+                    guardrail_to_apply=observer,
+                    litellm_logging_obj=litellm_logging_obj,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=hook_input,
+                )
+        except UndeliverableStreamRewrite:
+            _release_original_chunks(step.guardrail, streaming_chunks, originals)
+            return
         if observer.rewrote_tool_calls or (observer.rewrote_texts and not deliver_rewrites):
-            raise UndeliverableStreamRewrite(step.guardrail)
+            _release_original_chunks(step.guardrail, streaming_chunks, originals)
 
     @staticmethod
     async def _run_step(
@@ -386,8 +408,6 @@ class PipelineExecutor:
                 )  # mutable-ok: modified-data contract is a plain dict
             return ("pass", response if isinstance(response, dict) else None, None, None)
 
-        except UndeliverableStreamRewrite:
-            raise
         except Exception as e:
             if CustomGuardrail._is_guardrail_intervention(e):
                 error_msg: Final = _extract_error_message(e)

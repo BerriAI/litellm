@@ -56,8 +56,9 @@ class BaseTranslation(ABC):
     """Whether ``process_output_streaming_response`` accepts
     ``deliver_ended_stream_rewrites=True`` and, on an ended (fully buffered)
     stream, writes guardrail text rewrites back across ``responses_so_far`` so
-    a buffered pipeline can release rewritten chunks instead of withholding the
-    stream. Tool-call rewrites stay undeliverable everywhere."""
+    a buffered pipeline can release rewritten chunks. Tool-call rewrites, and
+    text rewrites on every other translation, are undeliverable: the pipeline
+    executor discards them and releases the original chunks."""
 
     @staticmethod
     def transform_user_api_key_dict_to_metadata(

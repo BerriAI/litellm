@@ -699,7 +699,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         ``response.content_part.done``, ``response.output_item.done``) are synced
         to the rewritten envelope too, so a client reading deltas sees the
         rewrite instead of the raw model output; a rewrite observed where no
-        write-back is possible fails closed instead of releasing raw output.
+        write-back is possible is reported as undeliverable, so the pipeline
+        executor discards it and releases the original events.
         """
         if not responses_so_far:
             return responses_so_far
@@ -788,7 +789,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         # ------------------------------------------------------------------ #
         # Case 2: response.output_item.done — extract tool calls only, then  #
         # fall through to the text fallback when a caller expects rewrites   #
-        # delivered, so a buffer truncated here still fails closed on text.  #
+        # delivered, so a truncated buffer still reports text undeliverable. #
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
             model_response_stream: Final = (
@@ -813,7 +814,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         # Fallback: apply guardrail to the accumulated text string.           #
         # No structured write-back is possible here; guardrails that only     #
         # need to block/flag (not rewrite) still work correctly, and a        #
-        # rewrite a caller expects delivered fails closed instead.            #
+        # rewrite a caller expects delivered is reported undeliverable.       #
         # ------------------------------------------------------------------ #
         string_so_far: Final = self.get_streaming_string_so_far(responses_so_far)
         if string_so_far:

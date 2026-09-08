@@ -1027,7 +1027,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
         With ``deliver_ended_stream_rewrites``, an ended stream whose guardrail rewrote the text gets the rewrite
         written back across the buffered chunks (full rewritten text in the first ``text_delta``, the rest blanked);
-        a rewrite on a stream that never reported a ``stop_reason`` has no write-back and fails closed instead.
+        a rewrite on a stream that never reported a ``stop_reason`` has no write-back and is reported as
+        undeliverable, so the pipeline executor discards it and releases the original chunks.
         """
         from litellm.integrations.custom_guardrail import ModifyResponseException
 

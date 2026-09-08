@@ -1015,7 +1015,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         content-carrying chunk and the rest are blanked, the same shape the
         in-flight write-back uses. Chunks carrying only finish_reason or usage
         stay untouched. A rewrite on a stream carrying more than one distinct
-        choice index fails closed."""
+        choice index is reported as undeliverable, so the pipeline executor
+        discards it and releases the original chunks."""
         post_guardrail_texts: Final = self._string_choice_contents(guardrailed_response)
         changed: Final = tuple(
             after
@@ -1030,7 +1031,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if len(stream_choice_indices) != 1:
             # stream_chunk_builder collapses every choice into one index-0
             # choice, so a rewrite of the rebuilt response cannot be attributed
-            # back to a single choice on an n>1 stream: withhold the stream
+            # back to a single choice on an n>1 stream: report it undeliverable
             # rather than deliver the rewrite on the wrong choice
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
