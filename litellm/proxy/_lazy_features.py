@@ -13,7 +13,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
-from starlette.types import Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
 
@@ -266,7 +266,7 @@ class LazyFeatureMiddleware:
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         fastapi_app: "FastAPI",
         features: tuple[LazyFeature, ...] = LAZY_FEATURES,
     ):

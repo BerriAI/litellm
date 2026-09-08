@@ -277,7 +277,7 @@ class GeminiRAGIngestion(BaseRAGIngestion):
             raise Exception(error_msg)
         verbose_logger.debug("Initiate resumable upload response: %s", response.headers)
         # Extract upload URL from response headers
-        upload_url: Final = response.headers.get("x-goog-upload-url")
+        upload_url: Final = dict(response.headers).get("x-goog-upload-url")
         if not upload_url:
             raise Exception("No upload URL returned in response headers")
 

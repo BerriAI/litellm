@@ -453,7 +453,7 @@ def _raise_for_upstream_failure(
     if response.status_code == 401 and relays_upstream_auth:
         raise MCPUpstreamAuthError(
             status_code=response.status_code,
-            www_authenticate=response.headers.get("www-authenticate"),
+            www_authenticate=dict(response.headers).get("www-authenticate"),
             server_name=upstream,
         )
     raise MCPOpenApiUpstreamError(response.status_code, upstream)

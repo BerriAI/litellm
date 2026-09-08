@@ -16,7 +16,7 @@ Requires:
 
 import json
 import os
-from typing import Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -34,6 +34,9 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.secret_managers.main import KeyManagementSettings
 
 from .base_secret_manager import BaseSecretManager
+
+if TYPE_CHECKING:
+    from botocore.awsrequest import HTTPHeaders
 
 
 class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
@@ -530,7 +533,7 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         secret_value: str | None = None,
         optional_params: dict | None = None,
         request_data: dict | None = None,
-    ) -> tuple[str, Any, bytes]:
+    ) -> tuple[str, "HTTPHeaders", bytes]:
         """Prepare the AWS Secrets Manager request"""
         try:
             from botocore.auth import SigV4Auth
