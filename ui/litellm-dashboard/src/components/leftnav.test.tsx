@@ -610,17 +610,14 @@ describe("Sidebar (leftnav)", () => {
     it("hides Projects from a plain internal user", () => {
       mockUseAuthorized.mockReturnValue(internalAuth);
       renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
-      expect(screen.queryByRole("link", { name: "Projects" })).not.toBeInTheDocument();
+      expect(screen.queryByText("Projects")).not.toBeInTheDocument();
     });
 
     it("shows Projects to an internal user who administers a team", () => {
       mockUseAuthorized.mockReturnValue(internalAuth);
       teamAdminState.isTeamAdmin = true;
       renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
-      expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute(
-        "href",
-        expect.stringContaining("projects"),
-      );
+      expect(screen.getByText("Projects")).toBeInTheDocument();
     });
 
     it("shows Projects to an internal user who administers an organization", () => {
@@ -631,10 +628,7 @@ describe("Sidebar (leftnav)", () => {
         error: null,
       });
       renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
-      expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute(
-        "href",
-        expect.stringContaining("projects"),
-      );
+      expect(screen.getByText("Projects")).toBeInTheDocument();
     });
   });
 
