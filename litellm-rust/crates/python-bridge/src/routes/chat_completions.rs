@@ -25,12 +25,11 @@ use crate::marshal::optional_timeout;
 struct ChatCompletionsState {
     arguments: Option<Py<PyDict>>,
     model: Option<String>,
-    messages: Option<Value>,
-    optional_params: Option<Map<String, Value>>,
+    body: Option<Py<PyDict>>,
+    headers: Option<Py<PyAny>>,
     api_key: Option<String>,
     api_base: Option<String>,
     custom_llm_provider: Option<String>,
-    extra_headers: Option<Map<String, Value>>,
     timeout: Option<std::time::Duration>,
     terminal: Option<TerminalRecord>,
 }
@@ -38,13 +37,20 @@ struct ChatCompletionsState {
 #[pymethods]
 impl ChatCompletionsState {
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.arguments)
+        visit.call(&self.arguments)?;
+        visit.call(&self.body)?;
+        visit.call(&self.headers)
     }
 
     fn __clear__(slf: &Bound<'_, Self>) {
         let roots = {
             let mut state = slf.borrow_mut();
-            (state.arguments.take(), state.terminal.take())
+            (
+                state.arguments.take(),
+                state.body.take(),
+                state.headers.take(),
+                state.terminal.take(),
+            )
         };
         drop(roots);
     }
@@ -168,7 +174,9 @@ fn prepare(
     let admission = admission(bag)?;
     let api_key = scalar(bag, "api_key")?;
     let api_base = scalar(bag, "api_base")?;
-    let extra_headers = optional_map(bag, "extra_headers")?;
+    let headers = bag
+        .get_item("extra_headers")?
+        .filter(|value| !value.is_none());
     let timeout = optional_timeout(
         bag.get_item("timeout_seconds")?
             .filter(|value| !value.is_none())
@@ -178,13 +186,13 @@ fn prepare(
     let complete_input = PyDict::new(py);
     complete_input.set_item("model", &admission.model)?;
     complete_input.set_item("messages", bag.get_item("messages")?)?;
-    for (name, value) in &admission.optional_params {
-        complete_input.set_item(name, Pythonized(value))?;
+    if let Some(optional_params) = bag.get_item("optional_params")? {
+        complete_input.call_method1("update", (optional_params,))?;
     }
     let additional = PyDict::new(py);
-    additional.set_item(COMPLETE_INPUT_DICT, complete_input)?;
+    additional.set_item(COMPLETE_INPUT_DICT, &complete_input)?;
     additional.set_item(API_BASE, bag.get_item("api_base")?)?;
-    additional.set_item(HEADERS, bag.get_item("extra_headers")?)?;
+    additional.set_item(HEADERS, &headers)?;
     let kwargs = PyDict::new(py);
     kwargs.set_item(INPUT, bag.get_item("messages")?)?;
     kwargs.set_item(API_KEY, bag.get_item("logging_api_key")?)?;
@@ -197,12 +205,11 @@ fn prepare(
         ChatCompletionsState {
             arguments: Some(arguments),
             model: Some(admission.model),
-            messages: Some(admission.messages),
-            optional_params: Some(admission.optional_params),
+            body: Some(complete_input.unbind()),
+            headers: headers.map(Bound::unbind),
             api_key,
             api_base,
             custom_llm_provider: admission.custom_llm_provider,
-            extra_headers,
             timeout,
             terminal: None,
         },
@@ -222,24 +229,48 @@ struct OwnedRequest {
 }
 
 fn take_request(py: Python<'_>, state: &Py<ChatCompletionsState>) -> PyResult<OwnedRequest> {
-    let mut state = state.borrow_mut(py);
-    let call_id = state
-        .arguments
+    let (arguments, body, headers) = {
+        let state = state.borrow(py);
+        let arguments = state
+            .arguments
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("chat completions state was cleared"))?
+            .clone_ref(py);
+        let body = state
+            .body
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("chat completions body was cleared"))?
+            .clone_ref(py);
+        let headers = state.headers.as_ref().map(|value| value.clone_ref(py));
+        (arguments, body, headers)
+    };
+    let call_id = scalar(arguments.bind(py), "litellm_call_id")?.unwrap_or_default();
+    let messages = value(body.bind(py), "messages")?;
+    let optional_params = body
+        .bind(py)
+        .iter()
+        .filter_map(|(key, value)| match key.extract::<String>() {
+            Ok(key) if key == "model" || key == "messages" => None,
+            Ok(key) => Some(from_py(&value).map(|value| (key, value))),
+            Err(error) => Some(Err(error)),
+        })
+        .collect::<PyResult<Map<String, Value>>>()?;
+    let extra_headers = headers
         .as_ref()
-        .ok_or_else(|| PyRuntimeError::new_err("chat completions state was cleared"))
-        .and_then(|arguments| scalar(arguments.bind(py), "litellm_call_id"))?
-        .unwrap_or_default();
+        .map(|value| from_py(value.bind(py)))
+        .transpose()?;
+    let mut state = state.borrow_mut(py);
     Ok(OwnedRequest {
         model: state
             .model
             .take()
             .ok_or_else(|| PyRuntimeError::new_err("chat completions request was already sent"))?,
-        messages: state.messages.take().unwrap(),
-        optional_params: state.optional_params.take().unwrap(),
+        messages,
+        optional_params,
         api_key: state.api_key.take(),
         api_base: state.api_base.take(),
         custom_llm_provider: state.custom_llm_provider.take(),
-        extra_headers: state.extra_headers.take(),
+        extra_headers,
         timeout: state.timeout.take(),
         call_id,
     })
@@ -398,4 +429,92 @@ pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(feature = "trace-parity")]
 pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
     register(module)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[pyfunction]
+    fn snapshot(py: Python<'_>, state: Py<ChatCompletionsState>) -> PyResult<Py<PyAny>> {
+        let request = take_request(py, &state)?;
+        to_py(
+            py,
+            &(
+                request.messages,
+                request.optional_params,
+                request.extra_headers,
+            ),
+        )
+    }
+
+    #[test]
+    #[ignore = "requires the Python SDK and its dependencies on PYTHONPATH"]
+    fn callback_roots_survive_rebinding_and_cycles_are_collected() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "chat_test").unwrap();
+            module
+                .add_function(wrap_pyfunction!(prepare, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
+                .unwrap();
+            let globals = PyDict::new(py);
+            globals.set_item("native", module).unwrap();
+            py.run(
+                c"
+import gc
+import weakref
+
+class Opaque:
+    pass
+
+class Logger:
+    def pre_call(self, **kwargs):
+        view = kwargs['additional_args']
+        self.body = view['complete_input_dict']
+        self.headers = view['headers']
+        assert kwargs['input'] is messages
+        assert self.body['messages'] is messages
+        assert self.body['stop'] is stops
+        assert self.headers is headers
+        messages[0]['content'] = 'edited'
+        stops.append('second')
+        self.headers['x-hook'] = 'edited'
+        view['complete_input_dict'] = {'replacement': True}
+        view['headers'] = {'replacement': 'true'}
+
+messages = [{'role': 'user', 'content': 'original'}]
+stops = ['first']
+headers = {}
+opaque = Opaque()
+logger = Logger()
+arguments = dict(model='claude-opus-5', messages=messages,
+                 optional_params={'max_tokens': 16, 'stop': stops},
+                 extra_headers=headers, api_key='test',
+                 custom_llm_provider='anthropic', opaque=opaque,
+                 litellm_logging_obj=logger)
+state = native.prepare(arguments, logger)
+wire_messages, wire_params, wire_headers = native.snapshot(state)
+assert wire_messages[0]['content'] == 'edited'
+assert wire_params['stop'] == ['first', 'second']
+assert wire_headers == {'x-hook': 'edited'}
+arguments['cycle'] = state
+logger.body['cycle'] = state
+headers['cycle'] = state
+alive = weakref.ref(opaque)
+del arguments, logger, opaque, headers
+gc.collect()
+assert alive() is not None
+del state
+gc.collect()
+assert alive() is None
+",
+                Some(&globals),
+                Some(&globals),
+            )
+            .unwrap();
+        });
+    }
 }

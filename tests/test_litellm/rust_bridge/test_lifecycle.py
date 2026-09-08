@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge._lifecycle import NativeOutcome, drive_async, drive_sync
+from litellm.rust_bridge._lifecycle import NativeOutcome, deployment_pre, drive_async, drive_sync
 
 
 class _Machine:
@@ -89,3 +89,21 @@ async def test_drive_async_awaits_the_selected_operation() -> None:
     assert await drive_async(host) == "complete"
     assert completed.is_set()
     assert host.machine.outcome is NativeOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_deployment_pre_retains_the_hooks_replacement(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    replacement: Final[dict[str, object]] = {"metadata": {"observed": False}}
+
+    class ReplacingLogger(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            return replacement
+
+    monkeypatch.setattr(litellm, "callbacks", [ReplacingLogger()])
+
+    result: Final = await deployment_pre({}, "acompletion")
+
+    assert result is replacement

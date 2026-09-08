@@ -34,12 +34,15 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.rust_bridge._lifecycle import (
+    LIFECYCLE_STARTED_KEY,
     LOGGING_OBJECT_KEY,
+    LifecycleOwner,
     NativeLifecycle,
     NativeLifecycleBindings,
     NativeOutcome,
     TerminalAction,
     advance_host,
+    build_call_arguments,
     deployment_failure,
     deployment_pre,
     deployment_success,
@@ -47,6 +50,8 @@ from litellm.rust_bridge._lifecycle import (
     drive_sync,
     host_result,
     invoke_terminal,
+    map_native_error,
+    owns_lifecycle,
     restore_correlation_context,
 )
 from litellm.rust_bridge.configuration import rust_enabled
@@ -319,6 +324,7 @@ def _reraise_or_decline(
     *,
     model: str,
     custom_llm_provider: str | None,
+    lifecycle_started: bool = False,
 ) -> None:
     """Re-raise a failure the provider already saw, or return so the caller declines.
 
@@ -329,11 +335,7 @@ def _reraise_or_decline(
     """
     exceptions: Final = _rust_bridge_exceptions()
     if exceptions is None:
-        verbose_logger.debug(
-            "Rust chat completions bridge raised %s; falling back to Python path",
-            type(rust_error).__name__,
-        )
-        return
+        raise rust_error
     declined, upstream_failed = exceptions
     if isinstance(rust_error, upstream_failed):
         args: Final = rust_error.args
@@ -345,7 +347,7 @@ def _reraise_or_decline(
             llm_provider=custom_llm_provider or "",
             model=model,
         )
-    if not isinstance(rust_error, declined):
+    if lifecycle_started or not isinstance(rust_error, declined):
         raise rust_error
     verbose_logger.debug(
         "Rust chat completions declined before calling the provider (%s); using the Python path",
@@ -379,32 +381,37 @@ def chat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
+    logging_obj: object | None = None,
+    litellm_params: Mapping[str, object] | None = None,
+    lifecycle_owner: LifecycleOwner = LifecycleOwner.BRIDGE,
     logging_api_key: str | None = None,
     on_response: ResponseObserver | None = None,
 ) -> ModelResponse | None:
     rust_chat_completions: Final = load_rust_chat_completions()
     if rust_chat_completions is None:
         return None
+    call_arguments: Final = _arguments(
+        arguments,
+        model,
+        messages,
+        optional_params,
+        model_response,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        timeout,
+        logging_api_key,
+        logging_obj,
+        litellm_params,
+        lifecycle_owner,
+    )
     try:
         if _STATE.chat_completions is not None and _uses_argument_bag(rust_chat_completions):
             argument_bag_call: Final = cast(  # cast-ok: signature inspection selected the argument-bag callable
                 RustChatCompletions, rust_chat_completions
             )
-            rust_result: Final = argument_bag_call(
-                _arguments(
-                    arguments,
-                    model,
-                    messages,
-                    optional_params,
-                    model_response,
-                    api_key,
-                    api_base,
-                    custom_llm_provider,
-                    extra_headers,
-                    timeout,
-                    logging_api_key,
-                )
-            )
+            rust_result: Final = argument_bag_call(call_arguments)
             return rust_result
         if _STATE.chat_completions is not None:
             legacy: Final = cast(  # cast-ok: signature inspection selected the legacy injected callable
@@ -424,23 +431,14 @@ def chat_completions(
                 on_response(rust_response)
             return build_model_response(rust_response, model_response)
         native_call: Final = cast(RustChatCompletions, rust_chat_completions)  # cast-ok: native ABI uses argument bag
-        return native_call(
-            _arguments(
-                arguments,
-                model,
-                messages,
-                optional_params,
-                model_response,
-                api_key,
-                api_base,
-                custom_llm_provider,
-                extra_headers,
-                timeout,
-                logging_api_key,
-            )
-        )
+        return native_call(call_arguments)
     except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
-        _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
+        _reraise_or_decline(
+            rust_error,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            lifecycle_started=call_arguments.get(LIFECYCLE_STARTED_KEY) is True,
+        )
         return None
     raise AssertionError("unreachable")
 
@@ -457,32 +455,37 @@ async def achat_completions(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
+    logging_obj: object | None = None,
+    litellm_params: Mapping[str, object] | None = None,
+    lifecycle_owner: LifecycleOwner = LifecycleOwner.BRIDGE,
     logging_api_key: str | None = None,
     on_response: ResponseObserver | None = None,
 ) -> ModelResponse | None:
     rust_achat_completions: Final = load_rust_achat_completions()
     if rust_achat_completions is None:
         return None
+    call_arguments: Final = _arguments(
+        arguments,
+        model,
+        messages,
+        optional_params,
+        model_response,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        timeout,
+        logging_api_key,
+        logging_obj,
+        litellm_params,
+        lifecycle_owner,
+    )
     try:
         if _STATE.achat_completions is not None and _uses_argument_bag(rust_achat_completions):
             argument_bag_call: Final = cast(  # cast-ok: signature inspection selected the argument-bag callable
                 RustAchatCompletions, rust_achat_completions
             )
-            rust_result: Final = await argument_bag_call(
-                _arguments(
-                    arguments,
-                    model,
-                    messages,
-                    optional_params,
-                    model_response,
-                    api_key,
-                    api_base,
-                    custom_llm_provider,
-                    extra_headers,
-                    timeout,
-                    logging_api_key,
-                )
-            )
+            rust_result: Final = await argument_bag_call(call_arguments)
             return rust_result
         if _STATE.achat_completions is not None:
             legacy: Final = cast(  # cast-ok: signature inspection selected the legacy injected callable
@@ -504,23 +507,14 @@ async def achat_completions(
         native_call: Final = cast(  # cast-ok: native ABI uses argument bag
             RustAchatCompletions, rust_achat_completions
         )
-        return await native_call(
-            _arguments(
-                arguments,
-                model,
-                messages,
-                optional_params,
-                model_response,
-                api_key,
-                api_base,
-                custom_llm_provider,
-                extra_headers,
-                timeout,
-                logging_api_key,
-            )
-        )
+        return await native_call(call_arguments)
     except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
-        _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
+        _reraise_or_decline(
+            rust_error,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            lifecycle_started=call_arguments.get(LIFECYCLE_STARTED_KEY) is True,
+        )
         return None
     raise AssertionError("unreachable")
 
@@ -538,6 +532,9 @@ async def achat_completions_or_fallback(
     timeout: float | httpx.Timeout | None,
     python_fallback: Callable[[], Awaitable[object]],
     arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
+    logging_obj: object | None = None,
+    litellm_params: Mapping[str, object] | None = None,
+    lifecycle_owner: LifecycleOwner = LifecycleOwner.BRIDGE,
     logging_api_key: str | None = None,
     on_response: ResponseObserver | None = None,
 ) -> object:
@@ -560,6 +557,9 @@ async def achat_completions_or_fallback(
         extra_headers=extra_headers,
         timeout=timeout,
         arguments=arguments,
+        logging_obj=logging_obj,
+        litellm_params=litellm_params,
+        lifecycle_owner=lifecycle_owner,
         logging_api_key=logging_api_key,
         on_response=on_response,
     )
@@ -588,20 +588,28 @@ def _arguments(
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
     logging_api_key: str | None,
+    logging_obj: object | None,
+    litellm_params: Mapping[str, object] | None,
+    lifecycle_owner: LifecycleOwner,
 ) -> dict[str, object]:  # mutable-ok: native bridge retains and updates Python argument objects
-    return {
-        **(arguments or {}),
-        "model": model,
-        "messages": messages,
-        "optional_params": optional_params,
-        "model_response": model_response,
-        "api_key": api_key,
-        "api_base": api_base,
-        "custom_llm_provider": custom_llm_provider,
-        "extra_headers": extra_headers,
-        "timeout_seconds": timeout_to_seconds(timeout),
-        "logging_api_key": logging_api_key if logging_api_key is not None else api_key or "",
-    }
+    return build_call_arguments(
+        arguments,
+        {
+            "model": model,
+            "messages": messages,
+            "optional_params": optional_params,
+            "model_response": model_response,
+            "api_key": api_key,
+            "api_base": api_base,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+            "timeout_seconds": timeout_to_seconds(timeout),
+            "logging_api_key": logging_api_key if logging_api_key is not None else api_key or "",
+        },
+        logging_obj=logging_obj,
+        litellm_params=litellm_params,
+        lifecycle_owner=lifecycle_owner,
+    )
 
 
 class _ChatCompletionsBindings(NativeLifecycleBindings, Protocol):
@@ -634,6 +642,8 @@ class _ChatCompletionsHost:
             arguments  # mutable-ok: native bridge retains and updates Python argument objects
         )
         self.asynchronous: bool = asynchronous
+        self.lifecycle_owned: Final = owns_lifecycle(arguments)
+        self.arguments[LIFECYCLE_STARTED_KEY] = True
         self.logger: object | None = arguments.get(LOGGING_OBJECT_KEY)
         self.state: object | None = None
         self.response: object = None
@@ -649,6 +659,8 @@ class _ChatCompletionsHost:
         self.arguments[LOGGING_OBJECT_KEY] = self.logger
 
     async def deployment_pre(self) -> None:
+        if not self.lifecycle_owned:
+            return
         self.current = await deployment_pre(self.current, "acompletion")
         self.current[LOGGING_OBJECT_KEY] = self.logger
 
@@ -672,14 +684,20 @@ class _ChatCompletionsHost:
         self.end = datetime.now()  # noqa: DTZ005  # Logging preserves the legacy naive timestamp contract
 
     async def deployment_success(self) -> None:
+        if not self.lifecycle_owned:
+            return
         from litellm.types.utils import CallTypes
 
         self.response = await deployment_success(self.current, self.response, CallTypes.acompletion)
 
     async def deployment_failure(self) -> None:
+        if not self.lifecycle_owned:
+            return
         await deployment_failure(self.current, self.error, "acompletion")
 
     def terminal(self, action: TerminalAction, value: object) -> object:
+        if not self.lifecycle_owned:
+            return None
         if self.logger is None or self.end is None:
             raise RuntimeError("chat completions terminal state was not initialized")
         record: Final = self.bindings.terminal_record(self.state) if self.state is not None else None
@@ -705,14 +723,16 @@ class _ChatCompletionsHost:
     def sync_failure(self) -> object:
         return self.terminal("sync_failure", self.error)
 
-    def async_failure(self) -> object:
-        return self.terminal("async_failure", self.error)
+    async def async_failure(self) -> object:
+        result: Final = self.terminal("async_failure", self.error)
+        return await result if isinstance(result, Awaitable) else result
 
     def restore(self) -> None:
-        restore_correlation_context(self.logger)
+        if self.lifecycle_owned:
+            restore_correlation_context(self.logger)
 
     def advance(self, outcome: NativeOutcome, error: BaseException | None = None) -> None:
-        advance_host(self, outcome, error)
+        advance_host(self, outcome, map_native_error(error, self.arguments, "chat completions"))
 
     def result(self) -> object:
         return host_result(self)

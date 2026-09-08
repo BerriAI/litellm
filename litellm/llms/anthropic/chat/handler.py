@@ -407,26 +407,19 @@ class AnthropicChatCompletion(BaseLLM):
             stream=stream,
         )
         if serves_via_rust:
-            rust_logging_args: Final = {
-                "complete_input_dict": {
-                    "model": model,
-                    "messages": messages,
-                    **rust_optional_params,
-                },
-                "api_base": api_base,
-                "headers": headers,
-            }
-            logging_obj.pre_call(input=messages, api_key=api_key, additional_args=rust_logging_args)
-            log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
-                logging_obj=logging_obj,
-                messages=messages,
-                api_key=api_key,
-                additional_args=rust_logging_args,
-            )
             if acompletion is True:
 
                 async def python_fallback() -> "ModelResponse | CustomStreamWrapper":
                     fallback_headers, fallback_data = build_request()
+                    logging_obj.pre_call(
+                        input=messages,
+                        api_key=api_key,
+                        additional_args={
+                            "complete_input_dict": fallback_data,
+                            "api_base": api_base,
+                            "headers": fallback_headers,
+                        },
+                    )
                     return await self.acompletion_function(
                         model=model,
                         messages=messages,
@@ -460,8 +453,9 @@ class AnthropicChatCompletion(BaseLLM):
                     custom_llm_provider=custom_llm_provider,
                     extra_headers=headers,
                     timeout=timeout,
-                    arguments={**litellm_params, "litellm_logging_obj": logging_obj},
-                    on_response=log_rust_post_call,
+                    logging_obj=logging_obj,
+                    litellm_params=litellm_params,
+                    lifecycle_owner=rust_chat_completions_bridge.LifecycleOwner.WRAPPER,
                     python_fallback=python_fallback,
                 )
             rust_response: Final = rust_chat_completions_bridge.chat_completions(
@@ -474,8 +468,9 @@ class AnthropicChatCompletion(BaseLLM):
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=headers,
                 timeout=timeout,
-                arguments={**litellm_params, "litellm_logging_obj": logging_obj},
-                on_response=log_rust_post_call,
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+                lifecycle_owner=rust_chat_completions_bridge.LifecycleOwner.WRAPPER,
             )
             if rust_response is not None:
                 return rust_response
@@ -483,16 +478,15 @@ class AnthropicChatCompletion(BaseLLM):
         headers, data = build_request()
 
         ## LOGGING
-        if not serves_via_rust:
-            logging_obj.pre_call(
-                input=messages,
-                api_key=api_key,
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": api_base,
-                    "headers": headers,
-                },
-            )
+        logging_obj.pre_call(
+            input=messages,
+            api_key=api_key,
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": api_base,
+                "headers": headers,
+            },
+        )
         print_verbose(f"_is_function_call: {_is_function_call}")
         if acompletion is True:
             if (

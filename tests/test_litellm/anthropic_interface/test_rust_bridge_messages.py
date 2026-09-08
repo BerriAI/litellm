@@ -154,6 +154,7 @@ def test_messages_wrapper_forwards_args_and_converts_timeout():
 
     assert response == FAKE_MESSAGES_RESPONSE
     assert bridge.calls[0] == {
+        "_rust_lifecycle_owner": "bridge",
         "model": "claude-sonnet-4-5",
         "body": REQUEST_BODY,
         "api_key": "sk-azure",
@@ -222,14 +223,14 @@ async def test_gate_invokes_rust_and_marks_response_header():
 
 
 @pytest.mark.asyncio
-async def test_gate_falls_back_to_python_when_bridge_raises():
+async def test_gate_propagates_unknown_errors_without_replaying():
     bridge = RaisingAsyncMessages()
     litellm.rust(True)
     rust_messages.set_rust_messages(amessages=bridge)
 
-    response = await _gate()
+    with pytest.raises(RuntimeError, match="upstream request failed"):
+        await _gate()
 
-    assert response is None
     assert bridge.calls == 1
 
 
@@ -251,6 +252,31 @@ async def test_gate_does_not_fall_back_after_provider_commit(monkeypatch):
 
     assert raised.value.status_code == 429
     assert calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("started", [False, True])
+async def test_gate_only_accepts_declines_before_callback_setup(monkeypatch, started):
+    from litellm.rust_bridge._lifecycle import LIFECYCLE_STARTED_KEY
+
+    error = _DeclinedMessagesError("declined")
+
+    async def decline(arguments):
+        if started:
+            arguments[LIFECYCLE_STARTED_KEY] = True
+        raise error
+
+    monkeypatch.setattr("litellm.rust_bridge.bindings.get_native_bridge", lambda: _NativeExceptions())
+    rust_messages.set_rust_messages(amessages=decline)
+    litellm.rust(True)
+
+    if not started:
+        assert await _gate() is None
+        return
+
+    with pytest.raises(_DeclinedMessagesError) as raised:
+        await _gate()
+    assert raised.value is error
 
 
 @pytest.mark.asyncio

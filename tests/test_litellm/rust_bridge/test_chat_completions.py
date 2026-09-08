@@ -10,8 +10,8 @@ from __future__ import annotations
 import pytest
 
 import litellm
-from litellm.rust_bridge import configuration
 from litellm.rust_bridge import chat_completions as bridge
+from litellm.rust_bridge import configuration
 from litellm.types.utils import ModelResponse
 
 RUST_RESPONSE = {
@@ -241,6 +241,32 @@ def _call_kwargs(model_response: ModelResponse) -> dict:
 
 
 class TestSyncCall:
+    def test_retains_explicit_logging_and_request_context(self):
+        native = _RecordingCall()
+        bridge.set_rust_chat_completions(chat_completions=native)
+        logger = object()
+        metadata = {"trace": []}
+        response = ModelResponse()
+
+        result = bridge.chat_completions(
+            **_call_kwargs(response), logging_obj=logger, litellm_params={"metadata": metadata}
+        )
+
+        assert native.calls[0]["litellm_logging_obj"] is logger
+        assert native.calls[0]["metadata"] is metadata
+        assert native.calls[0]["messages"] is MESSAGES
+        assert result is response
+
+    def test_unknown_failure_without_native_exception_types_is_not_replayed(self, monkeypatch):
+        _hide_native_bridge(monkeypatch)
+        error = ValueError("callback failed")
+        bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=error))
+
+        with pytest.raises(ValueError, match="callback failed") as raised:
+            bridge.chat_completions(**_call_kwargs(ModelResponse()))
+
+        assert raised.value is error
+
     def test_builds_a_model_response_and_stamps_the_rust_header(self):
         native = _RecordingCall()
         bridge.set_rust_chat_completions(chat_completions=native)
@@ -356,6 +382,22 @@ class TestFailureClassification:
     def test_a_decline_falls_back_because_nothing_was_sent(self):
         bridge.set_rust_chat_completions(chat_completions=_RecordingCall(error=_FakeDeclined("streaming")))
         assert bridge.chat_completions(**_call_kwargs(ModelResponse())) is None
+
+    def test_a_decline_after_callback_setup_is_not_replayed(self):
+        from litellm.rust_bridge._lifecycle import LIFECYCLE_STARTED_KEY
+
+        error = _FakeDeclined("raised by callback")
+
+        def started(arguments):
+            arguments[LIFECYCLE_STARTED_KEY] = True
+            raise error
+
+        bridge.set_rust_chat_completions(chat_completions=started)
+
+        with pytest.raises(_FakeDeclined) as raised:
+            bridge.chat_completions(**_call_kwargs(ModelResponse()))
+
+        assert raised.value is error
 
     def test_an_upstream_failure_is_surfaced_with_its_status(self):
         from litellm.exceptions import APIError

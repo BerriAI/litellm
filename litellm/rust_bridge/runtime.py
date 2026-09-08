@@ -137,20 +137,24 @@ def _required_reason(result: RustDeclined | RustUnavailable) -> str:
 
 
 def raise_upstream(error: BaseException, context: BridgeErrorContext) -> NoReturn:
+    raise upstream_error(error, context) from error
+
+
+def upstream_error(error: BaseException, context: BridgeErrorContext) -> Exception:
     args: Final[tuple[object, ...]] = error.args
     status_value: Final = args[0] if args else 0
     message_value: Final = args[1] if len(args) > 1 else str(error)
     status: Final = status_value if isinstance(status_value, int) else 0
     message: Final = message_value if isinstance(message_value, str) else str(message_value)
-    if status == 500:
-        raise InternalServerError(
+    if status == 500 and context.route != "chat completions":
+        return InternalServerError(
             message=f"litellm rust {context.route}: {message}",
             llm_provider=context.provider,
             model=context.model,
-        ) from error
-    raise APIError(
+        )
+    return APIError(
         status_code=status or 500,
         message=f"litellm rust {context.route}: {message}",
         llm_provider=context.provider,
         model=context.model,
-    ) from error
+    )

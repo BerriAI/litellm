@@ -417,21 +417,6 @@ class BedrockConverseLLM(BaseAWSLLM):
             stream=stream,
         )
         if serves_via_rust:
-            rust_logging_args: Final = {
-                "complete_input_dict": {
-                    "messages": messages,
-                    **optional_params,
-                },
-                "api_base": proxy_endpoint_url,
-                "headers": headers,
-            }
-            logging_obj.pre_call(input=messages, api_key="", additional_args=rust_logging_args)
-            log_rust_post_call: Final = rust_chat_completions_bridge.response_logger(
-                logging_obj=logging_obj,
-                messages=messages,
-                api_key="",
-                additional_args=rust_logging_args,
-            )
             if acompletion:
                 return rust_chat_completions_bridge.achat_completions_or_fallback(
                     model=model,
@@ -443,9 +428,10 @@ class BedrockConverseLLM(BaseAWSLLM):
                     custom_llm_provider="bedrock",
                     extra_headers=headers,
                     timeout=timeout,
-                    arguments={**litellm_params, "litellm_logging_obj": logging_obj},
+                    logging_obj=logging_obj,
+                    litellm_params=litellm_params,
+                    lifecycle_owner=rust_chat_completions_bridge.LifecycleOwner.WRAPPER,
                     logging_api_key="",
-                    on_response=log_rust_post_call,
                     python_fallback=lambda: self.async_completion(
                         model=model,
                         messages=messages,
@@ -462,7 +448,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                         client=client,
                         credentials=credentials,
                         api_key=api_key,
-                        skip_pre_call_logging=True,
+                        skip_pre_call_logging=False,
                     ),
                 )
             rust_response: Final = rust_chat_completions_bridge.chat_completions(
@@ -475,9 +461,10 @@ class BedrockConverseLLM(BaseAWSLLM):
                 custom_llm_provider="bedrock",
                 extra_headers=headers,
                 timeout=timeout,
-                arguments={**litellm_params, "litellm_logging_obj": logging_obj},
+                logging_obj=logging_obj,
+                litellm_params=litellm_params,
+                lifecycle_owner=rust_chat_completions_bridge.LifecycleOwner.WRAPPER,
                 logging_api_key="",
-                on_response=log_rust_post_call,
             )
             if rust_response is not None:
                 return rust_response
@@ -548,16 +535,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ## LOGGING
-        if not serves_via_rust:
-            logging_obj.pre_call(
-                input=messages,
-                api_key="",
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": proxy_endpoint_url,
-                    "headers": prepped.headers,
-                },
-            )
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": proxy_endpoint_url,
+                "headers": prepped.headers,
+            },
+        )
         if client is None or isinstance(client, AsyncHTTPHandler):
             _params: Final = {}
             if timeout is not None:

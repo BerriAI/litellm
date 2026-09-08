@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Protocol, cast
@@ -8,12 +8,15 @@ from typing import Final, Protocol, cast
 import httpx
 
 from litellm.rust_bridge._lifecycle import (
+    LIFECYCLE_STARTED_KEY,
     LOGGING_OBJECT_KEY,
+    LifecycleOwner,
     NativeLifecycle,
     NativeLifecycleBindings,
     NativeOutcome,
     TerminalAction,
     advance_host,
+    build_call_arguments,
     deployment_failure,
     deployment_pre,
     deployment_success,
@@ -21,16 +24,19 @@ from litellm.rust_bridge._lifecycle import (
     drive_sync,
     host_result,
     invoke_terminal,
+    map_native_error,
+    owns_lifecycle,
     restore_correlation_context,
 )
 from litellm.rust_bridge._lifecycle import (
     initialize_logging as initialize_lifecycle_logging,
 )
-from litellm.rust_bridge.bindings import NativeBinding
+from litellm.rust_bridge.bindings import NativeBinding, native_exception_types
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 
 class RustMessages(Protocol):
@@ -168,7 +174,7 @@ def retain_stream_response(
 
 
 def _arguments(
-    arguments: dict[str, object],  # mutable-ok: native bridge retains and updates Python argument objects
+    arguments: Mapping[str, object] | None,
     model: str,
     body: dict[str, object],  # mutable-ok: native bridge retains and updates Python argument objects
     api_key: str | None,
@@ -176,17 +182,27 @@ def _arguments(
     custom_llm_provider: str | None,
     extra_headers: dict[str, object] | None,  # mutable-ok: native bridge retains and updates Python argument objects
     timeout: float | httpx.Timeout | None,
+    logging_obj: object | None,
+    litellm_params: GenericLiteLLMParams | None,
+    messages: object,
+    lifecycle_owner: LifecycleOwner,
 ) -> dict[str, object]:  # mutable-ok: native bridge retains and updates Python argument objects
-    return {  # mutable-ok: the native bridge requires a concrete argument bag
-        **arguments,
-        "model": model,
-        "body": body,
-        "api_key": api_key,
-        "api_base": api_base,
-        "custom_llm_provider": custom_llm_provider,
-        "extra_headers": extra_headers,
-        "timeout_seconds": timeout_to_seconds(timeout),
-    }
+    return build_call_arguments(
+        arguments,
+        {
+            "model": model,
+            "body": body,
+            "api_key": api_key,
+            "api_base": api_base,
+            "custom_llm_provider": custom_llm_provider,
+            "extra_headers": extra_headers,
+            "timeout_seconds": timeout_to_seconds(timeout),
+            **({"messages": messages} if messages is not None else {}),
+            **({"litellm_params": litellm_params} if litellm_params is not None else {}),
+        },
+        logging_obj=logging_obj,
+        lifecycle_owner=lifecycle_owner,
+    )
 
 
 def messages(
@@ -199,15 +215,40 @@ def messages(
     extra_headers: dict[str, object] | None,  # mutable-ok: native bridge retains and updates Python argument objects
     timeout: float | httpx.Timeout | None,
     arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
+    request_arguments: Mapping[str, object] | None = None,
+    logging_obj: object | None = None,
+    litellm_params: GenericLiteLLMParams | None = None,
+    messages: object = None,
+    lifecycle_owner: LifecycleOwner = LifecycleOwner.BRIDGE,
 ) -> AnthropicMessagesResponse | None:
     implementation: Final = load_rust_messages()
     if implementation is None:
         return None
-    return implementation(
-        arguments=_arguments(
-            arguments or {}, model, body, api_key, api_base, custom_llm_provider, extra_headers, timeout
-        )
+    call_arguments: Final = _arguments(
+        request_arguments if request_arguments is not None else arguments,
+        model,
+        body,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        timeout,
+        logging_obj,
+        litellm_params,
+        messages,
+        lifecycle_owner,
     )
+    try:
+        return implementation(arguments=call_arguments)
+    except Exception as error:  # noqa: BLE001  # only explicit declines before lifecycle setup may fall back
+        exceptions: Final = native_exception_types()
+        if (
+            exceptions is not None
+            and isinstance(error, exceptions[0])
+            and not call_arguments.get(LIFECYCLE_STARTED_KEY)
+        ):
+            return None
+        raise map_native_error(error, call_arguments, "messages")
 
 
 async def amessages(
@@ -220,15 +261,40 @@ async def amessages(
     extra_headers: dict[str, object] | None,  # mutable-ok: native bridge retains and updates Python argument objects
     timeout: float | httpx.Timeout | None,
     arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates Python argument objects
+    request_arguments: Mapping[str, object] | None = None,
+    logging_obj: object | None = None,
+    litellm_params: GenericLiteLLMParams | None = None,
+    messages: object = None,
+    lifecycle_owner: LifecycleOwner = LifecycleOwner.BRIDGE,
 ) -> AnthropicMessagesResponse | None:
     implementation: Final = load_rust_amessages()
     if implementation is None:
         return None
-    return await implementation(
-        arguments=_arguments(
-            arguments or {}, model, body, api_key, api_base, custom_llm_provider, extra_headers, timeout
-        )
+    call_arguments: Final = _arguments(
+        request_arguments if request_arguments is not None else arguments,
+        model,
+        body,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        timeout,
+        logging_obj,
+        litellm_params,
+        messages,
+        lifecycle_owner,
     )
+    try:
+        return await implementation(arguments=call_arguments)
+    except Exception as error:  # noqa: BLE001  # only explicit declines before lifecycle setup may fall back
+        exceptions: Final = native_exception_types()
+        if (
+            exceptions is not None
+            and isinstance(error, exceptions[0])
+            and not call_arguments.get(LIFECYCLE_STARTED_KEY)
+        ):
+            return None
+        raise map_native_error(error, call_arguments, "messages")
 
 
 class _MessagesLifecycle(NativeLifecycle, Protocol):
@@ -242,7 +308,6 @@ class _MessagesBindings(NativeLifecycleBindings, Protocol):
     ]  # mutable-ok: native bridge retains and updates Python argument objects
     send: Callable[[object], Awaitable[AnthropicMessagesResponse]]
     send_sync: Callable[[object], AnthropicMessagesResponse]
-    committed_failure: Callable[[], None]
 
 
 class _MessagesHost:
@@ -261,7 +326,8 @@ class _MessagesHost:
         )
         self.asynchronous: bool = asynchronous
         self.logger: object | None = arguments.get(LOGGING_OBJECT_KEY)
-        self.lifecycle_owned: bool = self.logger is None
+        self.lifecycle_owned: Final = owns_lifecycle(arguments)
+        self.arguments[LIFECYCLE_STARTED_KEY] = True
         self.state: object | None = None
         self.response: object = None
         self.error: BaseException | None = None
@@ -344,21 +410,20 @@ class _MessagesHost:
     def sync_failure(self) -> object:
         return self.terminal("sync_failure", self.error)
 
-    def async_failure(self) -> object:
-        return self.terminal("async_failure", self.error)
+    async def async_failure(self) -> object:
+        result: Final = self.terminal("async_failure", self.error)
+        return await result if isinstance(result, Awaitable) else result
 
     def restore(self) -> None:
         if not self.streaming and self.lifecycle_owned:
             restore_correlation_context(self.logger)
 
     def advance(self, outcome: NativeOutcome, error: BaseException | None = None) -> None:
-        advance_host(self, outcome, error)
+        advance_host(self, outcome, map_native_error(error, self.arguments, "messages"))
 
     def result(self) -> object:
         if self.machine.complete():
             return self.response
-        if self.machine.failed_after_provider_response():
-            self.bindings.committed_failure()
         return host_result(self)
 
 

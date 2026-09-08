@@ -192,10 +192,6 @@ async def test_messages_logging_drain_waits_for_suspended_callback(messages_serv
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason="Rust Messages sends two provider requests before invoking failure callbacks",
-    strict=True,
-)
 async def test_messages_failure_callbacks_receive_original_provider_error(messages_server: RecordingServer) -> None:
     messages_server.default_response = ResponseSpec(body={"error": {"message": "provider unavailable"}}, status=500)
     messages_server.expected_requests = None
@@ -391,3 +387,53 @@ async def test_messages_cancelled_call_runs_no_terminal_callbacks(messages_serve
     assert "async_log_success_event" not in recorder.names
     assert "log_failure_event" not in recorder.names
     assert "async_log_failure_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [200, 500])
+async def test_whole_call_with_supplied_logger_still_owns_terminal_callbacks(
+    messages_server: RecordingServer, status: int
+) -> None:
+    from litellm.rust_bridge import messages as bridge
+
+    events: Final = []
+
+    class SuppliedLogger:
+        def pre_call(self, **kwargs):
+            events.append(("pre", kwargs))
+
+        async def async_success_handler(self, response, start, end):
+            events.append(("success", response))
+
+        def _should_run_sync_callbacks_for_async_calls(self):
+            return False
+
+        def failure_handler(self, error, trace, start, end):
+            events.append(("sync_failure", error))
+
+        async def async_failure_handler(self, error, trace, start, end):
+            events.append(("async_failure", error))
+
+    messages_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE, status=status)
+    arguments: Final = {
+        "model": "claude-opus-5",
+        "body": {"model": "claude-opus-5", "messages": MESSAGES, "max_tokens": 64},
+        "api_key": "test",
+        "api_base": messages_server.base_url,
+        "custom_llm_provider": "anthropic",
+        "extra_headers": {},
+        "timeout": 5.0,
+        "logging_obj": SuppliedLogger(),
+    }
+    if status == 200:
+        response: Final = await bridge.amessages(**arguments)
+        await drain_logging()
+        assert [name for name, value in events] == ["pre", "success"]
+        assert events[1][1] is response
+        return
+
+    with pytest.raises(litellm.InternalServerError) as raised:
+        await bridge.amessages(**arguments)
+    assert [name for name, value in events] == ["pre", "sync_failure", "async_failure"]
+    assert events[1][1] is raised.value
+    assert events[2][1] is raised.value

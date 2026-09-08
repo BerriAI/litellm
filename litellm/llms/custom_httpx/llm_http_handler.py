@@ -2257,12 +2257,9 @@ class BaseLLMHTTPHandler:
                 stream=stream or False,
                 custom_llm_provider=custom_llm_provider,
             ),
-            arguments={
-                **kwargs,
-                "messages": messages,
-                "litellm_logging_obj": logging_obj,
-                "litellm_params": litellm_params,
-            },
+            logging_obj=logging_obj,
+            request_arguments=kwargs,
+            messages=messages,
         )
         if rust_messages_response is not None:
             if stream:
@@ -2429,7 +2426,10 @@ class BaseLLMHTTPHandler:
         headers: dict,
         request_body: dict,
         timeout: float | httpx.Timeout | None,
-        arguments: dict[str, object] | None = None,  # mutable-ok: native bridge retains and updates the argument bag
+        arguments: dict[str, object] | None = None,  # mutable-ok: retained legacy bridge input
+        logging_obj: object | None = None,
+        request_arguments: Mapping[str, object] | None = None,
+        messages: object = None,
     ) -> AnthropicMessagesResponse | None:
         if custom_llm_provider not in ("azure_ai", "anthropic"):
             return None
@@ -2443,32 +2443,21 @@ class BaseLLMHTTPHandler:
         from litellm.rust_bridge import messages as rust_messages_bridge
 
         upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
-        try:
-            rust_response: Final = await rust_messages_bridge.amessages(
-                arguments=arguments or {},
-                model=model,
-                body=upstream_body,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                extra_headers=headers,
-                timeout=timeout,
-            )
-        except Exception as rust_error:  # noqa: BLE001  # rollout-safety fallback: any Rust bridge failure must fall back to the Python path
-            from litellm.rust_bridge.bindings import native_exception_types
-            from litellm.rust_bridge.runtime import BridgeErrorContext, raise_upstream
-
-            exception_types: Final = native_exception_types()
-            if exception_types is not None and isinstance(rust_error, exception_types[1]):
-                raise_upstream(
-                    rust_error,
-                    BridgeErrorContext(route="messages", provider=custom_llm_provider, model=model),
-                )
-            verbose_logger.debug(
-                "Rust Anthropic messages bridge raised %s; falling back to Python path",
-                type(rust_error).__name__,
-            )
-            return None
+        rust_response: Final = await rust_messages_bridge.amessages(
+            arguments=arguments,
+            request_arguments=request_arguments,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+            messages=messages,
+            lifecycle_owner=rust_messages_bridge.LifecycleOwner.WRAPPER,
+            model=model,
+            body=upstream_body,
+            api_key=api_key,
+            api_base=api_base,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=headers,
+            timeout=timeout,
+        )
         if rust_response is None:
             return None
 
