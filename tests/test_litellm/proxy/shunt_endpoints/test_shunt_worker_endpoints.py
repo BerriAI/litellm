@@ -152,10 +152,19 @@ class TestWorkerTextGoesThroughTheSharedPipeline:
         async def _fake_pre_call_logic(self, **kwargs):
             return self.data, object()
 
+        # Mirrors route_request's real contract: awaiting it resolves the deployment and
+        # hands back the provider coroutine *unawaited*, so the caller must await twice.
+        # A fake that returned the ModelResponse directly would pass against a caller that
+        # forgets the second await and hands a raw coroutine to the rest of the pipeline.
         async def _fake_route_request(**kwargs):
             from litellm.types.utils import Choices, Message, ModelResponse
 
-            return ModelResponse(choices=[Choices(index=0, message=Message(role="assistant", content=response_text))])
+            async def _provider_call():
+                return ModelResponse(
+                    choices=[Choices(index=0, message=Message(role="assistant", content=response_text))]
+                )
+
+            return _provider_call()
 
         monkeypatch.setattr(
             "litellm.proxy.shunt_endpoints.endpoints.ProxyBaseLLMRequestProcessing.common_processing_pre_call_logic",
@@ -228,6 +237,31 @@ class TestUploadLimits:
         with pytest.raises(ProxyException) as exc_info:
             await endpoints_mod._read_upload_texts([self._upload("big.py", b"x" * 50)])
         assert exc_info.value.code == "400"
+
+    @pytest.mark.asyncio
+    async def test_a_misconfigured_negative_per_file_limit_still_bounds_the_read(self, monkeypatch):
+        """A negative _MAX_UPLOAD_BYTES_PER_FILE (e.g. from a bad env var override) must never
+        reach UploadFile.read(): a negative size there means "read the whole file", which would
+        silently defeat this limit for every upload rather than enforce it. The constant is
+        range-validated at import time via get_env_int_in_range specifically to prevent this,
+        but this asserts the read-path behavior directly regardless of how the value got here."""
+        monkeypatch.setattr(endpoints_mod, "_MAX_UPLOAD_BYTES_PER_FILE", -5)
+        upload = self._upload("big.py", b"this must never be read without a positive bound")
+        real_read = upload.read
+        read_calls: list[int] = []
+
+        async def _tracking_read(size: int = -1):
+            read_calls.append(size)
+            return await real_read(size)
+
+        upload.read = _tracking_read  # rebind-ok: test spy on this one instance
+        with pytest.raises(ProxyException) as exc_info:
+            await endpoints_mod._read_upload_texts([upload])
+        assert exc_info.value.code == "400"
+        assert all(size > 0 for size in read_calls), (
+            f"read() was called with a non-positive size in {read_calls}, "
+            "which UploadFile.read() treats as 'read the whole file'"
+        )
 
     @pytest.mark.asyncio
     async def test_files_under_the_limits_are_read_in_full(self, monkeypatch):

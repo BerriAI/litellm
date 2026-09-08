@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Annotated, Final
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.env_utils import get_env_int
+from litellm.litellm_core_utils.env_utils import get_env_int_in_range
 from litellm.proxy._types import LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.guardrails.auto_router_shunt import ShuntConfig, shunt_config_for_model
@@ -156,13 +156,16 @@ async def _worker_text(
             route_type="acompletion",
             llm_router=llm_router,
         )
-        response: Final = await route_request(  # pyright: ignore[reportUnknownVariableType]  # route_request's own return type is intentionally an untyped union (see its ANN202 suppression)
+        llm_call: Final = await route_request(  # pyright: ignore[reportUnknownVariableType]  # route_request's own return type is intentionally an untyped union (see its ANN202 suppression)
             data=data,
             route_type="acompletion",
             llm_router=llm_router,
             user_model=None,
             user_api_key_dict=user_api_key_dict,
         )
+        # Two awaits: route_request resolves the deployment and hands back the provider
+        # coroutine unawaited (see its own ANN202 note), so this second await is the call.
+        response: Final = await llm_call  # pyright: ignore[reportUnknownVariableType]  # same untyped union as above
         processed: Final = await proxy_logging_obj.post_call_success_hook(
             data=data,
             user_api_key_dict=user_api_key_dict,
@@ -186,9 +189,17 @@ async def _worker_text(
 # multipart uploads specifically to hand their contents to a worker model, an authenticated
 # caller with a valid capability token could otherwise upload enough data to exhaust a proxy
 # worker's memory before the size limit ever runs.
-_MAX_UPLOAD_BYTES_PER_FILE: Final = get_env_int("LITELLM_SHUNT_MAX_UPLOAD_BYTES_PER_FILE", 1024 * 1024)
-_MAX_UPLOAD_BYTES_TOTAL: Final = get_env_int("LITELLM_SHUNT_MAX_UPLOAD_BYTES_TOTAL", 8 * 1024 * 1024)
-_MAX_UPLOAD_FILE_COUNT: Final = get_env_int("LITELLM_SHUNT_MAX_UPLOAD_FILE_COUNT", 20)
+#
+# Range-constrained rather than plain get_env_int: a zero or negative override would make the
+# per-read limit non-positive, and UploadFile.read() treats a negative size as "read the whole
+# file", so a typo'd env var would silently turn the bound it configures into no bound at all.
+_MAX_UPLOAD_BYTES_PER_FILE: Final = get_env_int_in_range(
+    "LITELLM_SHUNT_MAX_UPLOAD_BYTES_PER_FILE", 1024 * 1024, minimum=1, maximum=128 * 1024 * 1024
+)
+_MAX_UPLOAD_BYTES_TOTAL: Final = get_env_int_in_range(
+    "LITELLM_SHUNT_MAX_UPLOAD_BYTES_TOTAL", 8 * 1024 * 1024, minimum=1, maximum=512 * 1024 * 1024
+)
+_MAX_UPLOAD_FILE_COUNT: Final = get_env_int_in_range("LITELLM_SHUNT_MAX_UPLOAD_FILE_COUNT", 20, minimum=1, maximum=1000)
 
 
 async def _read_upload_text(upload: UploadFile, *, remaining_total_bytes: int) -> str:
@@ -196,22 +207,20 @@ async def _read_upload_text(upload: UploadFile, *, remaining_total_bytes: int) -
     remaining-total byte budgets -- never the whole file, so a caller can't force this endpoint
     to buffer more than that regardless of how large the real upload is.
 
-    `remaining_total_bytes <= 0` is checked explicitly rather than left to `min()` +
-    `.read(limit + 1)`: a non-positive `remaining_total_bytes` would make `limit` zero or
-    negative, and `UploadFile.read` treats a negative size as "read the whole file", which
-    would silently defeat this budget for any caller of this function that ever passes one.
-    `_read_upload_texts` below never actually produces a negative value (each read is already
-    bounded by what was left when it started), so this is the function's own contract holding
-    regardless of caller, not a path reachable through that call site today.
+    The computed `limit` is checked before it reaches `.read()`, not just the incoming
+    `remaining_total_bytes`: `UploadFile.read` treats a negative size as "read the whole file",
+    so a non-positive limit from *either* input -- an exhausted total budget, or a zero/negative
+    `_MAX_UPLOAD_BYTES_PER_FILE` from a bad env override -- would silently turn this bound into
+    no bound at all. Checking the value actually passed to `.read()` covers both at once.
     """
-    if remaining_total_bytes <= 0:
+    limit: Final = min(_MAX_UPLOAD_BYTES_PER_FILE, remaining_total_bytes)
+    if limit <= 0:
         raise ProxyException(
             message=f"uploads exceed the {_MAX_UPLOAD_BYTES_TOTAL}-byte total limit for this call",
             type=ProxyErrorTypes.bad_request_error,
             param="paths",
             code=400,
         )
-    limit: Final = min(_MAX_UPLOAD_BYTES_PER_FILE, remaining_total_bytes)
     content: Final = await upload.read(limit + 1)
     if len(content) > limit:
         raise ProxyException(
