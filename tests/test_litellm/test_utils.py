@@ -1403,21 +1403,33 @@ def test_supports_tool_choice_simple_tests():
         is True
     )
 
-    assert (
-        litellm.utils.supports_tool_choice(model="us.amazon.nova-micro-v1:0") is False
-    )
-    assert (
-        litellm.utils.supports_tool_choice(model="bedrock/us.amazon.nova-micro-v1:0")
-        is False
-    )
-    assert (
-        litellm.utils.supports_tool_choice(
-            model="us.amazon.nova-micro-v1:0", custom_llm_provider="bedrock_converse"
-        )
-        is False
-    )
-
     assert litellm.utils.supports_tool_choice(model="perplexity/sonar") is False
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    "model",
+    [
+        "amazon.nova-lite-v1:0",
+        "amazon.nova-micro-v1:0",
+        "amazon.nova-pro-v1:0",
+        "apac.amazon.nova-lite-v1:0",
+        "apac.amazon.nova-micro-v1:0",
+        "apac.amazon.nova-pro-v1:0",
+        "bedrock/us-gov-east-1/amazon.nova-pro-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-lite-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-micro-v1:0",
+        "bedrock/us-gov-west-1/amazon.nova-pro-v1:0",
+        "eu.amazon.nova-lite-v1:0",
+        "eu.amazon.nova-micro-v1:0",
+        "eu.amazon.nova-pro-v1:0",
+        "us.amazon.nova-lite-v1:0",
+        "us.amazon.nova-micro-v1:0",
+        "us.amazon.nova-pro-v1:0",
+    ],
+)
+def test_amazon_nova_v1_understanding_models_support_tool_choice(model: str) -> None:
+    assert litellm.utils.supports_tool_choice(model=model) is True
 
 
 def test_check_provider_match():

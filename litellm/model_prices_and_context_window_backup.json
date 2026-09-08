@@ -364,6 +364,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "amazon.nova-2-lite-v1:0": {
@@ -537,7 +538,8 @@
         "output_cost_per_token": 1.4e-07,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "amazon.nova-pro-v1:0": {
         "input_cost_per_token": 8e-07,
@@ -551,6 +553,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "amazon.nova-sonic-v1:0": {
@@ -2831,6 +2834,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "apac.amazon.nova-micro-v1:0": {
@@ -2843,7 +2847,8 @@
         "output_cost_per_token": 1.48e-07,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "apac.amazon.nova-pro-v1:0": {
         "input_cost_per_token": 8.4e-07,
@@ -2857,6 +2862,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": {
@@ -12136,6 +12142,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/us-gov-east-1/amazon.titan-embed-text-v1": {
@@ -12315,6 +12322,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/us-gov-west-1/amazon.nova-micro-v1:0": {
@@ -12327,7 +12335,8 @@
         "output_cost_per_token": 1.68e-07,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "bedrock/us-gov-west-1/amazon.nova-pro-v1:0": {
         "input_cost_per_token": 9.6e-07,
@@ -12341,6 +12350,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "bedrock/us-gov-west-1/amazon.titan-embed-text-v1": {
@@ -20778,6 +20788,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "eu.amazon.nova-micro-v1:0": {
@@ -20790,7 +20801,8 @@
         "output_cost_per_token": 1.84e-07,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "eu.amazon.nova-pro-v1:0": {
         "input_cost_per_token": 1.05e-06,
@@ -20805,6 +20817,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "eu.anthropic.claude-3-5-haiku-20241022-v1:0": {
@@ -43490,6 +43503,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "us.amazon.nova-micro-v1:0": {
@@ -43502,7 +43516,8 @@
         "output_cost_per_token": 1.4e-07,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "us.amazon.nova-premier-v1:0": {
         "deprecation_date": "2026-09-14",
@@ -43531,6 +43546,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_response_schema": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "us.anthropic.claude-3-5-haiku-20241022-v1:0": {
