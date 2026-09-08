@@ -5,6 +5,7 @@ Uses mock guardrails to validate pipeline execution without external services.
 """
 
 import copy
+import logging
 from typing import Literal
 from unittest.mock import MagicMock
 
@@ -17,7 +18,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
 )
-from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
+from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor, UndeliverableStreamRewrite
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
@@ -1052,3 +1053,244 @@ async def test_pipeline_step_keeps_native_hook_when_opted_out(monkeypatch):
     assert outcome == "pass"
     assert guardrail.native_pre_call_ran is True
     assert "guardrail_to_apply" not in data
+
+
+class _TextReturningGuardrail(CustomGuardrail):
+    def __init__(self, returned_texts):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+        self.returned_texts = returned_texts
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        return {**inputs, "texts": self.returned_texts}
+
+
+class _TextTranslation:
+    delivers_ended_stream_text_rewrites = False
+
+    def __init__(self):
+        self.seen_guardrail_names = []
+
+    async def process_output_streaming_response(
+        self, responses_so_far, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None, request_data=None
+    ):
+        self.seen_guardrail_names.append(guardrail_to_apply.guardrail_name)
+        await guardrail_to_apply.apply_guardrail(
+            inputs={"texts": ["hello world"]},
+            request_data=request_data or {},
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        return responses_so_far
+
+
+class _WritingTranslation:
+    """Writes the guardrail's text (and tool-call) outputs back into the buffered chunks the way the
+    chat/Responses/Messages handlers do on an ended stream."""
+
+    delivers_ended_stream_text_rewrites = True
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far,
+        guardrail_to_apply,
+        litellm_logging_obj=None,
+        user_api_key_dict=None,
+        request_data=None,
+        deliver_ended_stream_rewrites=False,
+    ):
+        assert deliver_ended_stream_rewrites is True
+        outputs = await guardrail_to_apply.apply_guardrail(
+            inputs={"texts": [responses_so_far[0]["text"]], "tool_calls": [dict(responses_so_far[0]["tool_call"])]},
+            request_data=request_data or {},
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        responses_so_far[0]["text"] = outputs["texts"][0]
+        responses_so_far[0]["tool_call"] = outputs["tool_calls"][0]
+        return responses_so_far
+
+
+class _RefusingTranslation:
+    delivers_ended_stream_text_rewrites = True
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far,
+        guardrail_to_apply,
+        litellm_logging_obj=None,
+        user_api_key_dict=None,
+        request_data=None,
+        deliver_ended_stream_rewrites=False,
+    ):
+        responses_so_far[0]["text"] = "half-written"
+        raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name)
+
+
+def _chunk():
+    return {"text": "hello world", "tool_call": {"function": {"name": "lookup", "arguments": '{"ssn": "123"}'}}}
+
+
+async def _run_streaming_step(translation, streaming_chunks=None):
+    chunks = [object()] if streaming_chunks is None else streaming_chunks
+    return await PipelineExecutor.execute_steps(
+        steps=[PipelineStep(guardrail="masker", on_pass="allow", on_fail="next", on_error="next")],
+        mode="post_call",
+        data={"model": "m"},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="p",
+        streaming_chunks=chunks,
+        endpoint_translation=translation,
+    )
+
+
+def _assert_passed_with_discard_warning(result, caplog):
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    assert any("'masker'" in record.getMessage() and "discarded" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_discards_text_rewrite_when_translation_lacks_write_back(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["hello [MASKED]"])])
+    translation = _TextTranslation()
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_streaming_step(translation, chunks)
+
+    _assert_passed_with_discard_warning(result, caplog)
+    assert chunks == [_chunk()]
+    assert translation.seen_guardrail_names == ["masker"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_unchanged_texts_in_another_container_allow(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(("hello world",))])
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_streaming_step(_TextTranslation())
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
+class _InPlaceMutatingGuardrail(CustomGuardrail):
+    """Rewrites like bedrock/presidio do: rebinds inputs["texts"] on the dict it was handed
+    and returns that same dict, so a post-call comparison against inputs sees no change."""
+
+    def __init__(self):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        inputs["texts"] = ["hello [MASKED]"]
+        return inputs
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_in_place_rewrite_is_discarded_without_write_back(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "callbacks", [_InPlaceMutatingGuardrail()])
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_streaming_step(_TextTranslation(), chunks)
+
+    _assert_passed_with_discard_warning(result, caplog)
+    assert chunks == [_chunk()]
+
+
+class _TextAndToolCallRewritingGuardrail(CustomGuardrail):
+    def __init__(self, rewrite_tool_call):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+        self.rewrite_tool_call = rewrite_tool_call
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        tool_calls = (
+            [{"function": {"name": "lookup", "arguments": '{"ssn": "[MASKED]"}'}}]
+            if self.rewrite_tool_call
+            else inputs["tool_calls"]
+        )
+        return {**inputs, "texts": ["hello [MASKED]"], "tool_calls": tool_calls}
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_text_rewrite_through_writing_translation(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "callbacks", [_TextAndToolCallRewritingGuardrail(rewrite_tool_call=False)])
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_streaming_step(_WritingTranslation(), chunks)
+
+    assert result.terminal_action == "allow"
+    assert chunks[0]["text"] == "hello [MASKED]"
+    assert chunks[0]["tool_call"]["function"]["arguments"] == '{"ssn": "123"}'
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_discards_tool_call_rewrite_and_restores_written_text(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "callbacks", [_TextAndToolCallRewritingGuardrail(rewrite_tool_call=True)])
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_streaming_step(_WritingTranslation(), chunks)
+
+    _assert_passed_with_discard_warning(result, caplog)
+    assert chunks == [_chunk()]
+
+
+class _BlockingStreamGuardrail(CustomGuardrail):
+    def __init__(self):
+        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+
+    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+        raise HTTPException(status_code=400, detail={"error": "output blocked"})
+
+
+def _recorded_guardrail_statuses(result):
+    return [
+        entry["guardrail_status"]
+        for entry in result.modified_data["metadata"]["standard_logging_guardrail_information"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_records_guardrail_information_once_on_mask(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["hello [MASKED]"])])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert result.terminal_action == "allow"
+    assert _recorded_guardrail_statuses(result) == ["success"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_records_the_guardrail_in_the_applied_guardrails_header(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["hello [MASKED]"])])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_records_guardrail_information_once_on_block(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [_BlockingStreamGuardrail()])
+
+    result = await _run_streaming_step(_WritingTranslation(), [_chunk()])
+
+    assert [step.outcome for step in result.step_results] == ["fail"]
+    assert _recorded_guardrail_statuses(result) == ["guardrail_intervened"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_restores_chunks_when_translation_refuses_the_rewrite(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["hello [MASKED]"])])
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_streaming_step(_RefusingTranslation(), chunks)
+
+    _assert_passed_with_discard_warning(result, caplog)
+    assert chunks == [_chunk()]
