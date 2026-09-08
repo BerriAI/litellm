@@ -17,6 +17,7 @@ import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import ClassifierVisionConfig from "./ClassifierVisionConfig";
 import type { ReasoningEffort } from "./complexity_router_tiers";
+import { nonReasoningTierFields } from "./nonReasoningTierFields";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassificationFrequency,
@@ -235,19 +236,6 @@ const ClassifierTypeRadios: React.FC<{
       </div>
     </RadioGroup>
   );
-};
-
-/** The NON_REASONING keys a classifier switch carries forward, or clears for a classifier that
- * cannot emit the tier. Leaving them set there is a config the backend refuses on save. */
-export const nonReasoningTierFields = (
-  classifierType: ClassifierType,
-  value: ComplexityRouterConfigValue,
-): Pick<ComplexityRouterConfigValue, "enable_non_reasoning_tier" | "tiers"> => {
-  if (classifierType === "llm") {
-    return { enable_non_reasoning_tier: value.enable_non_reasoning_tier, tiers: value.tiers };
-  }
-  const { NON_REASONING: _cleared, ...keptTiers } = value.tiers;
-  return { enable_non_reasoning_tier: undefined, tiers: keptTiers };
 };
 
 const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({

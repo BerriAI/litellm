@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
-import { nonReasoningTierFields } from "./ClassificationMethodConfig";
+import { nonReasoningTierFields } from "./nonReasoningTierFields";
 
 const enabledValue: ComplexityRouterConfigValue = {
   classifier_type: "llm",
