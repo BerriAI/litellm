@@ -675,7 +675,6 @@ async def test_guardrail_not_found_uses_on_fail(monkeypatch):
         ],
     )
 
-
     result = await PipelineExecutor.execute_steps(
         steps=pipeline.steps,
         mode=pipeline.mode,
@@ -1298,8 +1297,8 @@ async def test_streaming_step_restores_chunks_when_translation_refuses_the_rewri
 class _LegacyHookGuardrail(CustomGuardrail):
     """A guardrail with only the legacy post-call hook: it never defines apply_guardrail."""
 
-    def __init__(self, replacement=None, raises=None):
-        super().__init__(guardrail_name="masker", event_hook="post_call", default_on=True)
+    def __init__(self, replacement=None, raises=None, guardrail_name="masker"):
+        super().__init__(guardrail_name=guardrail_name, event_hook="post_call", default_on=True)
         self.replacement = replacement
         self.raises = raises
         self.calls = []
@@ -1339,7 +1338,7 @@ class _LegacyScanningTranslation:
     ):
         request_data.setdefault("response", {"text": responses_so_far[0]["text"]})
         outputs = await guardrail_to_apply.apply_guardrail(
-            inputs={"texts": [responses_so_far[0]["text"]]},
+            inputs={"texts": [responses_so_far[0]["text"]], "tool_calls": [dict(responses_so_far[0]["tool_call"])]},
             request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
@@ -1350,8 +1349,11 @@ class _LegacyScanningTranslation:
     async def process_output_response(
         self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None, request_data=None
     ):
+        inputs = {"texts": list(response["texts"])}
+        if response.get("tool_calls"):
+            inputs["tool_calls"] = list(response["tool_calls"])
         await guardrail_to_apply.apply_guardrail(
-            inputs={"texts": list(response["texts"])},
+            inputs=inputs,
             request_data={"response": response},
             input_type="response",
             logging_obj=litellm_logging_obj,
@@ -1359,10 +1361,26 @@ class _LegacyScanningTranslation:
         return response
 
 
+def _legacy_replacement(*texts, tool_calls=None):
+    return {"texts": list(texts), "tool_calls": [_chunk()["tool_call"]] if tool_calls is None else tool_calls}
+
+
 async def _run_legacy_streaming_step(monkeypatch, guardrail, chunks, on_fail="block", on_error="next"):
-    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    return await _run_legacy_streaming_steps(monkeypatch, [guardrail], chunks, on_fail=on_fail, on_error=on_error)
+
+
+async def _run_legacy_streaming_steps(monkeypatch, guardrails, chunks, on_fail="block", on_error="next"):
+    monkeypatch.setattr(litellm, "callbacks", list(guardrails))
     return await PipelineExecutor.execute_steps(
-        steps=[PipelineStep(guardrail="masker", on_pass="allow", on_fail=on_fail, on_error=on_error)],
+        steps=[
+            PipelineStep(
+                guardrail=guardrail.guardrail_name,
+                on_pass="next" if position + 1 < len(guardrails) else "allow",
+                on_fail=on_fail,
+                on_error=on_error,
+            )
+            for position, guardrail in enumerate(guardrails)
+        ],
         mode="post_call",
         data={"model": "m"},
         user_api_key_dict=MagicMock(),
@@ -1376,7 +1394,7 @@ async def _run_legacy_streaming_step(monkeypatch, guardrail, chunks, on_fail="bl
 @pytest.mark.asyncio
 @pytest.mark.parametrize("guardrail_class", [_LegacyHookGuardrail, _NativeHooksGuardrail])
 async def test_streaming_step_runs_legacy_hook_and_delivers_its_rewrite(monkeypatch, caplog, guardrail_class):
-    guardrail = guardrail_class(replacement={"texts": ["[REWRITTEN] hello world"]})
+    guardrail = guardrail_class(replacement=_legacy_replacement("[REWRITTEN] hello world"))
     chunks = [_chunk()]
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
@@ -1434,7 +1452,7 @@ async def test_streaming_step_takes_on_error_when_legacy_hook_crashes(monkeypatc
 
 @pytest.mark.asyncio
 async def test_streaming_step_discards_legacy_rewrite_whose_texts_do_not_line_up(monkeypatch, caplog):
-    guardrail = _LegacyHookGuardrail(replacement={"texts": ["split", "in two"]})
+    guardrail = _LegacyHookGuardrail(replacement=_legacy_replacement("split", "in two"))
     chunks = [_chunk()]
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
@@ -1442,3 +1460,45 @@ async def test_streaming_step_discards_legacy_rewrite_whose_texts_do_not_line_up
 
     _assert_passed_with_discard_warning(result, caplog)
     assert chunks == [_chunk()]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_discards_legacy_rewrite_that_changes_a_tool_call(monkeypatch, caplog):
+    masked_tool_call = {"function": {"name": "lookup", "arguments": '{"ssn": "[MASKED]"}'}}
+    guardrail = _LegacyHookGuardrail(
+        replacement=_legacy_replacement("[REWRITTEN] hello world", tool_calls=[masked_tool_call])
+    )
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
+
+    _assert_passed_with_discard_warning(result, caplog)
+    assert chunks == [_chunk()]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_discards_legacy_rewrite_that_drops_the_tool_calls(monkeypatch, caplog):
+    guardrail = _LegacyHookGuardrail(replacement=_legacy_replacement("[REWRITTEN] hello world", tool_calls=[]))
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks)
+
+    _assert_passed_with_discard_warning(result, caplog)
+    assert chunks == [_chunk()]
+
+
+@pytest.mark.asyncio
+async def test_later_legacy_step_sees_the_stream_as_the_earlier_step_left_it(monkeypatch):
+    masker = _LegacyHookGuardrail(replacement=_legacy_replacement("[REWRITTEN] hello world"))
+    auditor = _LegacyHookGuardrail(replacement=None, guardrail_name="auditor")
+    chunks = [_chunk()]
+
+    result = await _run_legacy_streaming_steps(monkeypatch, [masker, auditor], chunks, on_fail="next")
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass", "pass"]
+    assert chunks[0]["text"] == "[REWRITTEN] hello world"
+    assert [call["response"] for call in masker.calls] == [{"native": True, "text": "hello world"}]
+    assert [call["response"] for call in auditor.calls] == [{"native": True, "text": "[REWRITTEN] hello world"}]
