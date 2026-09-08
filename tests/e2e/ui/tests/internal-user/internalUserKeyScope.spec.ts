@@ -21,11 +21,14 @@ import {
 const MEMBER_PASSWORD = "E2e-Team-Member-Pass-1!";
 
 interface CreatedTeam {
-  team_id: string;
+  readonly team_id: string;
 }
 
-const isCreatedTeam = (body: unknown): body is CreatedTeam =>
-  typeof body === "object" && body !== null && typeof (body as CreatedTeam).team_id === "string";
+function assertCreatedTeam(body: unknown): asserts body is CreatedTeam {
+  expect(body, "/team/new returned no team_id").toMatchObject({
+    team_id: expect.any(String),
+  });
+}
 
 async function postAsMaster(
   request: APIRequestContext,
@@ -63,9 +66,7 @@ test.describe("Internal User - own team key model scope", () => {
       models: [CHAT_MODEL_A, CHAT_MODEL_B],
       team_member_permissions: ["/key/generate", "/key/update", "/key/info"],
     });
-    if (!isCreatedTeam(team)) {
-      throw new Error("/team/new returned no team_id");
-    }
+    assertCreatedTeam(team);
     const teamId = team.team_id;
 
     try {
