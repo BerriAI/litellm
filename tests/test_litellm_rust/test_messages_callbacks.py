@@ -144,6 +144,28 @@ async def test_messages_callbacks_run_once(messages_server: RecordingServer) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    reason="Buffered Rust Messages defers success callbacks until the client consumes or closes the fake stream",
+    strict=True,
+)
+async def test_messages_buffered_stream_callbacks_settle_before_client_consumption(
+    messages_server: RecordingServer,
+) -> None:
+    recorder: Final = RecordingLogger()
+
+    stream: Final = await call_messages(messages_server, [recorder], stream=True)
+    await drain_logging()
+    callbacks_before_close: Final = recorder.names.count("async_log_success_event")
+
+    await stream.aclose()
+    await drain_logging()
+    callbacks_after_close: Final = recorder.names.count("async_log_success_event")
+
+    assert callbacks_before_close == 1
+    assert callbacks_after_close == 1
+
+
+@pytest.mark.asyncio
 async def test_messages_logging_drain_waits_for_suspended_callback(messages_server: RecordingServer) -> None:
     started: Final = asyncio.Event()
     release: Final = asyncio.Event()
