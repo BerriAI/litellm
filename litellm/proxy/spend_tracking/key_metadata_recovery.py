@@ -8,6 +8,8 @@ from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS, SPEND_LOG_KEY_METADATA_CACHE_TTL
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.user_repository import UserRepository
@@ -29,22 +31,26 @@ ORDER BY token, deleted_at DESC
 """
 
 _SPEND_LOG_ALIAS_SQL: Final = """
-SELECT newest.digest, newest.key_alias, newest.team_id, newest.user_id
-FROM unnest($1::text[]) AS missing(digest)
-CROSS JOIN LATERAL (
-    SELECT
-        api_key AS digest,
-        metadata->>'user_api_key_alias' AS key_alias,
-        COALESCE(NULLIF(team_id, ''), metadata->>'user_api_key_team_id') AS team_id,
-        COALESCE(NULLIF("user", ''), metadata->>'user_api_key_user_id') AS user_id
-    FROM "LiteLLM_SpendLogs"
-    WHERE api_key = missing.digest
-      AND "startTime" >= $2::timestamp
-      AND "startTime" < $3::timestamp
-    ORDER BY "startTime" DESC
-    LIMIT 1
-) AS newest
+SELECT DISTINCT ON (api_key)
+    api_key AS digest,
+    metadata->>'user_api_key_alias' AS key_alias,
+    COALESCE(NULLIF(team_id, ''), metadata->>'user_api_key_team_id') AS team_id,
+    COALESCE(NULLIF("user", ''), metadata->>'user_api_key_user_id') AS user_id
+FROM "LiteLLM_SpendLogs"
+WHERE api_key = ANY($1::text[])
+  AND "startTime" >= $2::timestamp
+  AND "startTime" < $3::timestamp
+  AND COALESCE(
+        metadata->>'user_api_key_alias',
+        NULLIF("user", ''),
+        metadata->>'user_api_key_user_id',
+        NULLIF(team_id, ''),
+        metadata->>'user_api_key_team_id'
+      ) IS NOT NULL
+ORDER BY api_key, "startTime" DESC
 """
+
+_HASHED_JWT_PREFIX: Final = "hashed-jwt-"
 
 
 class KeyMetadataDict(TypedDict, total=False):
@@ -62,6 +68,11 @@ class _TokenDigestRow(BaseModel):
 
 
 _TOKEN_DIGEST_ROWS: Final = TypeAdapter(tuple[_TokenDigestRow, ...])
+_CACHED_KEY_METADATA: Final = TypeAdapter(KeyMetadataDict)
+_SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
+    max_size_in_memory=SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
+    default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL,
+)
 _EMPTY_KEY_METADATA: Final[Mapping[str, KeyMetadataDict]] = MappingProxyType({})
 _EMPTY_EMAILS: Final[Mapping[str, str]] = MappingProxyType({})
 
@@ -179,28 +190,70 @@ async def recover_double_hashed_key_metadata(
     return MappingProxyType({**from_active, **from_deleted})
 
 
-async def recover_key_metadata_from_spend_logs(
-    prisma_client: PrismaClient,
-    missing_keys: AbstractSet[str],
+def _is_spend_log_digest(key: str) -> bool:
+    return is_valid_sha256_hash(key.removeprefix(_HASHED_JWT_PREFIX))
+
+
+def _spend_log_cache_key(digest: str, window: tuple[datetime, datetime]) -> str:
+    start, end = window
+    return f"spend_log_key_metadata:{digest}:{start.isoformat()}:{end.isoformat()}"
+
+
+def _cached_spend_log_metadata(
+    cache: InMemoryCache,
+    digest: str,
     window: tuple[datetime, datetime],
-) -> Mapping[str, KeyMetadataDict]:
-    sha_missing: Final = frozenset(key for key in missing_keys if is_valid_sha256_hash(key))
-    if not sha_missing:
-        return _EMPTY_KEY_METADATA
+) -> KeyMetadataDict | None:
+    cached: Final[object] = cache.get_cache(_spend_log_cache_key(digest, window))
+    return None if cached is None else _CACHED_KEY_METADATA.validate_python(cached)
+
+
+async def _query_spend_log_metadata(
+    prisma_client: PrismaClient,
+    digests: AbstractSet[str],
+    window: tuple[datetime, datetime],
+) -> Mapping[str, KeyMetadataDict] | None:
     start, end = window
     rows: Final = await _db_or_empty(
-        lambda: prisma_client.db.query_raw(_SPEND_LOG_ALIAS_SQL, sorted(sha_missing), start, end),
+        lambda: prisma_client.db.query_raw(_SPEND_LOG_ALIAS_SQL, sorted(digests), start, end),
         "Failed spend-log alias recovery for %d missing keys: %s",
-        len(sha_missing),
+        len(digests),
     )
     if rows is None:
-        return _EMPTY_KEY_METADATA
+        return None
     return MappingProxyType(
         {
             row.digest: KeyMetadataDict(key_alias=row.key_alias, team_id=row.team_id, user_id=row.user_id)
             for row in _TOKEN_DIGEST_ROWS.validate_python(rows)
-            if row.digest in sha_missing and (row.key_alias or row.user_id or row.team_id)
+            if row.digest in digests and (row.key_alias or row.user_id or row.team_id)
         }
+    )
+
+
+async def recover_key_metadata_from_spend_logs(
+    prisma_client: PrismaClient,
+    missing_keys: AbstractSet[str],
+    window: tuple[datetime, datetime],
+    cache: InMemoryCache = _SPEND_LOG_METADATA_CACHE,
+) -> Mapping[str, KeyMetadataDict]:
+    digests: Final = frozenset(key for key in missing_keys if _is_spend_log_digest(key))
+    if not digests:
+        return _EMPTY_KEY_METADATA
+    cached: Final = MappingProxyType(
+        {
+            digest: meta
+            for digest in digests
+            for meta in (_cached_spend_log_metadata(cache, digest, window),)
+            if meta is not None
+        }
+    )
+    uncached: Final = digests - frozenset(cached)
+    fresh: Final = await _query_spend_log_metadata(prisma_client, uncached, window) if uncached else _EMPTY_KEY_METADATA
+    if fresh is not None:
+        for digest in uncached:
+            cache.set_cache(_spend_log_cache_key(digest, window), fresh.get(digest, KeyMetadataDict()))
+    return MappingProxyType(
+        {digest: meta for digest, meta in (*cached.items(), *(fresh or _EMPTY_KEY_METADATA).items()) if meta}
     )
 
 

@@ -492,7 +492,7 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
 
 @pytest.mark.asyncio
 async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_spend_logs():
-    """A dirty key no table can explain costs two digest lookups, never a token page walk or a SpendLogs scan."""
+    """Without a spend-log window a dirty key no table can explain costs two digest lookups and never a token page walk."""
     from litellm.proxy.utils import hash_token
 
     double_hashed = hash_token("b" * 64)
@@ -516,6 +516,78 @@ async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_s
         + mock_prisma.db.litellm_deletedverificationtoken.find_many.call_args_list
     )
     assert all("take" not in call.kwargs and "skip" not in call.kwargs for call in token_lookups)
+
+
+@pytest.mark.asyncio
+async def test_get_api_key_metadata_permanent_miss_with_a_window_reads_spend_logs_once_within_it():
+    from litellm.proxy.utils import hash_token
+
+    double_hashed = hash_token("permanent-miss-with-window-6852")
+    window = (datetime(2024, 1, 1), datetime(2024, 1, 4))
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+
+    result = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={double_hashed}, spend_logs_window=window)
+
+    assert double_hashed not in result
+    assert mock_prisma.db.query_raw.await_count == 3
+    ((_, digests, start, end),) = [
+        call.args for call in mock_prisma.db.query_raw.call_args_list if "LiteLLM_SpendLogs" in call.args[0]
+    ]
+    assert digests == [double_hashed]
+    assert (start, end) == window
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_recovers_a_session_key_alias_from_spend_logs_around_the_page_dates():
+    from litellm.proxy.utils import hash_token
+
+    session_digest = hash_token("cli-session-daily-activity-6852")
+    records = [_daily_user_spend_record(user_id="session-user", api_key=session_digest, spend=1.5)]
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=len(records))
+    mock_table.find_many = AsyncMock(return_value=records)
+    mock_prisma.db.litellm_dailyuserspend = mock_table
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[SimpleNamespace(user_id="session-user", user_email="session@example.com")]
+    )
+
+    async def query_raw(sql, *params):
+        if "LiteLLM_SpendLogs" in sql:
+            return [{"digest": session_digest, "key_alias": "cli-session-alias", "team_id": None, "user_id": "session-user"}]
+        return []
+
+    mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+
+    result = await get_daily_activity(
+        prisma_client=mock_prisma,
+        table_name="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        entity_metadata_field=None,
+        start_date="2024-01-01",
+        end_date="2024-01-01",
+        model=None,
+        api_key=None,
+        page=1,
+        page_size=1000,
+    )
+
+    key_metadata = result.results[0].breakdown.api_keys[session_digest].metadata
+    assert key_metadata.key_alias == "cli-session-alias"
+    assert key_metadata.user_email == "session@example.com"
+    ((_, digests, start, end),) = [
+        call.args for call in mock_prisma.db.query_raw.call_args_list if "LiteLLM_SpendLogs" in call.args[0]
+    ]
+    assert digests == [session_digest]
+    assert (start, end) == (datetime(2023, 12, 31), datetime(2024, 1, 3))
 
 
 def test_key_metadata_includes_recovered_user_email():
