@@ -1583,16 +1583,6 @@ async def _show_no_redis_warning() -> bool:
 
 
 def _show_env_credential_login_warning() -> bool:
-    """
-    Whether the UI should warn admins that env-credential login is still enabled.
-
-    UI_USERNAME/UI_PASSWORD (or the master key, when UI_PASSWORD is unset) grant
-    proxy-admin access with a shared static secret: no per-person identity, no
-    audit trail, no password policy, and it stays valid until the env var or
-    master key rotates. That is fine for first-time setup, so it is on by
-    default, but once real admin accounts exist it should be turned off with
-    `general_settings.disable_env_credential_login`.
-    """
     from litellm.proxy.auth.login_utils import is_env_credential_login_enabled
     from litellm.proxy.proxy_server import general_settings
 
