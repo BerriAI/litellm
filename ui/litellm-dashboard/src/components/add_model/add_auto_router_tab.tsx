@@ -25,12 +25,14 @@ import ComplexityRouterConfig, {
   ComplexityRouterConfigValue,
   effectiveClassifierType,
   usesLlmClassifier,
+  heuristicScoringRole,
   DEFAULT_ADAPTIVE_WEIGHTS,
   DEFAULT_SESSION_AFFINITY,
   DEFAULT_DEPLOYMENT_AFFINITY,
   DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
+import { customDimensionsError } from "./custom_dimensions";
 import { DEFAULT_ESCALATION_KEYWORDS } from "./EscalationKeywords";
 import {
   type AutoRouterCompressionState,
@@ -139,6 +141,7 @@ export const getSubmitBlockedReason = (
     getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
     getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
     getClassifierModelError(config) ??
+    (heuristicScoringRole(config) === "decides" ? customDimensionsError(config.custom_dimensions) : null) ??
     getClassifierReasoningEffortError(config, modelInfo) ??
     getReferencedModelsError(referencedModelsParams, availability)
   );
@@ -412,6 +415,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tierBoundaries: complexityRouterConfig.tier_boundaries,
     tokenThresholds: complexityRouterConfig.token_thresholds,
     dimensionWeights: complexityRouterConfig.dimension_weights,
+    customDimensions: complexityRouterConfig.custom_dimensions,
     reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
     enableContextWindowEscalation: complexityRouterConfig.enable_context_window_escalation,
     contextWindowEscalationBuffer: complexityRouterConfig.context_window_escalation_buffer,

@@ -146,6 +146,7 @@ export const CUSTOM_TIER_RESTRICTIONS = {
       "tier_boundaries",
       "token_thresholds",
       "dimension_weights",
+      "custom_dimensions",
       "reasoning_override_min_score",
       "custom_technical_keywords",
     ],
