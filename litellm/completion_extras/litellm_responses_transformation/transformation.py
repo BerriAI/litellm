@@ -370,7 +370,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             and isinstance(tool_call.get("custom"), dict)
         )
 
-        for msg in messages:
+        leading_system_count: Final = next(
+            (index for index, msg in enumerate(messages) if msg.get("role") != "system"),
+            len(messages),
+        )
+
+        for index, msg in enumerate(messages):
             role = msg.get("role")
             content = msg.get("content", "")
             tool_calls = msg.get("tool_calls")
@@ -378,7 +383,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
             if role == "system":
                 # Extract system message as instructions
-                if isinstance(content, str):
+                if isinstance(content, str) and index < leading_system_count:
                     if instructions:
                         # Concatenate multiple system prompts with a space
                         instructions = f"{instructions} {content}"
