@@ -492,6 +492,171 @@ async def test_message_methods_preserve_numeric_zero_request_id(method: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_forward_caller_identity_headers(method: str):
+    """message/send and message/stream must forward X-LiteLLM-User-Id and
+    X-LiteLLM-Team-Id, same as the tasks/* methods, so a downstream agent can scope
+    resources to the authenticated caller on the primary conversational path -- not
+    only on secondary task-management calls."""
+    from fastapi.responses import JSONResponse
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    class MessageSendParams:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class SendMessageRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    agent = _make_agent_mock()
+    params = {
+        "message": {
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Hello"}],
+            "messageId": "msg-123",
+        }
+    }
+    mock_request = _make_request_mock(method, params)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="user-abc", team_id="team-xyz")
+    captured = {}
+
+    async def capture_asend_message(request, **kwargs):
+        captured["agent_extra_headers"] = kwargs["agent_extra_headers"]
+        response = MagicMock()
+        response.model_dump.return_value = {
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "result": {"status": "success"},
+        }
+        return response
+
+    async def capture_stream_message(**kwargs):
+        captured["agent_extra_headers"] = kwargs["agent_extra_headers"]
+        return JSONResponse({"jsonrpc": "2.0", "id": kwargs["request_id"]})
+
+    mock_a2a_types = MagicMock()
+    mock_a2a_types.MessageSendParams = MessageSendParams
+    mock_a2a_types.SendMessageRequest = SendMessageRequest
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        if method == "message/send":
+            stack.enter_context(
+                patch.dict(
+                    sys.modules,
+                    {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "litellm.a2a_protocol.asend_message",
+                    new=AsyncMock(side_effect=capture_asend_message),
+                )
+            )
+        else:
+            stack.enter_context(
+                patch(
+                    "litellm.proxy.agent_endpoints.a2a_endpoints._handle_stream_message",
+                    new=AsyncMock(side_effect=capture_stream_message),
+                )
+            )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    forwarded_headers = captured["agent_extra_headers"] or {}
+    assert forwarded_headers.get("X-LiteLLM-User-Id") == "user-abc"
+    assert forwarded_headers.get("X-LiteLLM-Team-Id") == "team-xyz"
+
+
+@pytest.mark.asyncio
+async def test_message_send_caller_identity_headers_cannot_be_spoofed():
+    """A client must not be able to override X-LiteLLM-User-Id / X-LiteLLM-Team-Id on
+    message/send by including x-a2a-<agent>-x-litellm-user-id in their request
+    headers. The authenticated identity must always win, matching the existing
+    guarantee for tasks/* (see test_caller_identity_headers_cannot_be_spoofed_via_forwarded_headers)."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    class MessageSendParams:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class SendMessageRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    agent = _make_agent_mock()
+    params = {
+        "message": {
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Hello"}],
+            "messageId": "msg-123",
+        }
+    }
+    mock_request = _make_request_mock("message/send", params)
+    mock_request.headers = {
+        "x-a2a-test-agent-x-litellm-user-id": "attacker-user",
+        "x-a2a-test-agent-x-litellm-team-id": "attacker-team",
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team")
+    captured = {}
+
+    async def capture_asend_message(request, **kwargs):
+        captured["agent_extra_headers"] = kwargs["agent_extra_headers"]
+        response = MagicMock()
+        response.model_dump.return_value = {
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "result": {"status": "success"},
+        }
+        return response
+
+    mock_a2a_types = MagicMock()
+    mock_a2a_types.MessageSendParams = MessageSendParams
+    mock_a2a_types.SendMessageRequest = SendMessageRequest
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        stack.enter_context(
+            patch.dict(sys.modules, {"a2a": MagicMock(), "a2a.types": mock_a2a_types})
+        )
+        stack.enter_context(
+            patch(
+                "litellm.a2a_protocol.asend_message",
+                new=AsyncMock(side_effect=capture_asend_message),
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    forwarded_headers = captured["agent_extra_headers"] or {}
+    assert (
+        forwarded_headers.get("X-LiteLLM-User-Id") == "real-user"
+    ), "authenticated user id must not be overridden by forwarded client headers"
+    assert (
+        forwarded_headers.get("X-LiteLLM-Team-Id") == "real-team"
+    ), "authenticated team id must not be overridden by forwarded client headers"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "method,params",
     [

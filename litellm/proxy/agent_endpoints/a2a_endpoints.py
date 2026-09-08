@@ -157,7 +157,7 @@ def _forwarding_headers(
     user_api_key_dict: UserAPIKeyAuth,
     request_data: Mapping[str, object],
     agent_extra_headers: Mapping[str, str] | None,
-) -> Mapping[str, str] | None:
+) -> dict[str, str] | None:
     sanitized: Final = (
         {k: v for k, v in agent_extra_headers.items() if not k.lower().startswith("x-litellm-")}
         if agent_extra_headers
@@ -798,6 +798,17 @@ async def invoke_agent_a2a(
             static_headers=static_headers or None,
         )
 
+        # Stamp the caller's identity (X-LiteLLM-User-Id/-Team-Id) onto every method,
+        # not just the tasks/* ones _forwarding_headers was originally written for.
+        # message/send and message/stream previously sent agent_extra_headers as-is,
+        # so a downstream agent never saw who was calling it on the primary
+        # conversational path -- only on secondary task-management calls.
+        agent_extra_headers = _forwarding_headers(
+            user_api_key_dict=user_api_key_dict,
+            request_data=data,
+            agent_extra_headers=agent_extra_headers,
+        )
+
         # Databricks App endpoints require a short-lived OAuth M2M token rather
         # than a static bearer. Only agents explicitly configured with a
         # ``databricks_oauth`` block get one; every other agent is left untouched.
@@ -942,12 +953,7 @@ async def invoke_agent_a2a(
                 "method": method,
                 "params": params,
             }
-            caller_headers: Final = _forwarding_headers(
-                user_api_key_dict=user_api_key_dict,
-                request_data=data,
-                agent_extra_headers=agent_extra_headers,
-            )
-            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=caller_headers)
+            result = await _forward_jsonrpc(agent_url, forward_body, extra_headers=agent_extra_headers)
             if method == "agent/getAuthenticatedExtendedCard":
                 card: Final = result.get("result")
                 if isinstance(card, dict):
@@ -988,16 +994,11 @@ async def invoke_agent_a2a(
                 "method": method,
                 "params": params,
             }
-            sse_caller_headers: Final = _forwarding_headers(
-                user_api_key_dict=user_api_key_dict,
-                request_data=data,
-                agent_extra_headers=agent_extra_headers,
-            )
             return await _forward_jsonrpc_sse(
                 agent_url,
                 forward_body,
                 request_id=request_id,
-                extra_headers=sse_caller_headers,
+                extra_headers=agent_extra_headers,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
