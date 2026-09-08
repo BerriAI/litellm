@@ -9,7 +9,9 @@ vi.mock("@/components/networking", () => ({
 const mockMessagesStream = vi.fn();
 
 vi.mock("@anthropic-ai/sdk", () => ({
-  default: vi.fn(() => ({ messages: { stream: mockMessagesStream } })),
+  default: vi.fn(function () {
+    return { messages: { stream: mockMessagesStream } };
+  }),
 }));
 
 describe("anthropic_messages prompt cache usage", () => {
