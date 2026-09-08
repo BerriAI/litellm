@@ -789,12 +789,6 @@ def apply_missing_session_id_policy(
             )
 
 
-def is_claude_code_user_agent(user_agent: str) -> bool:
-    """Claude Code identifies itself as ``claude-cli/<version> ...``; the IDE
-    extensions and the Agent SDK run through the same CLI and share that prefix."""
-    return user_agent.startswith("claude-cli/")
-
-
 def is_codex_user_agent(user_agent: str) -> bool:
     """Codex builds its user agent as ``<originator>/<version> ...`` and ships
     several first-party originators: ``codex-tui``, ``codex_cli_rs``,
@@ -811,6 +805,8 @@ def should_auto_drop_params_for_agentic_cli(user_agent: str, data: dict, proxy_c
     requests routed to providers that reject them. An explicit drop_params
     from the caller or in the operator's ``litellm_settings`` always wins
     over this default."""
+    from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
+
     if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
         return False
     if "drop_params" in data:

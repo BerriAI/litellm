@@ -366,6 +366,7 @@ async def handle_mcp_tool_call(
     from litellm.proxy._experimental.mcp_server.server import (
         _get_allowed_mcp_servers,
         execute_mcp_tool,
+        raise_denied_scoped_mcp_access,
     )
 
     allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
@@ -373,6 +374,12 @@ async def handle_mcp_tool_call(
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
+    if mcp_servers and not allowed_mcp_servers:
+        await raise_denied_scoped_mcp_access(
+            requested_names=mcp_servers,
+            user_api_key_auth=user_api_key_dict,
+            client_ip=client_ip,
+        )
 
     # Reject before dispatch when the key has no accessible servers; otherwise an
     # unprefixed local tool name would fall through to the local registry in
