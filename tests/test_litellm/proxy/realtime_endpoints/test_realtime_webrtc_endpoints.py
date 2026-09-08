@@ -6,7 +6,8 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 
 import json
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
+from typing import Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -161,17 +162,27 @@ def mock_route_request_realtime_calls():
     return _mock_route
 
 
+class AddLitellmDataToRequest(Protocol):
+    def __call__(self, data: dict[str, object], **kwargs: object) -> Awaitable[dict[str, object]]: ...
+
+
+class PreCallHook(Protocol):
+    def __call__(
+        self, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str
+    ) -> Awaitable[dict[str, object]]: ...
+
+
 @pytest.fixture
-def mock_add_litellm_data():
-    async def _mock(data, **kwargs):
+def mock_add_litellm_data() -> AddLitellmDataToRequest:
+    async def _mock(data: dict[str, object], **kwargs: object) -> dict[str, object]:
         return data
 
     return _mock
 
 
 @pytest.fixture
-def mock_pre_call_hook():
-    async def _mock(user_api_key_dict, data, call_type):
+def mock_pre_call_hook() -> PreCallHook:
+    async def _mock(user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str) -> dict[str, object]:
         return data
 
     return _mock
@@ -1205,8 +1216,8 @@ async def test_transcription_sessions_wraps_route_exception(
 
 def test_realtime_calls_upstream_rejection_answers_an_openai_typed_error(
     proxy_app: FastAPI,
-    mock_add_litellm_data: Callable[..., Awaitable[object]],
-    mock_pre_call_hook: Callable[..., Awaitable[object]],
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A bare HTTPException carries no type or param, so the tail used to ship the
@@ -1245,8 +1256,8 @@ def test_realtime_calls_upstream_rejection_answers_an_openai_typed_error(
 
 def test_transcription_sessions_rejection_answers_an_openai_typed_error(
     proxy_app: FastAPI,
-    mock_add_litellm_data: Callable[..., Awaitable[object]],
-    mock_pre_call_hook: Callable[..., Awaitable[object]],
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
     monkeypatch: pytest.MonkeyPatch,
 ):
     """A model the router cannot serve surfaces as a bare HTTPException, which this tail
