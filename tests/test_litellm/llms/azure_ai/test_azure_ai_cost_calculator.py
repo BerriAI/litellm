@@ -11,9 +11,9 @@ import litellm
 from litellm.cost_calculator import completion_cost
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure_ai.cost_calculator import (
-    _is_azure_model_router,
     calculate_azure_model_router_flat_cost,
     cost_per_token,
+    is_azure_model_router,
 )
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from litellm.utils import get_model_info
@@ -54,7 +54,7 @@ class TestAzureModelRouterDetection:
     )
     def test_is_azure_model_router(self, model: str, expected: bool):
         """Test Azure Model Router detection."""
-        assert _is_azure_model_router(model) == expected
+        assert is_azure_model_router(model) == expected
 
 
 class TestAzureModelRouterPrefix:
@@ -130,11 +130,21 @@ def _routed_model_cost() -> tuple[float, float]:
 
 @pytest.mark.usefixtures("local_model_cost_map")
 class TestAzureModelRouterFlatCost:
-    """cost_per_token prices the response model only; the router fee is the cost breakdown's own line item."""
+    """cost_per_token charges the router fee once, for whichever router name the caller gives it."""
 
-    def test_unmapped_router_deployment_name_prices_at_zero(self) -> None:
+    def test_unmapped_router_deployment_name_prices_the_fee(self) -> None:
         usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
-        assert cost_per_token(model="azure-model-router", usage=usage) == (0.0, 0.0)
+        prompt_cost, completion_cost_usd = cost_per_token(model="azure-model-router", usage=usage)
+        assert prompt_cost == pytest.approx(1000 * ROUTER_FEE_PER_TOKEN, rel=1e-9)
+        assert completion_cost_usd == 0.0
+
+    def test_router_deployment_name_as_both_names_charges_the_fee_once(self) -> None:
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        prompt_cost, completion_cost_usd = cost_per_token(
+            model="model_router/my-deployment", usage=usage, request_model="azure_ai/model_router/my-deployment"
+        )
+        assert prompt_cost == pytest.approx(1000 * ROUTER_FEE_PER_TOKEN, rel=1e-9)
+        assert completion_cost_usd == 0.0
 
     @pytest.mark.parametrize("router_entry_name", ["model_router", "model-router"])
     def test_router_entry_prices_its_own_fee(self, router_entry_name: str) -> None:
@@ -209,7 +219,8 @@ class TestAzureModelRouterFlatCost:
 
 @pytest.mark.usefixtures("local_model_cost_map")
 class TestAzureModelRouterCostBreakdown:
-    """completion_cost charges the router fee exactly once, as the cost breakdown's additional cost line."""
+    """completion_cost charges the router fee exactly once: as the breakdown's additional cost line when a routed
+    model is priced as itself, inside the input cost when the priced name is the router."""
 
     def test_unmapped_router_deployment_name_costs_only_the_fee(self) -> None:
         cost = completion_cost(
@@ -219,7 +230,7 @@ class TestAzureModelRouterCostBreakdown:
         )
         assert cost == pytest.approx(ROUTED_FEE, rel=1e-9)
 
-    def test_fee_is_the_breakdown_line_item_for_an_unmapped_router_name(self) -> None:
+    def test_unmapped_router_name_carries_the_fee_as_its_input_cost(self) -> None:
         logging_obj = _router_logging("azure-model-router")
         cost = completion_cost(
             completion_response=_azure_ai_response("azure-model-router"),
@@ -229,10 +240,8 @@ class TestAzureModelRouterCostBreakdown:
         )
         breakdown = logging_obj.cost_breakdown
         assert breakdown is not None
-        assert breakdown["input_cost"] == 0.0
-        assert breakdown.get("additional_costs") == pytest.approx(
-            {"Azure Model Router Flat Cost": ROUTED_FEE}, rel=1e-9
-        )
+        assert breakdown["input_cost"] == pytest.approx(ROUTED_FEE, rel=1e-9)
+        assert "additional_costs" not in breakdown
         assert cost == pytest.approx(ROUTED_FEE, rel=1e-9)
 
     def test_router_request_with_routed_response_charges_the_fee_once(self) -> None:
