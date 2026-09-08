@@ -35,7 +35,7 @@ from litellm.types.utils import Embedding, EmbeddingResponse, PromptTokensDetail
 class MarengoEmbeddingItem(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    embedding: tuple[float, ...]
+    embedding: tuple[float, ...] | None = None
 
 
 class MarengoInvokeResponse(BaseModel):
@@ -47,10 +47,10 @@ class MarengoInvokeResponse(BaseModel):
 
     def vectors(self) -> tuple[tuple[float, ...], ...]:
         if self.data:
-            return tuple(item.embedding for item in self.data)
+            return tuple(item.embedding for item in self.data if item.embedding is not None)
         if self.embedding is not None:
             return (self.embedding,)
-        return tuple(item.embedding for item in self.embeddings)
+        return tuple(item.embedding for item in self.embeddings if item.embedding is not None)
 
 
 class MarengoBilledMultiInput(BaseModel):

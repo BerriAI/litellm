@@ -91,19 +91,21 @@ class Marengo3Params(BaseModel):
         return self.model_dump(include=MARENGO_2_7_ONLY_FIELDS, exclude_none=True)
 
 
-def _s3_location(uri: str, bucket_owner: str | None) -> TwelveLabsS3Location:
+def _require_bucket_owner(bucket_owner: str | None) -> str:
     if bucket_owner is None:
-        unowned: Final[TwelveLabsS3Location] = {"uri": uri}
-        return unowned
-    owned: Final[TwelveLabsS3Location] = {"uri": uri, "bucketOwner": bucket_owner}
-    return owned
+        raise BedrockError(
+            status_code=400,
+            message="s3:// media requires the 'bucketOwner' parameter, the account id that owns the bucket",
+        )
+    return bucket_owner
 
 
 def _media_source(media: str, bucket_owner: str | None) -> TwelveLabsMediaSource:
     if not media.startswith(S3_URI_PREFIX):
         inline: Final[TwelveLabsMediaSource] = {"base64String": get_base64_str(media)}
         return inline
-    remote: Final[TwelveLabsMediaSource] = {"s3Location": _s3_location(media, bucket_owner)}
+    s3_location: Final[TwelveLabsS3Location] = {"uri": media, "bucketOwner": _require_bucket_owner(bucket_owner)}
+    remote: Final[TwelveLabsMediaSource] = {"s3Location": s3_location}
     return remote
 
 

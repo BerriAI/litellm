@@ -1220,6 +1220,16 @@ def test_marengo_usage_without_request_data_bills_nothing():
     assert response.usage.prompt_tokens_details is None
 
 
+def test_marengo_response_items_without_an_embedding_are_skipped():
+    response = TwelveLabsMarengoEmbeddingConfig()._transform_response(
+        response_list=[{"data": [{"embeddingOption": "visual-text", "startSec": 0.0}, {"embedding": [0.1, 0.2, 0.3]}]}],
+        model="us.twelvelabs.marengo-embed-3-0-v1:0",
+    )
+
+    assert [item["embedding"] for item in response.data] == [[0.1, 0.2, 0.3]]
+    assert response.data[0]["index"] == 0
+
+
 def test_marengo_3_text_image_without_media_source_is_a_bad_request():
     with pytest.raises(litellm.BadRequestError, match=r"text_image.*media_source"):
         litellm.embedding(

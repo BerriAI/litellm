@@ -75,9 +75,22 @@ def test_image_request_from_s3_carries_bucket_owner():
     }
 
 
-def test_s3_media_without_bucket_owner_omits_the_key():
-    request = build_marengo_3_request("s3://media/duck.png", {"input_type": "image"})
-    assert request["image"]["mediaSource"] == {"s3Location": {"uri": "s3://media/duck.png"}}
+@pytest.mark.parametrize(
+    "input_media,params",
+    [
+        ("s3://media/duck.png", {"input_type": "image"}),
+        ("s3://media/clip.mp4", {"input_type": "video"}),
+        ("a duck", {"input_type": "text_image", "media_source": "s3://media/duck.png"}),
+        ("a duck", {"input_type": "multi_input", "media_sources": {"img1": "s3://media/duck.png"}}),
+    ],
+)
+def test_s3_media_without_bucket_owner_is_rejected_naming_it(input_media, params):
+    with pytest.raises(BedrockError) as excinfo:
+        build_marengo_3_request(input_media, params)
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.message == (
+        "s3:// media requires the 'bucketOwner' parameter, the account id that owns the bucket"
+    )
 
 
 def test_text_image_request_pairs_text_with_media_source():
@@ -147,12 +160,13 @@ def test_timed_media_request_nests_every_option_under_the_media_key(input_type):
             "embeddingType": ["fused_embedding"],
             "embeddingScope": ["clip", "asset"],
             "inferenceId": "req-42",
+            "bucketOwner": "123456789012",
         },
     )
     assert wire(request) == {
         "inputType": input_type,
         input_type: {
-            "mediaSource": {"s3Location": {"uri": "s3://media/clip.mp4"}},
+            "mediaSource": {"s3Location": {"uri": "s3://media/clip.mp4", "bucketOwner": "123456789012"}},
             "startSec": 2.0,
             "endSec": 12.5,
             "segmentation": {"method": "dynamic", "dynamic": {"minDurationSec": 4}},
@@ -165,8 +179,10 @@ def test_timed_media_request_nests_every_option_under_the_media_key(input_type):
 
 
 def test_timed_media_request_without_options_carries_only_the_media_source():
-    request = build_marengo_3_request("s3://media/clip.mp4", {"input_type": "video"})
-    assert request["video"] == {"mediaSource": {"s3Location": {"uri": "s3://media/clip.mp4"}}}
+    request = build_marengo_3_request("s3://media/clip.mp4", {"input_type": "video", "bucketOwner": "123456789012"})
+    assert request["video"] == {
+        "mediaSource": {"s3Location": {"uri": "s3://media/clip.mp4", "bucketOwner": "123456789012"}}
+    }
 
 
 @pytest.mark.parametrize(
@@ -211,7 +227,12 @@ def test_marengo_3_video_and_audio_still_require_the_async_route(input_type):
 def test_marengo_3_async_invoke_wraps_the_nested_payload_with_the_base_model_id():
     request = TwelveLabsMarengoEmbeddingConfig(model=MARENGO_3_BASE)._transform_request(
         input="s3://media/clip.mp4",
-        inference_params={"input_type": "video", "embeddingOption": ["visual"], "output_s3_uri": OUTPUT_S3_URI},
+        inference_params={
+            "input_type": "video",
+            "embeddingOption": ["visual"],
+            "bucketOwner": "123456789012",
+            "output_s3_uri": OUTPUT_S3_URI,
+        },
         async_invoke_route=True,
         model_id="async_invoke%2Ftwelvelabs.marengo-embed-3-0-v1%3A0",
         output_s3_uri=OUTPUT_S3_URI,
@@ -220,7 +241,10 @@ def test_marengo_3_async_invoke_wraps_the_nested_payload_with_the_base_model_id(
         "modelId": MARENGO_3_BASE,
         "modelInput": {
             "inputType": "video",
-            "video": {"mediaSource": {"s3Location": {"uri": "s3://media/clip.mp4"}}, "embeddingOption": ["visual"]},
+            "video": {
+                "mediaSource": {"s3Location": {"uri": "s3://media/clip.mp4", "bucketOwner": "123456789012"}},
+                "embeddingOption": ["visual"],
+            },
         },
         "outputDataConfig": {"s3OutputDataConfig": {"s3Uri": OUTPUT_S3_URI}},
     }

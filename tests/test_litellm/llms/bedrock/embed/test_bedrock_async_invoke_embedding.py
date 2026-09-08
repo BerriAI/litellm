@@ -204,6 +204,7 @@ class TestBedrockAsyncInvokeEmbedding:
                 input_type="video",
                 embeddingOption=["visual", "audio"],
                 segmentation={"method": "fixed", "fixed": {"durationSec": 6}},
+                bucketOwner="123456789012",
                 output_s3_uri="s3://test-bucket/async-invoke-output/",
             )
 
@@ -214,7 +215,7 @@ class TestBedrockAsyncInvokeEmbedding:
             "modelInput": {
                 "inputType": "video",
                 "video": {
-                    "mediaSource": {"s3Location": {"uri": "s3://test-bucket/clip.mp4"}},
+                    "mediaSource": {"s3Location": {"uri": "s3://test-bucket/clip.mp4", "bucketOwner": "123456789012"}},
                     "segmentation": {"method": "fixed", "fixed": {"durationSec": 6}},
                     "embeddingOption": ["visual", "audio"],
                 },
