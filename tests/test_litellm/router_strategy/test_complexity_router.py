@@ -7,7 +7,8 @@ Tests the rule-based complexity scoring and tier assignment logic.
 import asyncio
 import logging
 import sys
-from typing import Dict, List
+import time
+from typing import Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -47,6 +48,7 @@ from litellm.router_strategy.complexity_router.config import (
     ClassifierLLMConfig,
     ComplexityRouterConfig,
     ComplexityTier,
+    custom_pattern_work,
 )
 from litellm.router_strategy.complexity_router.tier_predictor import (
     TierGlobalStatistic,
@@ -754,6 +756,205 @@ class TestCustomTechnicalKeywords:
         assert not any("technical" in s.lower() for s in baseline_signals)
         assert any("technical" in s.lower() for s in custom_signals), f"Expected technical signal, got {custom_signals}"
         assert custom_score > baseline_score
+
+
+class TestCustomDimensions:
+    @pytest.mark.parametrize(
+        "matchers,prompt",
+        [
+            pytest.param(
+                {"keywords": ["orbitmesh", "fluxgate"]},
+                "Connect ORBITMESH and fluxgate for the requested change",
+                id="keywords",
+            ),
+            pytest.param(
+                {"patterns": [r"\bCREATE\s{1,4}TABLE\b", r"\bALTER\s{1,4}TABLE\b"]},
+                "create table widgets (id integer); ALTER TABLE widgets ADD label text;",
+                id="regex",
+            ),
+        ],
+    )
+    def test_custom_dimension_changes_only_matching_requests(
+        self, mock_router_instance: MagicMock, matchers: dict[str, object], prompt: str
+    ) -> None:
+        baseline: Final = ComplexityRouter("test-router", mock_router_instance)
+        configured: Final = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {"custom_dimensions": [{"name": "internalFrameworks", "weight": 0.7, **matchers}]},
+        )
+        baseline_tier, baseline_score, baseline_signals = baseline.classify(prompt)
+        tier, score, signals = configured.classify(prompt)
+        assert baseline_tier == ComplexityTier.SIMPLE
+        assert tier != ComplexityTier.SIMPLE
+        assert score == pytest.approx(baseline_score + 0.7)
+        assert signals == [*baseline_signals, "custom (internalFrameworks)"]
+        plain: Final = "Hello!"
+        assert configured.classify(plain) == baseline.classify(plain)
+        assert configured.classify(plain)[0] == ComplexityTier.SIMPLE
+
+    @pytest.mark.parametrize(
+        "dimension_overrides,config_overrides",
+        [
+            pytest.param({"keywords": []}, {}, id="missing-matchers"),
+            pytest.param({"keywords": ["  "]}, {}, id="blank-keyword"),
+            pytest.param({"patterns": ["\t"]}, {}, id="blank-pattern"),
+            pytest.param({"patterns": ["("]}, {}, id="invalid-regex"),
+            pytest.param({"patterns": [r"a*b"]}, {}, id="unbounded-star"),
+            pytest.param({"patterns": [r"a{2,}b"]}, {}, id="unbounded-brace"),
+            pytest.param({"patterns": [r"a{0,65}b"]}, {}, id="repeat-over-64"),
+            pytest.param({"patterns": [r"(a{0,8}){0,8}b"]}, {}, id="nested-repeat"),
+            pytest.param({"patterns": [r"(a|aa){0,12}b"]}, {}, id="alternation-in-repeat"),
+            pytest.param({"patterns": [r"(?:ab){0,64}c"]}, {}, id="group-repeat"),
+            pytest.param({"patterns": ["a?" * 9 + "b"]}, {}, id="pattern-work-over-budget"),
+            pytest.param({"patterns": ["(?:a|aa)" * 9 + "z"]}, {}, id="ambiguous-alternation-chain"),
+            pytest.param({"patterns": ["a?" * 8 + "a{64}" * 10 + "z"]}, {}, id="cheap-prefix-expensive-tail"),
+            pytest.param({"patterns": [r"(a)\1"]}, {}, id="backreference"),
+            pytest.param({"patterns": [r"(?=x)y"]}, {}, id="lookahead"),
+            pytest.param({"patterns": [r"(?>ab)"]}, {}, id="atomic-group"),
+            pytest.param({"patterns": [r"a*+b"]}, {}, id="possessive"),
+            pytest.param({"name": "CODEPRESENCE"}, {"dimension_weights": {"tokenCount": 0.1}}, id="reserved-name"),
+            pytest.param({}, {"dimension_weights": {"INTERNALFRAMEWORKS": 0.7}}, id="weight-in-map"),
+            pytest.param({"weight": 0}, {}, id="zero-weight"),
+            pytest.param({"weight": 1.1}, {}, id="excess-weight"),
+            pytest.param({"weight": float("nan")}, {}, id="nan-weight"),
+            pytest.param({"weight": float("inf")}, {}, id="infinite-weight"),
+            pytest.param({"name": "bad-name"}, {}, id="invalid-name"),
+            pytest.param({"name": "x" * 65}, {}, id="long-name"),
+            pytest.param({"keywords": [""]}, {}, id="empty-matcher"),
+            pytest.param({"keywords": ["x" * 257]}, {}, id="long-matcher"),
+            pytest.param({"keywords": ["x"] * 32, "patterns": ["y"]}, {}, id="combined-matcher-count"),
+            pytest.param({"keywords": ["x" * 256] * 17}, {}, id="matcher-character-budget"),
+            pytest.param({"unknown": True}, {}, id="extra-field"),
+        ],
+    )
+    def test_custom_dimension_invalid_configuration_rejected(
+        self, dimension_overrides: dict[str, object], config_overrides: dict[str, object]
+    ) -> None:
+        with pytest.raises(ValidationError, match=r"custom_dimensions|custom dimension"):
+            ComplexityRouterConfig.model_validate(
+                {
+                    "custom_dimensions": [
+                        {
+                            "name": "internalFrameworks",
+                            "weight": 0.7,
+                            "keywords": ["orbitmesh"],
+                            **dimension_overrides,
+                        }
+                    ],
+                    **config_overrides,
+                }
+            )
+
+    @pytest.mark.parametrize(
+        "names",
+        [
+            pytest.param(("internalFrameworks", "INTERNALFRAMEWORKS"), id="duplicate-casefolded-name"),
+            pytest.param(tuple(f"dimension{i}" for i in range(17)), id="dimension-count"),
+        ],
+    )
+    def test_custom_dimension_names_and_count_are_bounded(self, names: tuple[str, ...]) -> None:
+        with pytest.raises(ValidationError, match=r"custom_dimensions|custom dimension"):
+            ComplexityRouterConfig.model_validate(
+                {"custom_dimensions": [{"name": name, "weight": 0.7, "keywords": ["orbitmesh"]} for name in names]}
+            )
+
+    @pytest.mark.parametrize("classifier_type", ("heuristic_v2", "llm", "custom"))
+    def test_custom_dimensions_reject_classifiers_outside_the_tuning_gate(self, classifier_type: str) -> None:
+        classifier_config: Final = (
+            {"classifier_plugin": _FixedTierClassifier("SIMPLE")}
+            if classifier_type == "custom"
+            else {"classifier_llm_config": {"model": "judge"}}
+            if classifier_type == "llm"
+            else {}
+        )
+        with pytest.raises(ValidationError, match="custom_dimensions requires classifier_type"):
+            ComplexityRouterConfig.model_validate(
+                {
+                    "classifier_type": classifier_type,
+                    "custom_dimensions": [{"name": "internalFrameworks", "weight": 0.7, "keywords": ["orbitmesh"]}],
+                    **classifier_config,
+                }
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("current_ask", ("Hello!", "orbitmesh"))
+    async def test_custom_dimensions_public_hook_scores_only_current_ask(
+        self, mock_router_instance: MagicMock, current_ask: str
+    ) -> None:
+        router: Final = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+                "custom_dimensions": [{"name": "internalFrameworks", "weight": 0.7, "keywords": ["orbitmesh"]}],
+            },
+        )
+        result: Final = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[
+                {"role": "system", "content": "orbitmesh"},
+                {"role": "user", "content": "orbitmesh"},
+                {"role": "assistant", "content": "orbitmesh is ready"},
+                {"role": "user", "content": current_ask},
+                {"role": "tool", "tool_call_id": "previous", "content": "orbitmesh"},
+            ],
+        )
+        assert result is not None
+        assert result.routing_decision is not None
+        assert ("custom (internalFrameworks)" in result.routing_decision["signals"]) is (current_ask == "orbitmesh")
+        assert result.model == ("top" if current_ask == "orbitmesh" else "cheap")
+        assert "orbitmesh" not in " ".join(result.routing_decision["signals"])
+
+    def test_custom_patterns_scan_only_the_first_2048_characters(self, mock_router_instance: MagicMock) -> None:
+        router: Final = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {"custom_dimensions": [{"name": "late", "weight": 0.7, "patterns": [r"zzz{1,3}"]}]},
+        )
+        assert "custom (late)" in router.classify("a" * 2040 + " zzz")[2]
+        assert "custom (late)" not in router.classify("a" * 2048 + " zzz")[2]
+
+    def test_custom_dimensions_router_wide_regex_work_is_capped(self) -> None:
+        heavy: Final = {"weight": 0.5, "patterns": ["a?" * 8 + "z"]}
+        ComplexityRouterConfig.model_validate({"custom_dimensions": [{"name": f"d{i}", **heavy} for i in range(6)]})
+        with pytest.raises(ValidationError, match="regex work estimate is 8939"):
+            ComplexityRouterConfig.model_validate({"custom_dimensions": [{"name": f"d{i}", **heavy} for i in range(7)]})
+
+    @pytest.mark.parametrize(
+        "pattern,work",
+        [
+            pytest.param(r"\b(create|alter|drop)\s{1,4}table\b", 135, id="sql-ddl"),
+            pytest.param("a?" * 8 + "z", 1277, id="optional-chain-near-cap"),
+            pytest.param(r"a{0,15}a{0,15}z", 801, id="adjacent-bounded-near-cap"),
+            pytest.param(r"[a-z0-9_]{3,63}\.(com|net|io)", 1291, id="class-repeat-plus-alternation"),
+            pytest.param("(?:a|aa)" * 8 + "z", 1787, id="ambiguous-alternation-near-cap"),
+            pytest.param("a{64}" * 10 + "z", 662, id="long-deterministic-tail"),
+        ],
+    )
+    def test_custom_pattern_work_stays_cheap_on_adversarial_text(
+        self, mock_router_instance: MagicMock, pattern: str, work: int
+    ) -> None:
+        assert custom_pattern_work(pattern) == work
+        router: Final = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "custom_dimensions": [
+                    {"name": "bounded", "weight": 0.7, "patterns": [pattern]},
+                    {"name": "internalFrameworks", "weight": 0.7, "keywords": ["orbitmesh"]},
+                ]
+            },
+        )
+        adversarial: Final = "orbitmesh " + "a" * 4000
+        started: Final = time.perf_counter()
+        tier, score, signals = router.classify(adversarial)
+        elapsed: Final = time.perf_counter() - started
+        assert signals == ["long (1002 tokens)", "custom (internalFrameworks)"]
+        assert score == pytest.approx(0.8)
+        assert tier == ComplexityTier.REASONING
+        assert elapsed < 0.1
 
 
 class TestAsyncPreRoutingHookEdgeCases:

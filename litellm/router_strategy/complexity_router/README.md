@@ -195,6 +195,30 @@ model_list:
         session_affinity_ttl_seconds: 300
 ```
 
+## Custom dimensions
+
+Add `custom_dimensions` under `complexity_router_config` to give domain keywords or regex patterns their own weighted signal
+
+```yaml
+custom_dimensions:
+  - name: internalFrameworks
+    weight: 0.9
+    keywords: [orbitmesh, fluxgate]
+  - name: sqlMigration
+    weight: 0.7
+    patterns: ['\b(create|alter|drop)\s{1,4}table\b']
+```
+
+Each dimension contributes its weight once when any matcher hits the current ask. Repeated matches do not increase it. The built-in score and tier boundaries are unchanged, and the total score is not renormalized. Keywords use the existing case-insensitive word-boundary and CJK rules. Regexes search the first 2048 characters case-insensitively and compile during configuration validation and router initialization, never per request
+
+Only `heuristic`, `heuristic_first` and `hybrid` accept custom dimensions. Each name must be a unique ASCII identifier starting with a letter, at most 64 characters, and cannot reuse a built-in dimension name or a key in `dimension_weights`. Set its weight inline, greater than zero and at most one
+
+Patterns are checked at configuration time against a grammar whose worst case stays a few milliseconds on 2048 characters. Every quantifier needs an explicit upper bound of at most 64 and must repeat a single character or character class, so `\s{1,4}` is accepted while `\s+`, `(a|aa){0,12}` and `(?:ab){0,64}` are refused. Backreferences, lookarounds, atomic groups and possessive quantifiers are refused as well. Each pattern is then costed: alternation branches and repeat lengths multiply the ways the engine can retry, and every later piece of the pattern is charged once per path that can reach it, so `a?a?a?a?a?a?a?a?` followed by a long fixed tail is refused even though each quantifier is small. The budget is 2048 work units per pattern and 8192 across the router. An invalid or over-budget pattern fails the write with a message naming the pattern and the rule it broke
+
+Limits are 16 dimensions, 32 combined keywords/patterns per dimension, 256 characters per matcher and 4096 matcher characters per dimension. Matching runs inline on the request path with no timeout and no worker thread, because the grammar is what bounds the cost. These are routing hints, not security enforcement rules
+
+The existing heuristic-v1 tuning quota covers custom dimensions and their weights: one changed router without an auto-router license, unlimited with the entitlement. Omitting `custom_dimensions` preserves existing scoring. Routing decisions and spend logs include signals such as `custom (sqlMigration)` without recording the configured pattern or matched text. The field is configured through YAML or the model API; this change adds no dashboard editor
+
 ## Usage
 
 Once configured, use the model name like any other:
