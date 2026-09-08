@@ -1367,6 +1367,40 @@ def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
     }
 
 
+@pytest.mark.parametrize("reasoning_effort", ["high", {"effort": "high"}])
+@patch("litellm.completion_extras.responses_api_bridge.completion")
+def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
+    mock_responses_completion, reasoning_effort, restore_model_registry
+):
+    mock_responses_completion.return_value = MagicMock()
+    model = "perplexity/test-responses-bridge"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "perplexity",
+                "mode": "responses",
+                "supports_reasoning": True,
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            }
+        },
+        persist_across_reloads=False,
+    )
+
+    with patch.object(litellm, "supports_reasoning", return_value=False):
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort=reasoning_effort,
+            drop_params=True,
+            api_key="fake-key",
+            api_base="https://api.perplexity.ai",
+        )
+
+    optional_params = mock_responses_completion.call_args.kwargs["optional_params"]
+    assert optional_params["reasoning_effort"] == reasoning_effort
+
+
 @pytest.mark.parametrize(
     "model, model_info, expected_model_param, expected_base_model_param",
     [
