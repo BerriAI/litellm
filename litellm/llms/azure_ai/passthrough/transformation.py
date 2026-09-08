@@ -14,8 +14,13 @@ from litellm.llms.azure_ai.common_utils import (
     get_azure_ai_auth_headers,
 )
 from litellm.llms.azure_ai.ocr.common_utils import get_azure_ai_ocr_config
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, strip_leading_model_segment
+from litellm.llms.base_llm.passthrough.transformation import (
+    BasePassthroughConfig,
+    relayed_json_object,
+    strip_leading_model_segment,
+)
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CallTypes, StandardPassThroughResponseObject
 
 if TYPE_CHECKING:
@@ -23,6 +28,7 @@ if TYPE_CHECKING:
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
+    from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.utils import CostResponseTypes
 
 
@@ -75,6 +81,18 @@ def relayed_body(httpx_response: Response) -> str | dict:
     except ValueError:
         return httpx_response.text
     return body if isinstance(body, dict) else httpx_response.text
+
+
+def logged_rerank_response(httpx_response: Response, logging_obj: Logging, endpoint: str) -> RerankResponse | None:
+    body: Final = relayed_json_object(httpx_response) if f"/{endpoint.strip('/')}".endswith("/rerank") else None
+    if body is None:
+        return None
+    try:
+        rerank_response: Final = RerankResponse.model_validate(body)
+    except ValidationError:
+        return None
+    logging_obj.call_type = CallTypes.arerank.value  # rebind-ok: routes cost calculation to the per-query rerank path
+    return rerank_response
 
 
 class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
@@ -130,7 +148,14 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         request_data: Mapping[str, object],
         logging_obj: Logging,
         endpoint: str,
-    ) -> CostResponseTypes | OCRResponse | StandardPassThroughResponseObject | None:
+    ) -> (
+        CostResponseTypes
+        | OCRResponse
+        | RerankResponse
+        | ResponsesAPIResponse
+        | StandardPassThroughResponseObject
+        | None
+    ):
         from litellm.llms.azure.passthrough.transformation import AzurePassthroughConfig
 
         chat_result: Final = AzurePassthroughConfig().logging_non_streaming_response(  # pyright: ignore[reportUnknownMemberType]  # the Azure config still types request_data as a bare dict
@@ -146,6 +171,9 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         ocr_result: Final = self.logged_ocr_response(model, httpx_response, logging_obj, endpoint)
         if ocr_result is not None:
             return ocr_result
+        rerank_result: Final = logged_rerank_response(httpx_response, logging_obj, endpoint)
+        if rerank_result is not None:
+            return rerank_result
         return StandardPassThroughResponseObject(response=relayed_body(httpx_response))
 
     def logged_ocr_response(

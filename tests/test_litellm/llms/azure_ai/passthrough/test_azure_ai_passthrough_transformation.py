@@ -9,7 +9,8 @@ import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure_ai.passthrough.transformation import AzureAIPassthroughConfig
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
-from litellm.types.utils import LlmProviders, ModelResponse
+from litellm.types.rerank import RerankResponse
+from litellm.types.utils import EmbeddingResponse, ImageResponse, LlmProviders, ModelResponse
 from litellm.utils import ProviderConfigManager
 
 FOUNDRY_BASE = "https://my-resource.services.ai.azure.com"
@@ -367,6 +368,71 @@ def test_unparseable_ocr_body_falls_back_to_the_passthrough_object():
     )
 
     assert result == {"response": '["not", "an", "ocr", "body"]'}
+    assert logging_obj.call_type == "allm_passthrough_route"
+
+
+EMBEDDINGS_BODY = {
+    "object": "list",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+    "model": "embed-v-4-0",
+    "usage": {"prompt_tokens": 1200, "total_tokens": 1200},
+}
+
+RERANK_BODY = {
+    "id": "rerank-1",
+    "results": [{"index": 1, "relevance_score": 0.9}, {"index": 0, "relevance_score": 0.2}],
+    "meta": {"api_version": {"version": "2"}, "billed_units": {"search_units": 2}},
+}
+
+IMAGE_BODY = {"created": 1, "data": [{"b64_json": "AAAA"}]}
+
+
+def test_foundry_embeddings_relay_is_costed_per_input_token():
+    result, logging_obj = _relay_logging_result(
+        AzureAIPassthroughConfig(), "embed-v-4-0", "models/embeddings", EMBEDDINGS_BODY
+    )
+    per_token = litellm.get_model_info("azure_ai/embed-v-4-0")["input_cost_per_token"]
+
+    assert isinstance(result, EmbeddingResponse)
+    assert logging_obj.call_type == "aembedding"
+    assert per_token > 0
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(1200 * per_token)
+
+
+def test_cohere_rerank_relay_is_costed_per_search_unit():
+    result, logging_obj = _relay_logging_result(
+        AzureAIPassthroughConfig(), "cohere-rerank-v4.0-fast", "providers/cohere/v2/rerank", RERANK_BODY
+    )
+    per_query = litellm.get_model_info("azure_ai/cohere-rerank-v4.0-fast")["input_cost_per_query"]
+
+    assert isinstance(result, RerankResponse)
+    assert logging_obj.call_type == "arerank"
+    assert per_query > 0
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(2 * per_query)
+
+
+def test_image_generation_relay_is_costed_per_image():
+    result, logging_obj = _relay_logging_result(
+        AzureAIPassthroughConfig(), "FLUX.2-pro", "openai/deployments/FLUX.2-pro/images/generations", IMAGE_BODY
+    )
+    per_image = litellm.get_model_info("azure_ai/FLUX.2-pro")["output_cost_per_image"]
+
+    assert isinstance(result, ImageResponse)
+    assert logging_obj.call_type == "aimage_generation"
+    assert per_image > 0
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(per_image)
+
+
+def test_rejected_rerank_relay_keeps_the_passthrough_object_and_call_type():
+    result, logging_obj = _relay_logging_result(
+        AzureAIPassthroughConfig(),
+        "cohere-rerank-v4.0-fast",
+        "providers/cohere/v2/rerank",
+        {"message": "invalid request"},
+        status_code=400,
+    )
+
+    assert result == {"response": {"message": "invalid request"}}
     assert logging_obj.call_type == "allm_passthrough_route"
 
 
