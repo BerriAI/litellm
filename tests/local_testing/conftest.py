@@ -90,6 +90,7 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
 #   carry no real provider cost.
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
     "test_router.py::test_router_text_completion_client",
+    "test_embedding.py::test_encoding_format_omitted_by_default_for_openai_sdk",
 )
 
 

@@ -5,10 +5,11 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -30,6 +31,44 @@ if TYPE_CHECKING:
 
 _RESPONSES_API_PROVIDER_PREFIX: Final = "/openai"
 _RESPONSES_API_CREATE_ROUTES: Final = frozenset({"/v1/responses", "/responses"})
+
+
+_RESPONSE_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _response_payload(response_obj: object) -> Mapping[str, object] | None:
+    try:
+        return _RESPONSE_PAYLOAD_ADAPTER.validate_python(response_obj)
+    except ValidationError:
+        return None
+
+
+def _rewrite_advertised_id(
+    event: BaseLiteLLMOpenAIResponseObject,
+    rewrite: Callable[[str], str],
+) -> BaseLiteLLMOpenAIResponseObject:
+    event_id: Final = getattr(event, "id", None)
+    if isinstance(event_id, str) and event_id.startswith("resp_"):
+        setattr(event, "id", rewrite(event_id))
+        return event
+
+    nested: Final = getattr(event, "response", None)
+    if isinstance(nested, ResponsesAPIResponse):
+        setattr(nested, "id", rewrite(nested.id))
+        setattr(event, "response", nested)
+        return event
+
+    payload: Final = _response_payload(nested)
+    if payload is None:
+        return event
+
+    payload_id: Final = payload.get("id")
+    if not isinstance(payload_id, str):
+        return event
+
+    rewritten: Final = {**payload, "id": rewrite(payload_id)}  # mutable-ok: pydantic cannot serialize a frozen map
+    setattr(event, "response", rewritten)
+    return event
 
 
 def _is_responses_api_create_route(request_route: str | None) -> bool:
@@ -196,10 +235,6 @@ class ResponsesIDSecurity(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         request_cache: dict[str, str] | None = None,
     ) -> BaseLiteLLMOpenAIResponseObject:
-        # encrypt the response id using the symmetric key
-        # encrypt the response id, and encode the user id and response id in base64
-
-        # Check if signing key is available
         signing_key: Final = self._get_signing_key()
         if signing_key is None:
             verbose_proxy_logger.debug(
@@ -210,43 +245,22 @@ class ResponsesIDSecurity(CustomLogger):
             )
             return response
 
-        response_id: Final = getattr(response, "id", None)
-        response_obj: Final = getattr(response, "response", None)
+        def encrypt(original_id: str) -> str:
+            cached: Final = request_cache.get(original_id) if request_cache is not None else None
+            if cached is not None:
+                return cached
 
-        if response_id and isinstance(response_id, str) and response_id.startswith("resp_"):
-            # Check request-scoped cache first (for streaming consistency)
-            if request_cache is not None and response_id in request_cache:
-                setattr(response, "id", request_cache[response_id])
-            else:
-                encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
-                    response_id,
-                    user_api_key_dict.user_id or "",
-                    user_api_key_dict.team_id or "",
-                )
+            managed_id: Final = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+                original_id,
+                user_api_key_dict.user_id or "",
+                user_api_key_dict.team_id or "",
+            )
+            encrypted_id: Final = f"resp_{encrypt_value_helper(value=managed_id)}"
+            if request_cache is not None:
+                request_cache[original_id] = encrypted_id
+            return encrypted_id
 
-                encoded_user_id_and_response_id = encrypt_value_helper(value=encrypted_response_id)
-                encrypted_id = f"resp_{encoded_user_id_and_response_id}"
-                if request_cache is not None:
-                    request_cache[response_id] = encrypted_id
-                setattr(response, "id", encrypted_id)
-
-        elif response_obj and isinstance(response_obj, ResponsesAPIResponse):
-            # Check request-scoped cache first (for streaming consistency)
-            if request_cache is not None and response_obj.id in request_cache:
-                setattr(response_obj, "id", request_cache[response_obj.id])
-            else:
-                encrypted_response_id = SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
-                    response_obj.id,
-                    user_api_key_dict.user_id or "",
-                    user_api_key_dict.team_id or "",
-                )
-                encoded_user_id_and_response_id = encrypt_value_helper(value=encrypted_response_id)
-                encrypted_id = f"resp_{encoded_user_id_and_response_id}"
-                if request_cache is not None:
-                    request_cache[response_obj.id] = encrypted_id
-                setattr(response_obj, "id", encrypted_id)
-            setattr(response, "response", response_obj)
-        return response
+        return _rewrite_advertised_id(response, encrypt)
 
     async def async_post_call_success_hook(
         self,

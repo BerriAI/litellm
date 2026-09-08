@@ -200,7 +200,16 @@ autoscaling:
   enabled: false
   minReplicas: 1
   maxReplicas: 100
-  targetCPUUtilizationPercentage: 80
+  # 60 is the documented recommendation. See "Recommended Machine Specifications"
+  # in https://docs.litellm.ai/docs/proxy/prod. A new replica clears the startupProbe
+  # above only after up to failureThreshold x periodSeconds = 300 seconds, so a target
+  # high enough to trip near saturation adds capacity minutes after it was needed.
+  targetCPUUtilizationPercentage: 60
+  # Deliberately left unset rather than given a value. The prisma query engine's
+  # resident memory is a high-water mark that ratchets to the pod's worst-ever write
+  # and is never returned, so a memory target reads the largest write a pod ever did
+  # rather than what it is doing now, and replicas ratchet up without scaling back in.
+  # Memory is a floor to provision under 'resources', not a signal to scale on.
   # targetMemoryUtilizationPercentage: 80
   # behavior: {}
 

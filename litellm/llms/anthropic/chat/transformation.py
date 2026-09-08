@@ -1565,6 +1565,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         optional_params.pop("thinking", None)
                 else:
                     optional_params["thinking"] = value
+                    AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
+                        model=model, optional_params=optional_params, custom_llm_provider=self._resolved_provider
+                    )
             elif param == "reasoning_effort":
                 # Accept both string ("low") and dict ({"effort": "low",
                 # "summary": "concise"}). The Responses->Chat parser keeps the
