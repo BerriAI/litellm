@@ -957,6 +957,14 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
         CallTypes.agenerate_content_stream,
         CallTypes.generate_content_stream,
     ],
+    "/v1beta/models/{model}:generateContent": (
+        CallTypes.agenerate_content,
+        CallTypes.generate_content,
+    ),
+    "/v1beta/models/{model}:streamGenerateContent": (
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ),
     # MCP (Model Context Protocol)
     "/mcp/call_tool": [CallTypes.call_mcp_tool],
     # A2A (Agent-to-Agent)
@@ -964,12 +972,12 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
-        CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
+        CallTypes.llm_passthrough_route,
     ],
     "/v1/llm_passthrough": [
-        CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
+        CallTypes.llm_passthrough_route,
     ],
     "/v1/messages": [CallTypes.anthropic_messages],
     # OCR
@@ -1623,6 +1631,17 @@ class Choices(SafeAttributeModel, OpenAIObject):
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
+
+
+def text_tokens_without_nested_reasoning(
+    completion_tokens: int,
+    text_tokens: int,
+    reasoning_tokens: int,
+    other_modality_tokens: int,
+) -> int:
+    reported_total: Final = text_tokens + reasoning_tokens + other_modality_tokens
+    nested_reasoning_tokens: Final = min(reasoning_tokens, text_tokens, max(reported_total - completion_tokens, 0))
+    return text_tokens - nested_reasoning_tokens
 
 
 class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for older openai versions
@@ -3053,6 +3072,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     llm_provider: str | None
     traceback: str | None
     error_message: str | None
+    error_provider_request_id: ReadOnly[str | None]
     # error_rate_limit_category:
     #   For 429 / rate-limit errors, the source of the rate limit. One of the
     #   string values defined by `litellm.exceptions.RateLimitErrorCategory`

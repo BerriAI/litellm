@@ -2,13 +2,14 @@ import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Optional, cast
 
+import httpx
 from httpx import Response
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockEventStreamDecoderBase, BedrockModelInfo
+from ..common_utils import BedrockError, BedrockEventStreamDecoderBase, BedrockModelInfo
 
 if TYPE_CHECKING:
     from httpx import URL
@@ -18,6 +19,14 @@ if TYPE_CHECKING:
 
 
 class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig):
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
+
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in endpoint
 

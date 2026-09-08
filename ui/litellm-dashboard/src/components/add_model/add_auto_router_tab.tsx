@@ -207,10 +207,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [selectedPreset, setSelectedPreset] = useState<string | undefined>(undefined);
-  // Closed by default: a caller opens it deliberately, either by clicking it or by choosing Custom
-  // (which expands it automatically, since there's nothing else to show them their config from). A
-  // preset re-collapses it after prefilling, offering the same "here's what got filled in, expand to
-  // change it" affordance. A caller can always toggle it manually at any point.
   const [detailsExpanded, setDetailsExpanded] = useState<boolean>(false);
 
   const [isRoutingTestVisible, setIsRoutingTestVisible] = useState<boolean>(false);
@@ -335,7 +331,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     if (automaticRouterConfig === null) return;
     setSelectedPreset(undefined);
     applyPrefill({ ...buildEmptyPrefill(), complexityRouterConfig: automaticRouterConfig });
-    setDetailsExpanded(false);
+    setDetailsExpanded(true);
     toast.success("Automatic setup created", { description: tierConfigSummary(automaticRouterConfig) });
   };
 
@@ -543,14 +539,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 </FormField>
 
                 {!automaticSetupLoading && automaticRouterConfig && (
-                  <button
-                    type="button"
-                    className="mt-3 rounded-sm text-sm font-medium text-blue-600 hover:text-blue-700 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                    data-testid="configure-automatically-button"
-                    onClick={handleAutomaticSetup}
-                  >
-                    Configure automatically
-                  </button>
+                  <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">Not sure where to start?</p>
+                      <p className="text-sm text-muted-foreground">Let us pick models for each complexity tier.</p>
+                    </div>
+                    <Button type="button" data-testid="configure-automatically-button" onClick={handleAutomaticSetup}>
+                      Configure automatically
+                    </Button>
+                  </div>
                 )}
 
                 <div className="mt-5">

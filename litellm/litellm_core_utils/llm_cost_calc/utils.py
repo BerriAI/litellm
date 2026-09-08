@@ -26,6 +26,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     ServiceTier,
     Usage,
+    text_tokens_without_nested_reasoning,
 )
 from litellm.utils import get_model_info
 
@@ -513,6 +514,7 @@ def _get_token_base_cost(
     current_time: datetime | None = None,
     *,
     threshold_is_inclusive: bool = False,
+    missing_cache_read_uses_input: bool = False,
 ) -> tuple[float, float, float, float, float]:
     """
     Return prompt cost, completion cost, and cache costs for a given model and usage.
@@ -522,6 +524,9 @@ def _get_token_base_cost(
 
     `threshold_is_inclusive` switches that comparison to >=, for providers such as xAI
     that bill the higher tier once the prompt reaches the threshold.
+
+    `missing_cache_read_uses_input` resolves an absent cache-read rate to the resolved
+    input rate instead of 0.0; an explicit 0.0 rate stays a real price either way.
 
     Returns:
         Tuple[float, float, float, float] - (prompt_cost, completion_cost, cache_creation_cost, cache_read_cost)
@@ -550,29 +555,16 @@ def _get_token_base_cost(
         float,
         _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
     )
-    cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
+    cache_read_cost = _get_cost_per_unit(model_info, cache_read_cost_key, default_value=None)
 
     ## CHECK IF ABOVE THRESHOLD
     # Optimization: collect threshold keys first to avoid sorting all model_info keys.
-    # Most models don't have threshold pricing, so we can return early.
     # Exclude service_tier-specific variants (e.g. input_cost_per_token_above_200k_tokens_priority)
     # so that the threshold detection loop only processes standard keys.  The
     # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
     threshold_keys: Final = [
         k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
     ]
-    if not threshold_keys:
-        return _apply_off_peak_to_base_costs(
-            model_info,
-            current_time,
-            (
-                prompt_base_cost,
-                completion_base_cost,
-                cache_creation_cost,
-                cache_creation_cost_above_1hr,
-                cache_read_cost,
-            ),
-        )
 
     # Only sort the threshold keys (typically 1-2 keys instead of 66+)
     threshold: float | None = None
@@ -661,16 +653,24 @@ def _get_token_base_cost(
                         ),
                     )
 
-                    cache_read_cost = cast(
-                        float,
-                        _get_cost_per_unit(model_info, cache_read_tiered_key, cache_read_cost),
-                    )
+                    cache_read_cost = _get_cost_per_unit(model_info, cache_read_tiered_key, cache_read_cost)
 
                     break
             except (IndexError, ValueError):
                 continue
             except Exception:
                 continue
+
+    if cache_read_cost is None:
+        cache_read_cost = (
+            _off_peak_rate(
+                _open_off_peak_block(model_info, current_time) or MappingProxyType({}),
+                "input_cost_per_token",
+                prompt_base_cost,
+            )
+            if missing_cache_read_uses_input
+            else 0.0
+        )
 
     return _apply_off_peak_to_base_costs(
         model_info,
@@ -860,7 +860,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
         )
         or 0
     )
-    text_tokens: Final = (
+    reported_text_tokens: Final = (
         cast(
             int | None,
             getattr(usage.completion_tokens_details, "text_tokens", None),
@@ -882,6 +882,12 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
         or 0
     )
     video_tokens: Final = _coerce_token_count(getattr(usage.completion_tokens_details, "video_tokens", 0))
+    text_tokens: Final = text_tokens_without_nested_reasoning(
+        completion_tokens=usage.completion_tokens,
+        text_tokens=reported_text_tokens,
+        reasoning_tokens=reasoning_tokens,
+        other_modality_tokens=audio_tokens + image_tokens + video_tokens,
+    )
 
     return CompletionTokensDetailsResult(
         audio_tokens=audio_tokens,
@@ -1407,6 +1413,57 @@ def get_token_type_cost_breakdown(
         cache_read_cost=cache_read_cost,
         cache_creation_cost=cache_creation_cost,
     )
+
+
+def calculate_prompt_caching_savings(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    billed_at: datetime | None = None,
+) -> float:
+    """Read discount minus write premium, using the biller's rate and TTL resolution.
+
+    Missing reads and unpublished (missing/zero) writes claim no saving or premium;
+    explicit zero reads remain free. An unpublished 1h price uses the ordinary write rate.
+    ``billed_at`` is the request's completion time, so off-peak windows resolve as the
+    biller saw them rather than at the later spend write.
+    """
+    prompt_base_cost, _, cache_creation_cost, cache_creation_cost_above_1hr, cache_read_cost = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage,
+        service_tier=service_tier,
+        current_time=billed_at,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+        missing_cache_read_uses_input=True,
+    )
+    write_rate: Final = cache_creation_cost or prompt_base_cost
+    write_rate_1h: Final = cache_creation_cost_above_1hr or write_rate
+    prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
+    cache_read_tokens: Final = max(prompt_tokens_details["cache_hit_tokens"], 0)
+    cache_creation_tokens: Final = max(prompt_tokens_details["cache_creation_tokens"], 0)
+    details: Final = prompt_tokens_details["cache_creation_token_details"]
+    cache_creation_details: Final = (
+        CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=max(details.ephemeral_5m_input_tokens or 0, 0),
+            ephemeral_1h_input_tokens=max(details.ephemeral_1h_input_tokens or 0, 0),
+        )
+        if details is not None
+        else None
+    )
+    read_discount: Final = cache_read_tokens * max(prompt_base_cost - cache_read_cost, 0.0)
+    write_premium: Final = calculate_cache_writing_cost(
+        cache_creation_tokens=cache_creation_tokens,
+        cache_creation_token_details=cache_creation_details,
+        cache_creation_cost_above_1hr=write_rate_1h - prompt_base_cost,
+        cache_creation_cost=write_rate - prompt_base_cost,
+    )
+    uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency) * get_vertex_regional_endpoint_uplift(
+        model_info, vertex_location
+    )
+    return (read_discount - write_premium) * uplift
 
 
 def calculate_image_response_cost_from_usage(
