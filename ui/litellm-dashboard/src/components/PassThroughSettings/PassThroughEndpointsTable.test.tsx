@@ -115,12 +115,24 @@ describe("PassThroughEndpointsTable", () => {
 
     expect(editItem).toHaveAttribute("data-disabled");
     expect(deleteItem).toHaveAttribute("data-disabled");
+    expect(screen.getByTestId("endpoint-config-hint")).toHaveTextContent(
+      "This endpoint is defined in the config file and cannot be edited or deleted on the dashboard.",
+    );
 
     await user.click(editItem);
     await user.click(deleteItem);
 
     expect(onEndpointClick).not.toHaveBeenCalled();
     expect(onDeleteClick).not.toHaveBeenCalled();
+  });
+
+  it("should not show the config hint for DB endpoints", async () => {
+    const user = userEvent.setup();
+    render(<PassThroughEndpointsTable {...defaultProps} />);
+
+    await user.click(screen.getByTestId("endpoint-actions-ep-1"));
+    await screen.findByTestId("endpoint-action-delete");
+    expect(screen.queryByTestId("endpoint-config-hint")).not.toBeInTheDocument();
   });
 
   it("should label endpoint source as Config or DB", () => {
