@@ -116,9 +116,9 @@ LABEL_TO_KEYS: Dict[str, List[str]] = {
         "databricks-claude-sonnet-4-5",
         "databricks-claude-sonnet-4-6",
     ],
-    "claude sonnet 4": ["databricks-claude-sonnet-4"],
+    "claude sonnet 4": ["databricks-claude-sonnet-4", "databricks-claude-sonnet-4-1"],
     "claude haiku 4.5": ["databricks-claude-haiku-4-5"],
-    "gemini 3.0 pro, 3.1 pro": ["databricks-gemini-3-1-pro"],
+    "gemini 3.0 pro, 3.1 pro": ["databricks-gemini-3-1-pro", "databricks-gemini-3-pro"],
     "gemini 2.5 pro": ["databricks-gemini-2-5-pro"],
     "gemini 3.7 flash, 3.8 flash": [
         "databricks-gemini-3-7-flash",
