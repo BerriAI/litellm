@@ -475,10 +475,7 @@ const Sidebar_: React.FC<SidebarProps> = ({
           if (!isAdmin && enabledPagesInternalUsers != null) return enabledPagesInternalUsers.includes(item.page);
           return true;
         }
-        if (item.key === "projects") {
-          if (!enableProjectsUI) return false;
-          return isAdmin || isOrgAdmin || isTeamAdmin;
-        }
+        if (item.key === "projects" && !enableProjectsUI) return false;
         if (
           !isAdmin &&
           item.key === "agents" &&

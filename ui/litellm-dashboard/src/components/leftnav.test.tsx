@@ -3,8 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
 
-const teamAdminState = vi.hoisted(() => ({ isTeamAdmin: false }));
-
 vi.mock("../utils/roles", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../utils/roles")>();
   return {
@@ -15,7 +13,7 @@ vi.mock("../utils/roles", async (importOriginal) => {
     rolesWithWriteAccess: ["admin", "internal"],
     rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
     isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
-    isUserTeamAdminForAnyTeam: () => teamAdminState.isTeamAdmin,
+    isUserTeamAdminForAnyTeam: () => false,
   };
 });
 
@@ -586,50 +584,6 @@ describe("Sidebar (leftnav)", () => {
     expect(costOptimization!).toHaveTextContent(/Beta/);
 
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
-  });
-
-  describe("Projects visibility for delegated admins", () => {
-    const internalAuth = {
-      userId: "internal-user-id",
-      accessToken: "test-access-token",
-      userRole: "internal",
-      isViewOnly: false,
-      token: "test-token",
-      userEmail: "internal@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
-    };
-
-    afterEach(() => {
-      mockUseAuthorized.mockReset();
-      mockUseOrganizations.mockReset();
-      teamAdminState.isTeamAdmin = false;
-    });
-
-    it("hides Projects from a plain internal user", () => {
-      mockUseAuthorized.mockReturnValue(internalAuth);
-      renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
-      expect(screen.queryByText("Projects")).not.toBeInTheDocument();
-    });
-
-    it("shows Projects to an internal user who administers a team", () => {
-      mockUseAuthorized.mockReturnValue(internalAuth);
-      teamAdminState.isTeamAdmin = true;
-      renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
-      expect(screen.getByText("Projects")).toBeInTheDocument();
-    });
-
-    it("shows Projects to an internal user who administers an organization", () => {
-      mockUseAuthorized.mockReturnValue(internalAuth);
-      mockUseOrganizations.mockReturnValue({
-        data: [{ organization_id: "org-1", members: [{ user_id: "internal-user-id", user_role: "org_admin" }] }],
-        isLoading: false,
-        error: null,
-      });
-      renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
-      expect(screen.getByText("Projects")).toBeInTheDocument();
-    });
   });
 
   it("keeps a readable collapsed-rail tooltip for items whose label carries a badge", () => {
