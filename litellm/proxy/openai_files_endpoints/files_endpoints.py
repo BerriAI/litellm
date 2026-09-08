@@ -485,8 +485,8 @@ async def create_file(
         # Parse expires_after if provided
         expires_after: FileExpiresAfter | None = None
         form_data_raw: Final = await request.form()
-        form_data_dict: Final[dict[str, Any]] = dict(form_data_raw)
-        extracted_litellm_metadata: Final[dict[str, Any] | None] = extract_nested_form_metadata(
+        form_data_dict: Final[Mapping[str, object]] = dict(form_data_raw)
+        extracted_litellm_metadata: Final[Mapping[str, object] | None] = extract_nested_form_metadata(
             form_data=form_data_dict, prefix="litellm_metadata["
         )
         expires_after_anchor: Final = form_data_raw.get("expires_after[anchor]")

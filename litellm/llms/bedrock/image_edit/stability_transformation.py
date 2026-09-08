@@ -125,7 +125,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         }
 
         # Create a copy to not mutate original - convert TypedDict to regular dict
-        mapped_params: Final[dict[str, Any]] = dict(image_edit_optional_params)
+        mapped_params: Final[dict[str, object]] = dict(image_edit_optional_params)
 
         for k, v in image_edit_optional_params.items():
             if k in param_mapping:
@@ -172,7 +172,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         Returns the request body dict that will be JSON-encoded by the handler.
         """
         # Build Bedrock Stability request
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "output_format": "png",  # Default to PNG
         }
 

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 from litellm._logging import verbose_router_logger
 
 if TYPE_CHECKING:
-    from litellm.types.router import SearchToolTypedDict
+    from litellm.types.router import SearchToolLiteLLMParams, SearchToolTypedDict
 
 
 class _SearchToolsRouter(Protocol):
@@ -34,7 +34,7 @@ class SearchAPIRouter:
     @staticmethod
     def _resolve_search_provider_credentials(
         *,
-        tool_litellm_params: dict[str, Any],
+        tool_litellm_params: "SearchToolLiteLLMParams",
     ) -> tuple[str | None, str | None]:
         """
         Resolve search provider credentials from tool configuration ONLY.

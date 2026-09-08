@@ -1,6 +1,6 @@
 import types
 from collections.abc import AsyncIterator, Iterator
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
@@ -95,7 +95,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "VertexAILlama3StreamingHandler":
         return VertexAILlama3StreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,

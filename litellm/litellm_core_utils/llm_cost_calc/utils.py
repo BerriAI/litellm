@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone, tzinfo
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypedDict, cast
+from typing import Final, Literal, TypedDict, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import litellm
@@ -89,7 +89,7 @@ def _requested_image_size(optional_params: Mapping[str, object] | None) -> str |
     return value if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
 
 
-def get_web_search_requests(server_tool_use: Any) -> int | None:
+def get_web_search_requests(server_tool_use: object) -> int | None:
     """
     Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
     that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
@@ -1494,7 +1494,7 @@ def calculate_image_response_cost_from_usage(
     if prompt_tokens == 0 and completion_tokens == 0 and total_tokens == 0:
         return None
 
-    input_tokens_details: Final = getattr(usage, "input_tokens_details", None)
+    input_tokens_details: Final[object] = getattr(usage, "input_tokens_details", None)
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     if input_tokens_details is not None:
         # input_tokens_details may be a dict (e.g. OpenAI image edit responses)
@@ -1507,9 +1507,12 @@ def calculate_image_response_cost_from_usage(
             cached_tokens=0,
         )
 
-    output_tokens_details = getattr(usage, "completion_tokens_details", None)
-    if output_tokens_details is None:
-        output_tokens_details = getattr(usage, "output_tokens_details", None)
+    completion_tokens_details_attr: Final[object] = getattr(usage, "completion_tokens_details", None)
+    output_tokens_details: Final[object] = (
+        getattr(usage, "output_tokens_details", None)
+        if completion_tokens_details_attr is None
+        else completion_tokens_details_attr
+    )
 
     if output_tokens_details is None:
         completion_tokens_details = CompletionTokensDetailsWrapper(

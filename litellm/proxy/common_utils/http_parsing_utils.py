@@ -52,14 +52,18 @@ def _unqualified(annotation: object) -> object:
     return _unqualified(qualified[0])
 
 
+def _union_members(annotation: object) -> tuple[object, ...]:
+    """The non-``None`` members of a union annotation, or the annotation itself when it is not a union."""
+    if get_origin(annotation) not in (Union, UnionType):
+        return (annotation,)
+    members: Final[tuple[object, ...]] = get_args(annotation)
+    return tuple(arg for arg in members if arg is not type(None))
+
+
 def _numeric_form_type(annotation: object) -> type[int] | type[float] | None:
     """The scalar to parse an ``int``/``float``-typed field as, else ``None``."""
     unwrapped: Final = _unqualified(annotation)
-    candidates: Final = (
-        tuple(arg for arg in get_args(unwrapped) if arg is not type(None))
-        if get_origin(unwrapped) in (Union, UnionType)
-        else (unwrapped,)
-    )
+    candidates: Final = _union_members(unwrapped)
     if len(candidates) != 1:
         return None
     if candidates[0] is int:
