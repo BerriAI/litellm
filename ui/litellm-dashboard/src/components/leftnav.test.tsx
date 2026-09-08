@@ -609,15 +609,18 @@ describe("Sidebar (leftnav)", () => {
 
     it("hides Projects from a plain internal user", () => {
       mockUseAuthorized.mockReturnValue(internalAuth);
-      const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
-      expect(container.querySelector('a[href*="projects"]')).toBeNull();
+      renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+      expect(screen.queryByRole("link", { name: "Projects" })).not.toBeInTheDocument();
     });
 
     it("shows Projects to an internal user who administers a team", () => {
       mockUseAuthorized.mockReturnValue(internalAuth);
       teamAdminState.isTeamAdmin = true;
-      const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
-      expect(container.querySelector('a[href*="projects"]')).toHaveTextContent("Projects");
+      renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+      expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("projects"),
+      );
     });
 
     it("shows Projects to an internal user who administers an organization", () => {
@@ -627,8 +630,11 @@ describe("Sidebar (leftnav)", () => {
         isLoading: false,
         error: null,
       });
-      const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
-      expect(container.querySelector('a[href*="projects"]')).toHaveTextContent("Projects");
+      renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+      expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("projects"),
+      );
     });
   });
 
