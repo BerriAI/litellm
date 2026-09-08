@@ -19,9 +19,9 @@ if spec is None or spec.loader is None:
 module = module_from_spec(spec)
 spec.loader.exec_module(module)
 
-before = module.gil_stats()
-if not isinstance(before.get("releases"), int):
-    raise AssertionError(f"unexpected gil_stats result: {before!r}")
+before = module.chat_completions_decline("unsupported", [], {}, None)
+if not isinstance(before, str):
+    raise AssertionError(f"unexpected capability result: {before!r}")
 
 try:
     module._panic_for_test()
@@ -31,8 +31,8 @@ except BaseException as error:
 else:
     raise AssertionError("Rust panic returned without raising")
 
-after = module.gil_stats()
-if not isinstance(after.get("releases"), int):
+after = module.chat_completions_decline("unsupported", [], {}, None)
+if after != before:
     raise AssertionError(f"native module unusable after panic: {after!r}")
 """
 
