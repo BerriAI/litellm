@@ -143,3 +143,54 @@ pub(super) fn prepare_provider_request(
         timeout: request.timeout,
     })
 }
+
+pub async fn prepare_callback_request(
+    request: ChatCompletionsRequest<'_>,
+) -> Result<super::types::ChatCallbackRequest, Error> {
+    use super::transformation::PreCallBody;
+    use super::types::{ChatBodySnapshot, ChatCallbackRequest, ChatEndpoint};
+
+    let prepared = prepare_provider_request(resolve_request(request)?)?;
+    let endpoint = ChatEndpoint {
+        model: prepared.model.clone(),
+        config: prepared.config,
+        url: prepared.url.clone(),
+        timeout: prepared.timeout,
+    };
+    match prepared.config.pre_call_body() {
+        PreCallBody::Live => {
+            let mut generated = prepared
+                .body
+                .as_object()
+                .cloned()
+                .ok_or_else(|| Error::InvalidRequest("chat body must be an object".into()))?;
+            let parameter_fields = prepared
+                .optional_params
+                .keys()
+                .filter(|name| generated.contains_key(*name))
+                .cloned()
+                .collect::<Vec<_>>();
+            for name in &parameter_fields {
+                generated.remove(name);
+            }
+            Ok(ChatCallbackRequest::Live {
+                endpoint,
+                generated,
+                parameter_fields,
+                headers: prepared.upstream_headers,
+            })
+        }
+        PreCallBody::Serialized => {
+            let logging_body = serde_json::to_string(&prepared.body).map_err(|error| {
+                Error::InvalidRequest(format!("could not encode chat request: {error}"))
+            })?;
+            let body = logging_body.as_bytes().to_vec();
+            let headers = super::handler::signed_headers(&prepared, &body).await?;
+            Ok(ChatCallbackRequest::Serialized {
+                snapshot: ChatBodySnapshot { endpoint, body },
+                logging_body,
+                headers,
+            })
+        }
+    }
+}

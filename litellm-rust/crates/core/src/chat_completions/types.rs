@@ -52,6 +52,68 @@ pub struct ProviderChatRequestData {
     pub body: Value,
 }
 
+pub struct ChatEndpoint {
+    pub(super) model: String,
+    pub(super) config: &'static dyn ChatCompletionsProviderConfig,
+    pub(super) url: String,
+    pub(super) timeout: Option<Duration>,
+}
+
+pub struct ChatBodySnapshot {
+    pub(super) endpoint: ChatEndpoint,
+    pub(super) body: Vec<u8>,
+}
+
+pub struct SettledChatRequest {
+    pub(super) snapshot: ChatBodySnapshot,
+    pub(super) headers: Vec<(String, String)>,
+}
+
+pub enum ChatCallbackRequest {
+    Live {
+        endpoint: ChatEndpoint,
+        generated: Map<String, Value>,
+        parameter_fields: Vec<String>,
+        headers: Vec<(String, String)>,
+    },
+    Serialized {
+        snapshot: ChatBodySnapshot,
+        logging_body: String,
+        headers: Vec<(String, String)>,
+    },
+}
+
+impl ChatEndpoint {
+    pub fn capture_body(self, body: Value) -> Result<ChatBodySnapshot, crate::Error> {
+        let body = serde_json::to_vec(&body).map_err(|error| {
+            crate::Error::InvalidRequest(format!("could not encode chat request: {error}"))
+        })?;
+        Ok(ChatBodySnapshot {
+            endpoint: self,
+            body,
+        })
+    }
+}
+
+impl ChatBodySnapshot {
+    pub fn settle_headers(self, headers: Vec<(String, String)>) -> SettledChatRequest {
+        SettledChatRequest {
+            snapshot: self,
+            headers,
+        }
+    }
+}
+
+impl SettledChatRequest {
+    pub fn body(&self) -> &[u8] {
+        &self.snapshot.body
+    }
+
+    pub fn headers(&self) -> &[(String, String)] {
+        &self.headers
+    }
+}
+
 /// The raw provider response body handed back to a config for normalization.
 pub struct ProviderChatResponseData {
     pub body: Value,

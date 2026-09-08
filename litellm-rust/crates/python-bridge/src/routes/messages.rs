@@ -1,9 +1,11 @@
 use litellm_core::lifecycle::FailureStage;
 use litellm_core::lifecycle::{ErrorDisposition, Lifecycle, Outcome};
 use litellm_core::messages::lifecycle::{MessagesRoute, Observations, Operation, Options, machine};
-use litellm_core::messages::types::{MessagesRequest, ProviderMessagesRequest};
-use litellm_core::messages::{execute_prepared_messages_provider_call, prepare_provider_request};
-use litellm_python_interop::{Pythonized, from_py, run_async_value, run_sync_value, to_py};
+use litellm_core::messages::types::{
+    MessagesBodySnapshot, MessagesEndpoint, MessagesOptions, ProviderMessagesRequest,
+};
+use litellm_core::messages::{execute_prepared_messages_provider_call, prepare_endpoint};
+use litellm_python_interop::{Pythonized, from_py, run_async_value, run_sync_value};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::{PyTraverseError, PyVisit};
@@ -14,32 +16,27 @@ use serde_json::{Map, Value};
 use crate::driver::{ADDITIONAL_ARGS, API_BASE, API_KEY, COMPLETE_INPUT_DICT, HEADERS, INPUT};
 use crate::errors::{RustUpstreamError, core_error_to_pyerr, messages_provider_error_to_pyerr};
 use crate::marshal::optional_timeout;
+use crate::retained::RequestRoots;
 
 #[pyclass]
 struct MessagesState {
-    arguments: Option<Py<PyDict>>,
-    body: Option<Py<PyDict>>,
-    headers: Option<Py<PyDict>>,
-    prepared: Option<ProviderMessagesRequest>,
+    roots: Option<RequestRoots>,
+    prepared: Option<(MessagesEndpoint, MessagesBodySnapshot)>,
 }
 
 #[pymethods]
 impl MessagesState {
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.arguments)?;
-        visit.call(&self.body)?;
-        visit.call(&self.headers)
+        if let Some(roots) = &self.roots {
+            roots.traverse(&visit)?;
+        }
+        Ok(())
     }
 
     fn __clear__(slf: &Bound<'_, Self>) {
         let roots = {
             let mut state = slf.borrow_mut();
-            (
-                state.arguments.take(),
-                state.body.take(),
-                state.headers.take(),
-                state.prepared.take(),
-            )
+            (state.roots.take(), state.prepared.take())
         };
         drop(roots);
     }
@@ -53,10 +50,7 @@ fn scalar(arguments: &Bound<'_, PyDict>, name: &str) -> PyResult<Option<String>>
         .transpose()
 }
 
-fn decode_request(py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<MessagesRequest> {
-    let body = arguments
-        .get_item(pyo3::intern!(py, "body"))?
-        .ok_or_else(|| PyValueError::new_err("messages requires body"))?;
+fn decode_options(py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<MessagesOptions> {
     let timeout = optional_timeout(
         arguments
             .get_item(pyo3::intern!(py, "timeout_seconds"))?
@@ -64,8 +58,7 @@ fn decode_request(py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<Mes
             .map(|value| value.extract::<f64>())
             .transpose()?,
     )?;
-    Ok(MessagesRequest {
-        body: from_py(&body)?,
+    Ok(MessagesOptions {
         model: scalar(arguments, "model")?
             .ok_or_else(|| PyValueError::new_err("messages requires model"))?,
         api_key: scalar(arguments, "api_key")?,
@@ -156,20 +149,24 @@ fn prepare(
     logging: Py<PyAny>,
 ) -> PyResult<Py<MessagesState>> {
     let bag = arguments.bind(py);
-    let request = decode_request(py, bag)?;
-    let prepared = py
-        .detach(|| prepare_provider_request(request))
+    let options = decode_options(py, bag)?;
+    let endpoint = py
+        .detach(|| prepare_endpoint(options))
         .map_err(core_error_to_pyerr)?;
-    let body = to_py(py, &prepared.body)?
-        .into_bound(py)
+    let body = bag
+        .get_item("body")?
+        .ok_or_else(|| PyValueError::new_err("messages requires body"))?
         .cast_into::<PyDict>()?;
+    let snapshot = endpoint
+        .capture_buffered_body(from_py(body.as_any())?)
+        .map_err(core_error_to_pyerr)?;
     let headers = PyDict::new(py);
-    for (name, value) in &prepared.upstream_headers {
+    for (name, value) in endpoint.headers() {
         headers.set_item(name, value)?;
     }
     let additional = PyDict::new(py);
     additional.set_item(COMPLETE_INPUT_DICT, &body)?;
-    additional.set_item(API_BASE, &prepared.url)?;
+    additional.set_item(API_BASE, endpoint.url())?;
     additional.set_item(HEADERS, &headers)?;
     let kwargs = PyDict::new(py);
     let serialized = py.import("json")?.call_method1("dumps", (&body,))?;
@@ -185,39 +182,34 @@ fn prepare(
     Py::new(
         py,
         MessagesState {
-            arguments: Some(arguments),
-            body: Some(body.unbind()),
-            headers: Some(headers.unbind()),
-            prepared: Some(prepared),
+            roots: Some(RequestRoots::new(
+                arguments,
+                body.unbind().into_any(),
+                headers.unbind().into_any(),
+            )),
+            prepared: Some((endpoint, snapshot)),
         },
     )
 }
 
 fn take_request(py: Python<'_>, state: &Py<MessagesState>) -> PyResult<ProviderMessagesRequest> {
-    let (mut prepared, body, headers) = {
+    let ((endpoint, snapshot), headers) = {
         let mut state = state.borrow_mut(py);
         let prepared = state.prepared.take().ok_or_else(|| {
             PyRuntimeError::new_err("messages request was already sent or cleared")
         })?;
-        let body = state
-            .body
+        let roots = state
+            .roots
             .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("messages body was cleared"))?
-            .clone_ref(py);
-        let headers = state
-            .headers
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("messages headers were cleared"))?
-            .clone_ref(py);
-        (prepared, body, headers)
+            .ok_or_else(|| PyRuntimeError::new_err("messages roots were cleared"))?;
+        (prepared, roots.headers(py))
     };
-    prepared.body = from_py(body.bind(py).as_any())?;
-    prepared.upstream_headers = headers
-        .bind(py)
+    let headers = headers
+        .cast::<PyDict>()?
         .iter()
         .map(|(name, value)| Ok((name.extract()?, value.extract()?)))
         .collect::<PyResult<_>>()?;
-    Ok(prepared)
+    Ok(endpoint.settle(snapshot, headers))
 }
 
 fn validate_arguments(arguments: &Bound<'_, PyDict>) -> PyResult<()> {
@@ -328,6 +320,72 @@ pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
 
+    #[pyfunction]
+    fn snapshot(py: Python<'_>, state: Py<MessagesState>) -> PyResult<Py<PyAny>> {
+        let request = take_request(py, &state)?;
+        litellm_python_interop::to_py(py, &(request.body(), request.headers()))
+    }
+
+    #[test]
+    fn callback_aliases_survive_snapshot_and_roots_are_collectible() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "messages_test").unwrap();
+            module.add_function(wrap_pyfunction!(prepare, &module).unwrap()).unwrap();
+            module.add_function(wrap_pyfunction!(snapshot, &module).unwrap()).unwrap();
+            let globals = PyDict::new(py);
+            globals.set_item("native", module).unwrap();
+            py.run(c"
+import gc
+import weakref
+
+class Opaque:
+    pass
+
+class Logger:
+    def pre_call(self, **kwargs):
+        view = kwargs['additional_args']
+        self.body = view['complete_input_dict']
+        self.headers = view['headers']
+        assert self.body is body
+        assert self.body['messages'][0] is message
+        message['content'] = 'changed'
+        self.headers['x-hook'] = 'changed'
+        view['complete_input_dict'] = {'replacement': True}
+        view['headers'] = {'replacement': 'true'}
+
+message = {'role': 'user', 'content': 'original'}
+body = {'model': 'model', 'messages': [message], 'max_tokens': 16}
+opaque = Opaque()
+logger = Logger()
+arguments = dict(model='model', body=body, api_key='test',
+                 custom_llm_provider='anthropic', opaque=opaque,
+                 litellm_logging_obj=logger)
+state = native.prepare(arguments, logger)
+wire_body, wire_headers = native.snapshot(state)
+assert wire_body['messages'][0]['content'] == 'original'
+assert body['messages'][0]['content'] == 'changed'
+assert dict(wire_headers)['x-hook'] == 'changed'
+try:
+    native.snapshot(state)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError('request was sent twice')
+arguments['cycle'] = state
+logger.body['cycle'] = state
+logger.headers['cycle'] = state
+alive = weakref.ref(opaque)
+del arguments, logger, opaque, body
+gc.collect()
+assert alive() is not None
+del state
+gc.collect()
+assert alive() is None
+", Some(&globals), Some(&globals)).unwrap();
+        });
+    }
+
     #[test]
     fn decode_state_rejects_invalid_timeouts_without_panicking() {
         Python::initialize();
@@ -337,7 +395,7 @@ mod tests {
                 arguments.set_item("model", "model").unwrap();
                 arguments.set_item("body", PyDict::new(py)).unwrap();
                 arguments.set_item("timeout_seconds", timeout).unwrap();
-                let error = match decode_request(py, &arguments) {
+                let error = match decode_options(py, &arguments) {
                     Ok(_) => panic!("invalid timeout should fail normally"),
                     Err(error) => error,
                 };

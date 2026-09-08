@@ -2442,7 +2442,6 @@ class BaseLLMHTTPHandler:
 
         from litellm.rust_bridge import messages as rust_messages_bridge
 
-        upstream_body: Final = {key: value for key, value in request_body.items() if key != "stream"}
         rust_response: Final = await rust_messages_bridge.amessages(
             arguments=arguments,
             request_arguments=request_arguments,
@@ -2451,7 +2450,7 @@ class BaseLLMHTTPHandler:
             messages=messages,
             lifecycle_owner=rust_messages_bridge.LifecycleOwner.WRAPPER,
             model=model,
-            body=upstream_body,
+            body=request_body,
             api_key=api_key,
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,

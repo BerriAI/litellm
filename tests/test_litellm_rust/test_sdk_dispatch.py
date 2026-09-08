@@ -71,13 +71,22 @@ def test_public_ocr_uses_python_transport_when_disabled(ocr_server: RecordingSer
 @pytest.mark.parametrize("provider", ["anthropic", "bedrock"])
 @pytest.mark.parametrize("rebind_logging_view", [False, True])
 @pytest.mark.parametrize("status", [200, 429])
+@pytest.mark.parametrize("native", [False, True])
 async def test_chat_retains_callback_edits_through_public_dispatch(
-    recording_server: RecordingServer, asynchronous: bool, provider: str, rebind_logging_view: bool, status: int
+    recording_server: RecordingServer,
+    asynchronous: bool,
+    provider: str,
+    rebind_logging_view: bool,
+    status: int,
+    native: bool,
 ) -> None:
     import threading
+    import json
+
+    litellm.rust(native)
 
     from tests.test_litellm_rust.callback_recorder import RecordingLogger
-    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE, request_body, request_headers
+    from tests.test_litellm_rust.contracts import MESSAGES_RESPONSE
 
     recording_server.default_response = ResponseSpec(
         status=status,
@@ -98,10 +107,15 @@ async def test_chat_retains_callback_edits_through_public_dispatch(
     class EditingLogger(RecordingLogger):
         def log_pre_api_call(self, model, messages, kwargs):
             super().log_pre_api_call(model, messages, kwargs)
-            body = request_body(kwargs)
-            headers = request_headers(kwargs)
-            body["messages"][0]["content"] = "edited by callback"
-            body["max_tokens" if provider == "anthropic" else "maxTokens"] = 32
+            body = kwargs["additional_args"]["complete_input_dict"]
+            headers = kwargs["additional_args"]["headers"]
+            if provider == "anthropic":
+                assert isinstance(body, dict)
+                body["messages"][0]["content"][0]["text"] = "edited by callback"
+                body["max_tokens"] = 32
+            else:
+                assert isinstance(body, str)
+                assert json.loads(body)["messages"][0]["content"][0]["text"] == "original"
             headers["x-retained-callback"] = "original"
             observations.append((threading.current_thread(), body, headers))
             if rebind_logging_view:
@@ -139,12 +153,20 @@ async def test_chat_retains_callback_edits_through_public_dispatch(
     event_name: Final = "async_log_success_event" if asynchronous else "log_success_event"
     events: Final = await recorder.wait_for_async(event_name)
 
-    assert response._hidden_params["additional_headers"]["x-litellm-rust"] == "true"
+    if native:
+        assert response._hidden_params["additional_headers"]["x-litellm-rust"] == "true"
     assert recorder.names.count("log_pre_api_call") == 1
     assert recorder.names.count(event_name) == 1
-    assert observations[0][0] is caller_thread
+    if asynchronous and provider == "anthropic" and not native:
+        assert observations[0][0] is not caller_thread
+    else:
+        assert observations[0][0] is caller_thread
     assert events[0].response is response
-    assert recording_server.requests[0].body["messages"][0]["content"][0]["text"] == "edited by callback"
+    assert recording_server.requests[0].body["messages"][0]["content"][0]["text"] == (
+        "edited by callback" if provider == "anthropic" else "original"
+    )
     assert recording_server.requests[0].headers["x-retained-callback"] == "original"
     body: Final = recording_server.requests[0].body
-    assert (body["max_tokens"] if provider == "anthropic" else body["inferenceConfig"]["maxTokens"]) == 32
+    assert (body["max_tokens"] if provider == "anthropic" else body["inferenceConfig"]["maxTokens"]) == (
+        32 if provider == "anthropic" else 64
+    )

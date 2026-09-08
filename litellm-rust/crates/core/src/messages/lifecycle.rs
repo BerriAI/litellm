@@ -49,7 +49,6 @@ impl LifecycleRoute for MessagesRoute {
             program: CallProgram::new(ProgramOptions {
                 asynchronous: options.asynchronous,
                 internal_call: options.internal_call,
-                pre_call: false,
             }),
         }))
     }

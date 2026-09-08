@@ -6,6 +6,7 @@ mod errors;
 #[cfg(feature = "trace-parity")]
 mod function_trace;
 mod marshal;
+mod retained;
 mod routes;
 
 use pyo3::prelude::*;

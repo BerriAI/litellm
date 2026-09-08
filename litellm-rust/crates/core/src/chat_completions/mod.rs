@@ -20,6 +20,7 @@ pub mod types;
 use serde_json::{Map, Value};
 
 use handler::execute_chat_completions_provider_call;
+pub use prepare::prepare_callback_request;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
@@ -40,8 +41,22 @@ pub async fn chat_completions_with_terminal(
     request: ChatCompletionsRequest<'_>,
     context: CallLifecycleContext,
 ) -> ExecutedCall<ChatCompletionsResponse, Error> {
+    with_terminal(chat_completions(request), context).await
+}
+
+pub async fn execute_settled_with_terminal(
+    request: types::SettledChatRequest,
+    context: CallLifecycleContext,
+) -> ExecutedCall<ChatCompletionsResponse, Error> {
+    with_terminal(handler::execute_settled_request(request), context).await
+}
+
+async fn with_terminal(
+    call: impl std::future::Future<Output = Result<ChatCompletionsResponse, Error>>,
+    context: CallLifecycleContext,
+) -> ExecutedCall<ChatCompletionsResponse, Error> {
     let start_time = epoch_seconds();
-    match chat_completions(request).await {
+    match call.await {
         Ok(response) => {
             let usage = Usage {
                 prompt_tokens: response.usage.prompt_tokens,

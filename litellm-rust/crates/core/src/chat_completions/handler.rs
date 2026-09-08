@@ -7,8 +7,8 @@ use super::client::http_client;
 use super::prepare::prepare_provider_request;
 use super::transformation::ChatCompletionsAuth;
 use super::types::{
-    ChatCompletionsResponse, ProviderChatCompletionsRequest, ProviderChatResponseData,
-    ResolvedChatCompletionsRequest,
+    ChatBodySnapshot, ChatCompletionsResponse, ChatEndpoint, ProviderChatCompletionsRequest,
+    ProviderChatResponseData, ResolvedChatCompletionsRequest, SettledChatRequest,
 };
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
@@ -22,12 +22,32 @@ pub(super) async fn execute_chat_completions_provider_call(
         ))
     })?;
     let headers = signed_headers(&request, &body).await?;
+    execute_settled_request(
+        ChatBodySnapshot {
+            endpoint: ChatEndpoint {
+                model: request.model,
+                config: request.config,
+                url: request.url,
+                timeout: request.timeout,
+            },
+            body,
+        }
+        .settle_headers(headers),
+    )
+    .await
+}
 
-    let mut request_builder = http_client().post(&request.url).body(body);
-    for (key, value) in &headers {
+pub(super) async fn execute_settled_request(
+    request: SettledChatRequest,
+) -> Result<ChatCompletionsResponse, Error> {
+    let endpoint = request.snapshot.endpoint;
+    let mut request_builder = http_client()
+        .post(&endpoint.url)
+        .body(request.snapshot.body);
+    for (key, value) in &request.headers {
         request_builder = request_builder.header(key, value);
     }
-    if let Some(duration) = request.timeout {
+    if let Some(duration) = endpoint.timeout {
         request_builder = request_builder.timeout(duration);
     }
 
@@ -58,9 +78,9 @@ pub(super) async fn execute_chat_completions_provider_call(
     let body: Value = serde_json::from_str(&text).map_err(|err| {
         Error::InvalidResponse(format!("invalid chat completions response JSON: {err}"))
     })?;
-    request
+    endpoint
         .config
-        .transform_response(&request.model, ProviderChatResponseData { body })
+        .transform_response(&endpoint.model, ProviderChatResponseData { body })
         .map_err(as_response_error)
 }
 

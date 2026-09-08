@@ -21,13 +21,12 @@ use pyo3::types::PyDict;
 
 use crate::driver::{ADDITIONAL_ARGS, API_BASE, API_KEY, COMPLETE_INPUT_DICT, HEADERS, INPUT};
 use crate::errors::core_error_to_pyerr;
+use crate::retained::RequestRoots;
 use litellm_python_interop::{run_async_value, run_sync_value};
 
 #[pyclass]
 struct OcrState {
-    arguments: Option<Py<PyDict>>,
-    body: Option<Py<PyDict>>,
-    headers: Option<Py<PyDict>>,
+    roots: Option<RequestRoots>,
     logging: Option<Py<PyAny>>,
     pre_call: Option<Py<PyDict>>,
     endpoint: Option<OcrEndpoint>,
@@ -38,9 +37,9 @@ struct OcrState {
 #[pymethods]
 impl OcrState {
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.arguments)?;
-        visit.call(&self.body)?;
-        visit.call(&self.headers)?;
+        if let Some(roots) = &self.roots {
+            roots.traverse(&visit)?;
+        }
         visit.call(&self.logging)?;
         visit.call(&self.pre_call)
     }
@@ -49,9 +48,7 @@ impl OcrState {
         let roots = {
             let mut state = slf.borrow_mut();
             (
-                state.arguments.take(),
-                state.body.take(),
-                state.headers.take(),
+                state.roots.take(),
                 state.logging.take(),
                 state.pre_call.take(),
                 state.endpoint.take(),
@@ -342,17 +339,17 @@ fn prepare(
         document_projection,
         parameter_fields,
     } = draft;
-    let body = to_py(py, &draft_body)?
-        .into_bound(py)
-        .cast_into::<PyDict>()?;
-    match document_projection {
-        OcrDocumentProjection::RetainedDocument => {
-            body.set_item(pyo3::intern!(py, "document"), &document)?
+    let body = PyDict::new(py);
+    for (name, value) in &draft_body {
+        match (name.as_str(), document_projection) {
+            ("document", OcrDocumentProjection::RetainedDocument) => {
+                body.set_item(name, &document)?;
+            }
+            ("document", OcrDocumentProjection::ShallowCopyDocument) => {
+                body.set_item(name, document.copy()?)?;
+            }
+            _ => body.set_item(name, to_py(py, value)?)?,
         }
-        OcrDocumentProjection::ShallowCopyDocument => {
-            body.set_item(pyo3::intern!(py, "document"), document.copy()?)?
-        }
-        OcrDocumentProjection::Transformed => {}
     }
     let optional_params = PyDict::new(py);
     for &name in parameter_fields {
@@ -392,9 +389,11 @@ fn prepare(
     Py::new(
         py,
         OcrState {
-            arguments: Some(arguments),
-            body: Some(body.unbind()),
-            headers: Some(headers.unbind()),
+            roots: Some(RequestRoots::new(
+                arguments,
+                body.unbind().into_any(),
+                headers.unbind().into_any(),
+            )),
             logging: Some(logging),
             pre_call: Some(pre_call.unbind()),
             endpoint: Some(endpoint),
@@ -435,24 +434,17 @@ fn request(py: Python<'_>, state: &Py<OcrState>) -> PyResult<OcrWireRequest> {
             .endpoint
             .take()
             .ok_or_else(|| PyRuntimeError::new_err("OCR request was already sent or cleared"))?;
-        let body = state
-            .body
+        let roots = state
+            .roots
             .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("OCR body was cleared"))?
-            .clone_ref(py);
-        let headers = state
-            .headers
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("OCR headers were cleared"))?
-            .clone_ref(py);
+            .ok_or_else(|| PyRuntimeError::new_err("OCR roots were cleared"))?;
+        let body = roots.body(py);
+        let headers = roots.headers(py);
         (endpoint, body, headers, state.asynchronous)
     };
     let model = endpoint.model().to_string();
     let provider = endpoint.custom_llm_provider().to_string();
-    let request = endpoint.settle(
-        header_pairs(headers.bind(py))?,
-        from_py(body.bind(py).as_any())?,
-    );
+    let request = endpoint.settle(header_pairs(headers.cast::<PyDict>()?)?, from_py(&body)?);
     Ok((request, model, provider, asynchronous))
 }
 
@@ -465,9 +457,13 @@ fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
         let call_id = Python::attach(|py| {
             state
                 .borrow(py)
-                .arguments
+                .roots
                 .as_ref()
-                .and_then(|arguments| scalar(arguments.bind(py), "litellm_call_id").ok().flatten())
+                .and_then(|roots| {
+                    scalar(&roots.arguments(py), "litellm_call_id")
+                        .ok()
+                        .flatten()
+                })
                 .unwrap_or_default()
         });
         let executed = run_async_value(
@@ -527,9 +523,13 @@ fn send_sync(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
     let error_provider = provider.clone();
     let call_id = state
         .borrow(py)
-        .arguments
+        .roots
         .as_ref()
-        .and_then(|arguments| scalar(arguments.bind(py), "litellm_call_id").ok().flatten())
+        .and_then(|roots| {
+            scalar(&roots.arguments(py), "litellm_call_id")
+                .ok()
+                .flatten()
+        })
         .unwrap_or_default();
     let executed = run_sync_value(
         py,
@@ -754,9 +754,7 @@ mod tests {
             let state = Py::new(
                 py,
                 OcrState {
-                    arguments: None,
-                    body: None,
-                    headers: None,
+                    roots: None,
                     logging: None,
                     pre_call: None,
                     endpoint: None,
@@ -969,16 +967,12 @@ asyncio.run(exercise())
     #[pyfunction]
     fn snapshot(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
         let state = state.borrow(py);
-        let headers = state
-            .headers
+        let roots = state
+            .roots
             .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("OCR headers were cleared"))?;
-        let body = state
-            .body
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("OCR body was cleared"))?;
-        let headers = header_pairs(headers.bind(py))?;
-        let body: serde_json::Value = from_py(body.bind(py).as_any())?;
+            .ok_or_else(|| PyRuntimeError::new_err("OCR roots were cleared"))?;
+        let headers = header_pairs(roots.headers(py).cast::<PyDict>()?)?;
+        let body: serde_json::Value = from_py(&roots.body(py))?;
         to_py(py, &(headers, body))
     }
 

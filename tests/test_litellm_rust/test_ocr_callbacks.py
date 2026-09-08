@@ -96,28 +96,43 @@ def test_pre_call_header_edits_reach_later_callbacks_and_provider(ocr_server: Re
     assert ocr_server.requests[0].headers["x-audit-tag"] == "reviewed"
 
 
-def test_pre_call_nested_mutation_updates_retained_references(ocr_server: RecordingServer) -> None:
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("asynchronous", [False, True])
+async def test_pre_call_nested_mutation_updates_retained_references(
+    ocr_server: RecordingServer, native: bool, asynchronous: bool
+) -> None:
+    litellm.rust(native)
     original: Final = dict(OCR_DOCUMENT)
     replacement_url: Final = "data:application/pdf;base64,ZGVm"
     retained: Final = []
 
     class Retain(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
+            assert request_body(kwargs)["document"] is original
             retained.append(request_body(kwargs)["document"])
 
     class Edit(CustomLogger):
         def log_pre_api_call(self, model, messages, kwargs):
-            request_body(kwargs)["document"]["document_url"] = replacement_url
+            original["document_url"] = replacement_url
 
-    call_native_ocr(
-        ocr_server,
-        document=original,
-        callbacks=[Retain(), Edit()],
-    )
+    arguments: Final = {
+        "model": "mistral/mistral-ocr-latest",
+        "document": original,
+        "api_key": "test-key",
+        "api_base": ocr_server.base_url,
+        "callbacks": [Retain(), Edit()],
+    }
+    if asynchronous:
+        await litellm.aocr(**arguments)
+    else:
+        litellm.ocr(**arguments)
 
     assert retained[0]["document_url"] == replacement_url
     assert original["document_url"] == replacement_url
     assert ocr_server.requests[0].body["document"]["document_url"] == replacement_url
+    if native:
+        assert ocr_server.requests[0].headers["accept-encoding"] == "identity"
 
 
 def test_pre_call_field_replacement_preserves_original_references(ocr_server: RecordingServer) -> None:

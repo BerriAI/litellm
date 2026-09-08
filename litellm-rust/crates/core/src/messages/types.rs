@@ -16,13 +16,80 @@ pub struct MessagesRequest {
 }
 
 pub struct ProviderMessagesRequest {
-    pub provider: String,
-    pub model: String,
+    pub(super) provider: String,
+    pub(super) model: String,
     pub(super) config: &'static dyn AnthropicMessagesProviderConfig,
-    pub url: String,
-    pub body: Value,
-    pub upstream_headers: Vec<(String, String)>,
+    pub(super) url: String,
+    pub(super) body: Value,
+    pub(super) upstream_headers: Vec<(String, String)>,
+    pub(super) timeout: Option<Duration>,
+}
+
+impl ProviderMessagesRequest {
+    pub fn body(&self) -> &Value {
+        &self.body
+    }
+
+    pub fn headers(&self) -> &[(String, String)] {
+        &self.upstream_headers
+    }
+}
+
+pub struct MessagesOptions {
+    pub model: String,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub custom_llm_provider: Option<String>,
+    pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+}
+
+pub struct MessagesEndpoint {
+    pub(super) provider: String,
+    pub(super) model: String,
+    pub(super) config: &'static dyn AnthropicMessagesProviderConfig,
+    pub(super) url: String,
+    pub(super) headers: Vec<(String, String)>,
+    pub(super) timeout: Option<Duration>,
+}
+
+pub struct MessagesBodySnapshot(Value);
+
+impl MessagesEndpoint {
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn headers(&self) -> &[(String, String)] {
+        &self.headers
+    }
+
+    pub fn capture_buffered_body(
+        &self,
+        mut body: Value,
+    ) -> Result<MessagesBodySnapshot, crate::Error> {
+        let object = body.as_object_mut().ok_or_else(|| {
+            crate::Error::InvalidRequest("messages body must be an object".into())
+        })?;
+        object.remove("stream");
+        Ok(MessagesBodySnapshot(body))
+    }
+
+    pub fn settle(
+        self,
+        body: MessagesBodySnapshot,
+        headers: Vec<(String, String)>,
+    ) -> ProviderMessagesRequest {
+        ProviderMessagesRequest {
+            provider: self.provider,
+            model: self.model,
+            config: self.config,
+            url: self.url,
+            body: body.0,
+            upstream_headers: headers,
+            timeout: self.timeout,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

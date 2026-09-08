@@ -27,11 +27,21 @@ pub struct Unsupported(pub &'static str);
 
 pub const STREAM_PARAM: &str = "stream";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PreCallBody {
+    Live,
+    Serialized,
+}
+
 /// Message fields that carry no meaning for the upstream body, so their
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
 pub trait ChatCompletionsProviderConfig: Sync {
+    fn pre_call_body(&self) -> PreCallBody {
+        PreCallBody::Live
+    }
+
     fn complete_url(
         &self,
         api_base: Option<&str>,

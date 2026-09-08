@@ -59,15 +59,18 @@ async def test_messages_pre_call_receives_expected_provider_request(messages_ser
         "model": "claude-sonnet-4-5-20250929",
         "messages": MESSAGES,
         "max_tokens": 64,
+        "stream": False,
     }
     assert additional_args["headers"]["x-api-key"] == "test-key"
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raise_after_edit", [False, True])
+@pytest.mark.parametrize("native", [False, True])
 async def test_messages_pre_call_edits_reach_later_callbacks_and_provider(
-    messages_server: RecordingServer, raise_after_edit: bool
+    messages_server: RecordingServer, raise_after_edit: bool, native: bool
 ) -> None:
+    litellm.rust(native)
     observed: Final = []
 
     class Edit(CustomLogger):
@@ -85,7 +88,7 @@ async def test_messages_pre_call_edits_reach_later_callbacks_and_provider(
 
     assert observed[0][0]["temperature"] == 0.25
     assert observed[0][1]["x-audit-tag"] == "reviewed"
-    assert messages_server.requests[0].body["temperature"] == 0.25
+    assert "temperature" not in messages_server.requests[0].body
     assert messages_server.requests[0].headers["x-audit-tag"] == "reviewed"
 
 
@@ -127,6 +130,52 @@ async def test_messages_pre_call_state_reaches_terminal_callbacks(messages_serve
     await asyncio.wait_for(finished.wait(), timeout=10)
 
     assert observed == [token]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("provider", ["anthropic", "azure_ai"])
+@pytest.mark.parametrize("raise_after_edit", [False, True])
+async def test_messages_retained_aliases_preserve_identity_and_snapshot_timing(
+    messages_server: RecordingServer, native: bool, provider: str, raise_after_edit: bool
+) -> None:
+    litellm.rust(native)
+    retained: Final = []
+    observed: Final = []
+
+    class Retain(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            body = request_body(kwargs)
+            message = kwargs["messages"][0]
+            assert body["messages"][0] is message
+            assert body["messages"][0]["content"] is message["content"]
+            assert body["messages"][0]["content"][0] is message["content"][0]
+            retained.append(message["content"][0])
+
+    class Edit(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            retained[0]["text"] = "changed through retained reference"
+            if raise_after_edit:
+                raise RuntimeError("export failed after mutation")
+
+    class Observe(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            block = request_body(kwargs)["messages"][0]["content"][0]
+            observed.append((block is retained[0], block["text"]))
+
+    response: Final = await litellm.anthropic.messages.acreate(
+        model=MESSAGES_MODEL.replace("anthropic/", f"{provider}/"),
+        messages=[{"role": "user", "content": [{"type": "text", "text": "original"}]}],
+        max_tokens=64,
+        api_key="test-key",
+        api_base=messages_server.base_url,
+        callbacks=[Retain(), Edit(), Observe()],
+    )
+    assert observed == [(True, "changed through retained reference")]
+    assert retained[0]["text"] == "changed through retained reference"
+    assert messages_server.requests[0].body["messages"][0]["content"][0]["text"] == "original"
+    if native:
+        assert response["_hidden_params"]["additional_headers"]["x-litellm-rust"] == "true"
 
 
 @pytest.mark.asyncio

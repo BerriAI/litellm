@@ -67,7 +67,6 @@ impl LifecycleRoute for ChatCompletionsRoute {
             program: CallProgram::new(ProgramOptions {
                 asynchronous: options.asynchronous,
                 internal_call: options.internal_call,
-                pre_call: false,
             }),
         }))
     }
@@ -142,7 +141,8 @@ mod tests {
                 false,
                 vec![
                     Operation::Setup,
-                    Operation::Prepare,
+                    Operation::BuildRequest,
+                    Operation::PreCall,
                     Operation::Send,
                     Operation::SyncSuccess,
                     Operation::Restore,
@@ -153,7 +153,8 @@ mod tests {
                 vec![
                     Operation::Setup,
                     Operation::DeploymentPre,
-                    Operation::Prepare,
+                    Operation::BuildRequest,
+                    Operation::PreCall,
                     Operation::Send,
                     Operation::DeploymentSuccess,
                     Operation::AsyncSuccess,

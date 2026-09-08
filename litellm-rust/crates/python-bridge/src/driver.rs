@@ -30,8 +30,8 @@ fn operation_binding(
             method: "deployment_pre",
             awaiting: true,
         },
-        Operation::Prepare => OperationBinding {
-            method: "prepare",
+        Operation::BuildRequest => OperationBinding {
+            method: "build_request",
             awaiting: false,
         },
         Operation::PreCall if supports_pre_call => OperationBinding {
@@ -126,7 +126,13 @@ mod tests {
                     "deployment_pre",
                     true,
                 ),
-                (Operation::Prepare, false, false, "prepare", false),
+                (
+                    Operation::BuildRequest,
+                    false,
+                    false,
+                    "build_request",
+                    false,
+                ),
                 (Operation::PreCall, false, true, "pre_call", false),
                 (Operation::Send, false, false, "send_sync", false),
                 (Operation::Send, true, false, "send", true),

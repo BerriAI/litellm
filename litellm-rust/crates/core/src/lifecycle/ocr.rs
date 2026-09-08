@@ -110,7 +110,6 @@ impl LifecycleRoute for OcrRoute {
             program: CallProgram::new(ProgramOptions {
                 asynchronous: options.asynchronous,
                 internal_call: options.internal_call,
-                pre_call: true,
             }),
             identity: Identity {
                 requested_model: admission.model.clone(),

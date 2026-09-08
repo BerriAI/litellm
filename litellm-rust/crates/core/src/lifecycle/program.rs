@@ -7,7 +7,7 @@ use super::{
 pub enum Operation {
     Setup,
     DeploymentPre,
-    Prepare,
+    BuildRequest,
     PreCall,
     Send,
     DeploymentSuccess,
@@ -53,7 +53,6 @@ pub struct Transition {
 pub struct ProgramOptions {
     pub asynchronous: bool,
     pub internal_call: bool,
-    pub pre_call: bool,
 }
 
 #[derive(Debug)]
@@ -125,14 +124,14 @@ impl CallProgram {
             (DeploymentFailure, _) => failure,
             (_, Outcome::Abort) => Restore,
             (SyncFailure | AsyncFailure, Outcome::Failure) => Restore,
-            (Prepare | PreCall | Send, Outcome::Failure) if self.options.asynchronous => {
+            (BuildRequest | PreCall | Send, Outcome::Failure) if self.options.asynchronous => {
                 DeploymentFailure
             }
             (_, Outcome::Failure) => failure,
             (Setup, Outcome::Success) if self.options.asynchronous => DeploymentPre,
-            (Setup | DeploymentPre, Outcome::Success) => Prepare,
-            (Prepare, Outcome::Success) if self.options.pre_call => PreCall,
-            (Prepare | PreCall, Outcome::Success) => Send,
+            (Setup | DeploymentPre, Outcome::Success) => BuildRequest,
+            (BuildRequest, Outcome::Success) => PreCall,
+            (PreCall, Outcome::Success) => Send,
             (Send, Outcome::Success) if self.options.asynchronous => DeploymentSuccess,
             (Send, Outcome::Success) => SyncSuccess,
             (DeploymentSuccess, Outcome::Success) => {
@@ -169,7 +168,8 @@ impl CallProgram {
 
 pub fn actions_for(operation: Operation) -> &'static [ActionBinding] {
     match operation {
-        Operation::Prepare | Operation::Send => &PROVIDER_ACTION,
+        Operation::BuildRequest => &REQUEST_BUILD_ACTION,
+        Operation::Send => &PROVIDER_ACTION,
         Operation::PreCall => &PRE_CALL_ACTION,
         Operation::SyncFailure | Operation::AsyncFailure | Operation::DeploymentFailure => {
             &FAILURE_ACTION
@@ -179,6 +179,14 @@ pub fn actions_for(operation: Operation) -> &'static [ActionBinding] {
         _ => &CALLBACK_ACTION,
     }
 }
+
+const REQUEST_BUILD_ACTION: [ActionBinding; 1] = [ActionBinding {
+    kind: ActionKind::RequestBuild,
+    delivery: Delivery::InlineDirect,
+    on_result: ResultPolicy::Replace,
+    on_error: FailurePolicy::Propagate,
+    owner: Owner::Core,
+}];
 
 const PROVIDER_ACTION: [ActionBinding; 1] = [ActionBinding {
     kind: ActionKind::ProviderCall,
@@ -236,7 +244,6 @@ mod tests {
         let mut before = CallProgram::new(ProgramOptions {
             asynchronous: false,
             internal_call: false,
-            pre_call: false,
         });
         let failure = before.advance(Outcome::Failure, observations()).unwrap();
         assert_eq!(failure.commitment, Commitment::Replayable);
@@ -245,8 +252,8 @@ mod tests {
         let mut provider = CallProgram::new(ProgramOptions {
             asynchronous: false,
             internal_call: false,
-            pre_call: false,
         });
+        provider.advance(Outcome::Success, observations()).unwrap();
         provider.advance(Outcome::Success, observations()).unwrap();
         provider.advance(Outcome::Success, observations()).unwrap();
         let failure = provider.advance(Outcome::Failure, observations()).unwrap();
@@ -256,8 +263,8 @@ mod tests {
         let mut after = CallProgram::new(ProgramOptions {
             asynchronous: false,
             internal_call: false,
-            pre_call: false,
         });
+        after.advance(Outcome::Success, observations()).unwrap();
         after.advance(Outcome::Success, observations()).unwrap();
         after.advance(Outcome::Success, observations()).unwrap();
         after.advance(Outcome::Success, observations()).unwrap();

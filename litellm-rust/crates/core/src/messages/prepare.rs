@@ -3,12 +3,41 @@ use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider}
 
 use super::common_utils::{has_bearer_auth, has_header, messages_provider_config, string_headers};
 use super::transformation::{AnthropicMessagesProviderConfig, MessagesAuthStrategy};
-use super::types::{MessagesRequest, ProviderMessagesRequest};
+use super::types::{MessagesEndpoint, MessagesOptions, MessagesRequest, ProviderMessagesRequest};
 use serde_json::{Map, Value};
 
 pub fn prepare_provider_request(
     request: MessagesRequest,
 ) -> Result<ProviderMessagesRequest, Error> {
+    let endpoint = prepare_endpoint(MessagesOptions {
+        model: request.model,
+        api_key: request.api_key,
+        api_base: request.api_base,
+        custom_llm_provider: request.custom_llm_provider,
+        extra_headers: request.extra_headers,
+        timeout: request.timeout,
+    })?;
+    let typed_request = serde_json::from_value(request.body).map_err(|err| {
+        Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+    })?;
+    let transformed = endpoint.config.transform_request(typed_request)?;
+    let body = serde_json::to_value(transformed).map_err(|err| {
+        Error::InvalidRequest(format!(
+            "failed to serialize Anthropic messages request: {err}"
+        ))
+    })?;
+    Ok(ProviderMessagesRequest {
+        provider: endpoint.provider,
+        model: endpoint.model,
+        config: endpoint.config,
+        url: endpoint.url,
+        body,
+        upstream_headers: endpoint.headers,
+        timeout: endpoint.timeout,
+    })
+}
+
+pub fn prepare_endpoint(request: MessagesOptions) -> Result<MessagesEndpoint, Error> {
     let provider_info =
         get_custom_llm_provider(&request.model, request.custom_llm_provider.as_deref())
             .or_else(|| {
@@ -39,25 +68,14 @@ pub fn prepare_provider_request(
         &env_lookup,
     )?;
 
-    let typed_request = serde_json::from_value(request.body).map_err(|err| {
-        Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
-    })?;
-    let transformed = config.transform_request(typed_request)?;
-    let body = serde_json::to_value(transformed).map_err(|err| {
-        Error::InvalidRequest(format!(
-            "failed to serialize Anthropic messages request: {err}"
-        ))
-    })?;
-
     let url = config.complete_url(request.api_base.as_deref(), &model, &env_lookup)?;
 
-    Ok(ProviderMessagesRequest {
+    Ok(MessagesEndpoint {
         provider: provider.to_string(),
         model,
         config,
         url,
-        body,
-        upstream_headers: headers,
+        headers,
         timeout: request.timeout,
     })
 }
