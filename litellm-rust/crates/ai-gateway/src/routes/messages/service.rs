@@ -8,7 +8,7 @@ use litellm_core::lifecycle::{
     TerminalRecord,
 };
 use litellm_core::messages::lifecycle::{self, Options};
-use litellm_core::messages::types::MessagesRequest;
+use litellm_core::messages::types::{AnthropicMessagesRequest, MessagesRequest};
 use litellm_core::router::Router;
 use serde_json::{Map, Value};
 use std::future::{Ready, ready};
@@ -75,15 +75,15 @@ pub(crate) enum MessagesResponse {
 pub async fn run(
     router: &Arc<Router>,
     loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
-    body: Value,
+    body: AnthropicMessagesRequest,
     extra_headers: Option<Map<String, Value>>,
 ) -> Result<MessagesResponse, Error> {
-    let model = body
-        .get("model")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .ok_or_else(|| Error::InvalidRequest("messages body requires a model".to_string()))?;
+    let model = body.model.trim();
+    if model.is_empty() {
+        return Err(Error::InvalidRequest(
+            "messages body requires a model".to_string(),
+        ));
+    }
     let deployment = router
         .get_available_deployment(model)
         .ok_or_else(|| Error::Routing(format!("no deployment available for model '{model}'")))?;
@@ -96,13 +96,16 @@ pub async fn run(
     } else {
         Some(ANTHROPIC_MESSAGES_PROVIDER)
     };
-    let mut body = body;
-    body.as_object_mut()
-        .ok_or_else(|| Error::InvalidRequest("messages body must be an object".to_string()))?
-        .insert(
-            "model".to_string(),
-            Value::String(upstream_model.to_string()),
-        );
+    let stream = body.stream == Some(true);
+    let body = serde_json::to_value(AnthropicMessagesRequest {
+        model: upstream_model.to_string(),
+        ..body
+    })
+    .map_err(|error| {
+        Error::InvalidRequest(format!(
+            "failed to serialize Anthropic messages request: {error}"
+        ))
+    })?;
 
     let request = MessagesRequest {
         model: provider_model.to_string(),
@@ -126,7 +129,7 @@ pub async fn run(
                 .unwrap_or(0)
         ),
     );
-    if request.body.get("stream").and_then(Value::as_bool) == Some(true) {
+    if stream {
         return lifecycle::messages_stream(services, request, Options::default(), context)
             .await
             .map(Box::new)

@@ -4,18 +4,21 @@ mod service;
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Json, State};
 use axum::http::StatusCode;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
+use serde_json::{Map, Value};
+
 use litellm_core::Error;
 use litellm_core::lifecycle::StreamingCall;
-use serde_json::{Map, Value};
+use litellm_core::messages::types::AnthropicMessagesRequest;
+use litellm_gateway_auth::RequireMasterKey;
 
 use crate::constants::{MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH};
 use crate::state::AppState;
-use litellm_gateway_auth::RequireMasterKey;
 
 /// This route's contribution to the app router.
 pub fn router() -> Router<AppState> {
@@ -32,8 +35,9 @@ async fn handle(
     _auth: RequireMasterKey,
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body: Result<Json<AnthropicMessagesRequest>, JsonRejection>,
 ) -> Result<Response, MessagesRouteError> {
+    let Json(body) = body.map_err(MessagesRouteError::from)?;
     let extra_headers = forwarded_headers(&headers)?;
     match service::run(&state.router, state.loggers, body, extra_headers)
         .await
@@ -113,6 +117,15 @@ struct MessagesRouteError(Error);
 impl From<Error> for MessagesRouteError {
     fn from(error: Error) -> Self {
         Self(error)
+    }
+}
+
+impl From<JsonRejection> for MessagesRouteError {
+    fn from(error: JsonRejection) -> Self {
+        Self(Error::InvalidRequest(format!(
+            "invalid Anthropic messages request: {}",
+            error.body_text()
+        )))
     }
 }
 
@@ -337,7 +350,8 @@ mod tests {
                         json!({
                             "model": "claude-test",
                             "max_tokens": 16,
-                            "messages": [{"role": "user", "content": "hello"}]
+                            "messages": [{"role": "user", "content": "hello"}],
+                            "future_field": {"enabled": true}
                         })
                         .to_string(),
                     ))
@@ -364,6 +378,7 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(body).expect("upstream body is json");
         assert_eq!(body["model"], "claude-test");
         assert_eq!(body["messages"][0]["content"], "hello");
+        assert_eq!(body["future_field"]["enabled"], true);
     }
 
     #[tokio::test]
@@ -583,5 +598,59 @@ mod tests {
             .await
             .expect("route responds");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body reads");
+        let error = serde_json::from_slice::<serde_json::Value>(&response_body)
+            .expect("error response is json");
+        assert!(error["error"]["message"].is_string());
+    }
+
+    #[tokio::test]
+    async fn route_rejects_invalid_typed_request_bodies() {
+        let invalid_bodies = [
+            json!({
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hello"}]
+            }),
+            json!({
+                "model": "   ",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hello"}]
+            }),
+            json!({
+                "model": 42,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hello"}]
+            }),
+            json!({"model": "claude-test", "max_tokens": 16}),
+        ];
+
+        for body in invalid_bodies {
+            let app = app(state(
+                "claude-test",
+                "http://127.0.0.1:1".to_string(),
+                Some("master-key"),
+            ));
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/messages")
+                        .header("authorization", "Bearer master-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("route responds");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("response body reads");
+            let error = serde_json::from_slice::<serde_json::Value>(&response_body)
+                .expect("error response is json");
+            assert!(error["error"]["message"].is_string());
+        }
     }
 }
