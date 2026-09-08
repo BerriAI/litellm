@@ -8,6 +8,7 @@ Use litellm with Anthropic SDK, Vertex AI SDK, Cohere SDK, etc.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import inspect
 import json
@@ -15,6 +16,7 @@ import os
 import re
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, cast
 
@@ -84,6 +86,9 @@ from litellm.utils import ProviderConfigManager
 from .passthrough_endpoint_router import PassthroughEndpointRouter
 
 if TYPE_CHECKING:
+    from botocore.awsrequest import AWSPreparedRequest
+    from botocore.credentials import Credentials
+
     from litellm.proxy.proxy_server import ProxyConfig as _ProxyConfig
     from litellm.router import Router
 
@@ -1099,13 +1104,6 @@ async def bedrock_proxy_route(
     """
     create_request_copy(request)
 
-    try:
-        from botocore.auth import SigV4Auth
-        from botocore.awsrequest import AWSRequest
-        from botocore.credentials import Credentials
-    except ImportError:
-        raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-
     aws_region_name: Final = get_secret_str(secret_name="AWS_REGION_NAME")
     if not _is_bedrock_agent_runtime_route(endpoint=endpoint):
         return await bedrock_llm_proxy_route(
@@ -1139,17 +1137,20 @@ async def bedrock_proxy_route(
     from litellm.llms.bedrock.chat import BedrockConverseLLM
 
     bedrock_llm: Final = BedrockConverseLLM()
-    credentials: Final[Credentials] = bedrock_llm.get_credentials()
-    sigv4: Final = SigV4Auth(credentials, "bedrock", aws_region_name)
-    headers: Final = {"Content-Type": "application/json"}
     # Assuming the body contains JSON data, parse it
     try:
         data: Final = await _json_request_body(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
-    _request: Final = AWSRequest(method="POST", url=str(updated_url), data=json.dumps(data), headers=headers)
-    sigv4.add_auth(_request)
-    prepped: Final = _request.prepare()
+    prepped: Final = await asyncio.to_thread(
+        _sign_aws_json_post,
+        get_credentials=bedrock_llm.get_credentials,
+        service_name="bedrock",
+        aws_region_name=aws_region_name,
+        url=str(updated_url),
+        body=json.dumps(data),
+        headers=MappingProxyType({"Content-Type": "application/json"}),
+    )
 
     ## check for streaming
     is_streaming_request = False
@@ -1175,6 +1176,25 @@ async def bedrock_proxy_route(
     )
 
     return received_value
+
+
+def _sign_aws_json_post(
+    get_credentials: Callable[[], Credentials],
+    service_name: str,
+    aws_region_name: str | None,
+    url: str,
+    body: str,
+    headers: Mapping[str, str],
+) -> AWSPreparedRequest:
+    try:
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+    except ImportError:
+        raise ImportError(f"Missing boto3 to call {service_name}. Run 'pip install boto3'.")
+
+    aws_request: Final = AWSRequest(method="POST", url=url, data=body, headers=dict(headers))
+    SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
+    return aws_request.prepare()
 
 
 COMPREHEND_MEDICAL_TARGET_PREFIX: Final = "ComprehendMedical_20181030"
@@ -1207,13 +1227,6 @@ async def comprehend_medical_proxy_route(
 
     [Docs](https://docs.litellm.ai/docs/pass_through/comprehend_medical)
     """
-    try:
-        from botocore.auth import SigV4Auth
-        from botocore.awsrequest import AWSRequest
-        from botocore.credentials import Credentials
-    except ImportError:
-        raise ImportError("Missing boto3 to call comprehendmedical. Run 'pip install boto3'.")
-
     from .llm_provider_handlers.comprehend_medical_passthrough_logging_handler import (
         COMPREHEND_MEDICAL_SUPPORTED_OPERATIONS,
     )
@@ -1246,18 +1259,21 @@ async def comprehend_medical_proxy_route(
 
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-    credentials: Final[Credentials] = BaseAWSLLM().get_credentials(aws_region_name=aws_region_name)
-    sigv4: Final = SigV4Auth(credentials, "comprehendmedical", aws_region_name)
-    headers: Final = MappingProxyType(
-        {
-            "Content-Type": "application/x-amz-json-1.1",
-            "X-Amz-Target": f"{COMPREHEND_MEDICAL_TARGET_PREFIX}.{operation}",
-        }
-    )
     target_url: Final = f"https://comprehendmedical.{aws_region_name}.{get_aws_dns_suffix(aws_region_name)}/"
-    _request: Final = AWSRequest(method="POST", url=target_url, data=json.dumps(data), headers=headers)
-    sigv4.add_auth(_request)
-    prepped: Final = _request.prepare()
+    prepped: Final = await asyncio.to_thread(
+        _sign_aws_json_post,
+        get_credentials=partial(BaseAWSLLM().get_credentials, aws_region_name=aws_region_name),
+        service_name="comprehendmedical",
+        aws_region_name=aws_region_name,
+        url=target_url,
+        body=json.dumps(data),
+        headers=MappingProxyType(
+            {
+                "Content-Type": "application/x-amz-json-1.1",
+                "X-Amz-Target": f"{COMPREHEND_MEDICAL_TARGET_PREFIX}.{operation}",
+            }
+        ),
+    )
 
     endpoint_func: Final = create_pass_through_route(
         endpoint=operation,

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import json
@@ -7,7 +8,7 @@ import urllib.parse
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from threading import Lock
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, get_args, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -1668,3 +1669,19 @@ class BaseAWSLLM:
             request_headers_dict["Authorization"] = incoming_authorization
 
         return request_headers_dict, request.body
+
+
+_SignParams = ParamSpec("_SignParams")
+_SignedRequest = TypeVar("_SignedRequest")
+
+
+async def sign_request_off_loop_if_aws(
+    provider_config: object,
+    sign_request: Callable[_SignParams, _SignedRequest],
+    /,
+    *args: _SignParams.args,
+    **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped sign_request signature
+) -> _SignedRequest:
+    if isinstance(provider_config, BaseAWSLLM):
+        return await asyncio.to_thread(sign_request, *args, **kwargs)
+    return sign_request(*args, **kwargs)

@@ -366,7 +366,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Sign the request
             aws_request: Final = AWSRequest(method="PUT", url=url, data=json_string, headers=headers)
             aws_region_name: Final = self.get_aws_region_name_for_non_llm_api_calls(aws_region_name=self.s3_region_name)
-            S3SigV4Auth(credentials, "s3", aws_region_name).add_auth(aws_request)
+            await asyncio.to_thread(S3SigV4Auth(credentials, "s3", aws_region_name).add_auth, aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())
@@ -597,7 +597,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             # Sign the request
             aws_request: Final = AWSRequest(method="GET", url=url, headers=headers)
-            S3SigV4Auth(credentials, "s3", self.s3_region_name).add_auth(aws_request)
+            await asyncio.to_thread(S3SigV4Auth(credentials, "s3", self.s3_region_name).add_auth, aws_request)
 
             # Prepare the signed headers
             signed_headers: Final = dict(aws_request.headers.items())
