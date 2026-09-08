@@ -58,7 +58,7 @@ class _Content(BaseModel):
 class _Result(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, allow_inf_nan=False)
     score: float | None
-    content: list[_Content]
+    content: Sequence[_Content]
     file_id: str | None
     filename: str | None
 
@@ -67,7 +67,7 @@ class _SearchResponse(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True)
     object: Literal["vector_store.search_results.page"]
     search_query: str
-    data: list[_Result]
+    data: Sequence[_Result]
 
 
 class _MongoDBSearchParams(BaseModel):
@@ -185,17 +185,21 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         return min(max(limit * NUM_CANDIDATES_MULTIPLIER, MIN_NUM_CANDIDATES), MAX_NUM_CANDIDATES)
 
     def validate_environment(
-        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
-    ) -> dict[str, object]:
+        self, headers: Mapping[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:  # mutable-ok: the shared HTTP handler requires writable headers
         if litellm_params is None:
             raise config_error("Configure api_base and api_key for the MongoDB BETA sidecar.")
-        self._reject_unknown_params(dict(litellm_params))
+        self._reject_unknown_params(MappingProxyType(dict(litellm_params)))
         api_key: Final = litellm_params.api_key or get_secret_str("MONGODB_SIDECAR_API_KEY")
         if not api_key:
             raise config_error("MongoDB sidecar api_key is required. Set api_key or MONGODB_SIDECAR_API_KEY.")
-        return {**headers, "Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        return {
+            **headers,
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }  # mutable-ok: writable HTTP headers
 
-    def get_complete_url(self, api_base: str | None, litellm_params: dict[str, object]) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         if not api_base:
             raise config_error("MongoDB sidecar api_base is required, for example http://127.0.0.1:8080.")
         try:
@@ -268,7 +272,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         api_base: str,
         embedding_response: EmbeddingResponse,
         timeout: object,
-    ) -> tuple[str, dict[str, object]]:
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
         if not embedding_response.data:
             raise config_error(
                 "The embedding model returned no embedding for the search query. Check litellm_embedding_model."
@@ -277,17 +281,20 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         if not vector or any(not isinstance(value, (float, int)) or not isfinite(value) for value in vector):
             raise config_error("The embedding model must return a non-empty, finite query vector.")
         limit: Final = cls._limit(optional_params)
-        return f"{api_base}/v1/vector_stores/{quote(vector_store_id, safe='')}/search", {
-            "query": query_text,
-            "query_vector": tuple(vector),
-            "mongodb_database": params.require_database(),
-            "mongodb_collection": params.require_collection(),
-            "mongodb_embedding_field": params.embedding_field,
-            "mongodb_text_field": params.text_field,
-            "mongodb_num_candidates": cls._num_candidates(limit, params.mongodb_num_candidates),
-            "max_num_results": limit,
-            "timeout_ms": cls._timeout_ms(timeout),
-        }
+        return (
+            f"{api_base}/v1/vector_stores/{quote(vector_store_id, safe='')}/search",
+            {  # mutable-ok: JSON transport requires a dict
+                "query": query_text,
+                "query_vector": tuple(vector),
+                "mongodb_database": params.require_database(),
+                "mongodb_collection": params.require_collection(),
+                "mongodb_embedding_field": params.embedding_field,
+                "mongodb_text_field": params.text_field,
+                "mongodb_num_candidates": cls._num_candidates(limit, params.mongodb_num_candidates),
+                "max_num_results": limit,
+                "timeout_ms": cls._timeout_ms(timeout),
+            },
+        )
 
     def transform_search_vector_store_request(
         self,
@@ -299,7 +306,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
-    ) -> tuple[str, dict[str, object]]:
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
         params: Final = self._params(litellm_params, vector_store_search_optional_params, extra_body)
         query_text: Final = self._query_text(query)
         response: Final = (embedding_executor or self.embedding_executor).embed(
@@ -325,7 +332,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         litellm_params: Mapping[str, object],
         extra_body: Mapping[str, object] | None = None,
         embedding_executor: VectorStoreEmbeddingExecutor | None = None,
-    ) -> tuple[str, dict[str, object]]:
+    ) -> tuple[str, dict[str, object]]:  # mutable-ok: the provider contract returns a writable JSON request body
         params: Final = self._params(litellm_params, vector_store_search_optional_params, extra_body)
         query_text: Final = self._query_text(query)
         response: Final = await (embedding_executor or self.embedding_executor).aembed(
@@ -355,7 +362,7 @@ class MongoDBVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
             ) from None
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
     ) -> BaseLLMException:
         if status_code == 400:
             raise config_error(error_message)

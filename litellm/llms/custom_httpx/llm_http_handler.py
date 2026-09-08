@@ -1741,6 +1741,12 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
+        logging_obj.post_call(
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
+
         return self._transform_ocr_response(
             provider_config=provider_config,
             model=model,
@@ -1803,6 +1809,12 @@ class BaseLLMHTTPHandler:
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        logging_obj.post_call(
+            api_key=api_key,
+            original_response=response.text,
+            additional_args={"complete_input_dict": data},
+        )
 
         # Use async response transform for async operations
         return await provider_config.async_transform_ocr_response(
@@ -9814,7 +9826,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
-                litellm_params={**dict(litellm_params), "timeout": timeout},
+                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
                 extra_body=extra_body,
                 embedding_executor=embedding_executor,
             )
@@ -9861,7 +9873,9 @@ class BaseLLMHTTPHandler:
             )
         except httpx.TimeoutException:
             raise vector_store_provider_config.get_error_class(
-                error_message="Vector store search exceeded the caller timeout.", status_code=408, headers={}
+                error_message="Vector store search exceeded the caller timeout.",
+                status_code=408,
+                headers=httpx.Headers(),
             ) from None
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)
@@ -9947,7 +9961,7 @@ class BaseLLMHTTPHandler:
                 vector_store_search_optional_params=vector_store_search_optional_params,
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
-                litellm_params={**dict(litellm_params), "timeout": timeout},
+                litellm_params=MappingProxyType(dict(litellm_params, timeout=timeout)),
                 extra_body=extra_body,
                 embedding_executor=embedding_executor,
             )
@@ -9996,7 +10010,9 @@ class BaseLLMHTTPHandler:
             )
         except httpx.TimeoutException:
             raise vector_store_provider_config.get_error_class(
-                error_message="Vector store search exceeded the caller timeout.", status_code=408, headers={}
+                error_message="Vector store search exceeded the caller timeout.",
+                status_code=408,
+                headers=httpx.Headers(),
             ) from None
         except Exception as e:
             raise self._handle_error(e=e, provider_config=vector_store_provider_config)

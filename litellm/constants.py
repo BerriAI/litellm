@@ -73,6 +73,9 @@ DEFAULT_MAX_TOKENS: Final = int(os.getenv("DEFAULT_MAX_TOKENS", 4096))
 DEFAULT_ALLOWED_FAILS: Final = int(os.getenv("DEFAULT_ALLOWED_FAILS", 3))
 DEFAULT_REDIS_SYNC_INTERVAL: Final = int(os.getenv("DEFAULT_REDIS_SYNC_INTERVAL", 1))
 DEFAULT_COOLDOWN_TIME_SECONDS: Final = int(os.getenv("DEFAULT_COOLDOWN_TIME_SECONDS", 5))
+DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS: Final = float(
+    os.getenv("DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS", "1")
+)
 DEFAULT_REPLICATE_POLLING_RETRIES: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_RETRIES", 5))
 DEFAULT_REPLICATE_POLLING_DELAY_SECONDS: Final = int(os.getenv("DEFAULT_REPLICATE_POLLING_DELAY_SECONDS", 1))
 DEFAULT_IMAGE_TOKEN_COUNT: Final = int(os.getenv("DEFAULT_IMAGE_TOKEN_COUNT", 250))
@@ -1458,6 +1461,8 @@ LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"
 SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affinity_ttl"
+OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
+CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
