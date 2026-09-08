@@ -26,6 +26,7 @@ class TokenPricedCatalogModel:
     max_input_tokens: int
     max_output_tokens: int
     cache_read_input_token_cost: float | None
+    deprecation_date: str | None
     supported_flags: tuple[str, ...]
 
 
@@ -36,9 +37,10 @@ TOKEN_PRICED_MODELS: Final = (
         source=AZURE_OPENAI_PRICING,
         input_cost_per_token=5e-06,
         output_cost_per_token=3e-05,
-        max_input_tokens=200000,
+        max_input_tokens=272000,
         max_output_tokens=128000,
         cache_read_input_token_cost=5e-07,
+        deprecation_date="2026-12-02",
         supported_flags=(
             "supports_function_calling",
             "supports_prompt_caching",
@@ -58,7 +60,13 @@ TOKEN_PRICED_MODELS: Final = (
         max_input_tokens=200000,
         max_output_tokens=100000,
         cache_read_input_token_cost=3.75e-07,
-        supported_flags=("supports_function_calling", "supports_prompt_caching", "supports_reasoning", "supports_vision"),
+        deprecation_date="2026-11-15",
+        supported_flags=(
+            "supports_function_calling",
+            "supports_prompt_caching",
+            "supports_reasoning",
+            "supports_vision",
+        ),
     ),
     TokenPricedCatalogModel(
         catalog_name="model-router",
@@ -66,9 +74,10 @@ TOKEN_PRICED_MODELS: Final = (
         source=FOUNDRY_AOAI_PRICING,
         input_cost_per_token=1.4e-07,
         output_cost_per_token=0.0,
-        max_input_tokens=1048576,
+        max_input_tokens=200000,
         max_output_tokens=32768,
         cache_read_input_token_cost=None,
+        deprecation_date="2027-05-20",
         supported_flags=(),
     ),
     TokenPricedCatalogModel(
@@ -78,8 +87,9 @@ TOKEN_PRICED_MODELS: Final = (
         input_cost_per_token=2.5e-06,
         output_cost_per_token=1e-05,
         max_input_tokens=131072,
-        max_output_tokens=4096,
+        max_output_tokens=8182,
         cache_read_input_token_cost=None,
+        deprecation_date=None,
         supported_flags=("supports_function_calling", "supports_tool_choice"),
     ),
     TokenPricedCatalogModel(
@@ -91,6 +101,7 @@ TOKEN_PRICED_MODELS: Final = (
         max_input_tokens=262000,
         max_output_tokens=8192,
         cache_read_input_token_cost=None,
+        deprecation_date="2027-04-06",
         supported_flags=(
             "supports_function_calling",
             "supports_reasoning",
@@ -109,6 +120,7 @@ TOKEN_PRICED_MODELS: Final = (
         max_input_tokens=262000,
         max_output_tokens=8192,
         cache_read_input_token_cost=None,
+        deprecation_date="2027-04-06",
         supported_flags=(
             "supports_function_calling",
             "supports_response_schema",
@@ -146,7 +158,9 @@ def test_azure_ai_catalog_name_is_priced_and_routed(spec: TokenPricedCatalogMode
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize(
-    "spec", [spec for spec in TOKEN_PRICED_MODELS if spec.catalog_name != "model-router"], ids=lambda spec: spec.catalog_name
+    "spec",
+    [spec for spec in TOKEN_PRICED_MODELS if spec.catalog_name != "model-router"],
+    ids=lambda spec: spec.catalog_name,
 )
 def test_azure_ai_catalog_name_costs_a_million_tokens_at_list_price(spec: TokenPricedCatalogModel) -> None:
     prompt_cost, completion_cost = cost_per_token(
@@ -174,3 +188,9 @@ def test_azure_ai_catalog_entry_source_and_backup_match(catalog_name: str) -> No
 
     assert str(main_entry["source"]).startswith("https://azure.microsoft.com/en-us/pricing/details/")
     assert backup_entry == main_entry
+
+
+@pytest.mark.parametrize("spec", TOKEN_PRICED_MODELS, ids=lambda spec: spec.catalog_name)
+def test_azure_ai_catalog_entry_carries_its_retirement_date(spec: TokenPricedCatalogModel) -> None:
+    entry = _cost_map_entry(REPO_ROOT / "model_prices_and_context_window.json", spec.catalog_name)
+    assert entry.get("deprecation_date") == spec.deprecation_date

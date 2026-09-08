@@ -2,20 +2,25 @@
 Test Azure AI cost calculator, especially Model Router flat cost.
 """
 
+from datetime import datetime
+from typing import Final
+
 import pytest
 
+import litellm
+from litellm.cost_calculator import completion_cost
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.azure_ai.cost_calculator import (
     _is_azure_model_router,
+    calculate_azure_model_router_flat_cost,
     cost_per_token,
 )
-from litellm.types.utils import Usage
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 from litellm.utils import get_model_info
 
 # Get the flat cost from model_prices_and_context_window.json
 _model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
-AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS = (
-    _model_info.get("input_cost_per_token", 0) * 1_000_000
-)
+AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS = _model_info.get("input_cost_per_token", 0) * 1_000_000
 
 
 class TestAzureModelRouterDetection:
@@ -80,377 +85,172 @@ class TestAzureModelRouterPrefix:
         assert result == expected
 
 
+ROUTER_FEE_PER_TOKEN: Final = AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+ROUTED_MODEL: Final = "gpt-4.1-nano-2025-04-14"
+ROUTED_USAGE: Final = Usage(prompt_tokens=5000, completion_tokens=2000, total_tokens=7000)
+ROUTED_FEE: Final = 5000 * ROUTER_FEE_PER_TOKEN
+
+
+def _router_logging(request_model: str) -> Logging:
+    return Logging(
+        model=request_model,
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-123",
+        function_id="test-function",
+    )
+
+
+def _azure_ai_response(response_model: str, litellm_model_name: str | None = None) -> ModelResponse:
+    response: Final = ModelResponse(
+        id="test-123",
+        choices=[Choices(finish_reason="stop", index=0, message=Message(role="assistant", content="Hello"))],
+        created=1234567890,
+        model=response_model,
+        object="chat.completion",
+        usage=ROUTED_USAGE,
+    )
+    response._hidden_params = (
+        {"custom_llm_provider": "azure_ai"}
+        if litellm_model_name is None
+        else {"custom_llm_provider": "azure_ai", "litellm_model_name": litellm_model_name}
+    )
+    return response
+
+
+def _routed_model_cost() -> tuple[float, float]:
+    routed_info: Final = get_model_info(model=ROUTED_MODEL, custom_llm_provider="azure_ai")
+    return (
+        ROUTED_USAGE.prompt_tokens * (routed_info["input_cost_per_token"] or 0.0),
+        ROUTED_USAGE.completion_tokens * (routed_info["output_cost_per_token"] or 0.0),
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
 class TestAzureModelRouterFlatCost:
-    """Test Azure AI Foundry Model Router flat cost calculation."""
+    """cost_per_token prices the response model only; the router fee is the cost breakdown's own line item."""
 
-    def test_model_router_flat_cost_basic(self):
-        """Test that flat cost is added for Model Router requests."""
-        model = "azure-model-router"
-        usage = Usage(
-            prompt_tokens=1000,
-            completion_tokens=500,
-            total_tokens=1500,
+    def test_unmapped_router_deployment_name_prices_at_zero(self) -> None:
+        usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+        assert cost_per_token(model="azure-model-router", usage=usage) == (0.0, 0.0)
+
+    @pytest.mark.parametrize("router_entry_name", ["model_router", "model-router"])
+    def test_router_entry_prices_its_own_fee(self, router_entry_name: str) -> None:
+        usage = Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
+        prompt_cost, completion_cost_usd = cost_per_token(model=router_entry_name, usage=usage)
+        assert prompt_cost == pytest.approx(0.14, rel=1e-9)
+        assert completion_cost_usd == 0.0
+
+    def test_routed_model_is_priced_as_itself(self) -> None:
+        routed_prompt_cost, routed_completion_cost = _routed_model_cost()
+        prompt_cost, completion_cost_usd = cost_per_token(model=ROUTED_MODEL, usage=ROUTED_USAGE)
+        assert routed_prompt_cost > 0
+        assert prompt_cost == pytest.approx(routed_prompt_cost, rel=1e-9)
+        assert completion_cost_usd == pytest.approx(routed_completion_cost, rel=1e-9)
+
+    def test_unmapped_model_that_is_not_a_router_name_raises(self) -> None:
+        usage = Usage(prompt_tokens=10, completion_tokens=10, total_tokens=20)
+        with pytest.raises(Exception, match="no-such-azure-ai-model"):
+            cost_per_token(model="no-such-azure-ai-model", usage=usage)
+
+    def test_flat_cost_helper(self) -> None:
+        assert calculate_azure_model_router_flat_cost(
+            model="azure-model-router", prompt_tokens=10_000
+        ) == pytest.approx(0.0014, rel=1e-9)
+        assert calculate_azure_model_router_flat_cost(model="gpt-5-nano", prompt_tokens=10_000) == 0.0
+
+    def test_flat_cost_reads_the_fee_from_the_deployment_named_entry(self) -> None:
+        litellm.register_model(
+            {"azure_ai/model-router": {"input_cost_per_token": 2e-07, "litellm_provider": "azure_ai", "mode": "chat"}}
         )
-
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
-
-        # Calculate expected flat cost
-        expected_flat_cost = (
-            usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
-            / 1_000_000
+        litellm.get_model_info.cache_clear()
+        assert calculate_azure_model_router_flat_cost(model="model-router", prompt_tokens=1_000_000) == pytest.approx(
+            0.2, rel=1e-9
         )
-
-        # Flat cost should be $0.00014 (1000 tokens × $0.14 / 1M tokens)
-        assert expected_flat_cost == pytest.approx(0.00014, rel=1e-9)
-
-        # Prompt cost should include the flat cost
-        # (plus any base cost from the actual model used, which might be 0 if not in model_cost)
-        assert prompt_cost >= expected_flat_cost
-        print(
-            f"Model Router flat cost for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}"
-        )
-        print(f"Total prompt cost: ${prompt_cost:.6f}")
-
-    def test_model_router_flat_cost_large_request(self):
-        """Test flat cost calculation for larger requests."""
-        model = "model-router"
-        usage = Usage(
-            prompt_tokens=100_000,
-            completion_tokens=50_000,
-            total_tokens=150_000,
-        )
-
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
-
-        # Calculate expected flat cost
-        expected_flat_cost = (
-            usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
-            / 1_000_000
-        )
-
-        # Flat cost should be $0.014 (100k tokens × $0.14 / 1M tokens)
-        assert expected_flat_cost == pytest.approx(0.014, rel=1e-9)
-        # Use approx for floating-point comparison
-        assert prompt_cost >= expected_flat_cost or prompt_cost == pytest.approx(
-            expected_flat_cost, rel=1e-9
-        )
-        print(
-            f"Model Router flat cost for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}"
-        )
-        print(f"Total prompt cost: ${prompt_cost:.6f}")
-
-    def test_model_router_flat_cost_1m_tokens(self):
-        """Test flat cost for exactly 1 million input tokens."""
-        model = "azure-model-router"
-        usage = Usage(
-            prompt_tokens=1_000_000,
-            completion_tokens=100_000,
-            total_tokens=1_100_000,
-        )
-
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
-
-        # Calculate expected flat cost
-        expected_flat_cost = AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
-
-        # Flat cost should be exactly $0.14 for 1M tokens
-        assert expected_flat_cost == pytest.approx(0.14, rel=1e-9)
-        assert prompt_cost >= expected_flat_cost
-        print(f"Model Router flat cost for 1M tokens: ${expected_flat_cost:.6f}")
-        print(f"Total prompt cost: ${prompt_cost:.6f}")
-
-    def test_non_model_router_no_flat_cost(self):
-        """Test that non-Model Router models don't get the flat cost."""
-        model = "gpt-4o"
-        usage = Usage(
-            prompt_tokens=1000,
-            completion_tokens=500,
-            total_tokens=1500,
-        )
-
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
-
-        # No flat cost should be added for non-Model Router models
-        # The cost might be 0 or based on the model's pricing
-        print(f"Non-Model Router prompt cost: ${prompt_cost:.6f}")
-        # We just ensure it doesn't crash and returns valid values
-        assert prompt_cost >= 0
-        assert completion_cost >= 0
-
-    def test_model_router_with_cached_tokens(self):
-        """Test Model Router flat cost with cached tokens."""
-        model = "azure-model-router"
-        usage = Usage(
-            prompt_tokens=2000,
-            completion_tokens=800,
-            total_tokens=2800,
-            cache_read_input_tokens=500,
-            cache_creation_input_tokens=200,
-        )
-
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
-
-        # Flat cost is based on ALL prompt tokens (including cached)
-        expected_flat_cost = (
-            usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
-            / 1_000_000
-        )
-
-        assert expected_flat_cost == pytest.approx(0.00028, rel=1e-9)
-        assert prompt_cost >= expected_flat_cost
-        print(
-            f"Model Router flat cost with caching for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}"
-        )
-        print(f"Total prompt cost: ${prompt_cost:.6f}")
-
-    def test_router_flat_cost_when_response_has_actual_model(self):
-        """
-        Test that router flat cost is added when request was via router but response
-        contains the actual model (e.g., gpt-5-nano).
-
-        This is the key fix: Azure returns the actual model in the response, but we
-        must still add the router flat cost because the request was made via model router.
-        """
-        usage = Usage(
-            prompt_tokens=10000,
-            completion_tokens=5000,
-            total_tokens=15000,
-        )
-
-        # Response model is the actual model Azure used (not a router name)
-        response_model = "gpt-5-nano-2025-08-07"
-        # Request model is the router - user called azure_ai/model_router/model-router
-        request_model = "azure_ai/model_router/model-router"
-
-        prompt_cost, completion_cost = cost_per_token(
-            model=response_model,
-            usage=usage,
-            request_model=request_model,
-        )
-
-        # Expected: model cost (from gpt-5-nano) + router flat cost
-        expected_flat_cost = (
-            usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
-            / 1_000_000
-        )
-        assert expected_flat_cost == pytest.approx(0.0014, rel=1e-9)
-
-        # Total cost should be model cost + flat cost
-        total_cost = prompt_cost + completion_cost
-        assert total_cost >= expected_flat_cost
-
-        # Prompt cost should include both model prompt cost and router flat cost
-        assert prompt_cost >= expected_flat_cost
+        assert calculate_azure_model_router_flat_cost(
+            model="azure-model-router", prompt_tokens=1_000_000
+        ) == pytest.approx(0.14, rel=1e-9)
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 class TestAzureModelRouterCostBreakdown:
-    """Test that Azure Model Router flat cost is tracked in cost breakdown."""
+    """completion_cost charges the router fee exactly once, as the cost breakdown's additional cost line."""
 
-    def test_flat_cost_calculation_helper(self):
-        """Test that flat cost can be calculated using the helper function."""
-        from litellm.llms.azure_ai.cost_calculator import (
-            calculate_azure_model_router_flat_cost,
-        )
-
-        model = "azure-model-router"
-        prompt_tokens = 10000
-
-        # Calculate flat cost using helper function
-        flat_cost = calculate_azure_model_router_flat_cost(
-            model=model, prompt_tokens=prompt_tokens
-        )
-
-        # Expected flat cost
-        expected_flat_cost = (
-            prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
-        )
-
-        assert flat_cost > 0
-        assert flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
-        print(f"Flat cost calculated: ${flat_cost:.6f}")
-
-    def test_flat_cost_integration_with_completion_cost(self):
-        """Test that flat cost is properly integrated into completion_cost calculation."""
-        import litellm
-        from litellm.cost_calculator import completion_cost
-        from litellm.types.utils import Choices, Message, ModelResponse, Usage
-
-        # Create a mock response for azure_ai model router
-        response = ModelResponse(
-            id="test-123",
-            choices=[
-                Choices(
-                    finish_reason="stop",
-                    index=0,
-                    message=Message(
-                        role="assistant",
-                        content="Test response",
-                    ),
-                )
-            ],
-            created=1234567890,
-            model="azure-model-router",
-            object="chat.completion",
-            usage=Usage(
-                prompt_tokens=5000,
-                completion_tokens=2000,
-                total_tokens=7000,
-            ),
-        )
-
-        # Set hidden params for provider
-        response._hidden_params = {"custom_llm_provider": "azure_ai"}
-
-        # Calculate cost
+    def test_unmapped_router_deployment_name_costs_only_the_fee(self) -> None:
         cost = completion_cost(
-            completion_response=response,
+            completion_response=_azure_ai_response("azure-model-router"),
             model="azure-model-router",
             custom_llm_provider="azure_ai",
         )
+        assert cost == pytest.approx(ROUTED_FEE, rel=1e-9)
 
-        # Expected flat cost
-        expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
-        )
-
-        # Cost should include the flat cost (use approx for floating-point comparison)
-        assert cost >= expected_flat_cost or cost == pytest.approx(
-            expected_flat_cost, rel=1e-9
-        )
-        print(f"Total cost with flat fee: ${cost:.6f}")
-        print(f"Expected minimum flat cost: ${expected_flat_cost:.6f}")
-
-    def test_additional_costs_in_cost_breakdown(self):
-        """Test that Azure Model Router flat cost appears in additional_costs dict."""
-        from datetime import datetime
-
-        from litellm.cost_calculator import completion_cost
-        from litellm.litellm_core_utils.litellm_logging import Logging
-        from litellm.types.utils import Choices, Message, ModelResponse, Usage
-
-        # Create logging object with required parameters
-        logging_obj = Logging(
-            model="azure-model-router",
-            messages=[{"role": "user", "content": "Hello"}],
-            stream=False,
-            call_type="completion",
-            start_time=datetime.now(),
-            litellm_call_id="test-123",
-            function_id="test-function",
-        )
-
-        # Create a mock response for azure_ai model router
-        response = ModelResponse(
-            id="test-123",
-            choices=[
-                Choices(
-                    finish_reason="stop",
-                    index=0,
-                    message=Message(
-                        role="assistant",
-                        content="Test response",
-                    ),
-                )
-            ],
-            created=1234567890,
-            model="azure-model-router",
-            object="chat.completion",
-            usage=Usage(
-                prompt_tokens=5000,
-                completion_tokens=2000,
-                total_tokens=7000,
-            ),
-        )
-
-        # Set hidden params for provider
-        response._hidden_params = {"custom_llm_provider": "azure_ai"}
-
-        # Calculate cost with logging object
+    def test_fee_is_the_breakdown_line_item_for_an_unmapped_router_name(self) -> None:
+        logging_obj = _router_logging("azure-model-router")
         cost = completion_cost(
-            completion_response=response,
+            completion_response=_azure_ai_response("azure-model-router"),
             model="azure-model-router",
             custom_llm_provider="azure_ai",
             litellm_logging_obj=logging_obj,
         )
-
-        # Check that cost breakdown contains additional_costs
-        assert hasattr(logging_obj, "cost_breakdown")
-        assert logging_obj.cost_breakdown is not None
-        assert "additional_costs" in logging_obj.cost_breakdown
-        assert isinstance(logging_obj.cost_breakdown["additional_costs"], dict)
-
-        # Check that the Azure Model Router flat cost is in additional_costs
-        additional_costs = logging_obj.cost_breakdown["additional_costs"]
-        assert "Azure Model Router Flat Cost" in additional_costs
-
-        # Verify the flat cost value
-        expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+        breakdown = logging_obj.cost_breakdown
+        assert breakdown is not None
+        assert breakdown["input_cost"] == 0.0
+        assert breakdown.get("additional_costs") == pytest.approx(
+            {"Azure Model Router Flat Cost": ROUTED_FEE}, rel=1e-9
         )
-        actual_flat_cost = additional_costs["Azure Model Router Flat Cost"]
-        assert actual_flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
+        assert cost == pytest.approx(ROUTED_FEE, rel=1e-9)
 
-        print(f"Additional costs in breakdown: {additional_costs}")
-        print(f"Azure Model Router Flat Cost: ${actual_flat_cost:.6f}")
-
-    def test_additional_costs_when_response_has_actual_model_via_hidden_params(self):
-        """additional_costs populated when response has actual model but request was via model router (hidden_params)."""
-        from datetime import datetime
-
-        from litellm.cost_calculator import completion_cost
-        from litellm.litellm_core_utils.litellm_logging import Logging
-        from litellm.types.utils import Choices, Message, ModelResponse, Usage
-
-        logging_obj = Logging(
-            model="gpt-4.1-nano-2025-04-14",
-            messages=[{"role": "user", "content": "Hello"}],
-            stream=False,
-            call_type="completion",
-            start_time=datetime.now(),
-            litellm_call_id="test-123",
-            function_id="test-function",
-        )
-        response = ModelResponse(
-            id="test-123",
-            choices=[
-                Choices(
-                    finish_reason="stop",
-                    index=0,
-                    message=Message(role="assistant", content="Hello"),
-                )
-            ],
-            created=1234567890,
-            model="gpt-4.1-nano-2025-04-14",
-            object="chat.completion",
-            usage=Usage(prompt_tokens=5000, completion_tokens=2000, total_tokens=7000),
-        )
-        response._hidden_params = {
-            "custom_llm_provider": "azure_ai",
-            "litellm_model_name": "azure_ai/model-router",
-        }
+    def test_router_request_with_routed_response_charges_the_fee_once(self) -> None:
+        routed_prompt_cost, routed_completion_cost = _routed_model_cost()
+        logging_obj = _router_logging("model-router")
         cost = completion_cost(
-            completion_response=response,
-            model="gpt-4.1-nano-2025-04-14",
+            completion_response=_azure_ai_response(ROUTED_MODEL),
+            model=ROUTED_MODEL,
             custom_llm_provider="azure_ai",
             litellm_logging_obj=logging_obj,
         )
-        expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+        breakdown = logging_obj.cost_breakdown
+        assert breakdown is not None
+        assert breakdown["input_cost"] == pytest.approx(routed_prompt_cost, rel=1e-9)
+        assert breakdown["output_cost"] == pytest.approx(routed_completion_cost, rel=1e-9)
+        assert breakdown.get("additional_costs") == pytest.approx(
+            {"Azure Model Router Flat Cost": ROUTED_FEE}, rel=1e-9
         )
-        assert cost >= expected_flat_cost
-        assert logging_obj.cost_breakdown is not None
-        assert "additional_costs" in logging_obj.cost_breakdown
-        assert (
-            "Azure Model Router Flat Cost"
-            in logging_obj.cost_breakdown["additional_costs"]
+        assert cost == pytest.approx(routed_prompt_cost + routed_completion_cost + ROUTED_FEE, rel=1e-9)
+
+    def test_routed_response_named_by_hidden_params_charges_the_fee_once(self) -> None:
+        routed_prompt_cost, routed_completion_cost = _routed_model_cost()
+        logging_obj = _router_logging(ROUTED_MODEL)
+        cost = completion_cost(
+            completion_response=_azure_ai_response(ROUTED_MODEL, litellm_model_name="azure_ai/model-router"),
+            model=ROUTED_MODEL,
+            custom_llm_provider="azure_ai",
+            litellm_logging_obj=logging_obj,
         )
-        assert logging_obj.cost_breakdown["additional_costs"][
-            "Azure Model Router Flat Cost"
-        ] == pytest.approx(expected_flat_cost, rel=1e-9)
+        breakdown = logging_obj.cost_breakdown
+        assert breakdown is not None
+        assert breakdown["input_cost"] == pytest.approx(routed_prompt_cost, rel=1e-9)
+        assert breakdown.get("additional_costs") == pytest.approx(
+            {"Azure Model Router Flat Cost": ROUTED_FEE}, rel=1e-9
+        )
+        assert cost == pytest.approx(routed_prompt_cost + routed_completion_cost + ROUTED_FEE, rel=1e-9)
+
+    @pytest.mark.parametrize("router_entry_name", ["model_router", "model-router"])
+    def test_response_priced_as_the_router_entry_charges_the_fee_once(self, router_entry_name: str) -> None:
+        logging_obj = _router_logging(router_entry_name)
+        cost = completion_cost(
+            completion_response=_azure_ai_response(router_entry_name),
+            model=router_entry_name,
+            custom_llm_provider="azure_ai",
+            litellm_logging_obj=logging_obj,
+        )
+        breakdown = logging_obj.cost_breakdown
+        assert breakdown is not None
+        assert "additional_costs" not in breakdown
+        assert breakdown["input_cost"] == pytest.approx(ROUTED_FEE, rel=1e-9)
+        assert cost == pytest.approx(ROUTED_FEE, rel=1e-9)
 
 
 class TestAzureAIServiceTierCostCalculation:
@@ -459,26 +259,27 @@ class TestAzureAIServiceTierCostCalculation:
     @pytest.fixture(autouse=True)
     def register_test_model(self):
         import litellm
-        litellm.register_model(model_cost={
-            "test-azure-ai-model": {
-                "input_cost_per_token": 0.001,
-                "output_cost_per_token": 0.002,
-                "input_cost_per_token_priority": 0.01,
-                "output_cost_per_token_priority": 0.02,
-                "input_cost_per_token_flex": 0.0005,
-                "output_cost_per_token_flex": 0.001,
-                "litellm_provider": "azure_ai",
-                "max_tokens": 8192,
+
+        litellm.register_model(
+            model_cost={
+                "test-azure-ai-model": {
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.002,
+                    "input_cost_per_token_priority": 0.01,
+                    "output_cost_per_token_priority": 0.02,
+                    "input_cost_per_token_flex": 0.0005,
+                    "output_cost_per_token_flex": 0.001,
+                    "litellm_provider": "azure_ai",
+                    "max_tokens": 8192,
+                }
             }
-        })
+        )
 
     def test_service_tier_priority_higher_cost(self):
         """Priority tier should cost more than standard for azure_ai."""
         usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
-        standard_prompt, standard_completion = cost_per_token(
-            model="test-azure-ai-model", usage=usage
-        )
+        standard_prompt, standard_completion = cost_per_token(model="test-azure-ai-model", usage=usage)
         priority_prompt, priority_completion = cost_per_token(
             model="test-azure-ai-model", usage=usage, service_tier="priority"
         )
@@ -490,12 +291,8 @@ class TestAzureAIServiceTierCostCalculation:
         """Flex tier should cost less than standard for azure_ai."""
         usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
 
-        standard_prompt, standard_completion = cost_per_token(
-            model="test-azure-ai-model", usage=usage
-        )
-        flex_prompt, flex_completion = cost_per_token(
-            model="test-azure-ai-model", usage=usage, service_tier="flex"
-        )
+        standard_prompt, standard_completion = cost_per_token(model="test-azure-ai-model", usage=usage)
+        flex_prompt, flex_completion = cost_per_token(model="test-azure-ai-model", usage=usage, service_tier="flex")
 
         assert flex_prompt < standard_prompt
         assert flex_completion < standard_completion
@@ -528,29 +325,3 @@ def test_mai_thinking_1_model_info_and_cost(local_model_cost_map):
     assert model_info["supports_function_calling"] is True
     assert prompt_cost == pytest.approx(2.0)
     assert completion_cost == pytest.approx(8.0)
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize("router_entry_name", ["model_router", "model-router"])
-def test_router_entry_as_response_model_charges_the_fee_once(router_entry_name: str) -> None:
-    usage = Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
-    prompt_cost, completion_cost = cost_per_token(model=router_entry_name, usage=usage)
-    assert prompt_cost == pytest.approx(0.14, rel=1e-9)
-    assert completion_cost == 0.0
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-def test_unmapped_router_deployment_name_still_charges_the_fee() -> None:
-    usage = Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
-    prompt_cost, completion_cost = cost_per_token(model="azure-model-router", usage=usage)
-    assert prompt_cost == pytest.approx(0.14, rel=1e-9)
-    assert completion_cost == 0.0
-
-
-@pytest.mark.usefixtures("local_model_cost_map")
-def test_routed_model_response_adds_the_fee_on_top() -> None:
-    usage = Usage(prompt_tokens=1_000_000, completion_tokens=0, total_tokens=1_000_000)
-    routed_prompt_cost, _ = cost_per_token(model="gpt-5-nano", usage=usage)
-    prompt_cost, _ = cost_per_token(model="gpt-5-nano", usage=usage, request_model="azure_ai/model-router")
-    assert routed_prompt_cost > 0
-    assert prompt_cost == pytest.approx(routed_prompt_cost + 0.14, rel=1e-9)

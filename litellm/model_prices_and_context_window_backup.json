@@ -3586,7 +3586,7 @@
         "deprecation_date": "2026-12-02",
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -4068,10 +4068,11 @@
         "comment": "Flat cost of $0.14 per M input tokens for Azure AI Foundry Model Router infrastructure. Use pattern: azure_ai/model_router/<deployment-name> where deployment-name is your Azure deployment (e.g., azure-model-router)"
     },
     "azure_ai/model-router": {
+        "deprecation_date": "2027-05-20",
         "input_cost_per_token": 1.4e-07,
         "output_cost_per_token": 0,
         "litellm_provider": "azure_ai",
-        "max_input_tokens": 1048576,
+        "max_input_tokens": 200000,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
@@ -10393,8 +10394,8 @@
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
-        "max_output_tokens": 4096,
-        "max_tokens": 4096,
+        "max_output_tokens": 8182,
+        "max_tokens": 8182,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/cohere/",
@@ -10753,6 +10754,7 @@
         "supports_web_search": true
     },
     "azure_ai/grok-4-20-reasoning": {
+        "deprecation_date": "2027-04-06",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 262000,
@@ -10769,6 +10771,7 @@
         "supports_reasoning": true
     },
     "azure_ai/grok-4-20-non-reasoning": {
+        "deprecation_date": "2027-04-06",
         "input_cost_per_token": 1.25e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 262000,
