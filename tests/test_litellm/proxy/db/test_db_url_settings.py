@@ -35,6 +35,7 @@ _MANAGED_DB_ENV_VARS = (
     "IAM_TOKEN_DB_AUTH",
     "AZURE_POSTGRESQL_AUTH",
     "DATABASE_DISABLE_PREPARED_STATEMENTS",
+    "DATABASE_MAX_IDLE_CONNECTION_LIFETIME",
     "DATABASE_URL",
     "DIRECT_URL",
     "DATABASE_URL_READ_REPLICA",
@@ -111,7 +112,7 @@ def test_assembles_writer_url_when_iam_enabled(monkeypatch):
 
     assert (
         os.environ["DATABASE_URL"]
-        == "postgresql://litellm:WRITER_TOKEN@writer.example.com:5432/litellm_db"
+        == "postgresql://litellm:WRITER_TOKEN@writer.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
     # Reader was never configured, so it must not have been set.
     assert "DATABASE_URL_READ_REPLICA" not in os.environ
@@ -130,7 +131,9 @@ def test_a_pre_encoded_iam_user_survives_url_assembly(monkeypatch):
     with _stub_iam_token("WRITER_TOKEN"):
         assert _apply() is True
 
-    assert os.environ["DATABASE_URL"] == "postgresql://svc%40corp:WRITER_TOKEN@writer.example.com:5432/litellm_db"
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://svc%40corp:WRITER_TOKEN@writer.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
+    )
 
 
 def test_an_unreadable_toggle_fails_the_settings_model(monkeypatch):
@@ -168,7 +171,7 @@ def test_reader_url_assembled_when_host_set_and_url_unset(monkeypatch):
 
     assert (
         os.environ["DATABASE_URL_READ_REPLICA"]
-        == "postgresql://litellm:READER_TOKEN@reader.example.com:5432/litellm_db"
+        == "postgresql://litellm:READER_TOKEN@reader.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
 
 
@@ -191,7 +194,7 @@ def test_reader_url_not_clobbered_when_already_set(monkeypatch):
 
     assert (
         os.environ["DATABASE_URL_READ_REPLICA"]
-        == "postgresql://app:secret@reader.example.com:5432/litellm_db"
+        == "postgresql://app:secret@reader.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
 
 
@@ -222,7 +225,8 @@ def test_reader_field_fallbacks_default_to_writer_values(monkeypatch):
 
     assert (
         os.environ["DATABASE_URL_READ_REPLICA"]
-        == "postgresql://litellm:READER_TOKEN@reader.example.com:5432/litellm_db?schema=public"
+        == "postgresql://litellm:READER_TOKEN@reader.example.com:5432/litellm_db"
+        "?schema=public&max_idle_connection_lifetime=60"
     )
 
 
@@ -242,7 +246,7 @@ def test_assembles_writer_url_when_azure_entra_enabled(monkeypatch):
 
     assert os.environ["DATABASE_URL"] == (
         "postgresql://litellm%40contoso.onmicrosoft.com:ENTRA_TOKEN"
-        "@writer.postgres.database.azure.com:5432/litellm_db"
+        "@writer.postgres.database.azure.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
     assert os.environ["AZURE_POSTGRESQL_AUTH"] == "True"
     assert "IAM_TOKEN_DB_AUTH" not in os.environ
@@ -261,7 +265,7 @@ def test_azure_reader_url_assembled_from_writer_fallbacks(monkeypatch):
 
     assert os.environ["DATABASE_URL_READ_REPLICA"] == (
         "postgresql://litellm%40contoso.onmicrosoft.com:ENTRA_TOKEN"
-        "@reader.postgres.database.azure.com:5432/litellm_db?schema=public"
+        "@reader.postgres.database.azure.com:5432/litellm_db?schema=public&max_idle_connection_lifetime=60"
     )
 
 
@@ -357,7 +361,7 @@ def test_assembles_writer_url_from_password(monkeypatch):
     assert _apply() is True
     assert (
         os.environ["DATABASE_URL"]
-        == "postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db"
+        == "postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
 
 
@@ -370,7 +374,7 @@ def test_writer_password_is_percent_encoded(monkeypatch):
     assert _apply() is True
     assert (
         os.environ["DATABASE_URL"]
-        == "postgresql://litellm:p%40ss%2Fw%3Ard@writer.example.com:5432/litellm_db"
+        == "postgresql://litellm:p%40ss%2Fw%3Ard@writer.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
 
 
@@ -388,7 +392,7 @@ def test_writer_url_not_clobbered_when_already_set(monkeypatch):
     assert _apply() is False
     assert (
         os.environ["DATABASE_URL"]
-        == "postgresql://pinned:url@db.example.com:5432/litellm_db"
+        == "postgresql://pinned:url@db.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
 
 
@@ -400,7 +404,7 @@ def test_writer_url_passwordless(monkeypatch):
     assert _apply() is True
     assert (
         os.environ["DATABASE_URL"]
-        == "postgresql://litellm@writer.example.com:5432/litellm_db"
+        == "postgresql://litellm@writer.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
 
 
@@ -415,7 +419,7 @@ def test_database_username_alias(monkeypatch):
     assert _apply() is True
     assert (
         os.environ["DATABASE_URL"]
-        == "postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db"
+        == "postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
 
 
@@ -429,7 +433,7 @@ def test_password_reader_falls_back_to_writer_password(monkeypatch):
     assert _apply() is True
     assert (
         os.environ["DATABASE_URL_READ_REPLICA"]
-        == "postgresql://litellm:s3cr3t@reader.example.com:5432/litellm_db"
+        == "postgresql://litellm:s3cr3t@reader.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
 
 
@@ -445,7 +449,7 @@ def test_password_reader_uses_own_credentials(monkeypatch):
     assert _apply() is True
     assert (
         os.environ["DATABASE_URL_READ_REPLICA"]
-        == "postgresql://litellm_ro:ro_pw@reader.example.com:5432/litellm_db"
+        == "postgresql://litellm_ro:ro_pw@reader.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
     )
 
 
@@ -641,19 +645,19 @@ def test_reader_keeps_its_own_options_when_writer_params_are_appended(monkeypatc
     assert query["connection_limit"] == ["3"]
 
 
-def test_reader_url_left_alone_when_writer_has_no_params(monkeypatch):
+def test_reader_url_left_alone_when_nothing_is_missing(monkeypatch):
     """No params to inherit must mean the reader URL is not rewritten at all."""
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
     monkeypatch.setenv(
         "DATABASE_URL_READ_REPLICA",
-        "postgresql://u:p@reader.example.com:5432/db?options=-c%20search_path%3Dapp",
+        "postgresql://u:p@reader.example.com:5432/db?options=-c%20search_path%3Dapp&max_idle_connection_lifetime=45",
     )
 
     _apply()
 
     assert (
         os.environ["DATABASE_URL_READ_REPLICA"]
-        == "postgresql://u:p@reader.example.com:5432/db?options=-c%20search_path%3Dapp"
+        == "postgresql://u:p@reader.example.com:5432/db?options=-c%20search_path%3Dapp&max_idle_connection_lifetime=45"
     )
 
 
@@ -671,7 +675,7 @@ def test_disable_prepared_statements_appends_pgbouncer_to_assembled_writer(monke
 
     assert _apply() is True
     assert os.environ["DATABASE_URL"] == (
-        "postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db?pgbouncer=true"
+        "postgresql://litellm:s3cr3t@writer.example.com:5432/litellm_db?pgbouncer=true&max_idle_connection_lifetime=60"
     )
     assert "DIRECT_URL" not in os.environ
 
@@ -685,7 +689,9 @@ def test_disable_prepared_statements_appends_pgbouncer_to_pinned_writer(monkeypa
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
 
     assert _apply() is False
-    assert os.environ["DATABASE_URL"] == "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=true"
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=true&max_idle_connection_lifetime=60"
+    )
 
 
 def test_disable_prepared_statements_respects_a_pinned_pgbouncer_value(monkeypatch):
@@ -694,7 +700,9 @@ def test_disable_prepared_statements_respects_a_pinned_pgbouncer_value(monkeypat
 
     _apply()
 
-    assert os.environ["DATABASE_URL"] == "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=false"
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://u:p@db.example.com:5432/litellm_db?pgbouncer=false&max_idle_connection_lifetime=60"
+    )
 
 
 def test_disable_prepared_statements_applies_to_direct_url(monkeypatch):
@@ -704,7 +712,9 @@ def test_disable_prepared_statements_applies_to_direct_url(monkeypatch):
 
     _apply()
 
-    assert os.environ["DIRECT_URL"] == "postgresql://u:p@direct.example.com:5432/litellm_db?pgbouncer=true"
+    assert os.environ["DIRECT_URL"] == (
+        "postgresql://u:p@direct.example.com:5432/litellm_db?pgbouncer=true&max_idle_connection_lifetime=60"
+    )
 
 
 def test_reader_inherits_pgbouncer_from_disable_prepared_statements(monkeypatch):
@@ -724,7 +734,9 @@ def test_disable_prepared_statements_off_leaves_urls_alone(monkeypatch):
 
     _apply()
 
-    assert os.environ["DATABASE_URL"] == "postgresql://u:p@db.example.com:5432/litellm_db"
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://u:p@db.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
+    )
 
 
 def test_disable_prepared_statements_rejects_an_unreadable_value(monkeypatch):
@@ -760,6 +772,7 @@ def test_libpq_verify_full_and_sslrootcert_become_prisma_strict_sslcert(monkeypa
         "sslmode": ["require"],
         "sslcert": ["/certs/rds-bundle.pem"],
         "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
     }
 
 
@@ -768,7 +781,11 @@ def test_libpq_verify_ca_becomes_prisma_strict(monkeypatch):
 
     _apply()
 
-    assert _query(os.environ["DATABASE_URL"]) == {"sslmode": ["require"], "sslaccept": ["strict"]}
+    assert _query(os.environ["DATABASE_URL"]) == {
+        "sslmode": ["require"],
+        "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
+    }
 
 
 def test_sslrootcert_alone_turns_on_strict_verification(monkeypatch):
@@ -784,6 +801,7 @@ def test_sslrootcert_alone_turns_on_strict_verification(monkeypatch):
         "sslmode": ["require"],
         "sslcert": ["/certs/ca.pem"],
         "sslaccept": ["strict"],
+        "max_idle_connection_lifetime": ["60"],
     }
 
 
@@ -800,11 +818,15 @@ def test_pinned_prisma_ssl_params_win_over_libpq_translation(monkeypatch):
         "sslmode": ["require"],
         "sslcert": ["/pinned.pem"],
         "sslaccept": ["accept_invalid_certs"],
+        "max_idle_connection_lifetime": ["60"],
     }
 
 
 def test_prisma_native_ssl_url_is_left_untouched(monkeypatch):
-    url = "postgresql://u:p@db.example.com:5432/litellm_db?sslmode=require&sslcert=/certs/ca.pem&sslaccept=strict"
+    url = (
+        "postgresql://u:p@db.example.com:5432/litellm_db"
+        "?sslmode=require&sslcert=/certs/ca.pem&sslaccept=strict&max_idle_connection_lifetime=60"
+    )
     monkeypatch.setenv("DATABASE_URL", url)
 
     _apply()
@@ -820,4 +842,84 @@ def test_libpq_ssl_translation_covers_direct_url_and_read_replica(monkeypatch):
     _apply()
 
     for env_var in ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA"):
-        assert _query(os.environ[env_var]) == {"sslmode": ["require"], "sslaccept": ["strict"]}, env_var
+        assert _query(os.environ[env_var]) == {
+            "sslmode": ["require"],
+            "sslaccept": ["strict"],
+            "max_idle_connection_lifetime": ["60"],
+        }, env_var
+
+
+def test_default_idle_lifetime_applied_to_pinned_writer_and_direct_url(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
+    monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@direct.example.com:5432/litellm_db")
+
+    assert _apply() is False
+
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://u:p@db.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
+    )
+    assert os.environ["DIRECT_URL"] == (
+        "postgresql://u:p@direct.example.com:5432/litellm_db?max_idle_connection_lifetime=60"
+    )
+
+
+def test_url_pinned_idle_lifetime_wins_over_default_and_env_knob(monkeypatch):
+    monkeypatch.setenv("DATABASE_MAX_IDLE_CONNECTION_LIFETIME", "45")
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db?max_idle_connection_lifetime=300"
+    )
+
+    _apply()
+
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://u:p@db.example.com:5432/litellm_db?max_idle_connection_lifetime=300"
+    )
+
+
+def test_env_knob_overrides_default_idle_lifetime(monkeypatch):
+    monkeypatch.setenv("DATABASE_MAX_IDLE_CONNECTION_LIFETIME", "45")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@db.example.com:5432/litellm_db")
+    monkeypatch.setenv("DIRECT_URL", "postgresql://u:p@direct.example.com:5432/litellm_db")
+
+    _apply()
+
+    assert os.environ["DATABASE_URL"] == (
+        "postgresql://u:p@db.example.com:5432/litellm_db?max_idle_connection_lifetime=45"
+    )
+    assert os.environ["DIRECT_URL"] == (
+        "postgresql://u:p@direct.example.com:5432/litellm_db?max_idle_connection_lifetime=45"
+    )
+
+
+def test_env_knob_rejects_a_non_integer_value(monkeypatch):
+    monkeypatch.setenv("DATABASE_MAX_IDLE_CONNECTION_LIFETIME", "soon")
+
+    with pytest.raises(ValidationError, match="DATABASE_MAX_IDLE_CONNECTION_LIFETIME"):
+        DatabaseURLSettings.from_env()
+
+
+@pytest.mark.parametrize(("knob", "expected"), [(None, "60"), ("45", "45")])
+def test_reader_inherits_the_writer_idle_lifetime(monkeypatch, knob, expected):
+    if knob is not None:
+        monkeypatch.setenv("DATABASE_MAX_IDLE_CONNECTION_LIFETIME", knob)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
+    monkeypatch.setenv("DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db")
+
+    _apply()
+
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == (
+        f"postgresql://u:p@reader.example.com:5432/db?max_idle_connection_lifetime={expected}"
+    )
+
+
+def test_reader_keeps_its_own_pinned_idle_lifetime(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@writer.example.com:5432/db")
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA", "postgresql://u:p@reader.example.com:5432/db?max_idle_connection_lifetime=120"
+    )
+
+    _apply()
+
+    assert os.environ["DATABASE_URL_READ_REPLICA"] == (
+        "postgresql://u:p@reader.example.com:5432/db?max_idle_connection_lifetime=120"
+    )
