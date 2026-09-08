@@ -1,9 +1,11 @@
 import json
+from unittest.mock import Mock, patch
 
 import pytest
 
 import litellm
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.bedrock.embed.twelvelabs_marengo_3_transformation import (
     MARENGO_2_7_ONLY_PARAMS,
     build_marengo_3_request,
@@ -356,3 +358,35 @@ def test_timed_media_options_are_rejected_on_untimed_input_types_unless_dropped(
     assert build_marengo_3_request(DUCK_DATA_URL, timed, drop_params=True) == build_marengo_3_request(
         DUCK_DATA_URL, params
     )
+
+
+def _embed_marengo_3_us(client: HTTPHandler, **params: object):
+    return litellm.embedding(
+        model=f"bedrock/{MARENGO_3_US}",
+        input="hello",
+        client=client,
+        aws_region_name="us-east-1",
+        aws_bedrock_runtime_endpoint="https://bedrock-runtime.us-east-1.amazonaws.com",
+        api_key="test-bearer-token",
+        **params,
+    )
+
+
+def test_per_request_drop_params_reaches_the_marengo_3_builder(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    client = HTTPHandler()
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = json.dumps({"data": [{"embedding": [0.1, 0.2]}]})
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        with pytest.raises(litellm.BadRequestError, match=r"Marengo 2\.7 parameters textTruncate"):
+            _embed_marengo_3_us(client, textTruncate="end")
+        assert mock_post.call_count == 0
+
+        response = _embed_marengo_3_us(client, textTruncate="end", drop_params=True)
+
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert json.loads(mock_post.call_args.kwargs["data"]) == {"inputType": "text", "text": {"inputText": "hello"}}
