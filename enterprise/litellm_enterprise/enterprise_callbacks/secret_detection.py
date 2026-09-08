@@ -450,8 +450,6 @@ _CONFIG_SECTION: Final = "litellm-prompt"
 
 _ASSIGNMENT_LINE: Final = re.compile(r"[^\s\[#;:=][^:=]*[:=]")
 
-# A .py suffix keeps detect_secrets' own config transformers off this file (they only fire on
-# FileType.OTHER and FileType.YAML) while leaving every plugin's regex set unchanged.
 _SCAN_SUFFIX: Final = ".py"
 
 
@@ -483,11 +481,6 @@ def _scan_lines(lines: Sequence[str]) -> frozenset[tuple[str, str]]:
 
 
 def _parseable_lines(text: str) -> Generator[str, None, None]:
-    """Yields the lines of ``text`` that configparser can read.
-
-    A prompt is mostly prose, and one unreadable line aborts the whole parse, so the prose
-    is dropped rather than allowed to take the assignments down with it.
-    """
     open_option = False
     for number, line in enumerate(text.splitlines()):
         stripped = line.strip()
@@ -495,22 +488,14 @@ def _parseable_lines(text: str) -> Generator[str, None, None]:
         if not stripped:
             yield line
         elif stripped[0] in "#;":
-            # configparser reads a comment inside a value without closing it, so leaving
-            # open_option alone keeps the indented lines under the comment reachable.
             yield line
         elif assignment is not None:
             open_option = True
-            # Dedenting reaches the assignments inside a pasted config, and the line number
-            # keeps every key distinct so a config repeating api_key per model keeps them all.
             yield f"{assignment.group()[:-1].strip()}_{number}{stripped[assignment.end() - 1:]}"
         elif line[0].isspace() and open_option:
-            # An indented line inside an open value is part of that value to configparser,
-            # brackets included, so this has to be tested before the section header below.
             yield line
         elif stripped[0] == "[":
             open_option = False
-            # configparser needs a closing bracket and something inside it; without one
-            # it aborts the whole parse, taking every assignment below down with it.
             if "]" in stripped[2:]:
                 yield line
         else:
@@ -518,14 +503,7 @@ def _parseable_lines(text: str) -> Generator[str, None, None]:
 
 
 def _quoted_assignments(text: str) -> tuple[str, ...]:
-    """Rewrites the bare ``key = value`` assignments in ``text`` as quoted ones.
-
-    detect_secrets does this itself, but only when its first pass over the raw text found
-    nothing, so one vendor-prefixed key in a message hides every unquoted assignment beside
-    it. Interpolation stays off so that no emitted value is one the message never contained.
-    """
     parser: Final = configparser.ConfigParser(interpolation=None, strict=False)
-    # Keys keep their case, exactly as detect_secrets' own parser does.
     parser.optionxform = str  # pyright: ignore[reportAttributeAccessIssue]  # configparser types optionxform as a method
     body: Final = "\n".join(_parseable_lines(text))
     try:
@@ -538,8 +516,6 @@ def _quoted_assignments(text: str) -> tuple[str, ...]:
         for section in parser
         for key, values in parser.items(section)
         for value in values.splitlines()
-        # A quoted value is already visible to every plugin in the raw text, and
-        # re-quoting it here only invents matches the message never held.
         if value and '"' not in value
     )
 
@@ -587,8 +563,6 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         verbose_proxy_logger.warning(
             "Detected and redacted secrets in %s: %s", source, secret_types
         )
-        # detected_secrets is ordered longest value first, so the alternation redacts a
-        # secret that contains another one as a whole rather than in pieces.
         pattern: Final = re.compile(
             "|".join(re.escape(secret["value"]) for secret in detected_secrets)
         )
