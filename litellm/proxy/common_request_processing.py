@@ -3508,9 +3508,13 @@ class ProxyBaseLLMRequestProcessing:
             error_body: Final = await http_status_error.response.aread()
             error_text: Final = error_body.decode("utf-8")
 
+            error_headers: Final = {  # mutable-ok: HTTPException takes a plain header dict
+                k: v if isinstance(v, str) else str(v) for k, v in safe_headers.items()
+            }
             raise HTTPException(
                 status_code=http_status_error.response.status_code,
                 detail={"error": error_text},
+                headers=error_headers,
             )
         error_msg: Final = f"{e}"
         # Check for AttributeError in the exception chain.

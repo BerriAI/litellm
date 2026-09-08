@@ -370,6 +370,19 @@ def get_vertex_base_model_name(model: str) -> str:
     return model
 
 
+def get_vertex_ai_fine_tuned_endpoint_id(model: str) -> str | None:
+    """
+    Fine-tuned Gemini deployments are addressed by a numeric endpoint id,
+    configured as `vertex_ai/<id>` or `vertex_ai/gemini/<id>`.
+
+    Returns the endpoint id, or None when `model` is a regular publisher model.
+    Mirrors the online chat path in `_get_vertex_url`, which sends numeric
+    models to `endpoints/{id}` instead of `publishers/google/models/{model}`.
+    """
+    candidate: Final = model.split("/")[-1] if "gemini/" in model else model
+    return candidate if candidate.isdigit() else None
+
+
 def validate_vertex_location(vertex_location: str | None) -> str:
     """
     Validate a Vertex AI location before interpolating it into a request host or

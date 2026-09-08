@@ -20,6 +20,8 @@ from contextvars import ContextVar
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import (
@@ -80,10 +82,28 @@ class _AsyncRedisCommands(Protocol):
 
     def pipeline(self, transaction: bool = True) -> "Pipeline[bytes]": ...
 
+    def eval(self, script: str, numkeys: int, *keys_and_args: str | bytes | float) -> Awaitable[object]: ...
+
 
 _BREAKER_GUARD_FRAME_NAMES: Final = frozenset(
     {"<lambda>", "wrapper", "_run_under_circuit_breaker", "_run_under_circuit_breaker_sync"}
 )
+
+_INCREMENT_WITH_FLOOR_LUA: Final = (
+    "local count = redis.call('INCRBY', KEYS[1], ARGV[1]) "
+    "if count < 0 then count = redis.call('INCRBY', KEYS[1], -count) end "
+    "if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]) end "
+    "return count"
+)
+
+_LUA_COUNT: Final = TypeAdapter(int)
+_OPTIONAL_COUNTS: Final = TypeAdapter(tuple[int | None, ...])
+
+
+def _decoded_counts(values: Sequence[bytes | str | None]) -> tuple[int | None, ...]:
+    return _OPTIONAL_COUNTS.validate_python(
+        tuple(value.decode("utf-8") if isinstance(value, bytes) else value for value in values)
+    )
 
 
 def _get_call_stack_info(num_frames: int = 2) -> str:
@@ -736,6 +756,43 @@ class RedisCache(BaseCache):
             )
             raise e
 
+    @_redis_circuit_breaker_guard_sync
+    def increment_with_floor(self, key: str, value: int, ttl: int) -> int:
+        """Add ``value`` to ``key``, clamp the result at zero, and give a new key ``ttl``, in one Lua call.
+
+        A counter whose key expired while a request was still in flight would otherwise be
+        recreated negative by that request's decrement. Clamping inside the same call is what
+        keeps it safe: a separate corrective write could land after another pod's increment and
+        erase it.
+
+        The TTL is set only on a key that has none, so a counter expires ``ttl`` after it was
+        created rather than ``ttl`` after it was last touched. Refreshing it on every touch
+        would keep a count a dead worker never decremented alive for as long as the group
+        takes traffic. Returns the resulting count.
+        """
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        count: Final[object] = self.redis_client.eval(  # pyright: ignore[reportAttributeAccessIssue]  # stubs omit eval
+            _INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl
+        )
+        return _LUA_COUNT.validate_python(count)
+
+    @_redis_circuit_breaker_guard_sync
+    def batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+        """Read integer counters for ``key_list``, in order, raising when Redis cannot answer.
+
+        ``batch_get_cache`` swallows every failure and returns an empty dict, which the caller
+        cannot tell apart from "every counter is unset". A caller that has to fall back to its
+        own numbers when Redis is unreachable needs the failure, not a dict of zeros.
+        """
+        namespaced_keys: Final = [self.check_and_fix_namespace(key=key) for key in key_list]
+        return _decoded_counts(self._run_redis_mget_operation(keys=namespaced_keys))
+
+    @_redis_circuit_breaker_guard
+    async def async_batch_get_counts(self, key_list: list[str]) -> tuple[int | None, ...]:
+        """Async twin of ``batch_get_counts``, raising on failure the same way."""
+        namespaced_keys: Final = [self.check_and_fix_namespace(key=key) for key in key_list]
+        return _decoded_counts(await self._async_run_redis_mget_operation(keys=namespaced_keys))
+
     @_redis_circuit_breaker_guard
     async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
         start_time: Final = time.time()
@@ -1240,6 +1297,14 @@ class RedisCache(BaseCache):
         if isinstance(result, bytes):
             result = result.decode()
         return float(result)
+
+    @_redis_circuit_breaker_guard
+    async def async_increment_with_floor(self, key: str, value: int, ttl: int) -> int:
+        """Async twin of ``increment_with_floor``, sharing its Lua script and its guarantees."""
+        _redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        count: Final = await _redis_client.eval(_INCREMENT_WITH_FLOOR_LUA, 1, namespaced_key, value, ttl)
+        return _LUA_COUNT.validate_python(count)
 
     async def flush_cache_buffer(self):
         print_verbose(f"flushing to redis....reached size of buffer {len(self.redis_batch_writing_buffer)}")

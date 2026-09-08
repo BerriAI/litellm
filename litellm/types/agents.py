@@ -1,9 +1,9 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel, PrivateAttr, StrictInt
-from typing_extensions import Required, TypedDict
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
@@ -172,6 +172,7 @@ class AugmentedAgentCard(AgentCard):
 class AgentObjectPermission(TypedDict, total=False):
     mcp_servers: list[str] | None
     mcp_access_groups: list[str] | None
+    mcp_toolsets: ReadOnly[Sequence[str] | None]
     mcp_tool_permissions: dict[str, list[str]] | None
     models: list[str] | None
     agents: list[str] | None

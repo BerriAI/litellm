@@ -333,6 +333,67 @@ async def test_per_request_enable_prompt_caching_reaches_the_affinity_key(monkey
 
 
 @pytest.mark.asyncio
+async def test_claude_code_one_shot_subagent_does_not_reuse_an_auto_injected_affinity_key(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": "unique " * 3000}])
+    request_kwargs = {
+        "system": [
+            {
+                "type": "text",
+                "text": "x-anthropic-billing-header: cc_version=2.1.263; cc_is_subagent=true;",
+            }
+        ],
+        "proxy_server_request": {"headers": {"user-agent": "claude-cli/2.1.263 (external, cli)"}},
+    }
+    auto_injected_messages = AnthropicCacheControlHook.messages_with_default_injections(
+        messages=messages,
+        models=(AUTO_CACHING_MODEL,),
+    )
+    assert auto_injected_messages != messages
+    await PromptCachingCache(cache=cache).async_add_model_id(
+        model_id="dep-2", messages=auto_injected_messages, tools=None
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs=request_kwargs,
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
+async def test_root_cache_control_does_not_reuse_an_auto_injected_affinity_key(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    messages = _auto_caching_messages()
+    auto_injected_messages = AnthropicCacheControlHook.messages_with_default_injections(
+        messages=messages,
+        models=(AUTO_CACHING_MODEL,),
+    )
+    assert auto_injected_messages != messages
+    await PromptCachingCache(cache=cache).async_add_model_id(
+        model_id="dep-2", messages=auto_injected_messages, tools=None
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+        request_kwargs={"cache_control": {"type": "ephemeral"}},
+    )
+
+    assert filtered == deployments
+
+
+@pytest.mark.asyncio
 async def test_tool_marked_cache_control_keeps_routing_off_another_requests_prefix(monkeypatch, local_model_cost_map):
     """
     Tools carrying the client's own cache_control make auto-injection stand down, so this request

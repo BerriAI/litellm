@@ -1440,6 +1440,7 @@ jobs:
             TEST_FILES=$(printf "%s\n" \
               tests/local_testing/test_dual_cache.py \
               tests/local_testing/test_redis_batch_optimizations.py \
+              tests/local_testing/test_redis_increment_with_floor.py \
               tests/local_testing/test_router_utils.py)
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
