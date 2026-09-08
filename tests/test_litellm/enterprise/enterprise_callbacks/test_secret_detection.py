@@ -332,6 +332,10 @@ def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
         ("api_key: >\n  aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
         ("api_key: |-\n  aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
         ("secret= \\\n    aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
+        ("password =\n# rotate me\n    Zx4Kp9Lm2Qr7Ns3Vt", "Zx4Kp9Lm2Qr7Ns3Vt"),
+        ("api_key =\n; rotate me\n    aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
+        ("  # pasted from the vault\napi_key=aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
+        ("  [db]\napi_key=aB3dE6gH9jK2mN5p", "aB3dE6gH9jK2mN5p"),
     ],
     ids=[
         "flat-assignment",
@@ -344,6 +348,10 @@ def test_scan_message_keeps_every_value_when_a_config_repeats_a_key():
         "yaml-folded-block",
         "yaml-literal-block",
         "backslash-continuation",
+        "comment-inside-a-value",
+        "semicolon-comment-inside-a-value",
+        "indented-comment-above",
+        "indented-section-header-above",
     ],
 )
 def test_scan_message_still_sees_assignments_sharing_a_message_with_a_vendor_key(

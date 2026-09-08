@@ -495,7 +495,17 @@ def _parseable_lines(text: str) -> Generator[str, None, None]:
         if not stripped:
             yield line
         elif stripped[0] in "#;":
-            open_option = False
+            # configparser reads a comment inside a value without closing it, so leaving
+            # open_option alone keeps the indented lines under the comment reachable.
+            yield line
+        elif assignment is not None:
+            open_option = True
+            # Dedenting reaches the assignments inside a pasted config, and the line number
+            # keeps every key distinct so a config repeating api_key per model keeps them all.
+            yield f"{assignment.group()[:-1].strip()}_{number}{stripped[assignment.end() - 1:]}"
+        elif line[0].isspace() and open_option:
+            # An indented line inside an open value is part of that value to configparser,
+            # brackets included, so this has to be tested before the section header below.
             yield line
         elif stripped[0] == "[":
             open_option = False
@@ -503,13 +513,6 @@ def _parseable_lines(text: str) -> Generator[str, None, None]:
             # it aborts the whole parse, taking every assignment below down with it.
             if "]" in stripped[2:]:
                 yield line
-        elif assignment is not None:
-            open_option = True
-            # Dedenting reaches the assignments inside a pasted config, and the line number
-            # keeps every key distinct so a config repeating api_key per model keeps them all.
-            yield f"{assignment.group()[:-1].strip()}_{number}{stripped[assignment.end() - 1:]}"
-        elif line[0].isspace() and open_option:
-            yield line
         else:
             open_option = False
 
