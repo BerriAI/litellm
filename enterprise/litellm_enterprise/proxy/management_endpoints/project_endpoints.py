@@ -22,7 +22,7 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin, _set_object_metadata_field
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
@@ -105,14 +105,16 @@ async def _check_user_permission_for_project(
     if not team_id or not user_api_key_dict.user_id:
         return False
 
-    team = team_object
-    if team is None:
-        team = await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+    team_row: Final = (
+        team_object
+        if team_object is not None
+        else await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+    )
+    if team_row is None:
+        return False
 
-    if team and team.admins:
-        return user_api_key_dict.user_id in team.admins
-
-    return False
+    team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
+    return _is_user_team_admin(user_api_key_dict, team) or user_api_key_dict.user_id in (team.admins or [])
 
 
 async def _validate_team_exists(
