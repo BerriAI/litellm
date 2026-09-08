@@ -71,6 +71,12 @@ class TestMarkDeadWorkers:
         assert mark_dead_workers(str(tmp_path)) == ()
         assert sorted(p.name for p in tmp_path.glob("*.db")) == ["counter_424242.db", "histogram_424242.db"]
 
+    def test_keeps_live_gauges_of_workers_it_may_not_signal(self, tmp_path: Path) -> None:
+        """Signal 0 to pid 1 raises PermissionError for an unprivileged proxy; that pid is alive, not dead."""
+        (tmp_path / "gauge_livesum_1.db").touch()
+        assert mark_dead_workers(str(tmp_path)) == ()
+        assert (tmp_path / "gauge_livesum_1.db").exists()
+
 
 class TestWipeDirectory:
     def test_deletes_all_db_files(self, tmp_path):
