@@ -272,7 +272,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens_flex: float | None
     input_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
-    input_cost_per_query: float | None  # only for rerank models
+    input_cost_per_query: float | None  # per-request pricing: rerank, search, and Bedrock Marengo embeddings
     input_cost_per_image: float | None  # only for vertex ai models
     input_cost_per_image_token: float | None  # for gpt-image-1 and similar models
     input_cost_per_video_token: float | None  # for gemini omni models with video input
@@ -1694,6 +1694,9 @@ class PromptTokensDetailsWrapper(
     audio_length_seconds: float | None = None
     """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
 
+    query_count: int | None = None
+    """Number of billable requests sent to the model. Used for embeddings priced per request, such as Bedrock Marengo."""
+
     cache_write_tokens: int | None = None
     """Number of cache write (creation) tokens sent to the model. OpenAI naming (prompt_tokens_details.cache_write_tokens); this is the canonical field."""
 
@@ -1735,6 +1738,8 @@ class PromptTokensDetailsWrapper(
             del self.video_length_seconds
         if self.audio_length_seconds is None:
             del self.audio_length_seconds
+        if self.query_count is None:
+            del self.query_count
         if self.web_search_requests is None:
             del self.web_search_requests
         if self.google_maps_grounding_requests is None:
