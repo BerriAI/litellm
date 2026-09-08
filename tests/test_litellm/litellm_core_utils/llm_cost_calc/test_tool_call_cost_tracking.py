@@ -874,9 +874,8 @@ def test_dated_search_preview_entries_carry_search_pricing(local_model_cost_map)
     ],
 )
 def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
-    web_search_options, local_model_cost_map
-):
-    """Snapshot and alias must bill web search identically: OpenAI lists preview search at $25 per 1k calls."""
+    web_search_options: WebSearchOptions | None, local_model_cost_map: None
+) -> None:
     alias_info = litellm.get_model_info("gpt-4o-mini")
     snapshot_info = litellm.get_model_info("gpt-4o-mini-2024-07-18")
 
@@ -894,7 +893,6 @@ def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
 
 
 def test_gpt_4o_mini_web_search_price_matches_in_both_cost_maps():
-    """The bundled backup and canonical file are both served to deployments, so both must carry the price."""
     repo_root = Path(__file__).parents[4]
     cost_maps = tuple(
         json.loads((repo_root / path).read_text(encoding="utf-8"))
