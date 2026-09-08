@@ -5863,7 +5863,7 @@ ANTHROPIC_SSE_STREAM = (
 )
 
 
-def _log_passthrough_stream(url: str) -> tuple[PassThroughEndpointLoggingResultValues, dict]:
+def _log_passthrough_stream(url: str) -> tuple[PassThroughEndpointLoggingResultValues, float | None]:
     from datetime import datetime
 
     from litellm.proxy.pass_through_endpoints.streaming_handler import (
@@ -5875,7 +5875,7 @@ def _log_passthrough_stream(url: str) -> tuple[PassThroughEndpointLoggingResultV
     logging_obj.optional_params = {}
     logging_obj.litellm_call_id = "test-call-id"
 
-    return PassThroughStreamingHandler._build_passthrough_logging_result(
+    result, kwargs = PassThroughStreamingHandler._build_passthrough_logging_result(
         litellm_logging_obj=logging_obj,
         passthrough_success_handler_obj=PassThroughEndpointLogging(),
         url_route=url,
@@ -5886,6 +5886,7 @@ def _log_passthrough_stream(url: str) -> tuple[PassThroughEndpointLoggingResultV
         end_time=datetime.now(),
         model="claude-sonnet-4-5-20250929",
     )
+    return result, kwargs.get("response_cost")
 
 
 def test_anthropic_compatible_passthrough_stream_is_billed_off_api_anthropic_com():
@@ -5893,11 +5894,11 @@ def test_anthropic_compatible_passthrough_stream_is_billed_off_api_anthropic_com
     Regression for #40117: classified off the hostname alone, this stream reached the
     generic branch and logged "cannot parse chunks to standard response object" at zero cost.
     """
-    anthropic_result, anthropic_kwargs = _log_passthrough_stream("https://api.anthropic.com/v1/messages")
-    custom_result, custom_kwargs = _log_passthrough_stream("https://my-provider.example.com/v1/messages")
+    anthropic_result, anthropic_cost = _log_passthrough_stream("https://api.anthropic.com/v1/messages")
+    custom_result, custom_cost = _log_passthrough_stream("https://my-provider.example.com/v1/messages")
 
-    assert custom_kwargs["response_cost"] == anthropic_kwargs["response_cost"]
-    assert custom_kwargs["response_cost"] > 0
+    assert custom_cost == anthropic_cost
+    assert custom_cost is not None and custom_cost > 0
     assert custom_result.usage.prompt_tokens == anthropic_result.usage.prompt_tokens == 17
     assert custom_result.usage.completion_tokens == anthropic_result.usage.completion_tokens == 40
 
