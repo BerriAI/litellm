@@ -2582,10 +2582,11 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
             )
 
 
-async def reseed_spend_counter_from_db(counter_key: str) -> None:
+async def reseed_spend_counter_from_db(counter_key: str) -> bool:
     """Recover a counter that the reservation reconcile found in an inconsistent
     state (missing, or where applying the reconcile delta would drive it
-    negative) by reseeding it from the DB instead of deleting it.
+    negative) by reseeding it from the DB instead of deleting it. Returns
+    whether a DB row was found and the counter was reseeded.
 
     The DB row is a LAGGING authoritative floor, not post-request truth: the
     entity .spend column is flushed in batches (every PROXY_BATCH_WRITE_AT), so
@@ -2600,8 +2601,9 @@ async def reseed_spend_counter_from_db(counter_key: str) -> None:
     """
     db_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
     if db_spend is None:
-        return
+        return False
     await _repair_stale_spend_counter(counter_key=counter_key, db_spend=db_spend)
+    return True
 
 
 async def _floor_spend_from_db(
@@ -2663,21 +2665,14 @@ async def _authoritative_floor_spend(
     return db_spend
 
 
-async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:
-    """Return (spend, authoritative). ``authoritative`` is True when the value
-    came from Redis or a fresh DB read (cross-pod truth), False when it came
-    from the per-pod in-memory copy or the caller's fallback. Only the
-    fail-closed path reads the flag; normal callers ignore it."""
-    # 1. Redis first (cross-pod authoritative). On clean miss, skip
-    # in-memory: per-pod in-memory only has this pod's writes, so it
-    # would mask cross-pod increments.
-    redis_clean_miss = False
+async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None, bool]:
+    """Return (value, authoritative) for the live counter, None when absent. A clean
+    Redis miss is final: the per-pod in-memory copy outlives the Redis TTL and only
+    holds this pod's writes, so it is consulted only when Redis is unreachable."""
     if spend_counter_cache.redis_cache is not None:
         try:
-            val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-            if val is not None:
-                return float(val), True
-            redis_clean_miss = True
+            redis_val: Final = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
+            return (float(redis_val) if redis_val is not None else None), True
         except Exception as e:
             verbose_proxy_logger.debug(
                 "get_current_spend: Redis read failed for %s, falling back to in-memory: %s",
@@ -2685,13 +2680,20 @@ async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) 
                 e,
             )
 
-    # 2. In-memory only when Redis is unreachable.
-    if not redis_clean_miss:
-        val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-        if val is not None:
-            return float(val), False
+    in_memory_val: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+    return (float(in_memory_val) if in_memory_val is not None else None), False
 
-    # 3. Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
+
+async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:
+    """Return (spend, authoritative). ``authoritative`` is True when the value
+    came from Redis or a fresh DB read (cross-pod truth), False when it came
+    from the per-pod in-memory copy or the caller's fallback. Only the
+    fail-closed path reads the flag; normal callers ignore it."""
+    cached_val, cached_authoritative = await read_spend_counter_cache_value(counter_key=counter_key)
+    if cached_val is not None:
+        return cached_val, cached_authoritative
+
+    # Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
     db_spend: Final = await SpendCounterReseed.coalesced(
         prisma_client=prisma_client,
         spend_counter_cache=spend_counter_cache,
