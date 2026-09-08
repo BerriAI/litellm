@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -45,6 +46,15 @@ def _file_diff(path: str, added: Sequence[str] = (), deleted: Sequence[str] = ()
 
 def _lines(count: int, prefix: str = "x = ") -> tuple[str, ...]:
     return tuple(f"{prefix}{index}" for index in range(count))
+
+
+def _rename_diff(old: str, new: str, deleted: Sequence[str] = (), added: Sequence[str] = ()) -> str:
+    header = f"diff --git a/{old} b/{new}\nsimilarity index 90%\nrename from {old}\nrename to {new}\n"
+    if not deleted and not added:
+        return header.replace("90%", "100%")
+    hunk = f"index 0000000..1111111 100644\n--- a/{old}\n+++ b/{new}\n@@ -1,{len(deleted)} +1,{len(added)} @@\n"
+    body = "".join(f"-{line}\n" for line in deleted) + "".join(f"+{line}\n" for line in added)
+    return header + hunk + body
 
 
 NEW_TEST = ("def test_regression():", "    assert True")
@@ -149,7 +159,49 @@ def test_generated_files_do_not_count_toward_size(risk_tier, rules):
     )
     factor = _factor(_verdict(risk_tier, rules, diff), "size")
     assert factor.tier == "low"
-    assert factor.reason == "1 line(s) across 1 file(s)"
+    assert factor.reason == "1 line(s) across 1 file(s) outside the docs, tests, and model map tiers"
+
+
+def test_docs_and_tests_do_not_count_toward_size(risk_tier, rules):
+    diff = (
+        _file_diff("docs/my-website/docs/proxy/guide.md", added=_lines(5000, prefix="line "))
+        + _file_diff("tests/test_litellm/test_x.py", added=_lines(500) + NEW_TEST)
+        + _file_diff("litellm/llms/anthropic/chat/x.py", added=("x = 1",))
+    )
+    factor = _factor(_verdict(risk_tier, rules, diff), "size")
+    assert factor.tier == "low"
+    assert factor.reason == "1 line(s) across 1 file(s) outside the docs, tests, and model map tiers"
+
+
+def test_pure_move_counts_no_lines_toward_size(risk_tier, rules):
+    diff = _rename_diff("litellm/llms/anthropic/chat/old.py", "litellm/llms/anthropic/chat/new.py")
+    factor = _factor(_verdict(risk_tier, rules, diff), "size")
+    assert factor.tier == "low"
+    assert factor.reason == "0 line(s) across 1 file(s) outside the docs, tests, and model map tiers"
+
+
+def test_move_with_edits_counts_only_the_edited_lines(risk_tier, rules):
+    diff = _rename_diff(
+        "litellm/llms/anthropic/chat/old.py",
+        "litellm/llms/anthropic/chat/new.py",
+        deleted=_lines(2),
+        added=_lines(2, prefix="y = "),
+    )
+    assert _factor(_verdict(risk_tier, rules, diff), "size").reason.startswith("4 line(s) across 1 file(s)")
+
+
+def test_move_out_of_an_always_human_path_stays_high(risk_tier, rules):
+    diff = _rename_diff("litellm/proxy/auth/old.py", "litellm/proxy/common_utils/old.py")
+    factor = _factor(_verdict(risk_tier, rules, diff), "paths")
+    assert factor.tier == "high"
+    assert factor.reason == "always-human: `litellm/proxy/auth/old.py`"
+
+
+def test_move_into_an_always_human_path_is_high(risk_tier, rules):
+    diff = _rename_diff("litellm/proxy/utils/new.py", "litellm/proxy/auth/new.py")
+    factor = _factor(_verdict(risk_tier, rules, diff), "paths")
+    assert factor.tier == "high"
+    assert factor.reason == "always-human: `litellm/proxy/auth/new.py`"
 
 
 def test_removed_test_function_is_high(risk_tier, rules):
@@ -231,6 +283,8 @@ def test_production_change_without_any_test_is_medium(risk_tier, rules):
         (('it("hides the notice", () => {', "  expect(screen.queryByText(notice)).toBeNull();", "});"), "low"),
         (('it.skip("hides the notice", () => {', "});"), "high"),
         (("test.skip('hides the notice', async () => {", "});"), "high"),
+        (('it.only("hides the notice", () => {', "});"), "high"),
+        (('describe.only("login", () => {', "});"), "high"),
         (('xit("hides the notice", () => {', "});"), "high"),
         (
             (
@@ -279,6 +333,16 @@ def test_author_factor(risk_tier, rules, author, from_fork, expected):
         ("ui/litellm-dashboard/package.json", "high"),
         ("scripts/type_check_gate.py", "high"),
         (".github/risk-tiers.yml", "high"),
+        ("enterprise/pyproject.toml", "high"),
+        ("litellm-proxy-extras/pyproject.toml", "high"),
+        ("litellm/proxy/_experimental/mcp_server/auth/user_api_key_auth_mcp.py", "high"),
+        ("litellm/proxy/_experimental/mcp_server/outbound_credentials/x.py", "high"),
+        ("litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py", "high"),
+        ("litellm/proxy/_experimental/mcp_server/oauth2_token_cache.py", "high"),
+        ("litellm/proxy/_experimental/mcp_server/byok_oauth_endpoints.py", "high"),
+        ("litellm/proxy/_experimental/mcp_server/bridge_token_flow.py", "high"),
+        ("litellm/proxy/_experimental/mcp_server/proxy_api_credentials.py", "high"),
+        ("litellm/proxy/_experimental/mcp_server/server.py", "medium"),
         ("enterprise/litellm_enterprise/proxy/hooks/x.py", "high"),
         ("enterprise/litellm_enterprise/proxy/auth/x.py", "high"),
         ("enterprise/litellm_enterprise/proxy/management_endpoints/x.py", "high"),
@@ -297,6 +361,8 @@ def test_author_factor(risk_tier, rules, author, from_fork, expected):
         ("model_prices_and_context_window.json", "low"),
         ("litellm/model_prices_and_context_window_backup.json", "low"),
         ("litellm/proxy/README.md", "low"),
+        ("type-discipline-budget.json", "low"),
+        ("ruff-strict-budget.json", "low"),
     ],
 )
 def test_path_tier_from_the_checked_in_config(rules, path, expected):
@@ -335,6 +401,27 @@ def test_parse_diff_of_an_empty_diff_is_empty(risk_tier):
     assert risk_tier.parse_diff("") == ()
 
 
+def test_parse_diff_reads_a_rename_as_one_change_with_both_paths(risk_tier):
+    diff = _rename_diff("litellm/a/very_long_old_name.py", "litellm/b/new.py", deleted=("x = 1",), added=("x = 2",))
+    changes = risk_tier.parse_diff(diff)
+    assert len(changes) == 1
+    assert changes[0].path == "litellm/b/new.py"
+    assert changes[0].previous_path == "litellm/a/very_long_old_name.py"
+    assert changes[0].paths == ("litellm/a/very_long_old_name.py", "litellm/b/new.py")
+    assert changes[0].line_count == 2
+
+
+def test_parse_diff_unquotes_renamed_paths(risk_tier):
+    diff = (
+        'diff --git "a/docs/we\\"ird.md" b/docs/plain.md\n'
+        "similarity index 100%\n"
+        'rename from "docs/we\\"ird.md"\n'
+        "rename to docs/plain.md\n"
+    )
+    changes = risk_tier.parse_diff(diff)
+    assert changes[0].paths == ('docs/we"ird.md', "docs/plain.md")
+
+
 def test_parse_diff_decodes_git_quoted_paths_instead_of_dropping_them(risk_tier):
     diff = (
         "diff --git a/docs/plain.md b/docs/plain.md\n"
@@ -370,6 +457,7 @@ def _git(repo: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         env={
+            "PATH": os.environ["PATH"],
             "GIT_AUTHOR_NAME": "t",
             "GIT_AUTHOR_EMAIL": "t@x",
             "GIT_COMMITTER_NAME": "t",
@@ -443,3 +531,25 @@ def test_git_quoted_filename_still_reaches_the_paths_factor(risk_tier, rules, tm
     assert changes[0].added_lines == ("def f():", "    return 1")
     verdict = risk_tier.classify(changes, DEVIN, False, rules)
     assert _factor(verdict, "paths").tier == "high"
+
+
+def test_git_pure_move_is_one_zero_line_change(risk_tier, rules, tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "litellm" / "proxy" / "auth").mkdir(parents=True)
+    _git(tmp_path, "init", "-q", "-b", "main", "repo")
+    (repo / "litellm" / "proxy" / "auth" / "checks.py").write_text("".join(f"x{i} = {i}\n" for i in range(300)))
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "litellm" / "proxy" / "utils").mkdir()
+    _git(repo, "mv", "litellm/proxy/auth/checks.py", "litellm/proxy/utils/checks.py")
+    _git(repo, "commit", "-q", "-m", "move")
+    head = _git(repo, "rev-parse", "HEAD")
+
+    changes = risk_tier.parse_diff(risk_tier.git_diff(repo, base, head))
+
+    assert [change.paths for change in changes] == [("litellm/proxy/auth/checks.py", "litellm/proxy/utils/checks.py")]
+    assert changes[0].line_count == 0
+    verdict = risk_tier.classify(changes, DEVIN, False, rules)
+    assert _factor(verdict, "paths").tier == "high"
+    assert _factor(verdict, "size").tier == "low"

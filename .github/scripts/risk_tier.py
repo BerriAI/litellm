@@ -9,20 +9,24 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import ReadOnly, TypedDict
 
-Tier = Literal["low", "medium", "high"]
+Tier: TypeAlias = Literal["low", "medium", "high"]
 
 TEST_DEF_RE: Final = re.compile(r"^\s*(?:async\s+)?def\s+test_|^\s*(?:it|test)\(")
 SKIP_RE: Final = re.compile(
-    r"pytest\.mark\.(?:skip(?!if)|xfail)|unittest\.skip\b|\b(?:it|test|describe)\.skip\(\s*[\"'`]|\bx(?:it|test|describe)\("
+    r"pytest\.mark\.(?:skip(?!if)|xfail)|unittest\.skip\b"
+    r"|\b(?:it|test|describe)\.(?:skip\(\s*[\"'`]|only\()|\bx(?:it|test|describe)\("
 )
 ASSERT_RE: Final = re.compile(r"^\s*assert\b|\bexpect\(")
 GLOB_TOKEN_RE: Final = re.compile(r"(\*\*/|\*\*|\*|\?)")
 DIFF_BLOCK_SEPARATOR: Final = "\ndiff --git "
+RENAME_FROM_RE: Final = re.compile(r"^rename from (.+)$")
+RENAME_TO_RE: Final = re.compile(r"^rename to (.+)$")
 QUOTED_PATH_ESCAPE_RE: Final = re.compile(r'\\(?:([abfnrtv"\\])|([0-7]{3}))')
 QUOTED_PATH_ESCAPES: Final = MappingProxyType(
     {"a": "\a", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t", "v": "\v", '"': '"', "\\": "\\"}
@@ -81,6 +85,22 @@ class PathMatcher:
 
 
 @dataclass(frozen=True, slots=True)
+class FileChange:
+    path: str
+    added_lines: tuple[str, ...]
+    deleted_lines: tuple[str, ...]
+    previous_path: str | None = None
+
+    @property
+    def paths(self) -> tuple[str, ...]:
+        return (self.path,) if self.previous_path is None else (self.previous_path, self.path)
+
+    @property
+    def line_count(self) -> int:
+        return len(self.added_lines) + len(self.deleted_lines)
+
+
+@dataclass(frozen=True, slots=True)
 class Rules:
     config: RiskConfig
     high_paths: PathMatcher
@@ -105,19 +125,11 @@ class Rules:
             return "low"
         return "medium"
 
-    def is_production(self, path: str) -> bool:
-        return self.path_tier(path) != "low"
+    def change_tier(self, change: FileChange) -> Tier:
+        return highest(tuple(self.path_tier(path) for path in change.paths))
 
-
-@dataclass(frozen=True, slots=True)
-class FileChange:
-    path: str
-    added_lines: tuple[str, ...]
-    deleted_lines: tuple[str, ...]
-
-    @property
-    def line_count(self) -> int:
-        return len(self.added_lines) + len(self.deleted_lines)
+    def is_production(self, change: FileChange) -> bool:
+        return self.change_tier(change) != "low"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,19 +139,31 @@ class Factor:
     reason: str
 
 
+class FactorJson(TypedDict):
+    name: ReadOnly[str]
+    tier: ReadOnly[Tier]
+    reason: ReadOnly[str]
+
+
+class VerdictJson(TypedDict):
+    tier: ReadOnly[Tier]
+    factors: ReadOnly[tuple[FactorJson, ...]]
+    summary: ReadOnly[str]
+
+
 @dataclass(frozen=True, slots=True)
 class Verdict:
     tier: Tier
     factors: tuple[Factor, ...]
 
     def summary_markdown(self) -> str:
-        rows = "\n".join(f"| {factor.name} | {factor.tier} | {factor.reason} |" for factor in self.factors)
+        rows: Final = "\n".join(f"| {factor.name} | {factor.tier} | {factor.reason} |" for factor in self.factors)
         return f"risk: {self.tier} (shadow mode, nothing is blocked)\n\n| factor | tier | why |\n| --- | --- | --- |\n{rows}\n"
 
     def to_json(self) -> str:
-        payload = {
+        payload: Final[VerdictJson] = {
             "tier": self.tier,
-            "factors": [{"name": f.name, "tier": f.tier, "reason": f.reason} for f in self.factors],
+            "factors": tuple(FactorJson(name=f.name, tier=f.tier, reason=f.reason) for f in self.factors),
             "summary": self.summary_markdown(),
         }
         return json.dumps(payload, indent=2)
@@ -168,7 +192,7 @@ def load_config(path: Path) -> RiskConfig:
 
 
 def parse_diff(diff_text: str) -> tuple[FileChange, ...]:
-    blocks = ("\n" + diff_text).split(DIFF_BLOCK_SEPARATOR)[1:]
+    blocks: Final = ("\n" + diff_text).split(DIFF_BLOCK_SEPARATOR)[1:]
     return tuple(_parse_block(block) for block in blocks)
 
 
@@ -179,30 +203,39 @@ def _unquote_git_path(quoted: str) -> str:
     return QUOTED_PATH_ESCAPE_RE.sub(decode, quoted[1:-1])
 
 
+def _unquote(path: str) -> str:
+    return _unquote_git_path(path) if path.startswith('"') else path
+
+
 def _header_path(header: str) -> str:
-    one_side = header[: (len(header) - 1) // 2]
-    unquoted = _unquote_git_path(one_side) if one_side.startswith('"') else one_side
-    return unquoted.removeprefix("a/")
+    one_side: Final = header[: (len(header) - 1) // 2]
+    return _unquote(one_side).removeprefix("a/")
+
+
+def _rename_side(extended_header: Sequence[str], pattern: re.Pattern[str]) -> str | None:
+    return next((_unquote(match[1]) for line in extended_header if (match := pattern.match(line))), None)
 
 
 def _parse_block(block: str) -> FileChange:
     header, _, body = block.partition("\n")
-    path = _header_path(header)
-    lines = body.split("\n")
-    first_hunk = next((index for index, line in enumerate(lines) if line.startswith("@@")), len(lines))
-    hunk_lines = lines[first_hunk:]
+    lines: Final = body.split("\n")
+    first_hunk: Final = next((index for index, line in enumerate(lines) if line.startswith("@@")), len(lines))
+    extended_header: Final = lines[:first_hunk]
+    hunk_lines: Final = lines[first_hunk:]
+    renamed_to: Final = _rename_side(extended_header, RENAME_TO_RE)
     return FileChange(
-        path=path,
+        path=renamed_to if renamed_to is not None else _header_path(header),
         added_lines=tuple(line[1:] for line in hunk_lines if line.startswith("+")),
         deleted_lines=tuple(line[1:] for line in hunk_lines if line.startswith("-")),
+        previous_path=_rename_side(extended_header, RENAME_FROM_RE) if renamed_to is not None else None,
     )
 
 
 def module_key(path: str) -> str:
-    parts = path.split("/")
+    parts: Final = path.split("/")
     if parts[0] != "litellm":
         return parts[0]
-    depth = 3 if len(parts) > 3 else 2
+    depth: Final = 3 if len(parts) > 3 else 2
     return "/".join(parts[:depth])
 
 
@@ -215,17 +248,20 @@ def highest(tiers: Sequence[Tier]) -> Tier:
 
 
 def _listed(paths: Sequence[str]) -> str:
-    shown = ", ".join(f"`{path}`" for path in paths[:MAX_LISTED_PATHS])
-    rest = len(paths) - MAX_LISTED_PATHS
+    shown: Final = ", ".join(f"`{path}`" for path in paths[:MAX_LISTED_PATHS])
+    rest: Final = len(paths) - MAX_LISTED_PATHS
     return f"{shown} and {rest} more" if rest > 0 else shown
 
 
 def paths_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
-    tier = highest([rules.path_tier(change.path) for change in changes])
-    matching = [change.path for change in changes if rules.path_tier(change.path) == tier]
+    tier: Final = highest(tuple(rules.change_tier(change) for change in changes))
+    matching: Final = tuple(change for change in changes if rules.change_tier(change) == tier)
     match tier:
         case "high":
-            return Factor("paths", "high", f"always-human: {_listed(matching)}")
+            always_human: Final = tuple(
+                path for change in matching for path in change.paths if rules.path_tier(path) == "high"
+            )
+            return Factor("paths", "high", f"always-human: {_listed(always_human)}")
         case "medium":
             return Factor("paths", "medium", f"{len(matching)} file(s) outside the docs, tests, and model map tiers")
         case "low":
@@ -233,9 +269,13 @@ def paths_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
 
 
 def modules_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
-    modules = sorted({module_key(change.path) for change in changes if rules.is_production(change.path)})
-    count = len(modules)
-    tier: Tier = (
+    modules: Final = tuple(
+        sorted(
+            frozenset(module_key(path) for change in changes for path in change.paths if rules.path_tier(path) != "low")
+        )
+    )
+    count: Final = len(modules)
+    tier: Final[Tier] = (
         "high"
         if count >= rules.config.modules.high_from
         else "medium"
@@ -246,32 +286,34 @@ def modules_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
 
 
 def size_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
-    counted = [change for change in changes if not rules.size_ignored.matches(change.path)]
-    lines = sum(change.line_count for change in counted)
-    files = len(counted)
-    limits = rules.config.size
-    tier: Tier = (
+    counted: Final = tuple(
+        change for change in changes if rules.is_production(change) and not rules.size_ignored.matches(change.path)
+    )
+    lines: Final = sum(change.line_count for change in counted)
+    files: Final = len(counted)
+    limits: Final = rules.config.size
+    tier: Final[Tier] = (
         "low"
         if lines < limits.low.lines_under and files <= limits.low.files_up_to
         else "medium"
         if lines < limits.medium.lines_under and files <= limits.medium.files_up_to
         else "high"
     )
-    return Factor("size", tier, f"{lines} line(s) across {files} file(s)")
+    return Factor("size", tier, f"{lines} line(s) across {files} file(s) outside the docs, tests, and model map tiers")
 
 
 def _net(changes: Sequence[FileChange], pattern: re.Pattern[str]) -> int:
-    added = sum(1 for change in changes for line in change.added_lines if pattern.search(line))
-    deleted = sum(1 for change in changes for line in change.deleted_lines if pattern.search(line))
+    added: Final = sum(1 for change in changes for line in change.added_lines if pattern.search(line))
+    deleted: Final = sum(1 for change in changes for line in change.deleted_lines if pattern.search(line))
     return added - deleted
 
 
 def tests_factor(changes: Sequence[FileChange], rules: Rules) -> Factor:
-    test_changes = [change for change in changes if rules.test_files.matches(change.path)]
-    net_tests = _net(test_changes, TEST_DEF_RE)
-    net_skips = _net(test_changes, SKIP_RE)
-    net_asserts = _net(test_changes, ASSERT_RE)
-    production_changed = any(rules.is_production(change.path) for change in changes)
+    test_changes: Final = tuple(change for change in changes if rules.test_files.matches(change.path))
+    net_tests: Final = _net(test_changes, TEST_DEF_RE)
+    net_skips: Final = _net(test_changes, SKIP_RE)
+    net_asserts: Final = _net(test_changes, ASSERT_RE)
+    production_changed: Final = any(rules.is_production(change) for change in changes)
     if net_tests < 0:
         return Factor("tests", "high", f"{-net_tests} test(s) removed")
     if net_skips > 0:
@@ -294,19 +336,19 @@ def author_factor(author: str, from_fork: bool) -> Factor:
 
 
 def classify(changes: Sequence[FileChange], author: str, from_fork: bool, rules: Rules) -> Verdict:
-    factors = (
+    factors: Final = (
         paths_factor(changes, rules),
         modules_factor(changes, rules),
         size_factor(changes, rules),
         tests_factor(changes, rules),
         author_factor(author, from_fork),
     )
-    return Verdict(highest([factor.tier for factor in factors]), factors)
+    return Verdict(highest(tuple(factor.tier for factor in factors)), factors)
 
 
 def git_diff(repo: Path, base: str, head: str) -> str:
-    completed = subprocess.run(
-        ["git", "-c", "core.quotePath=false", "diff", "--no-renames", "--no-ext-diff", "-U0", base, head],
+    completed: Final = subprocess.run(
+        ("git", "-c", "core.quotePath=false", "diff", "--find-renames", "--no-ext-diff", "-U0", base, head),
         cwd=repo,
         capture_output=True,
         encoding="utf-8",
@@ -317,7 +359,7 @@ def git_diff(repo: Path, base: str, head: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Compute a pull request's floor risk tier from its diff")
+    parser: Final = argparse.ArgumentParser(description="Compute a pull request's floor risk tier from its diff")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
@@ -340,10 +382,10 @@ class CliArgs(BaseModel):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = CliArgs.model_validate(vars(build_parser().parse_args(argv)))
-    rules = Rules.from_config(load_config(args.config))
-    changes = parse_diff(git_diff(args.repo, args.base, args.head))
-    verdict = classify(changes, args.author, args.from_fork, rules)
+    args: Final = CliArgs.model_validate(vars(build_parser().parse_args(argv)))
+    rules: Final = Rules.from_config(load_config(args.config))
+    changes: Final = parse_diff(git_diff(args.repo, args.base, args.head))
+    verdict: Final = classify(changes, args.author, args.from_fork, rules)
     if args.json_out is not None:
         args.json_out.write_text(verdict.to_json(), encoding="utf-8")
     sys.stdout.write(verdict.summary_markdown())

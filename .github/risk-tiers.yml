@@ -22,9 +22,15 @@ paths:
     - "litellm/secret_managers/**"
     - "litellm/proxy/pass_through_endpoints/**"
     - "litellm/passthrough/**"
+    - "litellm/proxy/_experimental/mcp_server/auth/**"
+    - "litellm/proxy/_experimental/mcp_server/outbound_credentials/**"
+    - "litellm/proxy/_experimental/mcp_server/discoverable_endpoints.py"
+    - "litellm/proxy/_experimental/mcp_server/*oauth*"
+    - "litellm/proxy/_experimental/mcp_server/*_flow.py"
+    - "litellm/proxy/_experimental/mcp_server/proxy_api_credentials.py"
     - ".github/**"
     - ".circleci/**"
-    - "pyproject.toml"
+    - "**/pyproject.toml"
     - "uv.lock"
     - "**/package*.json"
     - "**/Dockerfile*"
@@ -35,6 +41,7 @@ paths:
     - "litellm/model_prices_and_context_window_backup.json"
     - "**/*.md"
     - "**/*.mdx"
+    - "*-budget.json"
 
 modules:
   medium_from: 2
