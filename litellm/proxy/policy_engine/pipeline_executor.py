@@ -20,7 +20,11 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import independent_snapshot
+from litellm.litellm_core_utils.core_helpers import (
+    get_metadata_variable_name_from_kwargs,
+    get_or_create_metadata_bucket,
+    independent_snapshot,
+)
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
@@ -30,7 +34,7 @@ from litellm.types.proxy.policy_engine.pipeline_types import (
     PipelineStep,
     PipelineStepResult,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import GenericGuardrailAPIInputs, StandardLoggingGuardrailInformation
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -258,6 +262,7 @@ class PipelineExecutor:
                 return _allow_result(step_results=step_results, working_data=working_data, request_data=data)
 
             if action == "block":
+                _carry_working_guardrail_information(working_data=working_data, request_data=data)
                 return PipelineExecutionResult(
                     terminal_action="block",
                     step_results=step_results,
@@ -267,6 +272,7 @@ class PipelineExecutor:
                 )
 
             if action == "modify_response":
+                _carry_working_guardrail_information(working_data=working_data, request_data=data)
                 return PipelineExecutionResult(
                     terminal_action="modify_response",
                     step_results=step_results,
@@ -357,16 +363,17 @@ class PipelineExecutor:
             verbose_proxy_logger.warning("Pipeline: guardrail '%s' not found in callbacks", step.guardrail)
             return ("error", None, f"Guardrail '{step.guardrail}' not found", None)
 
+        hook_input, scans_raw_request = _prepare_hook_input(step, callback, data, raw_request_snapshot)
+        snapshot_entries_before: Final = len(_recorded_guardrail_information(hook_input))
+
+        # Use unified_guardrail path if callback implements apply_guardrail
+        target: CustomLogger = callback
+        use_unified: Final = PipelineExecutor.supports_unified_execution(callback)
+        if use_unified and streaming_chunks is None:
+            hook_input["guardrail_to_apply"] = callback
+            target = UnifiedLLMGuardrails()
+
         try:
-            hook_input, scans_raw_request = _prepare_hook_input(step, callback, data, raw_request_snapshot)
-
-            # Use unified_guardrail path if callback implements apply_guardrail
-            target: CustomLogger = callback
-            use_unified: Final = PipelineExecutor.supports_unified_execution(callback)
-            if use_unified and streaming_chunks is None:
-                hook_input["guardrail_to_apply"] = callback
-                target = UnifiedLLMGuardrails()
-
             if mode == "pre_call":
                 response = await target.async_pre_call_hook(
                     user_api_key_dict=user_api_key_dict,
@@ -430,6 +437,12 @@ class PipelineExecutor:
             else:
                 verbose_proxy_logger.error("Pipeline: unexpected error from guardrail '%s': %s", step.guardrail, e)
                 return ("error", None, str(e), e)
+        finally:
+            if hook_input is not data:
+                _append_guardrail_information(
+                    request_data=data,
+                    entries=_recorded_guardrail_information(hook_input)[snapshot_entries_before:],
+                )
 
     @staticmethod
     def supports_unified_execution(callback: CustomGuardrail) -> bool:
@@ -484,6 +497,40 @@ def _restore_request_guardrails(
     if not stripped and not isinstance(request_metadata, dict):
         return {k: v for k, v in working_data.items() if k != "metadata"}  # mutable-ok: request dict
     return {**working_data, "metadata": stripped}  # mutable-ok: request dict
+
+
+_GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
+
+
+def _recorded_guardrail_information(source: Mapping[str, object]) -> list[StandardLoggingGuardrailInformation]:
+    bucket: Final = source.get(get_metadata_variable_name_from_kwargs(source))
+    recorded: Final = bucket.get(_GUARDRAIL_INFORMATION_KEY) if isinstance(bucket, dict) else None
+    return recorded if isinstance(recorded, list) else []
+
+
+def _append_guardrail_information(
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+    entries: Sequence[StandardLoggingGuardrailInformation],
+) -> None:
+    if not entries:
+        return
+    _, request_bucket = get_or_create_metadata_bucket(request_data)
+    existing: Final = request_bucket.get(_GUARDRAIL_INFORMATION_KEY)
+    if isinstance(existing, list):
+        existing.extend(entries)
+        return
+    request_bucket[_GUARDRAIL_INFORMATION_KEY] = list(entries)
+
+
+def _carry_working_guardrail_information(
+    working_data: Mapping[str, object],
+    request_data: dict[str, object],  # mutable-ok: same request-payload shape as execute_steps' data
+) -> None:
+    recorded: Final = _recorded_guardrail_information(working_data)
+    existing: Final = _recorded_guardrail_information(request_data)
+    if recorded is existing:
+        return
+    _append_guardrail_information(request_data=request_data, entries=[e for e in recorded if e not in existing])
 
 
 def _pipeline_action_for_outcome(step: PipelineStep, outcome: str) -> str:
