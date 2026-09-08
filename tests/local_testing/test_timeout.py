@@ -8,13 +8,14 @@ import openai
 import pytest
 
 import litellm
+from litellm.types.router import DeploymentTypedDict
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 
 _ESSAY_MESSAGES: Final = [{"role": "user", "content": "hello, write a 20 pg essay"}]
 _TIMEOUT_SECONDS: Final = 0.5
 
 
-def _slow_openai_deployment(model_name: str) -> dict:
+def _slow_openai_deployment(model_name: str) -> DeploymentTypedDict:
     return {
         "model_name": model_name,
         "litellm_params": {
@@ -25,7 +26,7 @@ def _slow_openai_deployment(model_name: str) -> dict:
     }
 
 
-def _slow_azure_deployment(model_name: str) -> dict:
+def _slow_azure_deployment(model_name: str) -> DeploymentTypedDict:
     return {
         "model_name": model_name,
         "litellm_params": {
@@ -124,16 +125,16 @@ def test_hanging_request_openai():
 def test_timeout_streaming():
     litellm.set_verbose = False
     with pytest.raises(openai.APITimeoutError):
-        response = litellm.completion(
-            model="openai/slow-endpoint",
-            messages=_ESSAY_MESSAGES,
-            api_base=FAKE_OPENAI_API_BASE,
-            api_key="fake-key",
-            timeout=_TIMEOUT_SECONDS,
-            stream=True,
+        tuple(
+            litellm.completion(
+                model="openai/slow-endpoint",
+                messages=_ESSAY_MESSAGES,
+                api_base=FAKE_OPENAI_API_BASE,
+                api_key="fake-key",
+                timeout=_TIMEOUT_SECONDS,
+                stream=True,
+            )
         )
-        for chunk in response:
-            print(chunk)
 
 
 @pytest.mark.skip(reason="local test")
@@ -162,6 +163,12 @@ def test_timeout_ollama():
 # test_timeout_ollama()
 
 
+async def _consume_async_response(response: litellm.ModelResponse | litellm.CustomStreamWrapper) -> None:
+    if isinstance(response, litellm.CustomStreamWrapper):
+        async for _ in response:
+            pass
+
+
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -175,14 +182,9 @@ async def test_anthropic_timeout(streaming, sync_mode):
         "timeout": _TIMEOUT_SECONDS,
         "stream": streaming,
     }
-    with pytest.raises(openai.APITimeoutError):
-        if sync_mode:
-            response = litellm.completion(**request)
-            if isinstance(response, litellm.CustomStreamWrapper):
-                for _ in response:
-                    pass
-        else:
-            response = await litellm.acompletion(**request)
-            if isinstance(response, litellm.CustomStreamWrapper):
-                async for _ in response:
-                    pass
+    if sync_mode:
+        with pytest.raises(openai.APITimeoutError):
+            tuple(litellm.completion(**request))
+    else:
+        with pytest.raises(openai.APITimeoutError):
+            await _consume_async_response(await litellm.acompletion(**request))

@@ -3336,8 +3336,8 @@ _SYNC_TRANSPORT_TIMEOUT_CASES: Final = (
 def test_completion_timeout_reaches_the_transport_and_maps_to_timeout(case: _TransportTimeoutCase):
     seen_timeouts: list[object] = []
     client: Final = case.make_client(_timing_out_transport(seen_timeouts))
-    with pytest.raises(litellm.Timeout):
-        if case.embedding:
+    if case.embedding:
+        with pytest.raises(litellm.Timeout):
             litellm.embedding(
                 model=case.model,
                 input="hello",
@@ -3347,20 +3347,20 @@ def test_completion_timeout_reaches_the_transport_and_maps_to_timeout(case: _Tra
                 max_retries=0,
                 **case.extra_kwargs,
             )
-        else:
-            response = litellm.completion(
-                model=case.model,
-                messages=_TRANSPORT_TIMEOUT_MESSAGES,
-                api_key="sk-test",
-                client=client,
-                timeout=_TRANSPORT_TIMEOUT_SECONDS,
-                max_retries=0,
-                stream=case.stream,
-                **case.extra_kwargs,
+    else:
+        with pytest.raises(litellm.Timeout):
+            tuple(
+                litellm.completion(
+                    model=case.model,
+                    messages=_TRANSPORT_TIMEOUT_MESSAGES,
+                    api_key="sk-test",
+                    client=client,
+                    timeout=_TRANSPORT_TIMEOUT_SECONDS,
+                    max_retries=0,
+                    stream=case.stream,
+                    **case.extra_kwargs,
+                )
             )
-            if isinstance(response, litellm.CustomStreamWrapper):
-                for _ in response:
-                    pass
     _assert_deadline_reached_transport(seen_timeouts)
 
 
@@ -3400,23 +3400,28 @@ _ASYNC_TRANSPORT_TIMEOUT_CASES: Final = (
 )
 
 
+async def _consume_async_timeout_response(response: litellm.ModelResponse | litellm.CustomStreamWrapper) -> None:
+    if isinstance(response, litellm.CustomStreamWrapper):
+        async for _ in response:
+            pass
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", _ASYNC_TRANSPORT_TIMEOUT_CASES, ids=lambda case: case.name)
 async def test_acompletion_timeout_reaches_the_transport_and_maps_to_timeout(case: _AsyncTransportTimeoutCase):
     seen_timeouts: list[object] = []
     client: Final = await case.make_client(_timing_out_transport(seen_timeouts))
     with pytest.raises(litellm.Timeout):
-        response = await litellm.acompletion(
-            model=case.model,
-            messages=_TRANSPORT_TIMEOUT_MESSAGES,
-            api_key="sk-test",
-            client=client,
-            timeout=_TRANSPORT_TIMEOUT_SECONDS,
-            max_retries=0,
-            stream=case.stream,
-            **case.extra_kwargs,
+        await _consume_async_timeout_response(
+            await litellm.acompletion(
+                model=case.model,
+                messages=_TRANSPORT_TIMEOUT_MESSAGES,
+                api_key="sk-test",
+                client=client,
+                timeout=_TRANSPORT_TIMEOUT_SECONDS,
+                max_retries=0,
+                stream=case.stream,
+                **case.extra_kwargs,
+            )
         )
-        if isinstance(response, litellm.CustomStreamWrapper):
-            async for _ in response:
-                pass
     _assert_deadline_reached_transport(seen_timeouts)
