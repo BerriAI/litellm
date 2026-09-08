@@ -4,13 +4,11 @@ from typing import Final
 
 from ....shared.unit_runners.rust_runner import RustTarget, RustTestIdentity
 from ..contracts import (
-    MappingExclusionSpec,
     MappingSpec,
     PythonFunctionDiscoverySpec,
     RustTestFamily,
     RustUnitSpec,
     TestMapping,
-    UnitParityExclusionSpec,
     UnitParitySpec,
     UnitTestContract,
 )
@@ -44,7 +42,6 @@ def _test_mappings(target: RustTarget, module: str, pairs: tuple[tuple[str, str]
 _AZURE_TRANSFORM_FILE: Final = "tests/test_litellm/llms/azure_ai/test_azure_document_intelligence_ocr_transformation.py"
 _AZURE_PAGES_FILE: Final = "tests/ocr_tests/test_ocr_azure_document_intelligence.py"
 _AZURE_BASE_FILE: Final = "tests/test_litellm/ocr/test_ocr_azure_document_intelligence_api_base.py"
-_RUST_BRIDGE_FILE: Final = "tests/test_litellm/ocr/test_rust_bridge.py"
 
 _AZURE_PORT_MAPPINGS: Final = _test_mappings(
     _CORE_TARGET,
@@ -220,28 +217,6 @@ _GATEWAY_PORT_MAPPINGS: Final = _test_mappings(
     ),
 )
 
-_HOST_ONLY_BRIDGE_EXCLUSIONS: Final = tuple(
-    MappingExclusionSpec(nodeid=f"{_RUST_BRIDGE_FILE}::{test}", reason=reason)
-    for test, reason in (
-        ("test_ocr_routes_to_rust_when_enabled", "Python selects and invokes the native bridge."),
-        ("test_ocr_routes_azure_ai_to_rust_when_enabled", "Python resolves provider arguments before the bridge."),
-        ("test_ocr_rust_path_converts_file_document_before_bridge", "Python converts file inputs before the bridge."),
-        (
-            "test_ocr_exception_type_uses_resolved_provider_context",
-            "Python wraps bridge exceptions into public errors.",
-        ),
-        (
-            "test_rust_upstream_error_uses_ocr_provider_error_mapping",
-            "Python maps native upstream errors through the selected OCR provider config.",
-        ),
-        ("test_aocr_routes_to_async_rust_when_enabled", "Python selects and invokes the async native bridge."),
-        ("test_aocr_exception_type_uses_resolved_provider_context", "Python wraps async bridge exceptions."),
-        ("test_ocr_forwards_timeout_to_rust", "Python converts and forwards explicit timeouts."),
-        ("test_ocr_passes_default_request_timeout_to_rust", "Python supplies its process-level default timeout."),
-        ("test_ocr_falls_back_to_python_when_bridge_unavailable", "Python owns fallback when the extension is absent."),
-    )
-)
-
 _FAMILY_PORT_MAPPINGS: Final = (
     TestMapping(
         python=f"{_AZURE_TRANSFORM_FILE}::test_transform_ocr_response_default_format_omits_raw_operation",
@@ -398,7 +373,7 @@ OCR_CONTRACT: Final = UnitTestContract(
             *_GATEWAY_PORT_MAPPINGS,
             *_FAMILY_PORT_MAPPINGS,
         ),
-        exclusions=_HOST_ONLY_BRIDGE_EXCLUSIONS,
+        exclusions=(),
         require_complete=True,
     ),
     unit_parity=UnitParitySpec(
@@ -408,12 +383,7 @@ OCR_CONTRACT: Final = UnitTestContract(
             "tests/test_litellm/llms/ocr",
             "tests/test_litellm/ocr",
         ),
-        exclusions=(
-            UnitParityExclusionSpec(
-                nodeid="tests/test_litellm/ocr/test_rust_bridge.py::test_rust_toggles_flag",
-                reason="This test asserts the process-level backend flag selected by the parity runner.",
-            ),
-        ),
+        exclusions=(),
     ),
     rust=RustUnitSpec(
         cargo_manifest="litellm-rust/Cargo.toml",
