@@ -846,6 +846,38 @@ def test_sync_usage_based_v2_override_enforces_rpm_when_a_specific_deployment_is
     assert router.completion(**kwargs).choices[0].message.content == "ok"
 
 
+def _pass_through_rpm_limited_model_list():
+    deployment = _rpm_limited_model_list()[0]
+    return [{**deployment, "litellm_params": {**deployment["litellm_params"], "use_in_pass_through": True}}]
+
+
+@pytest.mark.asyncio
+async def test_async_early_return_paths_run_the_override_pre_call_check():
+    router = Router(model_list=_pass_through_rpm_limited_model_list(), routing_strategy="simple-shuffle")
+    override = {"routing_strategy": "usage-based-routing-v2"}
+
+    pinned = await router.async_get_available_deployment(
+        model="other-model", request_kwargs={**override, "_encrypted_content_affinity_pinned": True}
+    )
+    assert pinned["model_info"]["id"] == "deploy-3"
+    with pytest.raises(litellm.RateLimitError):
+        await router.async_get_available_deployment_for_pass_through(model="deploy-3", request_kwargs=override)
+    plain = await router.async_get_available_deployment_for_pass_through(model="deploy-3", request_kwargs={})
+    assert plain["model_info"]["id"] == "deploy-3"
+
+
+def test_sync_pass_through_specific_deployment_runs_the_override_pre_call_check():
+    router = Router(model_list=_pass_through_rpm_limited_model_list(), routing_strategy="simple-shuffle")
+    override = {"routing_strategy": "usage-based-routing-v2"}
+
+    first = router.get_available_deployment_for_pass_through(model="deploy-3", request_kwargs=override)
+    assert first["model_info"]["id"] == "deploy-3"
+    with pytest.raises(litellm.RateLimitError):
+        router.get_available_deployment_for_pass_through(model="deploy-3", request_kwargs=override)
+    plain = router.get_available_deployment_for_pass_through(model="deploy-3", request_kwargs={})
+    assert plain["model_info"]["id"] == "deploy-3"
+
+
 def _quality_group(strategy="latency-based-routing"):
     return [{"group_name": "quality", "models": ["filtered-model", "other-model"], "routing_strategy": strategy}]
 
