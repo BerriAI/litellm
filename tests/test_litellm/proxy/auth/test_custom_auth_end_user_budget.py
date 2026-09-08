@@ -280,10 +280,6 @@ def test_update_valid_token_db_values_override_custom_auth_when_set():
 
 
 def test_update_valid_token_copies_end_user_max_budget():
-    # Regression: end_user_max_budget was the only limit field not copied by
-    # update_valid_token_with_end_user_params, so a budget from
-    # max_end_user_budget_id was silently dropped and budget reservation
-    # returned None, letting all concurrent first requests bypass the limit.
     valid_token = UserAPIKeyAuth(token="test_token", end_user_id="customer-1")
 
     end_user_params = {
@@ -297,8 +293,6 @@ def test_update_valid_token_copies_end_user_max_budget():
 
 
 def test_update_valid_token_preserves_custom_auth_max_budget_when_db_has_none():
-    # If custom auth sets end_user_max_budget and the DB budget table has no
-    # max_budget, the custom-auth-supplied value must survive the copy.
     valid_token = UserAPIKeyAuth(
         token="test_token",
         end_user_id="customer-1",
@@ -307,7 +301,6 @@ def test_update_valid_token_preserves_custom_auth_max_budget_when_db_has_none():
 
     end_user_params = {
         "end_user_id": "customer-1",
-        # no end_user_max_budget key: DB found no value
     }
 
     result = update_valid_token_with_end_user_params(valid_token, end_user_params)
@@ -317,9 +310,6 @@ def test_update_valid_token_preserves_custom_auth_max_budget_when_db_has_none():
 
 @pytest.mark.asyncio
 async def test_end_user_budget_counter_created_from_token_max_budget():
-    # Regression: _get_end_user_budget_counter reads valid_token.end_user_max_budget
-    # first. When that field was always None (due to the copy bug), no counter was
-    # returned and budget reservation skipped enforcement entirely for new end users.
     from litellm.proxy.spend_tracking.budget_reservation import (
         _get_end_user_budget_counter,
     )
@@ -343,8 +333,6 @@ async def test_end_user_budget_counter_created_from_token_max_budget():
 
 @pytest.mark.asyncio
 async def test_end_user_budget_counter_none_when_max_budget_missing():
-    # Without a budget on the token or the end_user_object, no counter should
-    # be returned: the user is unrestricted and reservation is skipped correctly.
     from litellm.proxy.spend_tracking.budget_reservation import (
         _get_end_user_budget_counter,
     )
