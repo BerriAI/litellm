@@ -12,7 +12,7 @@ from typing import (
 )
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -480,7 +480,6 @@ class ThirdlawGuardrail(CustomGuardrail):
         return {**data, **accepted}  # mutable-ok: the proxy owns the replaced request dict
 
     def _modified_response(self, *, response: object, replacement: Mapping[str, object]) -> object:
-        # LiteLLM's normalized chat-completion response type (e.g. Chat Completions).
         if isinstance(response, ModelResponse):
             # ModelResponse validation coerces a non-list ``choices`` into a single
             # empty choice instead of raising, which would silently blank the response.
@@ -500,24 +499,9 @@ class ThirdlawGuardrail(CustomGuardrail):
                     guardrail_name=self.guardrail_name,
                     message=f"ThirdLaw guardrail returned a malformed modified response: {error}",
                 ) from error
-        # Provider response bodies that arrive as a plain dict (e.g. a TypedDict response,
-        # which is a real dict at runtime).
         response_dict: Final = _dict_of(response)
         if response_dict is not None:
             return {**response_dict, **replacement}  # mutable-ok: the proxy owns the replaced response dict
-        # Any other Pydantic response model (e.g. ResponsesAPIResponse).
-        if isinstance(response, BaseModel):
-            merged: Final = {  # mutable-ok: one-shot overlay consumed immediately by model_validate
-                **_JSON_DICT_ADAPTER.validate_python(response.model_dump(mode="json")),
-                **replacement,
-            }
-            try:
-                return type(response).model_validate(merged)
-            except ValidationError as error:
-                raise GuardrailRaisedException(
-                    guardrail_name=self.guardrail_name,
-                    message=f"ThirdLaw guardrail returned a malformed modified response: {error}",
-                ) from error
         verbose_proxy_logger.warning(
             "ThirdLaw guardrail: modify_response is not supported for %s responses; returning original",
             type(response).__name__,
