@@ -20,6 +20,7 @@ HEURISTIC_V1_TUNING_FIELDS: Final = (
     "reasoning_override_min_score",
     "token_thresholds",
     "dimension_weights",
+    "custom_dimensions",
     "code_keywords",
     "reasoning_keywords",
     "technical_keywords",
