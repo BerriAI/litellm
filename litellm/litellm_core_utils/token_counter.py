@@ -315,11 +315,11 @@ def calculate_img_tokens(
 
 
 TokenCounterFunction = Callable[[str], int]
-
-EXTRAPOLATION_SAMPLES: Final = 16
 """
 Type for a function that counts tokens in a string.
 """
+
+EXTRAPOLATION_SAMPLES: Final = 16
 
 
 def _get_tiktoken_count_function(
