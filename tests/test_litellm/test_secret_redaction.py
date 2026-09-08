@@ -462,9 +462,10 @@ def test_vertex_error_message_no_credential_leak():
         raise_vertex_credentials_failure,
     )
 
+    path = "/etc/litellm/vertexai.json"
     failures = (
-        VertexCredentialsFileUnreadable("/etc/litellm/vertexai.json", "No such file or directory (FileNotFoundError)"),
-        VertexCredentialsFileNotJson("/etc/litellm/vertexai.json", "Invalid control character at: line 1 column 55"),
+        VertexCredentialsFileUnreadable(path, "No such file or directory (FileNotFoundError)"),
+        VertexCredentialsFileNotJson(path, "Invalid control character at: line 1 column 55"),
         VertexCredentialsInlineNotJson("Expecting value: line 1 column 1 (char 0)"),
     )
 
@@ -472,6 +473,7 @@ def test_vertex_error_message_no_credential_leak():
         with pytest.raises(ValueError, match="vertex") as exc_info:
             raise_vertex_credentials_failure(failure)
         message = str(exc_info.value)
+        assert path not in message  # the path goes to the log, not to the API caller
         assert _redact_string(message) == message  # nothing to redact
 
 

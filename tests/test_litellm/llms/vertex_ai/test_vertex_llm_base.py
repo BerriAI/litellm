@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -2204,39 +2205,45 @@ class TestVertexCredentialsSource:
     JSONDecodeError blaming the key material.
     """
 
-    def test_missing_credentials_file_names_the_path_not_the_json(self, tmp_path):
+    def test_missing_credentials_file_names_the_read_failure(self, tmp_path, caplog):
         missing = tmp_path / "vertexai.json"
 
-        with pytest.raises(ValueError, match="No such file or directory") as exc_info:
-            VertexBase().load_auth(credentials=str(missing), project_id="p")
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match="No such file or directory") as exc_info:
+                VertexBase().load_auth(credentials=str(missing), project_id="p")
 
         message = str(exc_info.value)
-        assert str(missing) in message
         assert "not valid JSON" not in message
+        assert str(missing) not in message
+        assert str(missing) in caplog.text
 
-    def test_unreadable_credentials_file_names_the_read_failure(self, tmp_path):
+    def test_unreadable_credentials_file_names_the_read_failure(self, tmp_path, caplog):
         # Present but not openable as a file, the same shape as a path on a mount
         # that has stopped serving reads.
         unreadable = tmp_path / "vertexai.json"
         unreadable.mkdir()
 
-        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
-            VertexBase().load_auth(credentials=str(unreadable), project_id="p")
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
+                VertexBase().load_auth(credentials=str(unreadable), project_id="p")
 
         message = str(exc_info.value)
-        assert str(unreadable) in message
         assert "not valid JSON" not in message
+        assert str(unreadable) not in message
+        assert str(unreadable) in caplog.text
 
-    def test_malformed_credentials_file_names_the_file_and_keeps_the_private_key_hint(self, tmp_path):
+    def test_malformed_credentials_file_keeps_the_private_key_hint(self, tmp_path, caplog):
         malformed = tmp_path / "vertexai.json"
         malformed.write_text('{"type": "service_account", "private_key": "-----BEGIN\nPRIVATE KEY-----"}')
 
-        with pytest.raises(ValueError, match="is not valid JSON") as exc_info:
-            VertexBase().load_auth(credentials=str(malformed), project_id="p")
+        with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+            with pytest.raises(ValueError, match="is not valid JSON") as exc_info:
+                VertexBase().load_auth(credentials=str(malformed), project_id="p")
 
         message = str(exc_info.value)
-        assert str(malformed) in message
         assert "private_key" in message
+        assert str(malformed) not in message
+        assert str(malformed) in caplog.text
 
     def test_malformed_inline_credentials_do_not_echo_the_credential(self):
         inline = (
@@ -2248,6 +2255,15 @@ class TestVertexCredentialsSource:
             ValueError, match="The inline `vertex_credentials` value is not valid JSON"
         ) as exc_info:
             VertexBase().load_auth(credentials=inline, project_id="p")
+
+        assert "MIIEvQIBADA" not in str(exc_info.value)
+
+    def test_a_credential_misconfigured_as_a_path_is_not_echoed(self):
+        """A value that is neither a path nor JSON must not come back in the message."""
+        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
+
+        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
+            VertexBase().load_auth(credentials=pem, project_id="p")
 
         message = str(exc_info.value)
         assert "MIIEvQIBADA" not in message
@@ -2288,28 +2304,20 @@ class TestVertexCredentialsSource:
         assert project_id == "from-inline"
         assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-inline"}
 
-    def test_credentials_path_reaches_the_operator_log_but_not_the_api_caller(self, tmp_path):
-        """The path is the actionable detail, so it is in the message the proxy logs.
-        What the proxy hands back to the caller goes through redact_internal_details."""
-        from litellm.litellm_core_utils.secret_redaction import redact_internal_details
+    def test_a_file_whose_name_starts_with_a_brace_is_still_read(self, tmp_path):
+        """Shape dispatch must not strand a real file that happens to be named like JSON."""
+        braced = tmp_path / "{vertex}.json"
+        braced.write_text(json.dumps({"type": "service_account", "project_id": "from-braced-file"}))
+        vertex_base = VertexBase()
+        mock_creds = MagicMock()
+        mock_creds.project_id = "from-braced-file"
 
-        missing = tmp_path / "vertexai.json"
+        with (
+            patch.object(vertex_base, "_credentials_from_service_account", return_value=mock_creds) as from_sa,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            creds, project_id = vertex_base.load_auth(credentials=str(braced), project_id=None)
 
-        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
-            VertexBase().load_auth(credentials=str(missing), project_id="p")
-
-        logged = str(exc_info.value)
-        assert str(missing) in logged
-        assert str(missing) not in redact_internal_details(logged)
-
-    def test_a_credential_misconfigured_as_a_path_is_redacted_not_echoed(self):
-        """A value that is neither a path nor JSON still lands in the file branch,
-        so it is scrubbed before it reaches the message."""
-        pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADA\n-----END PRIVATE KEY-----"
-
-        with pytest.raises(ValueError, match="Unable to read the vertex credentials file") as exc_info:
-            VertexBase().load_auth(credentials=pem, project_id="p")
-
-        message = str(exc_info.value)
-        assert "MIIEvQIBADA" not in message
-        assert "BEGIN PRIVATE KEY" not in message
+        assert creds is mock_creds
+        assert project_id == "from-braced-file"
+        assert from_sa.call_args.args[0] == {"type": "service_account", "project_id": "from-braced-file"}
