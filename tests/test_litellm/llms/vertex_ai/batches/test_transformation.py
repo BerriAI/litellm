@@ -34,6 +34,12 @@ INPUT_FILE = (
     "models/gemini-1.5-flash-001/e9412502-2c91-42a6-8e61-f5c294cc0fc8"
 )
 
+ENDPOINT_ID = "7768560373388541952"
+ENDPOINT_INPUT_FILE = (
+    f"gs://litellm-testing-bucket/litellm-vertex-files/endpoints/{ENDPOINT_ID}/"
+    "e9412502-2c91-42a6-8e61-f5c294cc0fc8"
+)
+
 
 # =========================================================================== #
 # transform_openai_batch_request_to_vertex_ai_batch_request
@@ -65,6 +71,41 @@ def test_transform_openai_request_builds_full_vertex_job():
 def test_transform_openai_request_missing_input_file_id_raises():
     with pytest.raises(ValueError, match="input_file_id is required"):
         T.transform_openai_batch_request_to_vertex_ai_batch_request({})
+
+
+def test_transform_openai_request_fine_tuned_endpoint_builds_endpoint_resource():
+    """A fine-tuned Gemini file id (endpoints/<numeric id>) must target the endpoint resource,
+    not a nonexistent publisher model (LIT-6899)."""
+    job = T.transform_openai_batch_request_to_vertex_ai_batch_request(
+        {"input_file_id": ENDPOINT_INPUT_FILE},
+        vertex_project="my-project",
+        vertex_location="us-central1",
+    )
+    assert job["model"] == f"projects/my-project/locations/us-central1/endpoints/{ENDPOINT_ID}"
+
+
+def test_transform_openai_request_fine_tuned_endpoint_defaults_location():
+    job = T.transform_openai_batch_request_to_vertex_ai_batch_request(
+        {"input_file_id": ENDPOINT_INPUT_FILE},
+        vertex_project="my-project",
+    )
+    assert job["model"] == f"projects/my-project/locations/us-central1/endpoints/{ENDPOINT_ID}"
+
+
+def test_transform_openai_request_fine_tuned_endpoint_without_project_raises_400():
+    with pytest.raises(VertexAIError) as exc_info:
+        T.transform_openai_batch_request_to_vertex_ai_batch_request({"input_file_id": ENDPOINT_INPUT_FILE})
+    assert exc_info.value.status_code == 400
+    assert "vertex_project" in str(exc_info.value)
+
+
+def test_transform_openai_request_publisher_model_ignores_project_and_location():
+    job = T.transform_openai_batch_request_to_vertex_ai_batch_request(
+        {"input_file_id": INPUT_FILE},
+        vertex_project="my-project",
+        vertex_location="europe-west4",
+    )
+    assert job["model"] == "publishers/google/models/gemini-1.5-flash-001"
 
 
 @pytest.mark.parametrize(
@@ -321,6 +362,35 @@ def test_get_model_from_gcs_file_no_publishers_raises_400():
     assert exc_info.value.status_code == 400
 
 
+def test_get_model_from_gcs_file_fine_tuned_endpoint():
+    """The whole endpoint id must survive parsing; the old 3-segment publishers/ parse dropped it."""
+    assert T._get_model_from_gcs_file(ENDPOINT_INPUT_FILE) == f"endpoints/{ENDPOINT_ID}"
+
+
+def test_get_model_from_gcs_file_publisher_path_wins_over_endpoints_prefix():
+    """A bucket prefix containing endpoints/<digits> must not override the publisher model path
+    LiteLLM appended after it."""
+    uri = "gs://bucket/team-endpoints/999/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/uuid"
+    assert T._get_model_from_gcs_file(uri) == "publishers/google/models/gemini-1.5-flash-001"
+
+
+def test_get_model_from_gcs_file_last_endpoints_segment_wins():
+    """With no publisher path, the endpoint id closest to the file (last occurrence) is the one
+    LiteLLM stored; an earlier prefix segment must not shadow it."""
+    uri = f"gs://bucket/endpoints/999/litellm-vertex-files/endpoints/{ENDPOINT_ID}/uuid"
+    assert T._get_model_from_gcs_file(uri) == f"endpoints/{ENDPOINT_ID}"
+
+
+def test_get_model_from_gcs_file_non_numeric_endpoints_segment_raises_400():
+    with pytest.raises(VertexAIError) as exc_info:
+        T._get_model_from_gcs_file("gs://bucket/endpoints/not-a-number/file-uuid")
+    assert exc_info.value.status_code == 400
+
+
+def test_get_bare_model_name_from_gcs_file_fine_tuned_endpoint():
+    assert T.get_bare_model_name_from_gcs_file(ENDPOINT_INPUT_FILE) == ENDPOINT_ID
+
+
 # =========================================================================== #
 # is_unmanaged_gcs_batch_input_file_id
 # =========================================================================== #
@@ -334,6 +404,8 @@ def test_get_model_from_gcs_file_no_publishers_raises_400():
         ("file-abc123", False),
         ("gs://bucket/no-model-here.jsonl", False),
         ("gs://bucket/publishers/google/gemini-1.5-flash-001/file-uuid", False),
+        (ENDPOINT_INPUT_FILE, True),
+        ("gs://bucket/endpoints/not-a-number/file-uuid", False),
     ],
 )
 def test_is_unmanaged_gcs_batch_input_file_id(input_file_id, expected):

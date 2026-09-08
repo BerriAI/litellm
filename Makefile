@@ -4,6 +4,7 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
+	test-rust-extension \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
@@ -54,6 +55,7 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
+	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -289,6 +291,17 @@ pre-commit:
 	@$(MAKE) check
 
 # Testing targets
+test-rust-extension:
+	@temporary=$$(mktemp -d) && \
+	trap 'rm -rf "$$temporary"' EXIT HUP INT TERM && \
+	$(UV) build --python 3.12 --wheel --out-dir "$$temporary/wheels" && \
+	set -- "$$temporary"/wheels/*.whl && \
+	[ "$$#" -eq 1 ] && \
+	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
+	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
+	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
+	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
+
 test: install-test-deps
 	$(UV_RUN) pytest tests/
 
