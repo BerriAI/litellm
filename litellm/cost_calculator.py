@@ -341,6 +341,8 @@ def cost_per_token(
     ### VERTEX LOCATION ###
     vertex_location: str | None = None,  # for Vertex AI regional-endpoint uplift (e.g. "us-east5", "global")
     response: Any | None = None,
+    ### REQUEST MODEL ###
+    request_model: str | None = None,  # original request model for router detection
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -662,6 +664,7 @@ def cost_per_token(
             model=model,
             usage=usage_block,
             response_time_ms=response_time_ms,
+            request_model=request_model,
             service_tier=service_tier,
         )
     else:

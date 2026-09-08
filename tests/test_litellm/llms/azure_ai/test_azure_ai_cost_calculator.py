@@ -155,6 +155,39 @@ class TestAzureModelRouterFlatCost:
         with pytest.raises(Exception, match="no-such-azure-ai-model"):
             cost_per_token(model="no-such-azure-ai-model", usage=usage)
 
+    def test_request_model_through_the_router_adds_the_fee_once(self) -> None:
+        routed_prompt_cost, routed_completion_cost = _routed_model_cost()
+        prompt_cost, completion_cost_usd = cost_per_token(
+            model=ROUTED_MODEL, usage=ROUTED_USAGE, request_model="azure_ai/model-router"
+        )
+        assert prompt_cost == pytest.approx(routed_prompt_cost + ROUTED_FEE, rel=1e-9)
+        assert completion_cost_usd == pytest.approx(routed_completion_cost, rel=1e-9)
+
+    def test_request_model_that_is_not_the_router_adds_nothing(self) -> None:
+        routed_prompt_cost, routed_completion_cost = _routed_model_cost()
+        assert cost_per_token(
+            model=ROUTED_MODEL, usage=ROUTED_USAGE, request_model=f"azure_ai/{ROUTED_MODEL}"
+        ) == pytest.approx((routed_prompt_cost, routed_completion_cost), rel=1e-9)
+
+    @pytest.mark.parametrize("router_entry_name", ["model_router", "model-router"])
+    def test_request_model_does_not_double_the_router_entry(self, router_entry_name: str) -> None:
+        prompt_cost, completion_cost_usd = cost_per_token(
+            model=router_entry_name, usage=ROUTED_USAGE, request_model=f"azure_ai/{router_entry_name}"
+        )
+        assert prompt_cost == pytest.approx(ROUTED_FEE, rel=1e-9)
+        assert completion_cost_usd == 0.0
+
+    def test_public_cost_per_token_keeps_the_request_model_keyword(self) -> None:
+        routed_prompt_cost, routed_completion_cost = _routed_model_cost()
+        prompt_cost, completion_cost_usd = litellm.cost_per_token(
+            model=ROUTED_MODEL,
+            custom_llm_provider="azure_ai",
+            usage_object=ROUTED_USAGE,
+            request_model="azure_ai/model-router",
+        )
+        assert prompt_cost == pytest.approx(routed_prompt_cost + ROUTED_FEE, rel=1e-9)
+        assert completion_cost_usd == pytest.approx(routed_completion_cost, rel=1e-9)
+
     def test_flat_cost_helper(self) -> None:
         assert calculate_azure_model_router_flat_cost(
             model="azure-model-router", prompt_tokens=10_000
