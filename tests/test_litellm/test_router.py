@@ -6134,11 +6134,6 @@ def test_update_kwargs_with_deployment_no_tags():
 
 @pytest.mark.asyncio
 async def test_retry_does_not_narrow_tag_filtered_group_to_failed_deployments_tags():
-    """
-    An untagged request that first lands on a tagged deployment must be able to
-    retry onto the untagged deployment of the same group, even though the failed
-    deployment's tags were merged into request metadata for spend attribution.
-    """
     router = Router(
         model_list=[
             {
@@ -6147,7 +6142,8 @@ async def test_retry_does_not_narrow_tag_filtered_group_to_failed_deployments_ta
                     "model": "openai/gpt-5.5",
                     "api_key": "fake-key",
                     "tags": ["free"],
-                    "weight": 999,
+                    "input_cost_per_token": 0.000001,
+                    "output_cost_per_token": 0.000001,
                     "mock_response": "litellm.ContextWindowExceededError",
                 },
                 "model_info": {"id": "tagged-failing"},
@@ -6157,25 +6153,27 @@ async def test_retry_does_not_narrow_tag_filtered_group_to_failed_deployments_ta
                 "litellm_params": {
                     "model": "openai/gpt-5.5",
                     "api_key": "fake-key",
-                    "weight": 1,
+                    "input_cost_per_token": 0.001,
+                    "output_cost_per_token": 0.001,
                     "mock_response": "ok",
                 },
                 "model_info": {"id": "untagged-healthy"},
             },
         ],
+        routing_strategy="cost-based-routing",
         enable_tag_filtering=True,
         num_retries=2,
         retry_after=0,
         retry_policy=RetryPolicy(BadRequestErrorRetries=2),
     )
+    metadata: Final[dict[str, object]] = {}
 
-    for _ in range(5):
-        kwargs: dict = {"metadata": {}}
-        response = await router.acompletion(
-            model="tagged-group", messages=[{"role": "user", "content": "hi"}], **kwargs
-        )
-        assert response._hidden_params["model_id"] == "untagged-healthy"
-        assert "free" in kwargs["metadata"]["tags"]
+    response = await router.acompletion(
+        model="tagged-group", messages=[{"role": "user", "content": "hi"}], metadata=metadata
+    )
+
+    assert response._hidden_params["model_id"] == "untagged-healthy"
+    assert metadata["tags"] == ["free"]
 
 
 def test_update_kwargs_with_deployment_merges_tools():
