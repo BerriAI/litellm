@@ -1368,18 +1368,57 @@ def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
 
 
 @pytest.mark.parametrize("reasoning_effort", ["high", {"effort": "high"}])
-@patch("litellm.completion_extras.responses_api_bridge.completion")
 def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
-    mock_responses_completion, reasoning_effort, restore_model_registry
+    reasoning_effort,
+    restore_model_registry,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    mock_responses_completion.return_value = MagicMock()
-    model = "perplexity/test-responses-bridge"
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_test",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "test-responses-bridge",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Done.", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "total_tokens": 2,
+            "output_tokens_details": {"reasoning_tokens": 0},
+        },
+        "error": None,
+        "incomplete_details": None,
+        "instructions": None,
+        "metadata": None,
+        "temperature": None,
+        "tool_choice": "auto",
+        "tools": [],
+        "top_p": None,
+        "max_output_tokens": None,
+        "previous_response_id": None,
+        "reasoning": None,
+        "truncation": None,
+        "user": None,
+    }
+    response_route: Final = respx_mock.post("https://api.perplexity.ai/v1/responses").respond(json=response_body)
+    model: Final = "perplexity/test-responses-bridge"
     litellm.register_model(
         {
             model: {
                 "litellm_provider": "perplexity",
                 "mode": "responses",
-                "supports_reasoning": True,
+                "supports_reasoning": False,
                 "input_cost_per_token": 0.0,
                 "output_cost_per_token": 0.0,
             }
@@ -1387,18 +1426,17 @@ def test_responses_bridge_preserves_reasoning_effort_with_drop_params(
         persist_across_reloads=False,
     )
 
-    with patch.object(litellm, "supports_reasoning", return_value=False):
-        litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": "hello"}],
-            reasoning_effort=reasoning_effort,
-            drop_params=True,
-            api_key="fake-key",
-            api_base="https://api.perplexity.ai",
-        )
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort=reasoning_effort,
+        drop_params=True,
+        api_key="fake-key",
+        api_base="https://api.perplexity.ai",
+    )
 
-    optional_params = mock_responses_completion.call_args.kwargs["optional_params"]
-    assert optional_params["reasoning_effort"] == reasoning_effort
+    request_body: Final = json.loads(response_route.calls[0].request.content)
+    assert request_body["reasoning"] == {"effort": "high"}
 
 
 @pytest.mark.parametrize(
