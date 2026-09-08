@@ -68,6 +68,7 @@ describe("PriceDataReload", () => {
     expect(screen.getByText("ETag:")).toBeInTheDocument();
     expect(screen.getByText('W/"eb8e9a53f4cc284b"')).toBeInTheDocument();
     expect(screen.getByText("Loaded at:")).toBeInTheDocument();
+    expect(screen.getByText(/worker that answered this request/)).toBeInTheDocument();
     expect(screen.getByText(new Date(provenance.loaded_at).toLocaleString())).toBeInTheDocument();
   });
 
@@ -91,6 +92,7 @@ describe("PriceDataReload", () => {
     expect(screen.queryByText("Source revision:")).not.toBeInTheDocument();
     expect(screen.queryByText("ETag:")).not.toBeInTheDocument();
     expect(screen.queryByText("Loaded at:")).not.toBeInTheDocument();
+    expect(screen.queryByText(/worker that answered this request/)).not.toBeInTheDocument();
   });
 
   it("confirms an immediate reload and refreshes dependent data", async () => {

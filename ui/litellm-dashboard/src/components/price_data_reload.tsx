@@ -132,6 +132,15 @@ const CostMapProvenanceRows: React.FC<{ sourceInfo: CostMapSourceInfo }> = ({ so
         <span className="font-medium">{formatDateTime(sourceInfo.loaded_at)}</span>
       </div>
     )}
+
+    {sourceInfo.loaded_at && (
+      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Info className="size-3.5 shrink-0" />
+        <span>
+          Reported by the worker that answered this request. Other workers pick up a reload on their next poll
+        </span>
+      </div>
+    )}
   </>
 );
 

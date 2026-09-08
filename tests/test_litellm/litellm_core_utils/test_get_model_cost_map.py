@@ -684,3 +684,23 @@ def test_boot_load_fallback_to_the_backup_reports_its_blob_id_and_drops_the_remo
     assert source["source"] == "local"
     assert source["etag"] is None
     assert source["source_revision"] == _bundled_blob_id()
+
+
+def test_boot_load_that_fails_the_integrity_check_reports_the_backup_not_the_rejected_fetch():
+    """A fetch that succeeds but fails integrity validation is thrown away, so the provenance must
+    describe the backup that got loaded, never the ETag or bytes of the map that was rejected."""
+    remote, _ = _mock_client(
+        [httpx.Response(200, headers={"ETag": 'W/"boot"'}, content=_real_map_bytes())], client_cls=httpx.Client
+    )
+    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=remote)
+    shrunk_body = b'{"gpt-5.4-mini": {"mode": "chat", "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}}'
+    shrunk, _ = _mock_client([httpx.Response(200, headers={"ETag": 'W/"shrunk"'}, content=shrunk_body)], client_cls=httpx.Client)
+
+    get_model_cost_map(url=_URL, sleep=_SyncSleepRecorder(), rng=random.Random(0), client=shrunk)
+
+    source = get_model_cost_map_source_info()
+    assert source["source"] == "local"
+    assert source["fallback_reason"] == "Remote data failed integrity validation"
+    assert source["etag"] is None
+    assert source["source_revision"] == _bundled_blob_id()
+    assert source["source_revision"] != git_blob_id(shrunk_body)
