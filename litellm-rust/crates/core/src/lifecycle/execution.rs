@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -9,7 +10,10 @@ use crate::integrations::custom_logger::{CallbackTiming, LogFuture};
 use crate::integrations::types::{StandardLoggingMetadata, Usage};
 
 use super::terminal::CostInputs;
-use super::{ActionResult, ExecutedCall, RouteProjection, TerminalClassification, TerminalRecord};
+use super::{
+    ActionResult, ExecutedCall, RouteProjection, StreamingCall, StreamingObserver, StreamingSource,
+    TerminalClassification, TerminalRecord,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CallLifecycleContext {
@@ -49,7 +53,7 @@ impl CallLifecycleContext {
         self
     }
 
-    fn terminal(
+    pub(super) fn terminal(
         &self,
         timing: CallbackTiming,
         classification: TerminalClassification,
@@ -121,6 +125,44 @@ impl Clock for SystemClock {
 pub struct CallLifecycle;
 
 impl CallLifecycle {
+    pub async fn run_streaming<InitialReq, ProviderReq, Services, ProviderCall, ProviderFuture>(
+        &self,
+        context: CallLifecycleContext,
+        request: InitialReq,
+        services: Arc<Services>,
+        observer: Box<dyn StreamingObserver>,
+        provider_call: ProviderCall,
+    ) -> Result<StreamingCall, Error>
+    where
+        Services: RequestPolicy<InitialReq, ProviderReq> + TerminalDispatcher + Clock + 'static,
+        ProviderCall: FnOnce(ProviderReq) -> ProviderFuture,
+        ProviderFuture: Future<Output = Result<StreamingSource, Error>>,
+    {
+        let start_time = services.now();
+        let request = match services.async_pre_call_hook(&context, request).await {
+            ActionResult::Continue(request) | ActionResult::Replace(request) => request,
+            ActionResult::Reject(error) => {
+                let executed = failure(&*services, &*services, &context, error, start_time).await;
+                return executed.into_result();
+            }
+        };
+        let provider_request = match services.async_during_call_hook(&context, request).await {
+            ActionResult::Continue(request) | ActionResult::Replace(request) => request,
+            ActionResult::Reject(error) => {
+                let executed = failure(&*services, &*services, &context, error, start_time).await;
+                return executed.into_result();
+            }
+        };
+        match provider_call(provider_request).await {
+            Ok(source) => Ok(StreamingCall::new(
+                source, observer, context, start_time, services,
+            )),
+            Err(error) => failure(&*services, &*services, &context, error, start_time)
+                .await
+                .into_result(),
+        }
+    }
+
     pub async fn run<
         InitialReq,
         ProviderReq,

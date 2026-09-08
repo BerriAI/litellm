@@ -83,6 +83,10 @@ impl From<&TerminalRecord> for StandardLoggingPayload {
             stream: matches!(
                 record.projection,
                 RouteProjection::Realtime { .. } | RouteProjection::ResponsesWs { .. }
+            ) || matches!(
+                &record.projection,
+                RouteProjection::Messages { value } | RouteProjection::ChatCompletions { value }
+                    if value.get("stream").and_then(Value::as_bool) == Some(true)
             ),
             metadata: record.cost_inputs.metadata.clone(),
             messages: record.projection.logging_input(),

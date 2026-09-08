@@ -50,6 +50,7 @@ pub enum Operation {
     Setup,
     DeploymentPre,
     Prepare,
+    PreCall,
     Send,
     DeploymentSuccess,
     DeploymentFailure,
@@ -177,11 +178,12 @@ impl LifecycleRoute for OcrRoute {
             (DeploymentFailure, _) => failure,
             (_, Outcome::Abort) => Restore,
             (SyncFailure | AsyncFailure, Outcome::Failure) => Restore,
-            (Prepare | Send, Outcome::Failure) if state.asynchronous => DeploymentFailure,
+            (Prepare | PreCall | Send, Outcome::Failure) if state.asynchronous => DeploymentFailure,
             (_, Outcome::Failure) => failure,
             (Setup, Outcome::Success) if state.asynchronous => DeploymentPre,
             (Setup | DeploymentPre, Outcome::Success) => Prepare,
-            (Prepare, Outcome::Success) => Send,
+            (Prepare, Outcome::Success) => PreCall,
+            (PreCall, Outcome::Success) => Send,
             (Send, Outcome::Success) if state.asynchronous => DeploymentSuccess,
             (Send, Outcome::Success) => SyncSuccess,
             (DeploymentSuccess, Outcome::Success) => {
@@ -210,6 +212,7 @@ impl LifecycleRoute for OcrRoute {
     ) -> &'static [ActionBinding] {
         match operation {
             Operation::Prepare | Operation::Send => &PROVIDER_ACTION,
+            Operation::PreCall => &PRE_CALL_ACTION,
             Operation::SyncFailure | Operation::AsyncFailure | Operation::DeploymentFailure => {
                 &FAILURE_ACTION
             }
@@ -226,6 +229,14 @@ const PROVIDER_ACTION: [ActionBinding; 1] = [ActionBinding {
     on_result: ResultPolicy::Replace,
     on_error: FailurePolicy::Propagate,
     owner: Owner::Core,
+}];
+
+const PRE_CALL_ACTION: [ActionBinding; 1] = [ActionBinding {
+    kind: ActionKind::RequestPolicy,
+    delivery: Delivery::InlineDirect,
+    on_result: ResultPolicy::Continue,
+    on_error: FailurePolicy::Propagate,
+    owner: Owner::Route,
 }];
 
 const CALLBACK_ACTION: [ActionBinding; 1] = [ActionBinding {
@@ -327,13 +338,17 @@ mod tests {
     fn success_sequences_and_completion_are_core_selected() {
         use Operation::*;
         for (asynchronous, expected) in [
-            (false, vec![Setup, Prepare, Send, SyncSuccess, Restore]),
+            (
+                false,
+                vec![Setup, Prepare, PreCall, Send, SyncSuccess, Restore],
+            ),
             (
                 true,
                 vec![
                     Setup,
                     DeploymentPre,
                     Prepare,
+                    PreCall,
                     Send,
                     DeploymentSuccess,
                     AsyncSuccess,
@@ -364,13 +379,14 @@ mod tests {
                     Setup,
                     DeploymentPre,
                     Prepare,
+                    PreCall,
                     Send,
                     DeploymentSuccess,
                     AsyncSuccess,
                     SyncSuccessIfNeeded,
                 ]
             } else {
-                vec![Setup, Prepare, Send, SyncSuccess]
+                vec![Setup, Prepare, PreCall, Send, SyncSuccess]
             };
             for stage in stages {
                 for outcome in [Outcome::Failure, Outcome::Abort] {
@@ -380,7 +396,7 @@ mod tests {
                     assert_eq!(transition.error, ErrorDisposition::Replace);
                     let expected = if outcome == Outcome::Abort {
                         Restore
-                    } else if asynchronous && matches!(stage, Prepare | Send) {
+                    } else if asynchronous && matches!(stage, Prepare | PreCall | Send) {
                         DeploymentFailure
                     } else {
                         SyncFailure

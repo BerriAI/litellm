@@ -1,103 +1,20 @@
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use serde_json::Value;
-
-use crate::Error;
-use crate::integrations::custom_logger::{LogError, LogFuture};
-use crate::lifecycle::{
-    ActionResult, CallLifecycleContext, RequestPolicy, TerminalDispatcher, TerminalRecord,
-};
+use crate::integrations::types::Usage;
 use crate::responses::types::{ResponsesWsEvent, ResponsesWsEventType};
+use serde_json::Value;
+use std::sync::Mutex;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ResponsesWsUsage {
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
-    pub total_tokens: u64,
+pub struct ResponsesWsObservation {
+    pub(crate) model: String,
+    pub(crate) usage: Usage,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ResponsesWsMetadata {
-    pub user_api_key_hash: Option<String>,
-    pub user_api_key_user_id: Option<String>,
-    pub user_api_key_team_id: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ResponsesWsLogPayload {
-    pub id: String,
-    pub litellm_call_id: String,
-    pub call_type: String,
-    pub model: String,
-    pub custom_llm_provider: String,
-    pub response_cost: f64,
-    pub usage: ResponsesWsUsage,
-    pub start_time: f64,
-    pub end_time: f64,
-    pub stream: bool,
-    pub metadata: ResponsesWsMetadata,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ResponsesWsLogOutcome {
-    Success {
-        payload: ResponsesWsLogPayload,
-        callback: ResponsesWsCallbackPayload,
-    },
-    Failure {
-        payload: ResponsesWsLogPayload,
-        callback: ResponsesWsCallbackPayload,
-        error_message: String,
-        error_kind: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ResponsesWsCallbackPayload {
-    pub object: String,
-    pub value: Value,
-}
-
-struct InstrumentationState {
-    litellm_call_id: String,
-    id: String,
-    model: String,
-    usage: ResponsesWsUsage,
-    start_time: f64,
-    end_time: f64,
-    metadata: ResponsesWsMetadata,
-    outcome: Option<ResponsesWsLogOutcome>,
-}
-
+#[derive(Default)]
 pub struct ResponsesWsInstrumentation {
-    state: Mutex<InstrumentationState>,
+    state: Mutex<ResponsesWsObservation>,
 }
 
 impl ResponsesWsInstrumentation {
-    pub fn new(
-        litellm_call_id: impl Into<String>,
-        model: impl Into<String>,
-        metadata: ResponsesWsMetadata,
-    ) -> Self {
-        let litellm_call_id = litellm_call_id.into();
-        let now = epoch_seconds();
-        Self {
-            state: Mutex::new(InstrumentationState {
-                id: litellm_call_id.clone(),
-                litellm_call_id,
-                model: model.into(),
-                usage: ResponsesWsUsage::default(),
-                start_time: now,
-                end_time: now,
-                metadata,
-                outcome: None,
-            }),
-        }
-    }
-
     pub fn observe(&self, event: &ResponsesWsEvent) {
         if !matches!(
             event.event_type,
@@ -115,14 +32,6 @@ impl ResponsesWsInstrumentation {
         let Some(response) = event.data.get("response").and_then(Value::as_object) else {
             return;
         };
-        if let Some(id) = response
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
-            state.id = id.to_string();
-            state.litellm_call_id = id.to_string();
-        }
         if let Some(model) = response
             .get("model")
             .and_then(Value::as_str)
@@ -154,124 +63,18 @@ impl ResponsesWsInstrumentation {
             });
     }
 
-    pub fn success_outcome(&self) -> ResponsesWsLogOutcome {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.end_time = epoch_seconds();
-        ResponsesWsLogOutcome::Success {
-            payload: build_payload(&state),
-            callback: ResponsesWsCallbackPayload {
-                object: "responses_websocket".to_string(),
-                value: Value::Null,
-            },
-        }
-    }
-
-    pub fn failure_outcome(&self) -> ResponsesWsLogOutcome {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.end_time = epoch_seconds();
-        ResponsesWsLogOutcome::Failure {
-            payload: build_payload(&state),
-            callback: ResponsesWsCallbackPayload {
-                object: "error".to_string(),
-                value: serde_json::json!({
-                    "message": "Responses WebSocket session ended in failure",
-                    "kind": "ResponsesWebSocketError",
-                }),
-            },
-            error_message: "Responses WebSocket session ended in failure".to_string(),
-            error_kind: "ResponsesWebSocketError".to_string(),
-        }
-    }
-
-    pub fn take_outcome(&self) -> Option<ResponsesWsLogOutcome> {
+    pub fn snapshot(&self) -> ResponsesWsObservation {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .outcome
-            .take()
+            .clone()
     }
-
-    pub fn take_or_build_outcome(&self, success: bool) -> ResponsesWsLogOutcome {
-        self.take_outcome().unwrap_or_else(|| {
-            if success {
-                self.success_outcome()
-            } else {
-                self.failure_outcome()
-            }
-        })
-    }
-}
-
-type LifecycleFuture<'a, T> = Pin<Box<dyn Future<Output = ActionResult<T, Error>> + Send + 'a>>;
-
-impl RequestPolicy<(), ()> for ResponsesWsInstrumentation {
-    type PreCallFuture<'a> = LifecycleFuture<'a, ()>;
-    type DuringCallFuture<'a> = LifecycleFuture<'a, ()>;
-
-    fn async_pre_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: (),
-    ) -> Self::PreCallFuture<'a> {
-        Box::pin(async move { ActionResult::Continue(request) })
-    }
-
-    fn async_during_call_hook<'a>(
-        &'a self,
-        _context: &'a CallLifecycleContext,
-        request: (),
-    ) -> Self::DuringCallFuture<'a> {
-        Box::pin(async move { ActionResult::Continue(request) })
-    }
-}
-
-impl TerminalDispatcher for ResponsesWsInstrumentation {
-    fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
-        Box::pin(async move {
-            let outcome = match terminal.classification {
-                crate::lifecycle::TerminalClassification::Success => self.success_outcome(),
-                crate::lifecycle::TerminalClassification::Failure { .. } => self.failure_outcome(),
-            };
-            if let Ok(mut state) = self.state.lock() {
-                state.outcome = Some(outcome);
-            }
-            Ok::<(), LogError>(())
-        })
-    }
-}
-
-fn build_payload(state: &InstrumentationState) -> ResponsesWsLogPayload {
-    ResponsesWsLogPayload {
-        id: state.id.clone(),
-        litellm_call_id: state.litellm_call_id.clone(),
-        call_type: "responses_websocket".to_string(),
-        model: state.model.clone(),
-        custom_llm_provider: "openai".to_string(),
-        response_cost: 0.0,
-        usage: state.usage.clone(),
-        start_time: state.start_time,
-        end_time: state.end_time,
-        stream: true,
-        metadata: state.metadata.clone(),
-    }
-}
-
-fn epoch_seconds() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs_f64())
-        .unwrap_or(0.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn event(value: Value) -> ResponsesWsEvent {
         serde_json::from_value(value).expect("valid Responses WebSocket event")
@@ -279,8 +82,7 @@ mod tests {
 
     #[test]
     fn accumulates_upstream_usage_and_identity() {
-        let instrumentation =
-            ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
+        let instrumentation = ResponsesWsInstrumentation::default();
         instrumentation.observe(&event(serde_json::json!({
             "type": "response.completed",
             "response": {
@@ -294,65 +96,10 @@ mod tests {
             }
         })));
 
-        let ResponsesWsLogOutcome::Success { payload, .. } = instrumentation.success_outcome()
-        else {
-            panic!("expected success outcome");
-        };
-        assert_eq!(payload.id, "resp-1");
-        assert_eq!(payload.model, "gpt-5-mini");
-        assert_eq!(payload.usage.prompt_tokens, 3);
-        assert_eq!(payload.usage.completion_tokens, 5);
-        assert_eq!(payload.usage.total_tokens, 8);
-        assert!(payload.end_time >= payload.start_time);
-    }
-
-    #[test]
-    fn builds_failure_payload_without_dispatching_callbacks() {
-        let instrumentation =
-            ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
-        assert!(matches!(
-            instrumentation.failure_outcome(),
-            ResponsesWsLogOutcome::Failure { .. }
-        ));
-    }
-
-    #[tokio::test]
-    async fn lifecycle_records_success_outcome_for_provider_completion() {
-        let instrumentation =
-            ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
-        let result = crate::lifecycle::CallLifecycle
-            .run(
-                crate::lifecycle::CallLifecycleContext::new(
-                    "responses_websocket",
-                    "gpt-5",
-                    "openai",
-                    "call-1",
-                ),
-                (),
-                &instrumentation,
-                &instrumentation,
-                &crate::lifecycle::SystemClock,
-                |_| async { Ok::<(), Error>(()) },
-            )
-            .await;
-
-        assert!(matches!(
-            result,
-            crate::lifecycle::ExecutedCall::Success { .. }
-        ));
-        assert!(matches!(
-            instrumentation.take_outcome(),
-            Some(ResponsesWsLogOutcome::Success { .. })
-        ));
-    }
-
-    #[test]
-    fn builds_outcome_when_lifecycle_did_not_record_one() {
-        let instrumentation =
-            ResponsesWsInstrumentation::new("call-1", "gpt-5", ResponsesWsMetadata::default());
-        assert!(matches!(
-            instrumentation.take_or_build_outcome(true),
-            ResponsesWsLogOutcome::Success { .. }
-        ));
+        let observation = instrumentation.snapshot();
+        assert_eq!(observation.model, "gpt-5-mini");
+        assert_eq!(observation.usage.prompt_tokens, 3);
+        assert_eq!(observation.usage.completion_tokens, 5);
+        assert_eq!(observation.usage.total_tokens, 8);
     }
 }

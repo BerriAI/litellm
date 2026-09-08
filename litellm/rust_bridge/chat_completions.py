@@ -12,6 +12,7 @@ retrying it there would bill the customer for the same work twice.
 
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     convert_to_model_response_object,
 )
 from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
+from litellm.rust_bridge._lifecycle import invoke_terminal
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.loader import get_native_bridge
 from litellm.rust_bridge.timeouts import timeout_to_seconds
@@ -46,32 +48,12 @@ RUST_RESPONSE_HEADER: Final = "x-litellm-rust"
 
 
 class RustChatCompletions(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: Mapping[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> Mapping[str, object]:
+    def __call__(self, arguments: dict[str, object]) -> ModelResponse:
         raise NotImplementedError
 
 
 class RustAchatCompletions(Protocol):
-    def __call__(
-        self,
-        model: str,
-        messages: Sequence[object],
-        optional_params: Mapping[str, object] | None,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str | None,
-        extra_headers: Mapping[str, object] | None,
-        timeout_seconds: float | None,
-    ) -> Awaitable[Mapping[str, object]]:
+    def __call__(self, arguments: dict[str, object]) -> Awaitable[ModelResponse]:
         raise NotImplementedError
 
 
@@ -87,13 +69,6 @@ class RustChatCompletionsDecline(Protocol):
 
 
 class ResponseObserver(Protocol):
-    """Invoked with the payload the core returned, on success only.
-
-    Lets the caller emit its own `post_call` on whichever path served the
-    request. Both entry points call it, so the synchronous and asynchronous
-    paths cannot drift apart the way the pre_call suppression once did.
-    """
-
     def __call__(self, rust_response: Mapping[str, object], /) -> None:
         raise NotImplementedError
 
@@ -105,16 +80,6 @@ def response_logger(
     api_key: str,
     additional_args: Mapping[str, object],
 ) -> ResponseObserver:
-    """A `ResponseObserver` that emits the caller's `post_call` for a Rust-served
-    request.
-
-    The core owns the provider call, so the Python transform that normally
-    raises this event never runs; without it every `post_call` callback goes
-    silent on a Rust-served request and `original_response` stays unset. The
-    payload is the core's normalized response rather than the provider's wire
-    body, which is the closest thing that crosses the bridge.
-    """
-
     def log(rust_response: Mapping[str, object], /) -> None:
         logging_obj.post_call(
             input=messages,
@@ -124,6 +89,14 @@ def response_logger(
         )
 
     return log
+
+
+def _uses_argument_bag(call: object) -> bool:
+    try:
+        parameters: Final = inspect.signature(call).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return not any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters)
 
 
 class _Unset:
@@ -325,7 +298,7 @@ def _reraise_or_decline(
     )
 
 
-def _build_model_response(
+def build_model_response(
     rust_response: Mapping[str, object],
     model_response: ModelResponse,
 ) -> ModelResponse:
@@ -350,27 +323,64 @@ def chat_completions(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
-    on_response: ResponseObserver,
+    arguments: dict[str, object] | None = None,
+    logging_api_key: str | None = None,
+    on_response: ResponseObserver | None = None,
 ) -> ModelResponse | None:
     rust_chat_completions: Final = load_rust_chat_completions()
     if rust_chat_completions is None:
         return None
     try:
-        rust_response: Final = rust_chat_completions(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_to_seconds(timeout),
+        if _STATE.chat_completions is not None and _uses_argument_bag(rust_chat_completions):
+            rust_result: Final = rust_chat_completions(
+                _arguments(
+                    arguments,
+                    model,
+                    messages,
+                    optional_params,
+                    model_response,
+                    api_key,
+                    api_base,
+                    custom_llm_provider,
+                    extra_headers,
+                    timeout,
+                    logging_api_key,
+                )
+            )
+            return rust_result
+        if _STATE.chat_completions is not None:
+            rust_response: Final = rust_chat_completions(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+            )
+            if on_response is not None:
+                on_response(rust_response)
+            return build_model_response(rust_response, model_response)
+        return rust_chat_completions(
+            _arguments(
+                arguments,
+                model,
+                messages,
+                optional_params,
+                model_response,
+                api_key,
+                api_base,
+                custom_llm_provider,
+                extra_headers,
+                timeout,
+                logging_api_key,
+            )
         )
     except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
         _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
         return None
-    on_response(rust_response)
-    return _build_model_response(rust_response, model_response)
+    raise AssertionError("unreachable")
 
 
 async def achat_completions(
@@ -384,27 +394,64 @@ async def achat_completions(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
-    on_response: ResponseObserver,
+    arguments: dict[str, object] | None = None,
+    logging_api_key: str | None = None,
+    on_response: ResponseObserver | None = None,
 ) -> ModelResponse | None:
     rust_achat_completions: Final = load_rust_achat_completions()
     if rust_achat_completions is None:
         return None
     try:
-        rust_response: Final = await rust_achat_completions(
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            api_key=api_key,
-            api_base=api_base,
-            custom_llm_provider=custom_llm_provider,
-            extra_headers=extra_headers,
-            timeout_seconds=timeout_to_seconds(timeout),
+        if _STATE.achat_completions is not None and _uses_argument_bag(rust_achat_completions):
+            rust_result: Final = await rust_achat_completions(
+                _arguments(
+                    arguments,
+                    model,
+                    messages,
+                    optional_params,
+                    model_response,
+                    api_key,
+                    api_base,
+                    custom_llm_provider,
+                    extra_headers,
+                    timeout,
+                    logging_api_key,
+                )
+            )
+            return rust_result
+        if _STATE.achat_completions is not None:
+            rust_response: Final = await rust_achat_completions(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                api_key=api_key,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                extra_headers=extra_headers,
+                timeout_seconds=timeout_to_seconds(timeout),
+            )
+            if on_response is not None:
+                on_response(rust_response)
+            return build_model_response(rust_response, model_response)
+        return await rust_achat_completions(
+            _arguments(
+                arguments,
+                model,
+                messages,
+                optional_params,
+                model_response,
+                api_key,
+                api_base,
+                custom_llm_provider,
+                extra_headers,
+                timeout,
+                logging_api_key,
+            )
         )
     except Exception as rust_error:  # noqa: BLE001  # rollout safety: the helper re-raises anything the provider already saw
         _reraise_or_decline(rust_error, model=model, custom_llm_provider=custom_llm_provider)
         return None
-    on_response(rust_response)
-    return _build_model_response(rust_response, model_response)
+    raise AssertionError("unreachable")
 
 
 async def achat_completions_or_fallback(
@@ -418,8 +465,10 @@ async def achat_completions_or_fallback(
     custom_llm_provider: str | None,
     extra_headers: Mapping[str, object] | None,
     timeout: float | httpx.Timeout | None,
-    on_response: ResponseObserver,
     python_fallback: Callable[[], Awaitable[object]],
+    arguments: dict[str, object] | None = None,
+    logging_api_key: str | None = None,
+    on_response: ResponseObserver | None = None,
 ) -> object:
     """Await the Rust path, falling back to the caller's own Python path when
     the bridge is unavailable or the call fails.
@@ -439,8 +488,44 @@ async def achat_completions_or_fallback(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         timeout=timeout,
+        arguments=arguments,
+        logging_api_key=logging_api_key,
         on_response=on_response,
     )
     if response is not None:
         return response
     return await python_fallback()
+
+
+def initialize_logging(arguments: dict[str, object], asynchronous: bool) -> object:
+    from litellm.rust_bridge._lifecycle import initialize_logging as initialize_lifecycle_logging
+
+    return initialize_lifecycle_logging(arguments, asynchronous, "completion")
+
+
+def _arguments(
+    arguments: dict[str, object] | None,
+    model: str,
+    messages: Sequence[object],
+    optional_params: Mapping[str, object],
+    model_response: ModelResponse,
+    api_key: str | None,
+    api_base: str | None,
+    custom_llm_provider: str | None,
+    extra_headers: Mapping[str, object] | None,
+    timeout: float | httpx.Timeout | None,
+    logging_api_key: str | None,
+) -> dict[str, object]:
+    return {
+        **(arguments or {}),
+        "model": model,
+        "messages": messages,
+        "optional_params": optional_params,
+        "model_response": model_response,
+        "api_key": api_key,
+        "api_base": api_base,
+        "custom_llm_provider": custom_llm_provider,
+        "extra_headers": extra_headers,
+        "timeout_seconds": timeout_to_seconds(timeout),
+        "logging_api_key": logging_api_key if logging_api_key is not None else api_key or "",
+    }

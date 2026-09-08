@@ -1448,14 +1448,20 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-types",
  "base64",
+ "bytes",
+ "futures-channel",
+ "futures-util",
  "rand 0.8.7",
  "reqwest",
  "rstest",
+ "rustls 0.23.42",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1465,7 +1471,6 @@ name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "futures-util",
  "litellm-ai-gateway",
  "litellm-core",
  "litellm-python-interop",
@@ -1474,7 +1479,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-tungstenite",
  "tracing",
 ]
 

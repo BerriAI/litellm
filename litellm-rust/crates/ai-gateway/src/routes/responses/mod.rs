@@ -229,7 +229,10 @@ async fn bridge(
         &mut client_out,
     )
     .await;
-    if result.is_err() {
+    if !matches!(
+        result,
+        Ok(litellm_core::lifecycle::ExecutedCall::Success { .. })
+    ) {
         client_out
             .close_with_code(1011, "Internal server error")
             .await;

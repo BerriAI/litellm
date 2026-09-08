@@ -6,44 +6,21 @@ from litellm.llms.custom_httpx.llm_http_handler import _rust_responses_websocket
 from litellm.rust_bridge import configuration, responses_websocket
 
 
-class _FakeNativeConnection:
-    def __init__(self) -> None:
-        self.sent: list[str] = []
-        self.closed = False
-
-    async def send_text(self, text: str) -> None:
-        self.sent.append(text)
-
-    async def recv_text(self) -> str:
-        return "response.completed"
-
-    async def close(self) -> None:
-        self.closed = True
-
-
-class _ClosedNativeConnection:
-    async def recv_text(self) -> None:
-        return None
+class _Declined(Exception):
+    pass
 
 
 class _FakeNativeBridge:
-    @classmethod
-    async def connect(
-        cls,
-        *,
-        url: str,
-        headers: dict[str, str],
-        timeout_seconds: float | None,
-    ) -> _FakeNativeConnection:
-        return _FakeNativeConnection()
+    RustBridgeDeclined = _Declined
 
 
 @pytest.fixture(autouse=True)
-def reset_responses_websocket():
-    responses_websocket.set_rust_responses_websocket(connection=None)
+def reset_responses_websocket(monkeypatch: pytest.MonkeyPatch):
+    responses_websocket.set_rust_responses_websocket(route=None)
     configuration.reset_rust_configuration()
+    monkeypatch.setattr(responses_websocket, "get_native_bridge", lambda: _FakeNativeBridge)
     yield
-    responses_websocket.set_rust_responses_websocket(connection=None)
+    responses_websocket.set_rust_responses_websocket(route=None)
     configuration.reset_rust_configuration()
 
 
@@ -55,42 +32,24 @@ def test_rust_websocket_bridge_uses_process_enablement() -> None:
     assert not _rust_responses_websocket_enabled("anthropic")
 
 
-@pytest.mark.asyncio
-async def test_adapter_raises_clean_close_when_rust_connection_ends() -> None:
-    adapter = responses_websocket._ConnectionAdapter(_ClosedNativeConnection())
-
-    with pytest.raises(responses_websocket.ConnectionClosedOK):
-        await adapter.recv()
-
-
-@pytest.mark.asyncio
-async def test_bridge_unavailable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bridge_unavailable_declines(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(responses_websocket, "_STATE", responses_websocket._RustResponsesWebSocketState())
     monkeypatch.setattr(responses_websocket, "get_native_bridge", lambda: None)
-
-    assert (
-        await responses_websocket.connect(
-            url="wss://example.test/responses",
-            headers={},
-            timeout=None,
-        )
-        is None
-    )
+    assert not responses_websocket.admit()
 
 
-@pytest.mark.asyncio
-async def test_enabled_bridge_connects_and_adapts_socket(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    responses_websocket.set_rust_responses_websocket(connection=_FakeNativeBridge)
+def test_host_only_lifecycle_declines_before_provider_io() -> None:
+    def decline() -> None:
+        raise _Declined("host guardrails required")
 
-    connection = await responses_websocket.connect(
-        url="wss://example.test/responses",
-        headers={"Authorization": "Bearer key"},
-        timeout=1.0,
-    )
+    responses_websocket.set_rust_responses_websocket(route=decline)
+    assert not responses_websocket.admit()
 
-    assert connection is not None
-    await connection.send("response.create")
-    assert await connection.recv() == "response.completed"
-    await connection.close()
+
+def test_unexpected_bridge_error_does_not_allow_fallback() -> None:
+    def fail() -> None:
+        raise RuntimeError("bridge failed")
+
+    responses_websocket.set_rust_responses_websocket(route=fail)
+    with pytest.raises(RuntimeError, match="bridge failed"):
+        responses_websocket.admit()

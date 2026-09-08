@@ -9,8 +9,7 @@ use crate::providers::vertex_ai::ocr::transformation as vertex_ai;
 use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
 
 use super::transformation::{OcrProviderConfig, OcrResponseHandling};
-use super::types::OcrAdmissionRequest;
-pub use super::types::PreparedOcr;
+use super::types::{OcrAdmissionRequest, OcrDraft, OcrEndpoint};
 
 fn request_config(
     request: &OcrAdmissionRequest,
@@ -81,7 +80,7 @@ fn check_admission_capabilities(
     Ok(())
 }
 
-pub fn prepare(request: OcrAdmissionRequest) -> Result<PreparedOcr, Error> {
+pub fn prepare(request: OcrAdmissionRequest) -> Result<OcrDraft, Error> {
     let (provider, config) = request_config(&request)?;
     let env_lookup = |key: &str| std::env::var(key).ok();
     let headers = config
@@ -131,15 +130,17 @@ pub fn prepare(request: OcrAdmissionRequest) -> Result<PreparedOcr, Error> {
     let Value::Object(body) = template.data else {
         return Err(Error::Unsupported("non-object OCR request template"));
     };
-    Ok(PreparedOcr {
-        model: provider.model.to_string(),
-        custom_llm_provider: provider.custom_llm_provider.to_string(),
-        url,
+    Ok(OcrDraft {
+        endpoint: OcrEndpoint {
+            model: provider.model.to_string(),
+            custom_llm_provider: provider.custom_llm_provider.to_string(),
+            url,
+            timeout_seconds: request.timeout_seconds,
+        },
         headers,
         body,
         document_projection: config.document_projection(),
         parameter_fields: config.supported_ocr_params(),
-        timeout_seconds: request.timeout_seconds,
     })
 }
 

@@ -23,7 +23,6 @@ use litellm_core::router::Router as ModelRouter;
 use serde::Deserialize;
 
 use crate::auth::RequireMasterKey;
-use crate::realtime::streaming::{RealTimeStreaming, SessionStatus};
 use crate::state::AppState;
 use litellm_core::integrations::custom_logger::CustomLogger;
 use litellm_core::integrations::types::RequestMetadata;
@@ -83,15 +82,6 @@ async fn handle(
     Ok(ws.on_upgrade(move |socket| bridge(socket, router, pool, loggers, master_key, model)))
 }
 
-/// Adapt the axum socket (text frames) to the typed-event `Stream`/`Sink` the
-/// service wants, keeping axum types out of `service`.
-///
-/// This is also the realtime-logging seam: every upstream→client event (the
-/// direction carrying `session.created` and `response.done` with usage) is fed
-/// to a [`RealTimeStreaming`] collector via the splice's `observe` callback. The
-/// observe is O(1) and never buffers frames. When the splice returns (any of the
-/// three break paths — client disconnect, upstream close, idle timeout), we flush
-/// one logging payload to the registered callbacks.
 async fn bridge(
     socket: WebSocket,
     router: Arc<ModelRouter>,
@@ -102,30 +92,10 @@ async fn bridge(
 ) {
     let (ws_sink, ws_stream) = socket.split();
 
-    // Attribute the spend log to the key that authenticated this session (the
-    // master key — the gateway is master-key auth). A non-null user_api_key_hash
-    // is required for the Python spend logger to write a SpendLogs row.
-    //
-    // SECURITY: hash the key — never send the raw credential. This field fans out
-    // to spend logs and every callback integration; the SHA-256 (matching the
-    // proxy's hash_token) keeps the plaintext master key out of all of them while
-    // still matching the key's hash in LiteLLM_SpendLogs.
     let metadata = RequestMetadata {
         user_api_key_hash: master_key.as_deref().map(crate::auth::hash_token),
         ..RequestMetadata::default()
     };
-
-    // Owned by THIS task only. The splice observes it via a synchronous `&mut`
-    // callback (below), so there is no Arc/Mutex/atomic on the per-frame hot
-    // path — just a monomorphized FnMut mutating stack-local fields. This is
-    // what lets observe scale: 10K concurrent sessions = 10K independent
-    // collectors, zero cross-task synchronization.
-    let mut collector = RealTimeStreaming::new(
-        loggers.as_ref().clone(),
-        new_call_id(),
-        model.clone(),
-        metadata,
-    );
 
     let client_in = ws_stream.filter_map(|message| async move {
         match message {
@@ -133,7 +103,6 @@ async fn bridge(
             _ => None,
         }
     });
-    // Plain forwarding sink — no observe here anymore.
     let client_out = ws_sink.with(|event: RealtimeEvent| async move {
         Ok::<Message, axum::Error>(Message::Text(
             serde_json::to_string(&event).unwrap_or_default(),
@@ -142,25 +111,16 @@ async fn bridge(
 
     futures_util::pin_mut!(client_in, client_out);
 
-    // The observe closure borrows `&mut collector` for the duration of the
-    // splice; the borrow ends when `run` returns, freeing the collector for the
-    // single post-session `log_messages` flush. `run` picks a pooled (warm) or
-    // fresh upstream — observe fires on the upstream arm either way.
-    let result = service::run(
+    let _ = service::run(
         &router,
         &pool,
         &model,
         None,
-        |event: &RealtimeEvent| collector.observe(event),
+        loggers,
+        new_call_id(),
+        metadata,
         client_in,
         client_out,
     )
     .await;
-
-    let status = if result.is_ok() {
-        SessionStatus::Success
-    } else {
-        SessionStatus::Failure
-    };
-    collector.log_messages(status).await;
 }

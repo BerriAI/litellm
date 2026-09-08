@@ -1,6 +1,7 @@
 use crate::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use crate::error::Error;
 use crate::http_utils::http_request;
+use crate::lifecycle::{StreamingMetadata, StreamingSource};
 
 use super::client::http_client;
 use super::common_utils::truncate_error_body;
@@ -44,7 +45,7 @@ pub(super) async fn execute_messages_provider_call(
 
 pub(super) async fn execute_messages_provider_stream(
     request: MessagesRequest,
-) -> Result<reqwest::Response, Error> {
+) -> Result<StreamingSource, Error> {
     let request = prepare_provider_request(request)?;
     if request.provider != ANTHROPIC_MESSAGES_PROVIDER {
         return Err(Error::InvalidRequest(
@@ -74,5 +75,24 @@ pub(super) async fn execute_messages_provider_stream(
             body: truncate_error_body(&text),
         });
     }
-    Ok(response)
+    let metadata = StreamingMetadata {
+        status: status.as_u16(),
+        content_type: response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+        cache_control: response
+            .headers()
+            .get(reqwest::header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string),
+    };
+    let stream = response.bytes_stream();
+    Ok(StreamingSource {
+        metadata,
+        stream: Box::pin(futures_util::StreamExt::map(stream, |result| {
+            result.map_err(|error| Error::Network(error.to_string()))
+        })),
+    })
 }

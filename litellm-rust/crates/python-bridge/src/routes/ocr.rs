@@ -9,7 +9,7 @@ use litellm_core::lifecycle::{
 };
 use litellm_core::ocr::NoopOcrServices;
 use litellm_core::ocr::types::{
-    OcrAdmissionRequest, OcrDocumentProjection, PreparedOcr, PreparedOcrCall,
+    OcrAdmissionRequest, OcrDocumentProjection, OcrDraft, OcrEndpoint, SettledOcrRequest,
 };
 use litellm_core::routing_utils::provider::get_custom_llm_provider;
 use litellm_python_interop::{Pythonized, from_py, to_py};
@@ -18,7 +18,6 @@ use pyo3::prelude::*;
 use pyo3::pyclass::{PyTraverseError, PyVisit};
 use pyo3::sync::PyOnceLock;
 use pyo3::types::PyDict;
-use serde_json::Value;
 
 use crate::errors::core_error_to_pyerr;
 use litellm_python_interop::{run_async_value, run_sync_value};
@@ -29,7 +28,9 @@ struct OcrState {
     body: Option<Py<PyDict>>,
     headers: Option<Py<PyDict>>,
     logging: Option<Py<PyAny>>,
-    prepared: Option<PreparedOcr>,
+    pre_call: Option<Py<PyDict>>,
+    endpoint: Option<OcrEndpoint>,
+    asynchronous: bool,
     terminal: Option<TerminalRecord>,
 }
 
@@ -39,7 +40,8 @@ impl OcrState {
         visit.call(&self.arguments)?;
         visit.call(&self.body)?;
         visit.call(&self.headers)?;
-        visit.call(&self.logging)
+        visit.call(&self.logging)?;
+        visit.call(&self.pre_call)
     }
 
     fn __clear__(slf: &Bound<'_, Self>) {
@@ -50,6 +52,8 @@ impl OcrState {
                 state.body.take(),
                 state.headers.take(),
                 state.logging.take(),
+                state.pre_call.take(),
+                state.endpoint.take(),
                 state.terminal.take(),
             )
         };
@@ -313,6 +317,7 @@ fn invoke(
         Operation::Setup => ("setup", false),
         Operation::DeploymentPre => ("deployment_pre", true),
         Operation::Prepare => ("prepare", false),
+        Operation::PreCall => ("pre_call", false),
         Operation::Send if asynchronous => ("send", true),
         Operation::Send => ("send_sync", false),
         Operation::DeploymentSuccess => ("deployment_success", true),
@@ -336,7 +341,7 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
     let request = decode_request(py, bag)?;
     let model = request.model.clone();
     let custom_llm_provider = request.custom_llm_provider.clone();
-    let prepared = py
+    let draft = py
         .detach(|| litellm_core::ocr::prepare::prepare(request))
         .map_err(|error| {
             request_error_to_pyerr(py, error, &model, custom_llm_provider.as_deref())
@@ -345,10 +350,17 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
         .get_item("document")?
         .ok_or_else(|| PyValueError::new_err("OCR requires document"))?
         .cast_into::<PyDict>()?;
-    let body = to_py(py, &prepared.body)?
+    let OcrDraft {
+        endpoint,
+        headers: draft_headers,
+        body: draft_body,
+        document_projection,
+        parameter_fields,
+    } = draft;
+    let body = to_py(py, &draft_body)?
         .into_bound(py)
         .cast_into::<PyDict>()?;
-    match prepared.document_projection {
+    match document_projection {
         OcrDocumentProjection::RetainedDocument => {
             body.set_item(pyo3::intern!(py, "document"), &document)?
         }
@@ -358,14 +370,14 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
         OcrDocumentProjection::Transformed => {}
     }
     let optional_params = PyDict::new(py);
-    for &name in prepared.parameter_fields {
+    for &name in parameter_fields {
         if let Some(value) = bag.get_item(name)? {
             body.set_item(name, &value)?;
             optional_params.set_item(name, value)?;
         }
     }
     let headers = PyDict::new(py);
-    for (name, value) in &prepared.headers {
+    for (name, value) in &draft_headers {
         headers.set_item(name, value)?;
     }
     let logging = py
@@ -380,22 +392,20 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
     )?;
     let update = PyDict::new(py);
     update.set_item("kwargs", bag)?;
-    update.set_item("model", &prepared.model)?;
+    update.set_item("model", endpoint.model())?;
     update.set_item("optional_params", optional_params)?;
     update.set_item("litellm_params", litellm_params)?;
-    update.set_item("custom_llm_provider", &prepared.custom_llm_provider)?;
+    update.set_item("custom_llm_provider", endpoint.custom_llm_provider())?;
     logging.call_method("update_from_kwargs", (), Some(&update))?;
 
     let additional_args = PyDict::new(py);
     additional_args.set_item("complete_input_dict", &body)?;
-    additional_args.set_item(pyo3::intern!(py, "api_base"), &prepared.url)?;
+    additional_args.set_item(pyo3::intern!(py, "api_base"), endpoint.url())?;
     additional_args.set_item(pyo3::intern!(py, "headers"), &headers)?;
     let pre_call = PyDict::new(py);
     pre_call.set_item("input", "OCR document processing")?;
     pre_call.set_item("api_key", bag.get_item("api_key")?)?;
     pre_call.set_item("additional_args", additional_args)?;
-    logging.call_method(pyo3::intern!(py, "pre_call"), (), Some(&pre_call))?;
-
     let logging = logging.unbind();
     Py::new(
         py,
@@ -404,19 +414,43 @@ fn prepare(py: Python<'_>, arguments: Py<PyDict>, asynchronous: bool) -> PyResul
             body: Some(body.unbind()),
             headers: Some(headers.unbind()),
             logging: Some(logging),
-            prepared: Some(prepared),
+            pre_call: Some(pre_call.unbind()),
+            endpoint: Some(endpoint),
+            asynchronous,
             terminal: None,
         },
     )
 }
 
-type OcrWireRequest = (PreparedOcr, Vec<(String, String)>, Value);
+#[pyfunction]
+fn pre_call(py: Python<'_>, state: Py<OcrState>) -> PyResult<()> {
+    let (logging, arguments) = {
+        let state = state.borrow(py);
+        let logging = state
+            .logging
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("OCR logging state was cleared"))?
+            .clone_ref(py);
+        let arguments = state
+            .pre_call
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("OCR pre-call state was cleared"))?
+            .clone_ref(py);
+        (logging, arguments)
+    };
+    logging
+        .bind(py)
+        .call_method(pyo3::intern!(py, "pre_call"), (), Some(arguments.bind(py)))?;
+    Ok(())
+}
+
+type OcrWireRequest = (SettledOcrRequest, String, String, bool);
 
 fn request(py: Python<'_>, state: &Py<OcrState>) -> PyResult<OcrWireRequest> {
-    let (prepared, body, headers) = {
+    let (endpoint, body, headers, asynchronous) = {
         let mut state = state.borrow_mut(py);
-        let prepared = state
-            .prepared
+        let endpoint = state
+            .endpoint
             .take()
             .ok_or_else(|| PyRuntimeError::new_err("OCR request was already sent or cleared"))?;
         let body = state
@@ -429,21 +463,21 @@ fn request(py: Python<'_>, state: &Py<OcrState>) -> PyResult<OcrWireRequest> {
             .as_ref()
             .ok_or_else(|| PyRuntimeError::new_err("OCR headers were cleared"))?
             .clone_ref(py);
-        (prepared, body, headers)
+        (endpoint, body, headers, state.asynchronous)
     };
-    Ok((
-        prepared,
+    let model = endpoint.model().to_string();
+    let provider = endpoint.custom_llm_provider().to_string();
+    let request = endpoint.settle(
         header_pairs(headers.bind(py))?,
         from_py(body.bind(py).as_any())?,
-    ))
+    );
+    Ok((request, model, provider, asynchronous))
 }
 
 #[pyfunction]
 fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
-    let (prepared, headers, body) = request(py, &state)?;
+    let (request, model, provider, asynchronous) = request(py, &state)?;
     litellm_python_interop::run_async_py(py, async move {
-        let model = prepared.model.clone();
-        let provider = prepared.custom_llm_provider.clone();
         let error_model = model.clone();
         let error_provider = provider.clone();
         let call_id = Python::attach(|py| {
@@ -460,13 +494,11 @@ fn send(py: Python<'_>, state: Py<OcrState>) -> PyResult<Bound<'_, PyAny>> {
                 Ok::<_, std::convert::Infallible>(
                     litellm_core::ocr::ocr(
                         &services,
-                        PreparedOcrCall {
-                            prepared,
-                            headers,
-                            body,
-                        }
-                        .into(),
-                        Options::default(),
+                        request,
+                        Options {
+                            asynchronous,
+                            ..Options::default()
+                        },
                         CallLifecycleContext::new("ocr", &model, &provider, call_id),
                     )
                     .await,
@@ -508,9 +540,7 @@ fn finish(py: Python<'_>, response: Py<PyDict>) -> PyResult<Py<PyAny>> {
 
 #[pyfunction]
 fn send_sync(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
-    let (prepared, headers, body) = request(py, &state)?;
-    let model = prepared.model.clone();
-    let provider = prepared.custom_llm_provider.clone();
+    let (request, model, provider, asynchronous) = request(py, &state)?;
     let error_model = model.clone();
     let error_provider = provider.clone();
     let call_id = state
@@ -526,13 +556,11 @@ fn send_sync(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
             Ok::<_, std::convert::Infallible>(
                 litellm_core::ocr::ocr(
                     &services,
-                    PreparedOcrCall {
-                        prepared,
-                        headers,
-                        body,
-                    }
-                    .into(),
-                    Options::default(),
+                    request,
+                    Options {
+                        asynchronous,
+                        ..Options::default()
+                    },
                     CallLifecycleContext::new("ocr", &model, &provider, call_id),
                 )
                 .await,
@@ -619,6 +647,9 @@ class Host:
     def prepare(self):
         self.state = _prepare(self.current, self.asynchronous)
 
+    def pre_call(self):
+        _pre_call(self.state)
+
     def send_sync(self):
         self.response = _send_sync(self.state)
         self.end = datetime.now()
@@ -674,6 +705,7 @@ class Host:
     module.add("_Lifecycle", py.get_type::<OcrLifecycle>())?;
     module.add("_invoke", wrap_pyfunction!(invoke, &module)?)?;
     module.add("_prepare", wrap_pyfunction!(prepare, &module)?)?;
+    module.add("_pre_call", wrap_pyfunction!(pre_call, &module)?)?;
     module.add("_send", wrap_pyfunction!(send, &module)?)?;
     module.add("_send_sync", wrap_pyfunction!(send_sync, &module)?)?;
     module.add("_finish", wrap_pyfunction!(finish, &module)?)?;
@@ -826,7 +858,9 @@ mod tests {
                     body: None,
                     headers: None,
                     logging: None,
-                    prepared: None,
+                    pre_call: None,
+                    endpoint: None,
+                    asynchronous: false,
                     terminal: Some(TerminalRecord {
                         call_id: "call-1".into(),
                         trace_id: None,
@@ -958,6 +992,9 @@ asyncio.run(exercise())
                 .add_function(wrap_pyfunction!(prepare, &module).unwrap())
                 .unwrap();
             module
+                .add_function(wrap_pyfunction!(pre_call, &module).unwrap())
+                .unwrap();
+            module
                 .add_function(wrap_pyfunction!(send, &module).unwrap())
                 .unwrap();
             let globals = PyDict::new(py);
@@ -1029,7 +1066,17 @@ asyncio.run(exercise())
 
     #[pyfunction]
     fn snapshot(py: Python<'_>, state: Py<OcrState>) -> PyResult<Py<PyAny>> {
-        let (_, headers, body) = request(py, &state)?;
+        let state = state.borrow(py);
+        let headers = state
+            .headers
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("OCR headers were cleared"))?;
+        let body = state
+            .body
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("OCR body was cleared"))?;
+        let headers = header_pairs(headers.bind(py))?;
+        let body: serde_json::Value = from_py(body.bind(py).as_any())?;
         to_py(py, &(headers, body))
     }
 
@@ -1040,6 +1087,9 @@ asyncio.run(exercise())
             let module = PyModule::new(py, "ocr_test").unwrap();
             module
                 .add_function(wrap_pyfunction!(prepare, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(pre_call, &module).unwrap())
                 .unwrap();
             module
                 .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
@@ -1087,6 +1137,7 @@ arguments = dict(model='mistral/mistral-ocr-latest', document=document,
                  api_key='test-key', pages=pages, metadata=metadata,
                  opaque=opaque, litellm_logging_obj=logger, timeout=Timeout())
 state = native.prepare(arguments)
+native.pre_call(state)
 assert logger.calls == ['update', 'pre']
 roots = gc.get_referents(state)
 assert any(root is arguments for root in roots)

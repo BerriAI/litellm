@@ -4,10 +4,10 @@ use litellm_core::Error;
 use litellm_core::constants::ANTHROPIC_MESSAGES_PROVIDER;
 use litellm_core::integrations::custom_logger::{CustomLogger, CustomLoggerRunner, LogFuture};
 use litellm_core::lifecycle::{
-    ActionResult, CallLifecycleContext, Clock, RequestPolicy, TerminalDispatcher, TerminalRecord,
+    ActionResult, CallLifecycleContext, Clock, RequestPolicy, StreamingCall, TerminalDispatcher,
+    TerminalRecord,
 };
 use litellm_core::messages::lifecycle::{self, Options};
-use litellm_core::messages::messages_stream;
 use litellm_core::messages::types::MessagesRequest;
 use litellm_core::router::Router;
 use serde_json::{Map, Value};
@@ -63,7 +63,7 @@ impl TerminalDispatcher for GatewayTerminalDispatcher {
 
 pub(crate) enum MessagesResponse {
     Json(Value),
-    Stream(reqwest::Response),
+    Stream(StreamingCall),
 }
 
 #[tracing::instrument(
@@ -113,11 +113,7 @@ pub async fn run(
         extra_headers,
         timeout: None,
     };
-    if request.body.get("stream").and_then(Value::as_bool) == Some(true) {
-        return messages_stream(request).await.map(MessagesResponse::Stream);
-    }
-
-    let services = GatewayTerminalDispatcher::new(loggers);
+    let services = Arc::new(GatewayTerminalDispatcher::new(loggers));
     let context = CallLifecycleContext::new(
         "messages",
         provider_model,
@@ -130,7 +126,13 @@ pub async fn run(
                 .unwrap_or(0)
         ),
     );
-    let response = lifecycle::messages(&services, request, Options::default(), context)
+    if request.body.get("stream").and_then(Value::as_bool) == Some(true) {
+        return lifecycle::messages_stream(services, request, Options::default(), context)
+            .await
+            .map(MessagesResponse::Stream);
+    }
+
+    let response = lifecycle::messages(&*services, request, Options::default(), context)
         .await
         .into_result()?;
     serde_json::to_value(response)

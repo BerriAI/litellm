@@ -1,0 +1,299 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde_json::{Map, Value, json};
+
+use crate::Error;
+use crate::integrations::custom_guardrail::{
+    CustomGuardrail, CustomGuardrailRunner, GuardrailContext, GuardrailError, GuardrailRequest,
+};
+use crate::integrations::custom_logger::{CallType, CustomLogger, CustomLoggerRunner, LogFuture};
+use crate::integrations::types::{RequestMetadata, StandardLoggingMetadata};
+use crate::lifecycle::{
+    ActionResult, CallLifecycle, CallLifecycleContext, Clock, ExecutedCall, RequestPolicy,
+    TerminalDispatcher, TerminalRecord,
+};
+use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
+
+use super::handler::execute_audio_transcription_provider_call;
+use super::prepare::prepare_audio_transcription_provider_call;
+use super::types::{
+    AudioRouteRequest, AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
+};
+
+pub trait AudioServices: TerminalDispatcher + Clock {
+    fn guardrails(&self) -> CustomGuardrailRunner;
+}
+
+pub struct DefaultAudioServices {
+    dispatcher: CustomLoggerRunner,
+    guardrails: CustomGuardrailRunner,
+}
+
+impl DefaultAudioServices {
+    pub fn new(
+        callbacks: Vec<Arc<dyn CustomLogger>>,
+        guardrails: Vec<Arc<dyn CustomGuardrail>>,
+    ) -> Self {
+        Self {
+            dispatcher: CustomLoggerRunner::new(callbacks),
+            guardrails: CustomGuardrailRunner::new(guardrails),
+        }
+    }
+}
+
+impl Clock for DefaultAudioServices {
+    fn now(&self) -> f64 {
+        crate::lifecycle::SystemClock.now()
+    }
+}
+
+impl TerminalDispatcher for DefaultAudioServices {
+    fn dispatch<'a>(&'a self, terminal: &'a TerminalRecord) -> LogFuture<'a> {
+        self.dispatcher.dispatch(terminal)
+    }
+}
+
+impl AudioServices for DefaultAudioServices {
+    fn guardrails(&self) -> CustomGuardrailRunner {
+        self.guardrails.clone()
+    }
+}
+
+pub struct AudioRoute;
+
+impl AudioRoute {
+    pub async fn execute<S: AudioServices>(
+        services: &S,
+        request: AudioRouteRequest<'_>,
+    ) -> ExecutedCall<Value, Error> {
+        let provider = get_custom_llm_provider(request.model, request.custom_llm_provider)
+            .unwrap_or(CustomLlmProvider {
+                model: request.model,
+                custom_llm_provider: "bedrock",
+            });
+        let context = CallLifecycleContext::new(
+            "audio_transcription",
+            provider.model,
+            provider.custom_llm_provider,
+            request
+                .litellm_call_id
+                .map(str::to_string)
+                .unwrap_or_else(new_audio_transcription_call_id),
+        )
+        .with_metadata(logging_metadata(&request.request_metadata));
+        let policy = AudioRequestPolicy {
+            guardrail_runner: services.guardrails(),
+            request_metadata: request.request_metadata,
+        };
+        let prepared = PreparedAudioTranscriptionRequest {
+            model: provider.model.to_string(),
+            custom_llm_provider: provider.custom_llm_provider.to_string(),
+            audio: request.audio,
+            api_key: request.api_key.map(str::to_string),
+            api_base: request.api_base.map(str::to_string),
+            extra_headers: request.extra_headers,
+            optional_params: request.optional_params,
+            timeout: request.timeout,
+        };
+        CallLifecycle
+            .run(
+                context,
+                prepared,
+                &policy,
+                services,
+                services,
+                execute_audio_transcription_provider_call,
+            )
+            .await
+    }
+}
+
+struct PreparedAudioTranscriptionRequest {
+    model: String,
+    custom_llm_provider: String,
+    audio: Value,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    extra_headers: Option<Map<String, Value>>,
+    optional_params: Map<String, Value>,
+    timeout: Option<std::time::Duration>,
+}
+
+struct AudioRequestPolicy {
+    guardrail_runner: CustomGuardrailRunner,
+    request_metadata: RequestMetadata,
+}
+
+type AudioFuture<'a, T> = Pin<Box<dyn Future<Output = ActionResult<T, Error>> + Send + 'a>>;
+
+impl AudioRequestPolicy {
+    async fn run_pre_call_guardrails(
+        &self,
+        request: PreparedAudioTranscriptionRequest,
+    ) -> Result<PreparedAudioTranscriptionRequest, Error> {
+        if self.guardrail_runner.is_empty() {
+            return Ok(request);
+        }
+        let (guardrail_request, _) = self
+            .guardrail_runner
+            .run_pre_call(
+                &guardrail_context(&self.request_metadata),
+                GuardrailRequest::new(json!({
+                    "model": request.model,
+                    "custom_llm_provider": request.custom_llm_provider,
+                    "audio": request.audio,
+                    "optional_params": request.optional_params,
+                })),
+            )
+            .await
+            .map_err(guardrail_error_to_core_error)?;
+        let Value::Object(mut data) = guardrail_request.data else {
+            return Err(Error::InvalidRequest(
+                "audio transcription pre_call guardrail must return an object".to_string(),
+            ));
+        };
+        let audio = data.remove("audio").ok_or_else(|| {
+            Error::InvalidRequest("audio transcription guardrail removed audio".to_string())
+        })?;
+        let optional_params = match data.remove("optional_params") {
+            Some(Value::Object(value)) => value,
+            Some(_) => {
+                return Err(Error::InvalidRequest(
+                    "audio transcription optional_params must be an object".to_string(),
+                ));
+            }
+            None => Map::new(),
+        };
+        Ok(PreparedAudioTranscriptionRequest {
+            audio,
+            optional_params,
+            ..request
+        })
+    }
+
+    async fn prepare_provider_request(
+        &self,
+        request: PreparedAudioTranscriptionRequest,
+    ) -> Result<ProviderAudioTranscriptionRequest, Error> {
+        let provider_request =
+            prepare_audio_transcription_provider_call(AudioTranscriptionRequest {
+                model: &request.model,
+                audio: request.audio,
+                api_key: request.api_key.as_deref(),
+                api_base: request.api_base.as_deref(),
+                custom_llm_provider: Some(&request.custom_llm_provider),
+                extra_headers: request.extra_headers,
+                optional_params: request.optional_params,
+                timeout: request.timeout,
+            })?;
+        self.run_during_call_guardrails(provider_request).await
+    }
+
+    async fn run_during_call_guardrails(
+        &self,
+        request: ProviderAudioTranscriptionRequest,
+    ) -> Result<ProviderAudioTranscriptionRequest, Error> {
+        if self.guardrail_runner.is_empty() {
+            return Ok(request);
+        }
+        let (guardrail_request, _) = self
+            .guardrail_runner
+            .run_during_call(
+                &guardrail_context(&self.request_metadata),
+                GuardrailRequest::new(json!({
+                    "model": request.model,
+                    "custom_llm_provider": request.custom_llm_provider,
+                    "url": request.url,
+                    "body": request.body,
+                })),
+            )
+            .await
+            .map_err(guardrail_error_to_core_error)?;
+        let Value::Object(mut data) = guardrail_request.data else {
+            return Err(Error::InvalidRequest(
+                "audio transcription during_call guardrail must return an object".to_string(),
+            ));
+        };
+        let body = data.remove("body").ok_or_else(|| {
+            Error::InvalidRequest("audio transcription guardrail removed body".to_string())
+        })?;
+        Ok(ProviderAudioTranscriptionRequest { body, ..request })
+    }
+}
+
+impl RequestPolicy<PreparedAudioTranscriptionRequest, ProviderAudioTranscriptionRequest>
+    for AudioRequestPolicy
+{
+    type PreCallFuture<'a>
+        = AudioFuture<'a, PreparedAudioTranscriptionRequest>
+    where
+        Self: 'a;
+    type DuringCallFuture<'a>
+        = AudioFuture<'a, ProviderAudioTranscriptionRequest>
+    where
+        Self: 'a;
+
+    fn async_pre_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: PreparedAudioTranscriptionRequest,
+    ) -> Self::PreCallFuture<'a> {
+        Box::pin(async move {
+            match self.run_pre_call_guardrails(request).await {
+                Ok(request) => ActionResult::Replace(request),
+                Err(error) => ActionResult::Reject(error),
+            }
+        })
+    }
+
+    fn async_during_call_hook<'a>(
+        &'a self,
+        _: &'a CallLifecycleContext,
+        request: PreparedAudioTranscriptionRequest,
+    ) -> Self::DuringCallFuture<'a> {
+        Box::pin(async move {
+            match self.prepare_provider_request(request).await {
+                Ok(request) => ActionResult::Replace(request),
+                Err(error) => ActionResult::Reject(error),
+            }
+        })
+    }
+}
+
+fn logging_metadata(metadata: &RequestMetadata) -> StandardLoggingMetadata {
+    StandardLoggingMetadata {
+        user_api_key_hash: metadata.user_api_key_hash.clone(),
+        user_api_key_user_id: metadata.user_api_key_user_id.clone(),
+        user_api_key_team_id: metadata.user_api_key_team_id.clone(),
+        ..Default::default()
+    }
+}
+
+fn guardrail_context(metadata: &RequestMetadata) -> GuardrailContext {
+    GuardrailContext {
+        call_type: CallType::Other("audio_transcription".to_string()),
+        selected_guardrails: Vec::new(),
+        metadata: std::collections::HashMap::new(),
+        user_api_key_hash: metadata.user_api_key_hash.clone(),
+        user_api_key_user_id: metadata.user_api_key_user_id.clone(),
+        user_api_key_team_id: metadata.user_api_key_team_id.clone(),
+        trace_parent: None,
+    }
+}
+
+fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
+    Error::InvalidRequest(format!("{}: {}", error.kind, error.message))
+}
+
+fn new_audio_transcription_call_id() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    let sequence = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    format!("audio-transcription-{timestamp}-{sequence}")
+}

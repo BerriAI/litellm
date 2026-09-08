@@ -3,6 +3,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::integrations::types::RequestMetadata;
+
 use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
 
 pub struct AudioTranscriptionRequest<'a> {
@@ -14,6 +16,19 @@ pub struct AudioTranscriptionRequest<'a> {
     pub extra_headers: Option<Map<String, Value>>,
     pub optional_params: Map<String, Value>,
     pub timeout: Option<Duration>,
+}
+
+pub struct AudioRouteRequest<'a> {
+    pub model: &'a str,
+    pub audio: Value,
+    pub api_key: Option<&'a str>,
+    pub api_base: Option<&'a str>,
+    pub custom_llm_provider: Option<&'a str>,
+    pub extra_headers: Option<Map<String, Value>>,
+    pub optional_params: Map<String, Value>,
+    pub timeout: Option<Duration>,
+    pub request_metadata: RequestMetadata,
+    pub litellm_call_id: Option<&'a str>,
 }
 
 #[derive(Clone)]

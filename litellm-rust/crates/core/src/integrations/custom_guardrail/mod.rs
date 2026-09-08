@@ -41,6 +41,7 @@ pub trait CustomGuardrail: Send + Sync {
     }
 }
 
+#[derive(Clone)]
 pub struct CustomGuardrailRunner {
     guardrails: Vec<Arc<dyn CustomGuardrail>>,
 }

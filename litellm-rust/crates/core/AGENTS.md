@@ -42,10 +42,12 @@ core/src/messages/
   client.rs          # the shared reqwest client
 ```
 
-`ocr` is in flight: today it holds only `transformation` and `types`; the rest
-of its lifecycle still lives in the gateway and moves here as it migrates.
-`audio_transcription` and `realtime` are the same. Bringing a route to full
-core shape means giving it a `mod.rs` entrypoint that owns the sequence above.
+`ocr` prepares callback-visible headers and body in `prepare.rs`, settles those
+authoritative roots into a native request after callbacks, and sends it through
+`http_utils::buffered_post`. Reducto upload, Azure Document Intelligence polling,
+and HTTP document URL conversion are declined at admission until they have an
+implementation on this settled-request path. `audio_transcription` and
+`realtime` remain in flight.
 
 The invariant is one function body owns the route lifecycle. The conceptual
 shape is:

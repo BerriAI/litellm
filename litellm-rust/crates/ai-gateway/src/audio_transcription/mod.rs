@@ -1,31 +1,44 @@
 use litellm_core::Error;
-use litellm_core::audio_transcription::execute_audio_transcription_provider_call;
-use litellm_core::lifecycle::{CallLifecycle, CallLifecycleRequest, SystemClock};
+use litellm_core::audio_transcription::{AudioRoute, AudioRouteRequest, DefaultAudioServices};
 use serde_json::Value;
 
-mod hooks;
-mod prepare;
 mod types;
 
 pub use types::AudioTranscriptionRequest;
 
-use prepare::{PreparedAudioTranscriptionCall, prepare_audio_transcription_call};
-
 pub async fn audio_transcription(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
-    let PreparedAudioTranscriptionCall { request, hooks } =
-        prepare_audio_transcription_call(request);
-    let context = request.lifecycle_context();
-    CallLifecycle
-        .run(
-            context,
-            request,
-            &hooks,
-            &hooks,
-            &SystemClock,
-            execute_audio_transcription_provider_call,
-        )
-        .await
-        .into_result()
+    let AudioTranscriptionRequest {
+        model,
+        audio,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        optional_params,
+        timeout,
+        callbacks,
+        guardrails,
+        request_metadata,
+        litellm_call_id,
+    } = request;
+    let services = DefaultAudioServices::new(callbacks, guardrails);
+    AudioRoute::execute(
+        &services,
+        AudioRouteRequest {
+            model,
+            audio,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            optional_params,
+            timeout,
+            request_metadata,
+            litellm_call_id,
+        },
+    )
+    .await
+    .into_result()
 }
 
 #[cfg(test)]

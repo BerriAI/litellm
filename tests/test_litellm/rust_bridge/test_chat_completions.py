@@ -95,16 +95,16 @@ class _RecordingCall:
         self.error = error
         self.calls: list[dict] = []
 
-    def __call__(self, **kwargs):
-        self.calls.append(kwargs)
+    def __call__(self, arguments):
+        self.calls.append(arguments)
         if self.error is not None:
             raise self.error
-        return self.result
+        return bridge.build_model_response(self.result, arguments["model_response"])
 
 
 class _RecordingAsyncCall(_RecordingCall):
-    async def __call__(self, **kwargs):
-        return _RecordingCall.__call__(self, **kwargs)
+    async def __call__(self, arguments):
+        return _RecordingCall.__call__(self, arguments)
 
 
 def _accepts(**overrides) -> bool:
@@ -237,7 +237,6 @@ def _call_kwargs(model_response: ModelResponse) -> dict:
         "custom_llm_provider": "anthropic",
         "extra_headers": {},
         "timeout": 30.0,
-        "on_response": lambda _rust_response: None,
     }
 
 
@@ -265,6 +264,19 @@ class TestSyncCall:
         bridge.set_rust_chat_completions(chat_completions=native)
         bridge.chat_completions(**_call_kwargs(ModelResponse()))
         assert native.calls[0]["timeout_seconds"] == 30.0
+
+    def test_passes_the_full_argument_bag(self):
+        native = _RecordingCall()
+        bridge.set_rust_chat_completions(chat_completions=native)
+        marker = object()
+        kwargs = _call_kwargs(ModelResponse())
+        kwargs["arguments"] = {"litellm_logging_obj": marker, "fallbacks": ["python"]}
+
+        bridge.chat_completions(**kwargs)
+
+        assert native.calls[0]["litellm_logging_obj"] is marker
+        assert native.calls[0]["fallbacks"] == ["python"]
+        assert native.calls[0]["model_response"] is kwargs["model_response"]
 
     def test_falls_back_when_the_bridge_is_unavailable(self, monkeypatch):
         _hide_native_bridge(monkeypatch)

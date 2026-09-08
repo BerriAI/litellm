@@ -3,6 +3,7 @@ pub mod executed;
 pub mod execution;
 pub mod machine;
 pub mod ocr;
+mod streaming;
 pub mod terminal;
 pub mod types;
 
@@ -13,5 +14,9 @@ pub use execution::{
     TerminalDispatcher,
 };
 pub use machine::{Lifecycle, LifecycleRoute};
-pub use terminal::{RouteProjection, TerminalClassification, TerminalRecord};
+pub use streaming::{
+    BytesStream, StreamingCall, StreamingCompletion, StreamingMetadata, StreamingObserver,
+    StreamingSource,
+};
+pub use terminal::{CostInputs, RouteProjection, TerminalClassification, TerminalRecord};
 pub use types::{ActionKind, ActionResult, Delivery, ErrorDisposition, FailurePolicy, Outcome};

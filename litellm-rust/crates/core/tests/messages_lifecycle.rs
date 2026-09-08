@@ -1,7 +1,8 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
+use futures_util::StreamExt;
 use litellm_core::Error;
 use litellm_core::integrations::custom_logger::{LogError, LogFuture};
 use litellm_core::lifecycle::{
@@ -105,6 +106,57 @@ async fn upstream(status: u16) -> (String, tokio::task::JoinHandle<()>) {
     (format!("http://{address}"), server)
 }
 
+async fn streaming_upstream(body: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0_u8; 4096];
+        let _ = socket.read(&mut buffer).await.unwrap();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+    (format!("http://{address}"), server)
+}
+
+async fn pending_streaming_upstream() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0_u8; 4096];
+        let _ = socket.read(&mut buffer).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n5\r\ndata:\r\n",
+            )
+            .await
+            .unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    });
+    (format!("http://{address}"), server)
+}
+
+async fn broken_streaming_upstream() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0_u8; 4096];
+        let _ = socket.read(&mut buffer).await.unwrap();
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 100\r\nconnection: close\r\n\r\ndata: short\n\n",
+            )
+            .await
+            .unwrap();
+    });
+    (format!("http://{address}"), server)
+}
+
 #[tokio::test]
 async fn success_dispatches_exactly_one_terminal() {
     let (api_base, server) = upstream(200).await;
@@ -157,4 +209,130 @@ async fn pre_call_rejection_never_touches_socket() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn stream_eof_dispatches_usage_exactly_once() {
+    let events = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let (api_base, server) = streaming_upstream(events).await;
+    let services = Arc::new(Services::default());
+    let mut stream_request = request(api_base);
+    stream_request.body["stream"] = json!(true);
+    let call = litellm_core::messages::lifecycle::messages_stream(
+        services.clone(),
+        stream_request,
+        Options::default(),
+        context(),
+    )
+    .await
+    .expect("stream starts");
+    let completion = call.completion.register();
+    let bytes = call
+        .stream
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("stream succeeds")
+        .concat();
+
+    assert_eq!(bytes, events.as_bytes());
+    let terminal = completion.await.expect("completion task succeeds");
+    assert_eq!(terminal.classification, TerminalClassification::Success);
+    assert_eq!(terminal.usage.prompt_tokens, 5);
+    assert_eq!(terminal.usage.completion_tokens, 4);
+    assert_eq!(terminal.usage.total_tokens, 9);
+    assert_eq!(services.terminals.lock().unwrap().len(), 1);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn dropping_unregistered_completion_still_dispatches_terminal() {
+    let events = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let (api_base, server) = streaming_upstream(events).await;
+    let services = Arc::new(Services::default());
+    let mut stream_request = request(api_base);
+    stream_request.body["stream"] = json!(true);
+    let call = litellm_core::messages::lifecycle::messages_stream(
+        services.clone(),
+        stream_request,
+        Options::default(),
+        context(),
+    )
+    .await
+    .expect("stream starts");
+    let stream = call.stream;
+    drop(call.completion);
+    stream.collect::<Vec<_>>().await;
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if services.terminals.lock().unwrap().len() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("terminal dispatch completes");
+    assert_eq!(
+        services.terminals.lock().unwrap()[0].classification,
+        TerminalClassification::Success
+    );
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn stream_consumer_drop_dispatches_cancellation_exactly_once() {
+    let (api_base, server) = pending_streaming_upstream().await;
+    let services = Arc::new(Services::default());
+    let mut stream_request = request(api_base);
+    stream_request.body["stream"] = json!(true);
+    let call = litellm_core::messages::lifecycle::messages_stream(
+        services.clone(),
+        stream_request,
+        Options::default(),
+        context(),
+    )
+    .await
+    .expect("stream starts");
+    let completion = call.completion.register();
+    let mut stream = call.stream;
+    assert!(stream.next().await.expect("first chunk exists").is_ok());
+    drop(stream);
+
+    let terminal = completion.await.expect("completion task succeeds");
+    assert!(matches!(
+        terminal.classification,
+        TerminalClassification::Failure { ref kind, .. } if kind == "Cancelled"
+    ));
+    assert_eq!(services.terminals.lock().unwrap().len(), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn stream_transport_error_dispatches_failure_exactly_once() {
+    let (api_base, server) = broken_streaming_upstream().await;
+    let services = Arc::new(Services::default());
+    let mut stream_request = request(api_base);
+    stream_request.body["stream"] = json!(true);
+    let call = litellm_core::messages::lifecycle::messages_stream(
+        services.clone(),
+        stream_request,
+        Options::default(),
+        context(),
+    )
+    .await
+    .expect("stream starts");
+    let completion = call.completion.register();
+    let chunks = call.stream.collect::<Vec<_>>().await;
+
+    assert!(chunks.iter().any(Result::is_err));
+    let terminal = completion.await.expect("completion task succeeds");
+    assert!(matches!(
+        terminal.classification,
+        TerminalClassification::Failure { ref kind, .. } if kind == "NetworkError"
+    ));
+    assert_eq!(services.terminals.lock().unwrap().len(), 1);
+    server.await.unwrap();
 }

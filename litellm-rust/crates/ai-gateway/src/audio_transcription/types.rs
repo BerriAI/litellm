@@ -1,12 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use litellm_core::lifecycle::{CallLifecycleContext, CallLifecycleRequest};
-use serde_json::{Map, Value};
-
 use litellm_core::integrations::custom_guardrail::CustomGuardrail;
 use litellm_core::integrations::custom_logger::CustomLogger;
 use litellm_core::integrations::types::RequestMetadata;
+use serde_json::{Map, Value};
 
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,
@@ -21,27 +19,4 @@ pub struct AudioTranscriptionRequest<'a> {
     pub guardrails: Vec<Arc<dyn CustomGuardrail>>,
     pub request_metadata: RequestMetadata,
     pub litellm_call_id: Option<&'a str>,
-}
-
-pub(crate) struct PreparedAudioTranscriptionRequest {
-    pub(crate) model: String,
-    pub(crate) custom_llm_provider: String,
-    pub(crate) litellm_call_id: String,
-    pub(crate) audio: Value,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_base: Option<String>,
-    pub(crate) extra_headers: Option<Map<String, Value>>,
-    pub(crate) optional_params: Map<String, Value>,
-    pub(crate) timeout: Option<Duration>,
-}
-
-impl CallLifecycleRequest for PreparedAudioTranscriptionRequest {
-    fn lifecycle_context(&self) -> CallLifecycleContext {
-        CallLifecycleContext::new(
-            "audio_transcription",
-            self.model.clone(),
-            self.custom_llm_provider.clone(),
-            self.litellm_call_id.clone(),
-        )
-    }
 }

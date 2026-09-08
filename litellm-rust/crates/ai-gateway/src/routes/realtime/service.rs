@@ -8,10 +8,15 @@
 //! for correctness, only latency.
 
 use std::time::Duration;
+use std::sync::Arc;
 
 use crate::io::realtime_pool::{RealtimePool, upstream_key};
 use futures_util::{Sink, Stream};
 use litellm_core::error::Error;
+use litellm_core::integrations::custom_logger::{CustomLogger, CustomLoggerRunner};
+use litellm_core::integrations::types::{RequestMetadata, StandardLoggingMetadata};
+use litellm_core::lifecycle::{CallLifecycleContext, ExecutedCall};
+use litellm_core::realtime::{RealtimeRequest, realtime};
 use litellm_core::realtime::types::RealtimeEvent;
 use litellm_core::router::Router;
 
@@ -25,10 +30,12 @@ pub async fn run<In, Out>(
     pool: &RealtimePool,
     model: &str,
     idle_timeout: Option<Duration>,
-    observe: impl FnMut(&RealtimeEvent) + Send,
+    loggers: Arc<Vec<Arc<dyn CustomLogger>>>,
+    call_id: String,
+    metadata: RequestMetadata,
     client_in: In,
     client_out: Out,
-) -> Result<(), Error>
+) -> Result<ExecutedCall<(), Error>, Error>
 where
     In: Stream<Item = RealtimeEvent> + Unpin + Send,
     Out: Sink<RealtimeEvent> + Unpin + Send,
@@ -44,34 +51,29 @@ where
         .strip_prefix("openai/")
         .unwrap_or(&params.model);
 
-    // Warm path: take a pooled upstream (handshake already paid) and relay its
-    // buffered session.created immediately. On miss/dead socket fall through.
-    if let Some(key) = upstream_key(
+    let connection = upstream_key(
         provider_model,
         params.api_key.as_deref(),
         params.api_base.as_deref(),
-    ) && let Some(handoff) = pool.take(&key)
-    {
-        return crate::io::realtime::realtime_warm(
-            provider_model,
-            handoff,
+    ).ok_or_else(|| Error::Auth("missing realtime provider API key".to_string()))?;
+    let warm = pool.take(&connection);
+    let context = CallLifecycleContext::new("realtime", model, "openai", call_id)
+        .with_metadata(StandardLoggingMetadata {
+            user_api_key_hash: metadata.user_api_key_hash,
+            user_api_key_user_id: metadata.user_api_key_user_id,
+            user_api_key_team_id: metadata.user_api_key_team_id,
+            ..Default::default()
+        });
+    Ok(realtime(
+        &CustomLoggerRunner::new(loggers.as_ref().clone()),
+        RealtimeRequest {
+            connection,
+            warm,
             idle_timeout,
-            observe,
-            client_in,
-            client_out,
-        )
-        .await;
-    }
-
-    // Cold path: fresh dial (the original behavior).
-    crate::io::realtime::realtime(
-        provider_model,
-        params.api_key.as_deref(),
-        params.api_base.as_deref(),
-        idle_timeout,
-        observe,
+        },
+        context,
         client_in,
         client_out,
     )
-    .await
+    .await)
 }

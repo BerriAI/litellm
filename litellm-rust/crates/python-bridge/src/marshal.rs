@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -34,20 +33,6 @@ impl RouteOptions {
             timeout: optional_timeout(inputs.timeout_seconds)?,
         })
     }
-}
-
-pub(crate) fn required_value(
-    name: &'static str,
-    value: Value,
-    expected: fn(&Value) -> bool,
-    expected_name: &'static str,
-) -> PyResult<Value> {
-    if expected(&value) {
-        return Ok(value);
-    }
-    Err(PyTypeError::new_err(format!(
-        "{name} must be a {expected_name}"
-    )))
 }
 
 pub(crate) fn object_or_empty(
@@ -86,25 +71,6 @@ pub(crate) fn optional_timeout(timeout_seconds: Option<f64>) -> PyResult<Option<
                 .map_err(|_| PyValueError::new_err("timeout_seconds must be a finite duration"))
         })
         .transpose()
-}
-
-pub(crate) fn marshal_headers(headers: Option<Value>) -> PyResult<HashMap<String, String>> {
-    let value = match headers {
-        Some(headers) => headers,
-        None => Value::Object(Map::new()),
-    };
-    let Value::Object(headers) = value else {
-        return Err(PyTypeError::new_err("headers must be a dict"));
-    };
-    headers
-        .into_iter()
-        .map(|(name, value)| {
-            value
-                .as_str()
-                .map(|value| (name, value.to_string()))
-                .ok_or_else(|| PyValueError::new_err("header values must be strings"))
-        })
-        .collect()
 }
 
 #[cfg(test)]

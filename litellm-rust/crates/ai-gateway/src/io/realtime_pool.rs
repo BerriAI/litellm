@@ -27,13 +27,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use futures_util::StreamExt;
-use litellm_core::Error;
-use litellm_core::realtime::types::RealtimeEvent;
-
-use crate::io::realtime::{
-    UpstreamRx, UpstreamTx, UpstreamWs, dial_upstream, read_event, resolve_api_key,
-};
+use litellm_core::realtime::{RealtimeConnectionSpec, warmup};
 
 /// Default target warm sockets per key when pooling is enabled.
 pub const DEFAULT_POOL_SIZE: usize = 4;
@@ -64,38 +58,13 @@ const BACKOFF_MAX: Duration = Duration::from_secs(30);
 /// Identifies an upstream connection: the tuple that fully determines the dial.
 /// `api_key` is included so a warm socket is only ever reused for the same key
 /// (no cross-tenant reuse).
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct UpstreamKey {
-    pub model: String,
-    pub api_key: String,
-    pub api_base: Option<String>,
-}
-
-impl std::fmt::Debug for UpstreamKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UpstreamKey")
-            .field("model", &self.model)
-            .field("api_key", &"[REDACTED]")
-            .field("api_base", &self.api_base)
-            .finish()
-    }
-}
+pub type UpstreamKey = RealtimeConnectionSpec;
 
 /// A warm upstream: split halves + the buffered `session.created` + when it was
 /// warmed (for `max_idle` expiry).
 struct WarmConnection {
-    tx: UpstreamTx,
-    rx: UpstreamRx,
-    session_created: RealtimeEvent,
+    connection: litellm_core::realtime::WarmConnection,
     warmed_at: Instant,
-}
-
-/// A live upstream taken from the pool, ready to splice. The caller relays
-/// `session_created` to the client first, then splices `(tx, rx)` as usual.
-pub struct WarmHandoff {
-    pub tx: UpstreamTx,
-    pub rx: UpstreamRx,
-    pub session_created: RealtimeEvent,
 }
 
 /// Pool configuration, resolved once at startup from the environment.
@@ -256,7 +225,7 @@ impl RealtimePool {
     /// is too old or already dead is dropped (closing it) and the next candidate
     /// tried. Never blocks: if nothing warm is live, returns `None` so the caller
     /// fresh-dials.
-    pub fn take(&self, key: &UpstreamKey) -> Option<WarmHandoff> {
+    pub fn take(&self, key: &UpstreamKey) -> Option<litellm_core::realtime::WarmConnection> {
         if !self.config.enabled() {
             return None;
         }
@@ -273,14 +242,10 @@ impl RealtimePool {
             // Liveness: a non-blocking check that the socket hasn't already
             // delivered a Close/Err. A warm socket should be silent after
             // session.created, so anything pending means it is unhealthy.
-            if is_dead(&mut candidate.rx) {
+            if !candidate.connection.is_live() {
                 continue;
             }
-            return Some(WarmHandoff {
-                tx: candidate.tx,
-                rx: candidate.rx,
-                session_created: candidate.session_created,
-            });
+            return Some(candidate.connection);
         }
     }
 
@@ -377,7 +342,7 @@ impl RealtimePool {
         let mut warm = self.warm.lock().unwrap();
         if let Some(bucket) = warm.get_mut(key) {
             bucket.retain_mut(|conn| {
-                conn.warmed_at.elapsed() <= self.config.max_idle && !is_dead(&mut conn.rx)
+                conn.warmed_at.elapsed() <= self.config.max_idle && conn.connection.is_live()
             });
         }
     }
@@ -438,15 +403,10 @@ impl RealtimePool {
 ///
 /// `key.api_key` is already resolved (non-blank). The first frame OpenAI sends
 /// unprompted is `session.created`; we buffer exactly that and read nothing more.
-async fn warm_one(key: &UpstreamKey) -> Result<WarmConnection, Error> {
-    let upstream: UpstreamWs =
-        dial_upstream(&key.model, &key.api_key, key.api_base.as_deref()).await?;
-    let (tx, mut rx) = upstream.split();
-    let session_created = read_event(&mut rx).await?;
+async fn warm_one(key: &UpstreamKey) -> Result<WarmConnection, litellm_core::Error> {
+    let connection = warmup(key).await?;
     Ok(WarmConnection {
-        tx,
-        rx,
-        session_created,
+        connection,
         warmed_at: Instant::now(),
     })
 }
@@ -459,34 +419,7 @@ pub fn upstream_key(
     api_key: Option<&str>,
     api_base: Option<&str>,
 ) -> Option<UpstreamKey> {
-    let api_key = resolve_api_key(api_key).ok()?;
-    Some(UpstreamKey {
-        model: model.to_string(),
-        api_key,
-        api_base: api_base.map(str::to_string),
-    })
-}
-
-/// Non-blocking liveness check: poll the upstream once. A warm socket is silent
-/// after `session.created`, so a pending `Close`/`Err`/`None` means it is dead.
-/// A pending data frame (shouldn't happen pre-handoff) is also treated as
-/// unhealthy — we'd rather discard and fresh-dial than hand over a socket in an
-/// unexpected state. `Pending` (the healthy case) returns `false`.
-fn is_dead(rx: &mut UpstreamRx) -> bool {
-    use futures_util::Stream;
-    use futures_util::task::noop_waker_ref;
-    use std::pin::Pin;
-    use std::task::{Context, Poll};
-
-    let mut cx = Context::from_waker(noop_waker_ref());
-    match Pin::new(rx).poll_next(&mut cx) {
-        Poll::Pending => false,
-        Poll::Ready(None) => true,
-        Poll::Ready(Some(Err(_))) => true,
-        // Any frame arriving before handoff is unexpected for a silent warm
-        // socket; treat it as unhealthy.
-        Poll::Ready(Some(Ok(_))) => true,
-    }
+    RealtimeConnectionSpec::new(model, api_key, api_base).ok()
 }
 
 #[cfg(test)]

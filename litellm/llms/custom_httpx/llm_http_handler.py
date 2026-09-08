@@ -6543,20 +6543,13 @@ class BaseLLMHTTPHandler:
                 },
             )
 
+            if _rust_responses_websocket_enabled(custom_llm_provider):
+                from litellm.rust_bridge import responses_websocket as rust_responses_websocket
+
+                rust_responses_websocket.admit()
+
             @asynccontextmanager
             async def _backend_connection():
-                if _rust_responses_websocket_enabled(custom_llm_provider):
-                    from litellm.rust_bridge import responses_websocket as rust_responses_websocket
-
-                    rust_backend: Final = await rust_responses_websocket.connect(
-                        url=ws_url,
-                        headers={str(key): str(value) for key, value in headers.items()},
-                        timeout=timeout,
-                    )
-                    if rust_backend is not None:
-                        yield rust_backend
-                        return
-
                 async with websockets.connect(
                     ws_url,
                     additional_headers=headers,

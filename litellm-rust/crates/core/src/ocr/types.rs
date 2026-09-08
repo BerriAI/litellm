@@ -16,12 +16,6 @@ pub struct OcrAdmissionRequest {
     pub stream: bool,
 }
 
-pub struct PreparedOcrCall {
-    pub prepared: PreparedOcr,
-    pub headers: Vec<(String, String)>,
-    pub body: Value,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum OcrDocument {
@@ -65,15 +59,51 @@ pub enum OcrDocumentProjection {
     Transformed,
 }
 
-pub struct PreparedOcr {
-    pub model: String,
-    pub custom_llm_provider: String,
-    pub url: String,
+pub struct OcrDraft {
+    pub endpoint: OcrEndpoint,
     pub headers: Vec<(String, String)>,
     pub body: Map<String, Value>,
     pub document_projection: OcrDocumentProjection,
     pub parameter_fields: &'static [&'static str],
-    pub timeout_seconds: f64,
+}
+
+pub struct OcrEndpoint {
+    pub(super) model: String,
+    pub(super) custom_llm_provider: String,
+    pub(super) url: String,
+    pub(super) timeout_seconds: f64,
+}
+
+impl OcrEndpoint {
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    pub fn custom_llm_provider(&self) -> &str {
+        &self.custom_llm_provider
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn timeout_seconds(&self) -> f64 {
+        self.timeout_seconds
+    }
+
+    pub fn settle(self, headers: Vec<(String, String)>, body: Value) -> SettledOcrRequest {
+        SettledOcrRequest {
+            endpoint: self,
+            headers,
+            body,
+        }
+    }
+}
+
+pub struct SettledOcrRequest {
+    pub(super) endpoint: OcrEndpoint,
+    pub(super) headers: Vec<(String, String)>,
+    pub(super) body: Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

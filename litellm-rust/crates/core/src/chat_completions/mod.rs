@@ -11,6 +11,7 @@ mod client;
 mod common_utils;
 pub mod conversation;
 pub(crate) mod handler;
+pub mod lifecycle;
 mod prepare;
 pub mod response_utils;
 pub mod transformation;
@@ -22,11 +23,98 @@ use handler::execute_chat_completions_provider_call;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
 use types::{ChatCompletionsRequest, ChatCompletionsResponse};
 
+use crate::integrations::custom_logger::CallbackTiming;
+use crate::integrations::types::Usage;
+use crate::lifecycle::{
+    CallLifecycleContext, ExecutedCall, RouteProjection, TerminalClassification, TerminalRecord,
+};
+
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn chat_completions(
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
     execute_chat_completions_provider_call(resolve_request(request)?).await
+}
+
+pub async fn chat_completions_with_terminal(
+    request: ChatCompletionsRequest<'_>,
+    context: CallLifecycleContext,
+) -> ExecutedCall<ChatCompletionsResponse, Error> {
+    let start_time = epoch_seconds();
+    match chat_completions(request).await {
+        Ok(response) => {
+            let usage = Usage {
+                prompt_tokens: response.usage.prompt_tokens,
+                completion_tokens: response.usage.completion_tokens,
+                total_tokens: response.usage.total_tokens,
+            };
+            let projection = serde_json::to_value(&response).unwrap_or(Value::Null);
+            let terminal = terminal(
+                context,
+                start_time,
+                usage,
+                TerminalClassification::Success,
+                projection,
+            );
+            ExecutedCall::Success { response, terminal }
+        }
+        Err(error) => {
+            let kind = match &error {
+                Error::Auth(_) => "AuthError",
+                Error::InvalidProvider(_) => "InvalidProvider",
+                Error::InvalidRequest(_) => "InvalidRequest",
+                Error::InvalidType { .. } => "InvalidType",
+                Error::MissingField(_) => "MissingField",
+                Error::Http { .. } => "HttpError",
+                Error::InvalidResponse(_) => "InvalidResponse",
+                Error::Network(_) => "NetworkError",
+                Error::Connect(_) => "ConnectError",
+                Error::Routing(_) => "RoutingError",
+                Error::Unsupported(_) => "UnsupportedRequest",
+            };
+            let message = error.to_string();
+            let terminal = terminal(
+                context,
+                start_time,
+                Usage::default(),
+                TerminalClassification::Failure {
+                    kind: kind.into(),
+                    message: message.clone(),
+                },
+                serde_json::json!({"kind": kind, "message": message}),
+            );
+            ExecutedCall::Failure { error, terminal }
+        }
+    }
+}
+
+fn terminal(
+    context: CallLifecycleContext,
+    start_time: f64,
+    usage: Usage,
+    classification: TerminalClassification,
+    value: Value,
+) -> TerminalRecord {
+    TerminalRecord {
+        call_id: context.litellm_call_id,
+        trace_id: context.trace_id,
+        attempt: context.attempt,
+        call_type: context.call_type,
+        model: context.model,
+        provider: context.custom_llm_provider,
+        timing: CallbackTiming::new(start_time, epoch_seconds()),
+        usage,
+        cost_inputs: Default::default(),
+        classification,
+        projection: RouteProjection::ChatCompletions { value },
+    }
+}
+
+fn epoch_seconds() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or(0.0)
 }
 
 /// Whether the core would accept this request, without resolving credentials or

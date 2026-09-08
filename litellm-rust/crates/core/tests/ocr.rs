@@ -8,9 +8,7 @@ use litellm_core::Error;
 use litellm_core::lifecycle::CallLifecycleContext;
 use litellm_core::ocr::prepare::prepare;
 use litellm_core::ocr::types::{OcrDocument, OcrDocumentProjection};
-use litellm_core::ocr::{
-    NoopOcrServices, OcrAdmissionRequest as OcrRequest, PreparedOcr, PreparedOcrCall,
-};
+use litellm_core::ocr::{NoopOcrServices, OcrAdmissionRequest as OcrRequest, OcrDraft};
 use serde_json::{Value, json};
 
 fn request() -> OcrRequest {
@@ -32,7 +30,7 @@ fn request() -> OcrRequest {
     }
 }
 
-fn body(prepared: &PreparedOcr) -> Value {
+fn body(prepared: &OcrDraft) -> Value {
     let mut body = prepared.body.clone();
     body.insert(
         "document".into(),
@@ -44,20 +42,15 @@ fn body(prepared: &PreparedOcr) -> Value {
 }
 
 async fn ocr(
-    prepared: PreparedOcr,
+    prepared: OcrDraft,
     headers: Vec<(String, String)>,
     body: Value,
 ) -> Result<litellm_core::ocr::OcrResponseData, Error> {
-    let model = prepared.model.clone();
-    let provider = prepared.custom_llm_provider.clone();
+    let model = prepared.endpoint.model().to_string();
+    let provider = prepared.endpoint.custom_llm_provider().to_string();
     let response = litellm_core::ocr::ocr(
         &NoopOcrServices,
-        PreparedOcrCall {
-            prepared,
-            headers,
-            body,
-        }
-        .into(),
+        prepared.endpoint.settle(headers, body),
         Default::default(),
         CallLifecycleContext::new("ocr", model, provider, "test-call"),
     )
@@ -75,10 +68,10 @@ fn prepares_provider_template_auth_and_url() {
         ..request()
     })
     .unwrap();
-    assert_eq!(prepared.model, "mistral-ocr-latest");
-    assert_eq!(prepared.custom_llm_provider, "mistral");
-    assert_eq!(prepared.url, "https://ocr.example/v1/ocr");
-    assert_eq!(prepared.timeout_seconds, 2.0);
+    assert_eq!(prepared.endpoint.model(), "mistral-ocr-latest");
+    assert_eq!(prepared.endpoint.custom_llm_provider(), "mistral");
+    assert_eq!(prepared.endpoint.url(), "https://ocr.example/v1/ocr");
+    assert_eq!(prepared.endpoint.timeout_seconds(), 2.0);
     assert_eq!(
         prepared.document_projection,
         OcrDocumentProjection::RetainedDocument
@@ -106,8 +99,8 @@ fn prepares_provider_template_auth_and_url() {
         ..request()
     })
     .unwrap();
-    assert_eq!(explicit.model, "mistral-ocr-latest");
-    assert_eq!(explicit.url, "https://api.mistral.ai/v1/ocr");
+    assert_eq!(explicit.endpoint.model(), "mistral-ocr-latest");
+    assert_eq!(explicit.endpoint.url(), "https://api.mistral.ai/v1/ocr");
     assert_eq!(
         explicit.headers,
         vec![("aUtHoRiZaTiOn".into(), "Bearer explicit".into())]
@@ -540,12 +533,26 @@ async fn preserves_callback_body_and_header_changes() {
 }
 
 #[tokio::test]
+async fn settled_headers_are_the_only_headers_sent() {
+    let (base, handle) = server(200, "", "{}", Duration::ZERO);
+    let prepared = prepare(OcrRequest {
+        api_base: Some(base),
+        ..request()
+    })
+    .unwrap();
+    let body = body(&prepared);
+    ocr(prepared, Vec::new(), body).await.unwrap();
+    let (headers, _) = handle.join().unwrap();
+    assert!(!headers.to_ascii_lowercase().contains("authorization:"));
+}
+
+#[tokio::test]
 async fn rejects_unsupported_inputs_before_io() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    for case in ["file", "local", "provider", "compression"] {
-        let mut prepared = prepare(OcrRequest {
+    for case in ["file", "local", "compression"] {
+        let prepared = prepare(OcrRequest {
             api_base: Some(base.clone()),
             ..request()
         })
@@ -555,7 +562,6 @@ async fn rejects_unsupported_inputs_before_io() {
         match case {
             "file" => body["document"] = json!({"type": "file", "file": "private"}),
             "local" => body["document"]["document_url"] = json!("file:///private.pdf"),
-            "provider" => prepared.custom_llm_provider = "cohere".into(),
             "compression" => headers.push(("Content-Encoding".into(), "gzip".into())),
             _ => unreachable!(),
         }

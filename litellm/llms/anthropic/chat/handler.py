@@ -407,8 +407,8 @@ class AnthropicChatCompletion(BaseLLM):
             stream=stream,
         )
         if serves_via_rust:
-            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
+            rust_logging_args: Final = {
+                "complete_input_dict": {
                     "model": model,
                     "messages": messages,
                     **rust_optional_params,
@@ -426,9 +426,6 @@ class AnthropicChatCompletion(BaseLLM):
             if acompletion is True:
 
                 async def python_fallback() -> "ModelResponse | CustomStreamWrapper":
-                    # pre_call already fired for this request above. The Rust
-                    # path only declines before the provider is called, so this
-                    # is the same attempt continuing, not a second one.
                     fallback_headers, fallback_data = build_request()
                     return await self.acompletion_function(
                         model=model,
@@ -463,6 +460,7 @@ class AnthropicChatCompletion(BaseLLM):
                     custom_llm_provider=custom_llm_provider,
                     extra_headers=headers,
                     timeout=timeout,
+                    arguments={**litellm_params, "litellm_logging_obj": logging_obj},
                     on_response=log_rust_post_call,
                     python_fallback=python_fallback,
                 )
@@ -476,6 +474,7 @@ class AnthropicChatCompletion(BaseLLM):
                 custom_llm_provider=custom_llm_provider,
                 extra_headers=headers,
                 timeout=timeout,
+                arguments={**litellm_params, "litellm_logging_obj": logging_obj},
                 on_response=log_rust_post_call,
             )
             if rust_response is not None:
@@ -484,9 +483,6 @@ class AnthropicChatCompletion(BaseLLM):
         headers, data = build_request()
 
         ## LOGGING
-        # Reaching here with `serves_via_rust` set means the Rust attempt
-        # declined at call time, before the provider was called, and already
-        # logged this request. That is the same attempt continuing.
         if not serves_via_rust:
             logging_obj.pre_call(
                 input=messages,

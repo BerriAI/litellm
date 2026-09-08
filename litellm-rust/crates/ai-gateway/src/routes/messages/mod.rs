@@ -10,6 +10,7 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use litellm_core::Error;
+use litellm_core::lifecycle::StreamingCall;
 use serde_json::{Map, Value};
 
 use crate::auth::RequireMasterKey;
@@ -43,26 +44,44 @@ async fn handle(
     }
 }
 
-fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRouteError> {
-    let content_type = upstream
-        .headers()
-        .get(CONTENT_TYPE)
-        .cloned()
+fn stream_response(call: StreamingCall) -> Result<Response, MessagesRouteError> {
+    let content_type = call
+        .metadata
+        .content_type
+        .as_deref()
+        .map(HeaderValue::from_str)
+        .transpose()
+        .map_err(|error| {
+            MessagesRouteError(Error::InvalidResponse(format!(
+                "invalid upstream content type: {error}"
+            )))
+        })?
         .unwrap_or_else(|| HeaderValue::from_static("text/event-stream"));
+    let status = StatusCode::from_u16(call.metadata.status).map_err(|error| {
+        MessagesRouteError(Error::InvalidResponse(format!(
+            "invalid upstream response status: {error}"
+        )))
+    })?;
+    let cache_control = call
+        .metadata
+        .cache_control
+        .as_deref()
+        .map(HeaderValue::from_str)
+        .transpose()
+        .map_err(|error| {
+            MessagesRouteError(Error::InvalidResponse(format!(
+                "invalid upstream cache control: {error}"
+            )))
+        })?;
+    let _completion = call.completion.register();
     let mut response = Response::builder()
-        .status(
-            StatusCode::from_u16(upstream.status().as_u16()).map_err(|error| {
-                MessagesRouteError(Error::InvalidResponse(format!(
-                    "invalid upstream response status: {error}"
-                )))
-            })?,
-        )
+        .status(status)
         .header(CONTENT_TYPE, content_type);
-    if let Some(value) = upstream.headers().get(CACHE_CONTROL) {
+    if let Some(value) = cache_control {
         response = response.header(CACHE_CONTROL, value);
     }
     response
-        .body(Body::from_stream(upstream.bytes_stream()))
+        .body(Body::from_stream(call.stream))
         .map_err(|error| {
             MessagesRouteError(Error::InvalidResponse(format!(
                 "failed to build streaming response: {error}"
@@ -142,6 +161,9 @@ mod tests {
     use axum::http::Request;
     use axum::http::StatusCode;
     use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+    use litellm_core::integrations::custom_logger::{
+        CallbackTiming, CallbackValue, CustomLogger, LogFuture, ModelCallDetails,
+    };
     use litellm_core::router::{Deployment, LiteLLMParams, Router as ModelRouter};
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -151,6 +173,34 @@ mod tests {
     use super::super::app;
     use crate::io::realtime_pool::RealtimePool;
     use crate::state::AppState;
+
+    struct CapturingLogger {
+        sender: tokio::sync::mpsc::UnboundedSender<(u64, u64, bool)>,
+    }
+
+    impl CustomLogger for CapturingLogger {
+        fn async_log_success_event<'a>(
+            &'a self,
+            details: &'a ModelCallDetails,
+            _: &'a CallbackValue,
+            _: CallbackTiming,
+        ) -> LogFuture<'a> {
+            Box::pin(async move {
+                let payload = details
+                    .standard_logging_payload
+                    .as_ref()
+                    .expect("stream terminal has standard payload");
+                self.sender
+                    .send((
+                        payload.prompt_tokens,
+                        payload.completion_tokens,
+                        payload.stream,
+                    ))
+                    .expect("test receiver remains open");
+                Ok(())
+            })
+        }
+    }
 
     fn state(model: &str, api_base: String, master_key: Option<&str>) -> AppState {
         state_with_provider(model, model, api_base, master_key)
@@ -359,10 +409,13 @@ mod tests {
     #[tokio::test]
     async fn route_streams_anthropic_events_without_buffering_or_reordering() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
-        let events = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+        let events = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
         let (api_base, server) =
             streaming_upstream(listener, 200, "text/event-stream", events).await;
-        let app = app(state("claude-test", api_base, Some("master-key")));
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let mut gateway_state = state("claude-test", api_base, Some("master-key"));
+        gateway_state.loggers = Arc::new(vec![Arc::new(CapturingLogger { sender })]);
+        let app = app(gateway_state);
         let response = app
             .oneshot(
                 Request::builder()
@@ -406,6 +459,13 @@ mod tests {
             .await
             .expect("response body reads");
         assert_eq!(response_body, events.as_bytes());
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+                .await
+                .expect("stream completion is registered")
+                .expect("logger receives terminal"),
+            (5, 4, true)
+        );
         let upstream_request = server.await.expect("upstream task completes");
         let (_, upstream_body) = upstream_request
             .split_once("\r\n\r\n")

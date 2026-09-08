@@ -417,8 +417,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             stream=stream,
         )
         if serves_via_rust:
-            rust_logging_args: Final = {  # mutable-ok: logging callbacks read additional_args as a plain dict
-                "complete_input_dict": {  # mutable-ok: same, and it is serialized alongside its parent
+            rust_logging_args: Final = {
+                "complete_input_dict": {
                     "messages": messages,
                     **optional_params,
                 },
@@ -443,6 +443,8 @@ class BedrockConverseLLM(BaseAWSLLM):
                     custom_llm_provider="bedrock",
                     extra_headers=headers,
                     timeout=timeout,
+                    arguments={**litellm_params, "litellm_logging_obj": logging_obj},
+                    logging_api_key="",
                     on_response=log_rust_post_call,
                     python_fallback=lambda: self.async_completion(
                         model=model,
@@ -473,6 +475,8 @@ class BedrockConverseLLM(BaseAWSLLM):
                 custom_llm_provider="bedrock",
                 extra_headers=headers,
                 timeout=timeout,
+                arguments={**litellm_params, "litellm_logging_obj": logging_obj},
+                logging_api_key="",
                 on_response=log_rust_post_call,
             )
             if rust_response is not None:
@@ -544,11 +548,6 @@ class BedrockConverseLLM(BaseAWSLLM):
         )
 
         ## LOGGING
-        # Reaching here with `serves_via_rust` set means the synchronous Rust
-        # attempt declined at call time, before the provider was called, and
-        # already logged this request. That is the same attempt continuing.
-        # The asynchronous branch above returns before this point, and hands
-        # its own fallback `skip_pre_call_logging=True` for the same reason.
         if not serves_via_rust:
             logging_obj.pre_call(
                 input=messages,
