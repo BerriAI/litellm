@@ -26560,6 +26560,23 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** CustomDimension */
+        CustomDimension: {
+            /**
+             * Keywords
+             * @default []
+             */
+            keywords: string[];
+            /** Name */
+            name: string;
+            /**
+             * Patterns
+             * @default []
+             */
+            patterns: string[];
+            /** Weight */
+            weight: number;
+        };
         /**
          * CustomerResponse
          * @description Customer object returned by the /customer read+write endpoints.
@@ -34873,6 +34890,12 @@ export interface components {
              * @default 0.95
              */
             context_window_escalation_buffer: number;
+            /**
+             * Custom Dimensions
+             * @description Named binary dimensions added to the heuristic-v1 score. Each contributes its inline weight once when any keyword matches the current ask or a case-insensitive regex matches its first 2048 characters. Regex quantifiers repeat one character or class at most 64 times. Unbounded quantifiers, repeated groups, backreferences and lookarounds are rejected. Conservative work limits include alternation paths, repeat lengths and subsequent matching: 2048 units per pattern, 8192 across the router. Only heuristic, heuristic_first and hybrid accept this field. Uses the existing heuristic tuning quota.
+             * @default []
+             */
+            custom_dimensions: components["schemas"]["CustomDimension"][];
             /**
              * Custom Technical Keywords
              * @description Domain-specific technical keywords appended to the effective base list (technical_keywords if set, otherwise DEFAULT_TECHNICAL_KEYWORDS). Order is preserved; duplicates are removed case-insensitively against the base list and within this list.
