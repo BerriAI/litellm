@@ -413,6 +413,14 @@ def _map_openai_exception(
                 response=getattr(original_exception, "response", None),
                 litellm_debug_info=extra_information,
             )
+        elif original_exception.status_code == 403 and "spending-limit" in error_str:
+            raise RateLimitError(
+                message=f"RateLimitError: {exception_provider} - {message}",
+                model=model,
+                llm_provider=custom_llm_provider,
+                response=getattr(original_exception, "response", None),
+                litellm_debug_info=extra_information,
+            )
         elif original_exception.status_code == 404:
             raise NotFoundError(
                 message=f"NotFoundError: {exception_provider} - {message}",

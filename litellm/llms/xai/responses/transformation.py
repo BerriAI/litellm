@@ -231,8 +231,9 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
 
             if should_use_xai_oauth(litellm_params.model_dump()):
+                token_file: Final = litellm_params.xai_oauth_token_file
                 try:
-                    api_key = XAIOAuthAuthenticator().get_access_token()
+                    api_key = XAIOAuthAuthenticator(auth_file=token_file).get_access_token()
                 except XAIOAuthError as exc:
                     raise AuthenticationError(
                         model=model,
@@ -268,7 +269,9 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         api_key: Final = XAIModelInfo.get_api_key(litellm_params.get("api_key"), legacy_generic_before_env=True)
         if should_use_xai_oauth(litellm_params) and not api_key:
-            api_base = XAIOAuthAuthenticator().get_api_base()
+            raw_token_file: Final = litellm_params.get("xai_oauth_token_file")
+            token_file: Final = raw_token_file if isinstance(raw_token_file, str) else None
+            api_base = XAIOAuthAuthenticator(auth_file=token_file).get_api_base()
         else:
             api_base = api_base or litellm.api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE
 
