@@ -3445,11 +3445,11 @@ class ProxyLogging:
         assembled output through the endpoint guardrail translation, the same
         machinery flat post_call guardrails use at end of stream. An allow
         releases the buffered chunks: verbatim when no guardrail rewrote the
-        output, rewritten in place when one rewrote text and the translation
-        delivers ended-stream rewrites (later steps then re-scan the rewritten
-        chunks, so rewrites chain). A rewrite the translation cannot deliver
-        yet (a tool-call rewrite, or a text rewrite on a route without
-        write-back) is discarded by the executor and the original chunks are
+        output, rewritten in place when one rewrote text or a tool call and the
+        translation delivers ended-stream rewrites (later steps then re-scan the
+        rewritten chunks, so rewrites chain). A rewrite the translation cannot
+        deliver yet (one on a route without write-back, or a shape the route
+        refuses) is discarded by the executor and the original chunks are
         released, as is a buffered shape no translation resolves; a block or
         modify_response terminates with the translation's block chunks or the
         raised error.

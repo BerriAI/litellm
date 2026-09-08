@@ -924,7 +924,7 @@ class _TextReturningGuardrail(CustomGuardrail):
 
 
 class _TextTranslation:
-    delivers_ended_stream_text_rewrites = False
+    delivers_ended_stream_rewrites = False
 
     def __init__(self):
         self.seen_guardrail_names = []
@@ -946,7 +946,7 @@ class _WritingTranslation:
     """Writes the guardrail's text (and tool-call) outputs back into the buffered chunks the way the
     chat/Responses/Messages handlers do on an ended stream."""
 
-    delivers_ended_stream_text_rewrites = True
+    delivers_ended_stream_rewrites = True
 
     async def process_output_streaming_response(
         self,
@@ -970,7 +970,7 @@ class _WritingTranslation:
 
 
 class _RefusingTranslation:
-    delivers_ended_stream_text_rewrites = True
+    delivers_ended_stream_rewrites = True
 
     async def process_output_streaming_response(
         self,
@@ -1088,12 +1088,26 @@ async def test_streaming_step_delivers_text_rewrite_through_writing_translation(
 
 
 @pytest.mark.asyncio
-async def test_streaming_step_discards_tool_call_rewrite_and_restores_written_text(monkeypatch, caplog):
+async def test_streaming_step_delivers_tool_call_rewrite_through_writing_translation(monkeypatch, caplog):
     monkeypatch.setattr(litellm, "callbacks", [_TextAndToolCallRewritingGuardrail(rewrite_tool_call=True)])
     chunks = [_chunk()]
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
         result = await _run_streaming_step(_WritingTranslation(), chunks)
+
+    assert result.terminal_action == "allow"
+    assert chunks[0]["text"] == "hello [MASKED]"
+    assert chunks[0]["tool_call"]["function"]["arguments"] == '{"ssn": "[MASKED]"}'
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_discards_tool_call_rewrite_when_translation_lacks_write_back(monkeypatch, caplog):
+    monkeypatch.setattr(litellm, "callbacks", [_TextAndToolCallRewritingGuardrail(rewrite_tool_call=True)])
+    chunks = [_chunk()]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_streaming_step(_TextTranslation(), chunks)
 
     _assert_passed_with_discard_warning(result, caplog)
     assert chunks == [_chunk()]

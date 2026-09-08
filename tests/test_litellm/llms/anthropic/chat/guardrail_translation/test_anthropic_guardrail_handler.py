@@ -315,6 +315,72 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert "event: message_start" in raw and "event: message_stop" in raw
         assert '"stop_reason": "end_turn"' in raw
 
+    @staticmethod
+    def _ended_tool_use_sse_chunks() -> list:
+        events = [
+            ("message_start", {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-4-5", "content": [], "stop_reason": None, "usage": {"input_tokens": 1, "output_tokens": 0}}}),
+            ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup_fruit", "input": {}}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": '{"fruit": "persim'}}),
+            ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": 'mon"}'}}),
+            ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+            ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None}, "usage": {"output_tokens": 2}}),
+            ("message_stop", {"type": "message_stop"}),
+        ]
+        return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
+
+    @staticmethod
+    def _argument_masking_guardrail() -> CustomGuardrail:
+        class MaskArguments(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                for tool_call in inputs.get("tool_calls", []):
+                    tool_call.function.arguments = '{"fruit": "[MASKED]"}'
+                return inputs
+
+        return MaskArguments(guardrail_name="test")
+
+    @staticmethod
+    def _partial_jsons(chunks: list) -> list:
+        return [
+            json.loads(line[len("data:") :].strip())["delta"]["partial_json"]
+            for chunk in chunks
+            for line in chunk.decode().split("\n")
+            if line.startswith("data:") and json.loads(line[len("data:") :].strip()).get("type") == "content_block_delta"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_writes_tool_use_input_back_into_sse_chunks(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_tool_use_sse_chunks()
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert self._partial_jsons(chunks) == ['{"fruit": "[MASKED]"}', "", ""]
+        raw = b"".join(chunks).decode()
+        assert '"name": "lookup_fruit"' in raw and '"id": "toolu_1"' in raw
+        assert '"stop_reason": "tool_use"' in raw
+        assert "persim" not in raw
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_tool_use_rewrite_leaves_chunks_untouched_by_default(self):
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_tool_use_sse_chunks()
+        original = [bytes(chunk) for chunk in chunks]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._argument_masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+        )
+
+        assert chunks == original
+
     @pytest.mark.asyncio
     async def test_ended_stream_rewrite_leaves_chunks_untouched_by_default(self):
         handler = AnthropicMessagesHandler()
