@@ -50,3 +50,22 @@ describe("nonReasoningTierFields", () => {
     });
   });
 });
+
+describe("stale references to the cleared tier", () => {
+  const withFloorOnTierZero: ComplexityRouterConfigValue = { ...enabledValue, plan_mode_min_tier: "NON_REASONING" };
+
+  it("releases a plan-mode floor pointing at the tier it just cleared", () => {
+    // The backend rejects a floor naming an inactive tier, and the switch is disabled once the
+    // classifier changes, so a floor left behind is a config the operator cannot save or undo.
+    expect(nonReasoningTierFields("heuristic", withFloorOnTierZero).plan_mode_min_tier).toBeUndefined();
+  });
+
+  it("leaves a floor on another tier alone", () => {
+    const floorOnComplex: ComplexityRouterConfigValue = { ...enabledValue, plan_mode_min_tier: "COMPLEX" };
+    expect(nonReasoningTierFields("heuristic", floorOnComplex).plan_mode_min_tier).toBe("COMPLEX");
+  });
+
+  it("keeps the floor while the classifier can still emit the tier", () => {
+    expect(nonReasoningTierFields("llm", withFloorOnTierZero).plan_mode_min_tier).toBe("NON_REASONING");
+  });
+});

@@ -12,11 +12,16 @@ const NonReasoningTierToggle: React.FC<{
 }> = ({ value, onChange, available }) => {
   const handleToggle = (enabled: boolean): void => {
     const { NON_REASONING: existingPool, ...keptTiers } = value.tiers;
-    const next: ComplexityRouterConfigValue = {
-      ...value,
-      enable_non_reasoning_tier: enabled ? true : undefined,
-      tiers: enabled ? { ...keptTiers, NON_REASONING: existingPool ?? [] } : keptTiers,
-    };
+    // Turning it off must also release the plan-mode floor, which the backend rejects while it
+    // names an inactive tier. An orphaned keyword rule is left for the save gate to name.
+    const next: ComplexityRouterConfigValue = enabled
+      ? { ...value, enable_non_reasoning_tier: true, tiers: { ...keptTiers, NON_REASONING: existingPool ?? [] } }
+      : {
+          ...value,
+          enable_non_reasoning_tier: undefined,
+          tiers: keptTiers,
+          plan_mode_min_tier: value.plan_mode_min_tier === "NON_REASONING" ? undefined : value.plan_mode_min_tier,
+        };
     onChange(next);
   };
 
