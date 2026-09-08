@@ -235,6 +235,39 @@ async def test_streaming_ttft_ranking_ignores_completion_length(sync_mode: bool)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_ttft_window_keeps_newest_samples_when_full(sync_mode: bool):
+    """Float timestamps, as the SDK passes them. Once max_latency_list_size
+    samples exist the oldest TTFT is dropped so the window slides."""
+    max_size = 3
+    cache = DualCache()
+    handler = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"max_latency_list_size": max_size})
+    start_time = 1_700_000_000.0
+    ttfts = (0.1, 0.2, 0.3, 0.4)
+
+    for ttft in ttfts:
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"model_group": MODEL_GROUP},
+                "model_info": {"id": FAST_TTFT_ID},
+            },
+            "stream": True,
+            "completion_start_time": start_time + ttft,
+        }
+        response_obj = _chat_response(completion_tokens=1)
+        if sync_mode:
+            handler.log_success_event(
+                response_obj=response_obj, kwargs=kwargs, start_time=start_time, end_time=start_time + 1.0
+            )
+        else:
+            await handler.async_log_success_event(
+                response_obj=response_obj, kwargs=kwargs, start_time=start_time, end_time=start_time + 1.0
+            )
+
+    assert _recorded_ttft(cache, FAST_TTFT_ID) == [pytest.approx(ttft) for ttft in ttfts[-max_size:]]
+
+
+@pytest.mark.asyncio
 async def test_streaming_routing_ignores_per_token_ttft_samples_from_older_workers():
     """Workers on the previous release share the Redis map and keep writing
     seconds-per-token under the old "time_to_first_token" key during a rolling
