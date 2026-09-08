@@ -504,6 +504,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         provider_config: BaseConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
+        skip_pre_call_logging: bool = False,
     ):
         json_mode: Final[bool] = optional_params.pop("json_mode", False)
         extra_body: Final[Mapping[str, object] | None] = optional_params.pop("extra_body", None)
@@ -563,15 +564,16 @@ class BaseLLMHTTPHandler:
                     model=model,
                 ),
             )
-            logging_obj.pre_call(
-                input=messages,
-                api_key=api_key,
-                additional_args={
-                    "complete_input_dict": data,
-                    "api_base": api_base,
-                    "headers": signed[0],
-                },
-            )
+            if not skip_pre_call_logging:
+                logging_obj.pre_call(
+                    input=messages,
+                    api_key=api_key,
+                    additional_args={
+                        "complete_input_dict": data,
+                        "api_base": api_base,
+                        "headers": signed[0],
+                    },
+                )
             if litellm_params.get("_websearch_interception_converted_stream", False):
                 logging_obj.model_call_details["websearch_interception_converted_stream"] = True
             return data, signed[0], signed[1]

@@ -17,6 +17,9 @@ pub(super) fn chat_completions_provider_config(
         "bedrock" => Some(
             &crate::providers::bedrock::chat_completions::transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
         ),
+        "ollama_chat" => Some(
+            &crate::providers::ollama::chat_completions::transformation::OLLAMA_CHAT_COMPLETIONS_CONFIG,
+        ),
         _ => None,
     }
 }

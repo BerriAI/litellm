@@ -89,7 +89,8 @@ pub struct ChatCompletionsUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
-    pub prompt_tokens_details: PromptTokensDetails,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

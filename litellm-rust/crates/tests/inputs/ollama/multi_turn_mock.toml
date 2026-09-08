@@ -1,0 +1,59 @@
+model = "ollama-chat"
+temperature = 0.0
+seed = 42
+max_tokens = 64
+
+[[messages]]
+role = "system"
+content = "Be terse."
+
+[[messages]]
+role = "user"
+content = "What is 2+2?"
+
+[[messages]]
+role = "assistant"
+content = "4"
+
+[[messages]]
+role = "user"
+content = "And 3+3?"
+
+[[mock.responses]]
+status = 200
+body = '''
+{
+  "model": "qwen3.8:27b",
+  "created_at": "2026-09-04T12:00:00Z",
+  "message": {"role": "assistant", "content": "6"},
+  "done": true,
+  "done_reason": "stop",
+  "prompt_eval_count": 9,
+  "eval_count": 1
+}
+'''
+
+[[mock.responses]]
+status = 200
+body = '''
+{
+  "model": "qwen3.8:27b",
+  "created_at": "2026-09-04T12:00:00Z",
+  "message": {"role": "assistant", "content": "6"},
+  "done": true,
+  "done_reason": "stop",
+  "prompt_eval_count": 9,
+  "eval_count": 1
+}
+'''
+
+[proxy]
+config = '''
+model_list:
+  - model_name: ollama-chat
+    litellm_params:
+      model: ollama_chat/qwen3.8:27b
+      api_base: http://127.0.0.1:$PORT
+general_settings:
+  master_key: sk-1234
+'''

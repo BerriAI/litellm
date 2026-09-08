@@ -1,0 +1,40 @@
+Request 0:
+Parity: True
+ {
+   "messages": [
+     {
+       "content": "Ping.",
+       "images": [],
+       "role": "user"
+     }
+   ],
+   "model": "qwen3.8:27b",
+   "options": {
+     "seed": 7
+   },
+   "stream": false
+ }
+
+Response 0:
+Parity: True
+ {
+   "choices": [
+     {
+       "finish_reason": "stop",
+       "index": 0,
+       "message": {
+         "content": "Pong",
+         "role": "assistant"
+       }
+     }
+   ],
+   "created": "<redacted>",
+   "id": "<redacted>",
+   "model": "ollama-chat",
+   "object": "chat.completion",
+   "usage": {
+     "completion_tokens": 1,
+     "prompt_tokens": 2,
+     "total_tokens": 3
+   }
+ }

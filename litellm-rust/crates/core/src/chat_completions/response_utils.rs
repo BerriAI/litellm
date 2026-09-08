@@ -40,11 +40,11 @@ pub fn usage_from_parts(
         prompt_tokens,
         completion_tokens: output_tokens,
         total_tokens: prompt_tokens + output_tokens,
-        prompt_tokens_details: PromptTokensDetails {
+        prompt_tokens_details: Some(PromptTokensDetails {
             cached_tokens: cache_read_tokens,
             cache_creation_tokens,
             text_tokens: input_tokens,
-        },
+        }),
     }
 }
 
@@ -86,9 +86,10 @@ mod tests {
         assert_eq!(usage.prompt_tokens, 20);
         assert_eq!(usage.completion_tokens, 4);
         assert_eq!(usage.total_tokens, 24);
-        assert_eq!(usage.prompt_tokens_details.cached_tokens, 7);
-        assert_eq!(usage.prompt_tokens_details.cache_creation_tokens, 3);
-        assert_eq!(usage.prompt_tokens_details.text_tokens, 10);
+        let details = usage.prompt_tokens_details.expect("unexpected prompt_tokens_details missing");
+        assert_eq!(details.cached_tokens, 7);
+        assert_eq!(details.cache_creation_tokens, 3);
+        assert_eq!(details.text_tokens, 10);
     }
 
     #[test]
@@ -96,6 +97,7 @@ mod tests {
         let usage = usage_from_parts(12, 5, 0, 0);
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.total_tokens, 17);
-        assert_eq!(usage.prompt_tokens_details.text_tokens, 12);
+        let details = usage.prompt_tokens_details.expect("unexpected prompt_tokens_details missing");
+        assert_eq!(details.text_tokens, 12);
     }
 }

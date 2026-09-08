@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 # Providers whose `/chat/completions` deployments the Rust core can serve. A
 # provider outside this set never reaches the bridge.
-RUST_CHAT_COMPLETIONS_PROVIDERS: Final = frozenset({"anthropic", "bedrock"})
+RUST_CHAT_COMPLETIONS_PROVIDERS: Final = frozenset({"anthropic", "bedrock", "ollama_chat"})
 
 # `litellm_params` values are `object`, so validate the one this module reads
 # rather than narrowing an unparameterized `Mapping` and typing the result Any.
