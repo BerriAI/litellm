@@ -345,7 +345,7 @@ class Cache:
         litellm_param_kwargs: Final = all_litellm_params
         is_semantic_cache: Final = self._is_semantic_cache()
         scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
-        for param in kwargs:
+        for param in sorted(kwargs):
             if param in scope_excluded_params:
                 continue
             if param in combined_kwargs:
