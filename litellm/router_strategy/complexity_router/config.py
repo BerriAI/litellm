@@ -1089,6 +1089,20 @@ class ComplexityRouterConfig(BaseModel):
             "wording the built-ins don't cover, or after a client release changes its strings."
         ),
     )
+    max_tokens_from_tier_model: bool = Field(
+        default=True,
+        description=(
+            "Set max_tokens on every routed request to the output ceiling of the tier model it "
+            "lands on, replacing whatever the caller sent. A caller behind an auto-router cannot "
+            "pick one value that fits every tier: the smallest tier's ceiling starves a bigger "
+            "tier's thinking budget, and a bigger tier's ceiling is rejected by the smallest. The "
+            "ceiling is the smallest max_output_tokens across the tier model's deployments, read "
+            "from each deployment's model_info and then the model cost map; a tier model with a "
+            "deployment whose ceiling is unknown keeps the caller's value. A max_tokens, "
+            "max_completion_tokens or max_output_tokens in the tier's own litellm_params still "
+            "wins. Set false to forward the caller's value unchanged."
+        ),
+    )
     route_housekeeping_to_cheapest_tier: bool = Field(
         default=True,
         description=(

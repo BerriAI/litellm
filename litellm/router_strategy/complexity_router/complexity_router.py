@@ -31,6 +31,7 @@ from litellm._logging import verbose_router_logger
 from litellm.constants import (
     EMPTY_MAPPING,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    OUTPUT_TOKEN_CEILING_PARAMS,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
 )
@@ -2110,11 +2111,15 @@ class ComplexityRouter(CustomLogger):
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
     def _litellm_params_for_model(self, tier: ComplexityTier | str | None, model: str) -> Mapping[str, object]:
-        if tier is None:
-            return MappingProxyType({})
-        entries: Final = self.config.tier_model_configs.get(_tier_name(tier), ())
+        entries: Final = self.config.tier_model_configs.get(_tier_name(tier), ()) if tier is not None else ()
         entry: Final = next((candidate for candidate in entries if candidate.model_name == model), None)
-        return entry.litellm_params if entry is not None else MappingProxyType({})
+        explicit: Final = entry.litellm_params if entry is not None else MappingProxyType({})
+        if not self.config.max_tokens_from_tier_model or not OUTPUT_TOKEN_CEILING_PARAMS.isdisjoint(explicit):
+            return explicit
+        ceiling: Final = self._group_output_ceiling(model)
+        if ceiling is None:
+            return explicit
+        return MappingProxyType({**explicit, "max_tokens": ceiling})
 
     @staticmethod
     def _pick_from_tier_value(model: str | Sequence[str], tier_key: str) -> str:
@@ -2449,12 +2454,15 @@ class ComplexityRouter(CustomLogger):
         return name if self.config.has_custom_tiers else ComplexityTier(name)
 
     def _deployment_window(self, group: str, deployment: Mapping[str, object]) -> int | None:
+        return self._deployment_limit(group, deployment, "max_input_tokens")
+
+    def _deployment_limit(
+        self, group: str, deployment: Mapping[str, object], key: Literal["max_input_tokens", "max_output_tokens"]
+    ) -> int | None:
         from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 
         deployment_model_info: Final = deployment.get("model_info")
-        declared: Final = (
-            deployment_model_info.get("max_input_tokens") if isinstance(deployment_model_info, Mapping) else None
-        )
+        declared: Final = deployment_model_info.get(key) if isinstance(deployment_model_info, Mapping) else None
         if isinstance(declared, int):
             return declared
         litellm_params: Final = deployment.get("litellm_params")
@@ -2471,18 +2479,34 @@ class ComplexityRouter(CustomLogger):
                 deployment=cast(dict, deployment),  # cast-ok: router deployments are plain dicts
                 received_model_name=group,
             )
-            window: Final = model_info.get("max_input_tokens")
+            limit: Final = model_info.get(key)
         except Exception:  # noqa: BLE001  # best-effort: an unmappable deployment must not hide the others
             return None
-        return window if isinstance(window, int) else None
+        return limit if isinstance(limit, int) else None
+
+    def _group_deployments(self, group: str) -> Sequence[Mapping[str, object]]:
+        list_models: Final = getattr(self.litellm_router_instance, "get_model_list", None)
+        deployments: Final = list_models(model_name=group) if callable(list_models) else None
+        return tuple(deployments) if isinstance(deployments, list) else ()
+
+    def _group_output_ceiling(self, group: str) -> int | None:
+        """Smallest max_output_tokens across the group's deployments, or None when any deployment
+        declares none: the core router picks within the group without a fit check, and a ceiling
+        above an unmapped member's real limit is a provider 400 on that member."""
+        deployments: Final = self._group_deployments(group)
+        ceilings: Final = tuple(
+            ceiling
+            for deployment in deployments
+            if (ceiling := self._deployment_limit(group, deployment, "max_output_tokens")) is not None
+        )
+        return min(ceilings) if ceilings and len(ceilings) == len(deployments) else None
 
     def _group_window_facts(self, group: str) -> tuple[int | None, bool]:
         """(smallest declared context window across the group's deployments, whether any deployment
         declares none). The core router picks a deployment within the group without a fit check, so
         the group is only as safe as its smallest member."""
-        list_models: Final = getattr(self.litellm_router_instance, "get_model_list", None)
-        deployments: Final = list_models(model_name=group) if callable(list_models) else None
-        if not isinstance(deployments, list) or not deployments:
+        deployments: Final = self._group_deployments(group)
+        if not deployments:
             return (None, True)
         windows: Final = tuple(
             window for deployment in deployments if (window := self._deployment_window(group, deployment)) is not None
@@ -3531,6 +3555,7 @@ class ComplexityRouter(CustomLogger):
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
             fallback_tier: Final = None if default_model_first else ComplexityTier.MEDIUM
+            default_tier_params: Final = self._litellm_params_for_model(fallback_tier, routed_model)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
@@ -3539,7 +3564,9 @@ class ComplexityRouter(CustomLogger):
                     cause="default_fallback",
                     tier=fallback_tier,
                     conversation_continuing=conversation_continuing,
+                    tier_litellm_params=default_tier_params,
                 ),
+                litellm_params=default_tier_params,
             )
 
         ask: Final = user_message or ""
@@ -3566,6 +3593,7 @@ class ComplexityRouter(CustomLogger):
                 _tier_name(plan_floor),
                 routed_model,
             )
+            plan_tier_params: Final = self._litellm_params_for_model(plan_floor, routed_model)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
@@ -3577,7 +3605,9 @@ class ComplexityRouter(CustomLogger):
                     matched_keyword=plan_mode_sentinel,
                     escalation_keyword=escalation_keyword,
                     escalated=False,
+                    tier_litellm_params=plan_tier_params,
                 ),
+                litellm_params=plan_tier_params,
             )
 
         override: Final = await self._resolve_keyword_tier_override(ask, request_kwargs)
@@ -3670,6 +3700,7 @@ class ComplexityRouter(CustomLogger):
                 outcome.signals,
                 fallback_model,
             )
+            fallback_tier_params: Final = self._litellm_params_for_model(None, fallback_model)
             return PreRoutingHookResponse(
                 model=fallback_model,
                 messages=messages if has_original_messages else None,
@@ -3680,7 +3711,9 @@ class ComplexityRouter(CustomLogger):
                     signals=outcome.signals,
                     escalation_keyword=escalation_keyword,
                     escalated=False,
+                    tier_litellm_params=fallback_tier_params,
                 ),
+                litellm_params=fallback_tier_params,
             )
         if self.config.adaptive:
             # hard_floor rather than a hard pick, and passed whenever the sentinel is present
