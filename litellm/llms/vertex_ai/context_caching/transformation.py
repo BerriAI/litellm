@@ -9,7 +9,11 @@ from collections.abc import Sequence
 from typing import Final, Literal
 
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import CachedContentRequestBody
+from litellm.types.llms.vertex_ai import (
+    CachedContentRequestBody,
+    EncryptedCachedContentRequestBody,
+    EncryptionSpec,
+)
 from litellm.utils import is_cached_message
 
 from ..common_utils import get_supports_system_message
@@ -174,6 +178,7 @@ def transform_openai_messages_to_gemini_context_caching(
     cache_key: str,
     vertex_project: str | None,
     vertex_location: str | None,
+    kms_key_name: str | None = None,
 ) -> CachedContentRequestBody:
     # Extract TTL from cached messages BEFORE system message transformation
     ttl: Final = extract_ttl_from_cached_messages(messages)
@@ -208,4 +213,6 @@ def transform_openai_messages_to_gemini_context_caching(
     if transformed_system_messages is not None:
         data["system_instruction"] = transformed_system_messages
 
-    return data
+    if kms_key_name is None:
+        return data
+    return EncryptedCachedContentRequestBody(**data, encryptionSpec=EncryptionSpec(kmsKeyName=kms_key_name))

@@ -1,3 +1,4 @@
+import json
 from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1558,6 +1559,90 @@ class TestContextCachingEndpoints:
         self.mock_async_client.get.assert_not_called()
         self.mock_async_client.post.assert_not_called()
 
+    KMS_KEY_NAME = "projects/test_project/locations/us-central1/keyRings/litellm/cryptoKeys/context-cache"
+
+    def _cmek_call_kwargs(self, custom_llm_provider):
+        return {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Cached reference material",
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                },
+                {"role": "user", "content": "Question about the material"},
+            ],
+            "optional_params": {},
+            "api_key": "test_key",
+            "api_base": None,
+            "model": "gemini-2.5-pro",
+            "timeout": 30.0,
+            "logging_obj": self.mock_logging,
+            "custom_llm_provider": custom_llm_provider,
+            "vertex_project": "test_project",
+            "vertex_location": "us-central1",
+            "vertex_auth_header": "test_token",
+        }
+
+    def _cached_contents_transport(self, posted_bodies):
+        """Fake Google: the cache list is empty (GET) and every create (POST) succeeds."""
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(200, json={})
+            posted_bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={"name": "new_cache_name", "model": "gemini-2.5-pro"})
+
+        return httpx.MockTransport(handle)
+
+    def _assert_kms_key_only_adds_encryption_spec(self, posted_bodies):
+        plain_body, cmek_body = posted_bodies
+        assert "encryptionSpec" not in plain_body
+        assert cmek_body["encryptionSpec"] == {"kmsKeyName": self.KMS_KEY_NAME}
+        assert {k: v for k, v in cmek_body.items() if k != "encryptionSpec"} == plain_body
+        assert plain_body["contents"][0]["parts"][0]["text"] == "Cached reference material"
+        assert plain_body["model"].endswith("models/gemini-2.5-pro")
+
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    def test_check_and_create_cache_kms_key_adds_encryption_spec(self, custom_llm_provider):
+        """kms_key_name becomes Vertex's `encryptionSpec` on the cache-creation POST and changes nothing else.
+
+        It is forwarded for every provider on purpose: Google AI Studio has no CMEK, so it rejects the field
+        instead of silently caching the content without the customer's key.
+        """
+        posted_bodies = []
+        client = HTTPHandler()
+        client.client = httpx.Client(transport=self._cached_contents_transport(posted_bodies))
+        kwargs = self._cmek_call_kwargs(custom_llm_provider)
+
+        self.context_caching.check_and_create_cache(client=client, **kwargs)
+        _, _, returned_cache = self.context_caching.check_and_create_cache(
+            client=client, kms_key_name=self.KMS_KEY_NAME, **kwargs
+        )
+
+        assert returned_cache == "new_cache_name"
+        self._assert_kms_key_only_adds_encryption_spec(posted_bodies)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"])
+    async def test_async_check_and_create_cache_kms_key_adds_encryption_spec(self, custom_llm_provider):
+        """Async variant of test_check_and_create_cache_kms_key_adds_encryption_spec."""
+        posted_bodies = []
+        client = AsyncHTTPHandler()
+        client.client = httpx.AsyncClient(transport=self._cached_contents_transport(posted_bodies))
+        kwargs = self._cmek_call_kwargs(custom_llm_provider)
+
+        await self.context_caching.async_check_and_create_cache(client=client, **kwargs)
+        _, _, returned_cache = await self.context_caching.async_check_and_create_cache(
+            client=client, kms_key_name=self.KMS_KEY_NAME, **kwargs
+        )
+
+        assert returned_cache == "new_cache_name"
+        self._assert_kms_key_only_adds_encryption_spec(posted_bodies)
 
 def test_cached_messages_end_on_supported_turn():
     from litellm.llms.vertex_ai.context_caching.transformation import (

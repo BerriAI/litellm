@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -475,3 +475,53 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
         {"file_data": {"mime_type": "application/pdf", "file_uri": files_api_pdf}},
     ]
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
+
+
+def test_sync_transform_request_body_forwards_kms_key_name_to_cache_creation():
+    """`kms_key_name` reaches the cachedContents POST as encryptionSpec and never the generateContent body."""
+    kms_key_name = "projects/qa-project/locations/us-central1/keyRings/litellm/cryptoKeys/context-cache"
+    cache_name = "projects/qa-project/locations/us-central1/cachedContents/123"
+    captured = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={})
+        captured["cache_create"] = json.loads(request.content)
+        return httpx.Response(200, json={"name": cache_name, "model": "gemini-2.5-flash"})
+
+    client = HTTPHandler()
+    client.client = httpx.Client(transport=httpx.MockTransport(handle))
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": " ".join(f"clause {i}" for i in range(2000)),
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        },
+        {"role": "user", "content": "Which clause covers termination?"},
+    ]
+
+    body = transformation.sync_transform_request_body(
+        gemini_api_key=None,
+        messages=messages,
+        api_base=None,
+        model="gemini-2.5-flash",
+        client=client,
+        timeout=None,
+        extra_headers=None,
+        optional_params={"kms_key_name": kms_key_name},
+        logging_obj=Mock(),
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        vertex_project="qa-project",
+        vertex_location="us-central1",
+        vertex_auth_header="qa-token",
+    )
+
+    assert captured["cache_create"]["encryptionSpec"] == {"kmsKeyName": kms_key_name}
+    assert body["cachedContent"] == cache_name
+    assert kms_key_name not in json.dumps(body)

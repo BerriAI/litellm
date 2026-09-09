@@ -290,6 +290,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        kms_key_name: str | None = None,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -393,6 +394,7 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
+            kms_key_name=kms_key_name,
         )
 
         cached_content_request_body["tools"] = tools
@@ -449,6 +451,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_auth_header: str | None,
         extra_headers: dict | None = None,
         cached_content: str | None = None,
+        kms_key_name: str | None = None,
     ) -> tuple[list[AllMessageValues], dict, str | None]:
         """
         Receives
@@ -548,6 +551,7 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
+            kms_key_name=kms_key_name,
         )
 
         cached_content_request_body["tools"] = tools
