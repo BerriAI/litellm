@@ -628,3 +628,56 @@ def test_streamed_anthropic_tool_call_events_correlate_on_normalized_item_id():
     assert item_dones[0].item.call_id == "toolu_01AbCdEf"
     for evt in deltas + dones:
         assert evt.item_id == added[0].item.id
+
+
+def _tool_call_chunk(finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_pwd",
+                            "type": "function",
+                            "function": {"name": "run_command", "arguments": '{"command":"pwd"}'},
+                            "index": 0,
+                        }
+                    ],
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+def test_streamed_named_tool_choice_is_echoed_in_responses_api_shape():
+    iterator = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper([_tool_call_chunk(finish_reason="tool_calls")]),
+        request_input="Run the command pwd.",
+        responses_api_request={
+            "tools": [{"type": "function", "name": "run_command", "parameters": {"type": "object"}}],
+            "tool_choice": {"type": "function", "name": "run_command"},
+        },
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    events = list(iterator)
+
+    response_events = [event for event in events if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES]
+    assert [event.type for event in response_events] == [
+        "response.created",
+        "response.in_progress",
+        "response.completed",
+    ]
+    assert response_events[0].response.tool_choice == {"type": "function", "name": "run_command"}
+    assert response_events[1].response.tool_choice == {"type": "function", "name": "run_command"}
+    assert any(getattr(event, "type", None) == "response.output_item.done" for event in events)

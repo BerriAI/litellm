@@ -27,6 +27,7 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 )
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
+from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -68,6 +69,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStatus,
+    ToolChoice,
     ValidChatCompletionMessageContentTypes,
     ValidChatCompletionMessageContentTypesLiteral,
 )
@@ -126,6 +128,7 @@ _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
+_RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
 
 
 @runtime_checkable
@@ -266,6 +269,17 @@ class LiteLLMCompletionResponsesConfig:
 
         # Return as-is for unknown formats
         return tool_choice
+
+    @staticmethod
+    def _transform_tool_choice_for_responses_api_response(tool_choice: object) -> ToolChoice:
+        normalized: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
+        match normalized:
+            case None:
+                return "auto"
+            case {"type": "function", "function": {"name": str(function_name)}}:
+                return ToolChoiceFunctionParam(type="function", name=function_name)
+            case _:
+                return _RESPONSES_API_TOOL_CHOICE_ADAPTER.validate_python(normalized)
 
     @staticmethod
     def _should_drop_derived_web_search_options(model: str, custom_llm_provider: str | None) -> bool:
@@ -2263,7 +2277,9 @@ class LiteLLMCompletionResponsesConfig:
             ),
             parallel_tool_calls=getattr(chat_completion_response, "parallel_tool_calls", False),
             temperature=getattr(chat_completion_response, "temperature", 0),
-            tool_choice=getattr(chat_completion_response, "tool_choice", "auto"),
+            tool_choice=LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+                responses_api_request.get("tool_choice")
+            ),
             tools=getattr(chat_completion_response, "tools", []),
             top_p=getattr(chat_completion_response, "top_p", None),
             max_output_tokens=getattr(chat_completion_response, "max_output_tokens", None),
