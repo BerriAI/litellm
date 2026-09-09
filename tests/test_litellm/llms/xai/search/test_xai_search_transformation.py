@@ -317,6 +317,30 @@ class TestXAISearchConfigTransformResponse:
         resp = _config().transform_search_response(_resp(payload), logging_obj=Mock())
         assert [r.url for r in resp.results] == ["https://example.com"]
 
+    def test_caps_results_to_max_results(self):
+        annotations = [_citation(f"https://example.com/{i}", f"T{i}") for i in range(5)]
+        resp = _config().transform_search_response(
+            _resp(_message_response("claim", annotations)), logging_obj=Mock(), optional_params={"max_results": 2}
+        )
+        assert [r.url for r in resp.results] == ["https://example.com/0", "https://example.com/1"]
+
+    def test_without_max_results_returns_all_citations(self):
+        annotations = [_citation(f"https://example.com/{i}", f"T{i}") for i in range(4)]
+        resp = _config().transform_search_response(
+            _resp(_message_response("claim", annotations)), logging_obj=Mock()
+        )
+        assert len(resp.results) == 4
+
+    @pytest.mark.parametrize("max_results", [True, False, 0, -1, "5"])
+    def test_ignores_invalid_max_results_and_returns_all_citations(self, max_results: object):
+        annotations = [_citation(f"https://example.com/{i}", f"T{i}") for i in range(3)]
+        resp = _config().transform_search_response(
+            _resp(_message_response("claim", annotations)),
+            logging_obj=Mock(),
+            optional_params={"max_results": max_results},
+        )
+        assert len(resp.results) == 3
+
 
 class TestXAISearchConfigCost:
     def test_uses_xai_reported_ticks_when_present(self):
@@ -416,6 +440,27 @@ class TestXAISearchConfigCost:
         assert resp._hidden_params["additional_headers"][
             "llm_provider-x-litellm-response-cost"
         ] == pytest.approx(transformation._PER_CITATION_SURCHARGE_USD * 2)
+
+    def test_surcharge_uses_full_citation_count_even_when_results_are_capped(self, monkeypatch: pytest.MonkeyPatch):
+        def fake_get_model_info(model: str, custom_llm_provider: str):
+            if model == "xai/grok-4-fast-non-reasoning":
+                return {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}
+            raise Exception("not mapped")
+
+        monkeypatch.setattr(transformation, "get_model_info", fake_get_model_info)
+        annotations = [_citation(f"https://example.com/{i}", f"T{i}") for i in range(5)]
+        payload = _message_response(
+            "claim",
+            annotations,
+            usage={"input_tokens": 0, "output_tokens": 0, "output_tokens_details": {"reasoning_tokens": 0}},
+        )
+        resp = _config().transform_search_response(
+            _resp(payload), logging_obj=Mock(), optional_params={"max_results": 2}
+        )
+        assert len(resp.results) == 2
+        assert resp._hidden_params["additional_headers"][
+            "llm_provider-x-litellm-response-cost"
+        ] == pytest.approx(transformation._PER_CITATION_SURCHARGE_USD * 5)
 
 
 class TestXAISearchConfigGetErrorClass:

@@ -163,6 +163,19 @@ def _requested_model(response_kwargs: Mapping[str, object]) -> str:
     return _model(optional_params)
 
 
+def _valid_max_results(max_results: object) -> int | None:
+    if isinstance(max_results, bool) or not isinstance(max_results, int):
+        return None
+    return max_results if max_results > 0 else None
+
+
+def _requested_max_results(response_kwargs: Mapping[str, object]) -> int | None:
+    optional_params: Final = response_kwargs.get("optional_params")
+    if not isinstance(optional_params, Mapping):
+        return None
+    return _valid_max_results(optional_params.get("max_results"))
+
+
 def _x_search_tool(optional_params: Mapping[str, object]) -> _XSearchTool:
     return _XSearchTool(
         allowed_x_handles=_typed_str_tuple(optional_params.get("allowed_x_handles")),
@@ -325,19 +338,22 @@ class XAISearchConfig(BaseSearchConfig):
                 else "unknown reason"
             )
             raise self._upstream_error(f"the search was incomplete: {reason}", raw_response)
-        return self._priced(results, parsed.usage, _requested_model(kwargs))
+        max_results: Final = _requested_max_results(kwargs)
+        capped_results: Final = results[:max_results] if max_results is not None else results
+        return self._priced(capped_results, parsed.usage, _requested_model(kwargs), len(results))
 
     def _priced(
         self,
         results: tuple[SearchResult, ...],
         usage: _Usage | None,
         model: str,
+        distinct_citation_count: int,
     ) -> SearchResponse:
         response: Final = SearchResponse(
             results=list(results),  # mutable-ok: SearchResponse.results is list[SearchResult]
             object="search",
         )
-        cost: Final = _resolved_cost(usage, model, len(results))
+        cost: Final = _resolved_cost(usage, model, distinct_citation_count)
         if cost is not None:
             response._hidden_params[  # pyright: ignore[reportPrivateUsage]  # response_cost_calculator's own contract
                 "additional_headers"
