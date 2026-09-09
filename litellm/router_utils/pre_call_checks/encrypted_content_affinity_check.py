@@ -30,8 +30,8 @@ This pre-call check is responsible only for the routing decision: it reads the e
 the matching deployment.
 
 Safe to enable globally:
-- Only activates when encoded markers appear in the request ``input``.
-- No effect on embedding models, chat completions, or first-time requests.
+- Only pins requests carrying encoded markers in ``input`` or assistant ``reasoning_items``.
+- No effect on embedding models or first-time deployment selection.
 - No quota reduction -- first requests are fully load balanced.
 - No cache required.
 """
@@ -67,8 +67,8 @@ class _SupportsActiveCooldowns(Protocol):
 
 class EncryptedContentAffinityCheck(CustomLogger):
     """
-    Routes follow-up Responses API requests to the deployment that produced
-    the encrypted output items they reference.
+    Routes follow-up Responses API and bridged chat requests to the deployment
+    that produced the encrypted output items they reference.
 
     The ``model_id`` is decoded directly from the litellm-encoded item IDs –
     no caching or TTL management needed.
@@ -148,6 +148,16 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
+    def _extract_model_id_from_messages(messages: list[AllMessageValues] | None) -> str | None:
+        for message in messages or []:
+            if message.get("role") != "assistant":
+                continue
+            model_id: Final = EncryptedContentAffinityCheck._extract_model_id_from_input(message.get("reasoning_items"))
+            if model_id:
+                return model_id
+        return None
+
+    @staticmethod
     def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
@@ -223,7 +233,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         parent_otel_span: Span | None = None,
     ) -> list[dict]:
         """
-        If the request ``input`` contains litellm-encoded item IDs, decode the
+        If ``input`` or assistant ``reasoning_items`` contain encoded item IDs, decode the
         embedded ``model_id`` and pin the request to that deployment. Raises
         ``RateLimitError`` / ``ServiceUnavailableError`` / ``BadRequestError``
         when the originating deployment is unavailable and no encryption-boundary
@@ -233,23 +243,22 @@ class EncryptedContentAffinityCheck(CustomLogger):
         remaining cooldown window) so OpenAI-compatible clients back off and
         retry after the deployment is eligible again.
         """
-        request_kwargs = request_kwargs or {}
+        routing_kwargs: Final = request_kwargs if request_kwargs is not None else {}
         typed_healthy_deployments: Final = cast(list[dict], healthy_deployments)
         if not self._is_enabled_for_model_group(model):
             return typed_healthy_deployments
 
-        # Signal to the response post-processor that encrypted item IDs should be
-        # encoded in the output of this request.  Only set the flag when
-        # litellm_metadata already exists (Responses API path).  Using
-        # setdefault would create an empty litellm_metadata dict for chat
-        # completions / embeddings, which breaks tag-based routing because
-        # _get_metadata_variable_name_from_kwargs would pick "litellm_metadata"
-        # over "metadata" where tags are actually stored.
-        if "litellm_metadata" in request_kwargs:
-            request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"] = True
+        # The chat bridge merges metadata into litellm_metadata after routing;
+        # creating litellm_metadata here would hide chat routing tags.
+        if "litellm_metadata" in routing_kwargs or messages is not None:
+            metadata_key: Final = "litellm_metadata" if "litellm_metadata" in routing_kwargs else "metadata"
+            routing_kwargs[metadata_key] = {
+                **(routing_kwargs.get(metadata_key) or {}),
+                "encrypted_content_affinity_enabled": True,
+            }
 
-        request_input: Final = request_kwargs.get("input")
-        model_id: Final = self._extract_model_id_from_input(request_input)
+        request_input: Final = routing_kwargs.get("input")
+        model_id: Final = self._extract_model_id_from_input(request_input) or self._extract_model_id_from_messages(messages)
         if not model_id:
             return typed_healthy_deployments
 
@@ -267,7 +276,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 "EncryptedContentAffinityCheck: pinning -> deployment=%s",
                 model_id,
             )
-            request_kwargs["_encrypted_content_affinity_pinned"] = True
+            routing_kwargs["_encrypted_content_affinity_pinned"] = True
             return [deployment]
 
         # Follow-up switched model_name (LIT-2531): pin by Azure resource instead.
@@ -282,7 +291,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
                 model_id,
                 len(boundary_matches),
             )
-            request_kwargs["_encrypted_content_affinity_pinned"] = True
+            routing_kwargs["_encrypted_content_affinity_pinned"] = True
             return boundary_matches
 
         # Dispatching to a non-peer would guarantee an upstream

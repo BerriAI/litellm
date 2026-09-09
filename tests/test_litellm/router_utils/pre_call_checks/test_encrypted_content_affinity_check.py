@@ -16,15 +16,19 @@ The mechanism works without any cache and supports two encoding strategies:
 """
 
 import time
-from typing import List, Optional
+from typing import Final, List, Optional
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import (
+    ChatCompletionAssistantMessage,
+    ChatCompletionReasoningItem,
+    ResponsesAPIResponse,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -711,6 +715,108 @@ def test_encrypted_content_wrapping_with_multiple_semicolons():
 from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
     EncryptedContentAffinityCheck,
 )
+
+
+class _ChatAffinityModelInfo(TypedDict):
+    id: ReadOnly[str]
+
+
+class _ChatAffinityDeployment(TypedDict):
+    model_info: ReadOnly[_ChatAffinityModelInfo]
+
+
+class _ChatAffinityMetadata(TypedDict, total=False):
+    tags: ReadOnly[list[str]]
+    model_info: ReadOnly[_ChatAffinityModelInfo]
+    encrypted_content_affinity_enabled: ReadOnly[bool]
+
+
+class _ChatAffinityRequest(TypedDict, total=False):
+    metadata: ReadOnly[_ChatAffinityMetadata]
+    litellm_metadata: ReadOnly[_ChatAffinityMetadata]
+    _encrypted_content_affinity_pinned: ReadOnly[bool]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize("keep_item_id", [True, False])
+@pytest.mark.parametrize("stream", [True, False])
+async def test_chat_bridge_encrypted_content_affinity_roundtrip(
+    enabled: bool, keep_item_id: bool, stream: bool
+) -> None:
+    from openai.types.responses import ResponseFunctionToolCall, ResponseReasoningItem
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+    from litellm.types.llms.openai import ResponseCompletedEvent
+
+    check: Final = EncryptedContentAffinityCheck(enable_global_affinity=enabled)
+    bridge: Final = LiteLLMResponsesTransformationHandler()
+    deployments: Final = [
+        _ChatAffinityDeployment(model_info={"id": "origin"}),
+        _ChatAffinityDeployment(model_info={"id": "other"}),
+    ]
+    request: Final = _ChatAffinityRequest(metadata={"tags": ["prod"], "model_info": {"id": "origin"}})
+    first: Final = await check.async_filter_deployments("group", deployments, [], request)
+    assert first == deployments
+    assert "litellm_metadata" not in request
+    assert request["metadata"]["tags"] == ["prod"]
+    assert request["metadata"].get("encrypted_content_affinity_enabled", False) is enabled
+
+    sanitized: Final = bridge._build_sanitized_litellm_params(request)
+    response: Final = ResponsesAPIResponse(
+        id="resp_example",
+        created_at=1,
+        model="example",
+        output=[
+            ResponseReasoningItem(type="reasoning", id="rs_example", summary=[], encrypted_content="opaque"),
+            ResponseFunctionToolCall(type="function_call", call_id="call_example", name="get_weather", arguments="{}"),
+        ],
+    )
+    ResponsesAPIRequestUtils._update_responses_api_response_id_with_model_id(
+        response, "openai", sanitized["litellm_metadata"]
+    )
+    stored_items: Final = (
+        OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            ResponseCompletedEvent(type="response.completed", response=response)
+        ).choices[0].delta.reasoning_items
+        if stream
+        else bridge._convert_response_output_to_choices(response.output)[0].message.reasoning_items
+    )
+    assert stored_items
+    stored: Final = stored_items[0]
+    assert stored["id"].startswith("encitem_") is enabled
+    replay: Final = ChatCompletionReasoningItem(
+        type="reasoning", summary=[], encrypted_content=stored["encrypted_content"],
+        **({"id": stored["id"]} if keep_item_id else {}),
+    )
+    messages: Final = [ChatCompletionAssistantMessage(role="assistant", content=None, reasoning_items=[replay])]
+    followup: Final = _ChatAffinityRequest(metadata={"tags": ["prod"]})
+    second: Final = await check.async_filter_deployments("group", deployments, messages, followup)
+    assert second == (deployments[:1] if enabled else deployments)
+    assert followup.get("_encrypted_content_affinity_pinned", False) is enabled
+    assert "litellm_metadata" not in followup
+    assert followup["metadata"]["tags"] == ["prod"]
+
+    response_input, _ = bridge.convert_chat_completion_messages_to_responses_api(messages)
+    restored: Final = ResponsesAPIRequestUtils._restore_encrypted_content_item_ids_in_input(response_input)
+    assert restored[0]["encrypted_content"] == "opaque"
+    if keep_item_id:
+        assert restored[0]["id"] == "rs_example"
+    assert messages[0]["reasoning_items"][0] == replay
+
+
+@pytest.mark.asyncio
+async def test_chat_affinity_marks_empty_kwargs_without_affecting_embeddings() -> None:
+    check: Final = EncryptedContentAffinityCheck()
+    chat_kwargs: Final = _ChatAffinityRequest()
+    embedding_kwargs: Final = _ChatAffinityRequest()
+    await check.async_filter_deployments("group", [], [], chat_kwargs)
+    await check.async_filter_deployments("group", [], None, embedding_kwargs)
+    assert chat_kwargs == {"metadata": {"encrypted_content_affinity_enabled": True}}
+    assert embedding_kwargs == {}
 
 
 @pytest.mark.asyncio
