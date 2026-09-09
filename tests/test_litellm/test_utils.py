@@ -188,6 +188,8 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
         ("perplexity/perplexity/kimi-k3", True),
         ("perplexity/perplexity/deepseek-v4-flash-0731", True),
         ("perplexity/perplexity/kimi-k2.7-code", False),
+        ("perplexity/perplexity/nemotron-3.5-lightning-30b-a3b", True),
+        ("perplexity/perplexity/nemotron-3-ultra-550b-a55b", True),
     ):
         assert litellm.supports_reasoning(model=model) is reasoning, model
 
@@ -198,6 +200,18 @@ def test_get_model_info_resolves_provider_prefixed_model_ids(local_model_cost_ma
     assert via_provider["input_cost_per_token"] == 1.4e-06
     assert via_provider["output_cost_per_token"] == 4.4e-06
     assert via_provider["mode"] == "responses"
+
+    lightning = litellm.get_model_info(
+        model="perplexity/nemotron-3.5-lightning-30b-a3b", custom_llm_provider="perplexity"
+    )
+    assert lightning["key"] == "perplexity/perplexity/nemotron-3.5-lightning-30b-a3b"
+    assert lightning["input_cost_per_token"] == 1.15e-08
+    assert lightning["output_cost_per_token"] == 1.7e-07
+    assert lightning["cache_read_input_token_cost"] == 1.15e-09
+    assert lightning["mode"] == "responses"
+
+    ultra = litellm.get_model_info(model="perplexity/perplexity/nemotron-3-ultra-550b-a55b")
+    assert ultra["key"] == "perplexity/perplexity/nemotron-3-ultra-550b-a55b"
 
 
 def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
