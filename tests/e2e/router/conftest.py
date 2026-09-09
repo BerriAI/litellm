@@ -10,13 +10,12 @@ proxy does not already list it (compose has it in static config; stage does not)
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 
 import pytest
-from requests import RequestException
-
 from complexity_router_client import ComplexityRouterClient, build_client
-from proxy_client import ProxyClient
+from e2e_config import REDIS_TIMEOUT_OPT_IN_ENV
 from e2e_http import NoBody, Success
 from lifecycle import ResourceManager
 from models import (
@@ -26,6 +25,8 @@ from models import (
     LiteLLMParamsBody,
     ModelsListResponse,
 )
+from proxy_client import ProxyClient
+from requests import RequestException
 
 ROUTER_MODEL = "complexity-smart-router"
 ROUTER_PARAMS = LiteLLMParamsBody(
@@ -43,6 +44,16 @@ ROUTER_PARAMS = LiteLLMParamsBody(
 )
 # Key must be allowed to call the virtual router and both tier backends.
 ROUTER_KEY_MODELS = [ROUTER_MODEL, "gpt-5.5", "claude-haiku-4-5"]
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if os.environ.get(REDIS_TIMEOUT_OPT_IN_ENV):
+        return
+    deselected = [item for item in items if item.get_closest_marker("redis_timeout") is not None]
+    if not deselected:
+        return
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = [item for item in items if item.get_closest_marker("redis_timeout") is None]
 
 
 @pytest.fixture(scope="session")
@@ -120,8 +131,6 @@ def _ensure_complexity_smart_router(  # pyright: ignore[reportUnusedFunction]  #
 @pytest.fixture
 def complexity_key(resources: ResourceManager, client: ComplexityRouterClient) -> str:
     """Per-test key allowed to call the complexity router and its tier backends."""
-    key = client.proxy.generate_key(
-        KeyGenerateBody(models=ROUTER_KEY_MODELS, user_id="e2e-complexity-router")
-    )
+    key = client.proxy.generate_key(KeyGenerateBody(models=ROUTER_KEY_MODELS, user_id="e2e-complexity-router"))
     resources.defer(lambda: client.proxy.delete_key(key))
     return key
