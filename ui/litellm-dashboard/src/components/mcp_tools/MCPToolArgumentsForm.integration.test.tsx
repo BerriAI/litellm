@@ -41,7 +41,7 @@ describe("MCPToolArgumentsForm", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "filter.category *" }), {
       target: { value: "invoices" },
     });
-    fireEvent.change(screen.getByRole("textbox", { name: "filter", exact: true }), {
+    fireEvent.change(screen.getByRole("textbox", { name: "filter" }), {
       target: { value: '{"category":"receipts","metadata":{"region":"eu"}}' },
     });
     fireEvent.change(screen.getByRole("spinbutton", { name: "page.limit" }), { target: { value: "7" } });
