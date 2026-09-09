@@ -67,8 +67,8 @@ def parse_call_response(response: httpx.Response, alias: str, owner: str, expire
 
 
 def build_sideband_request(call: CodexRealtimeCall) -> CodexSidebandRequest:
-    return {
-        "model": f"chatgpt/{call.model}",
-        "chatgpt_realtime_call_id": call.call_id,
-        "query_params": {"model": call.model},
-    }
+    return CodexSidebandRequest(
+        model=f"chatgpt/{call.model}",
+        chatgpt_realtime_call_id=call.call_id,
+        query_params=RealtimeQueryParams(model=call.model),
+    )
