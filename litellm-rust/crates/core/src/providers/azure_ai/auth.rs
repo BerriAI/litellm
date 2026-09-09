@@ -1,3 +1,5 @@
+use crate::auth::error::MissingCredential;
+use crate::auth::error::AuthConfigurationError;
 use std::sync::OnceLock;
 
 use crate::auth::azure::{AzureAuthInputs, AzureAuthService};
@@ -6,7 +8,7 @@ use crate::auth::{
     CredentialPlacement, CredentialPlanKind, CredentialRef, CredentialRule, ExistingHeaderBehavior,
     ProviderAuthPolicy, ResolvedCredential, SecretValue,
 };
-use crate::error::{AuthError, Error};
+use crate::error::AuthError;
 
 pub const AZURE_AI_API_KEY_ENV: &str = "AZURE_AI_API_KEY";
 pub const AZURE_AI_API_BASE_ENV: &str = "AZURE_AI_API_BASE";
@@ -53,19 +55,19 @@ fn resolve_value(
     env_name: &str,
     env_lookup: &dyn Fn(&str) -> Option<String>,
     missing_error: AuthError,
-) -> Result<String, Error> {
+) -> Result<String, AuthError> {
     explicit
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .or_else(|| env_lookup(env_name).filter(|value| !value.trim().is_empty()))
-        .ok_or(Error::Auth(missing_error))
+        .ok_or(missing_error)
 }
 
 pub fn resolve_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, AuthError> {
     resolve_value(
         api_key,
         AZURE_AI_API_KEY_ENV,
@@ -79,7 +81,7 @@ pub fn resolve_api_key(
 pub fn resolve_api_base(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, AuthError> {
     resolve_value(
         api_base,
         AZURE_AI_API_BASE_ENV,
@@ -94,7 +96,7 @@ pub fn resolve_api_base(
 pub fn resolve_document_intelligence_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, AuthError> {
     resolve_value(
         api_key,
         AZURE_DOCUMENT_INTELLIGENCE_API_KEY_ENV,
@@ -108,7 +110,7 @@ pub fn resolve_document_intelligence_api_key(
 pub fn resolve_document_intelligence_endpoint(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, AuthError> {
     resolve_value(
         api_base,
         AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT_ENV,
@@ -124,7 +126,7 @@ pub fn validate_environment(
     headers: Vec<(String, String)>,
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, AuthError> {
     if headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case("Authorization"))
@@ -132,7 +134,7 @@ pub fn validate_environment(
         return Ok(headers);
     }
     let api_key = resolve_api_key(api_key, env_lookup)?;
-    apply_credential(headers, &api_key, CredentialPlacement::Bearer).map_err(Error::from)
+    apply_credential(headers, &api_key, CredentialPlacement::Bearer)
 }
 
 pub async fn authenticate(
@@ -140,7 +142,7 @@ pub async fn authenticate(
     api_key: Option<&str>,
     auth_inputs: Option<&AzureAuthInputs>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, AuthError> {
     authenticate_with_policy(
         headers,
         api_key,
@@ -148,7 +150,7 @@ pub async fn authenticate(
         auth_inputs,
         env_lookup,
         &AZURE_AI_AUTH_POLICY,
-        "Missing Azure AI credentials - set AZURE_AI_API_KEY or configure Entra ID",
+        MissingCredential::AzureAi,
     )
     .await
 }
@@ -158,7 +160,7 @@ pub async fn authenticate_document_intelligence(
     api_key: Option<&str>,
     auth_inputs: Option<&AzureAuthInputs>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, AuthError> {
     authenticate_with_policy(
         headers,
         api_key,
@@ -166,7 +168,7 @@ pub async fn authenticate_document_intelligence(
         auth_inputs,
         env_lookup,
         &DOCUMENT_INTELLIGENCE_AUTH_POLICY,
-        "Missing Azure Document Intelligence credentials - set AZURE_DOCUMENT_INTELLIGENCE_API_KEY or configure Entra ID",
+        MissingCredential::AzureDocumentIntelligence,
     )
     .await
 }
@@ -178,8 +180,8 @@ async fn authenticate_with_policy(
     auth_inputs: Option<&AzureAuthInputs>,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
     policy: &ProviderAuthPolicy,
-    missing_message: &'static str,
-) -> Result<Vec<(String, String)>, Error> {
+    missing_credential: MissingCredential,
+) -> Result<Vec<(String, String)>, AuthError> {
     if policy.has_existing_credential(&headers) {
         return Ok(headers);
     }
@@ -190,19 +192,17 @@ async fn authenticate_with_policy(
             }
             CredentialPlanKind::Entra => resolve_entra_credential(auth_inputs, env_lookup).await?,
             CredentialPlanKind::Caller => {
-                return Err(AuthError::InvalidConfiguration(
-                    "caller credential plan requires provider-specific inputs".to_string(),
-                )
+                return Err(AuthError::Configuration(AuthConfigurationError::MissingCallerInputs)
                 .into());
             }
         };
         if let Some(credential) = credential {
             return policy
                 .apply(headers, rule.kind, &credential)
-                .map_err(Error::from);
+                ;
         }
     }
-    Err(AuthError::InvalidConfiguration(missing_message.to_string()).into())
+    Err(AuthError::MissingCredential(missing_credential).into())
 }
 
 async fn resolve_entra_credential(
@@ -245,7 +245,7 @@ fn auth_service() -> &'static AzureAuthService {
 #[cfg(test)]
 mod tests {
     use crate::auth::azure::AzureAuthInputs;
-    use crate::error::{AuthError, Error};
+    use crate::error::AuthError;
     use serde_json::json;
 
     use super::{
@@ -269,9 +269,9 @@ mod tests {
     fn missing_api_key_has_a_typed_error() {
         assert_eq!(
             resolve_api_key(None, &|_| None).expect_err("missing key errors"),
-            Error::Auth(AuthError::MissingApiKey {
+            AuthError::MissingApiKey {
                 provider: "Azure AI",
-            })
+            }
         );
     }
 
@@ -279,10 +279,10 @@ mod tests {
     fn missing_api_base_has_a_typed_error() {
         assert_eq!(
             resolve_api_base(None, &|_| None).expect_err("missing base errors"),
-            Error::Auth(AuthError::MissingApiBase {
+            AuthError::MissingApiBase {
                 provider: "Azure AI",
                 environment_variable: "AZURE_AI_API_BASE",
-            })
+            }
         );
     }
 

@@ -1,3 +1,4 @@
+use crate::chat_completions::error::{ChatRequestError, ChatResponseError};
 use crate::Error;
 use serde_json::{Map, Value};
 
@@ -89,13 +90,13 @@ pub trait ChatCompletionsProviderConfig: Sync {
         model: &str,
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
-    ) -> Result<ProviderChatRequestData, Error>;
+    ) -> Result<ProviderChatRequestData, ChatRequestError>;
 
     fn transform_response(
         &self,
         model: &str,
         response: ProviderChatResponseData,
-    ) -> Result<ChatCompletionsResponse, Error>;
+    ) -> Result<ChatCompletionsResponse, ChatResponseError>;
 }
 
 pub fn unsupported_param(

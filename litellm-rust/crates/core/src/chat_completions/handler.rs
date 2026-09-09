@@ -1,3 +1,5 @@
+use super::error::{ChatRequestError, ChatResponseError};
+use crate::error::TransportError;
 use serde_json::Value;
 
 use crate::error::Error;
@@ -17,9 +19,7 @@ pub(super) async fn execute_chat_completions_provider_call(
 ) -> Result<ChatCompletionsResponse, Error> {
     let request = prepare_provider_request(request)?;
     let body = serde_json::to_vec(&request.body).map_err(|err| {
-        Error::InvalidRequest(format!(
-            "failed to serialize chat completions request: {err}"
-        ))
+        ChatRequestError::Serialization(err.to_string())
     })?;
     let headers = signed_headers(&request, &body).await?;
 
@@ -31,22 +31,13 @@ pub(super) async fn execute_chat_completions_provider_call(
         request_builder = request_builder.timeout(duration);
     }
 
-    let response = http_request(request_builder).await.map_err(|err| {
-        // Failing to establish the connection means the request never went out,
-        // so the host can still serve it. Everything else here, a timeout
-        // above all, may have reached the provider and been answered.
-        if err.is_connect() || err.is_builder() {
-            Error::Connect(err.to_string())
-        } else {
-            Error::Network(err.to_string())
-        }
-    })?;
+    let response = http_request(request_builder).await.map_err(TransportError::before_request)?;
 
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(|err| Error::from(TransportError::from(err)))?;
 
     if !status.is_success() {
         return Err(Error::Http {
@@ -56,28 +47,12 @@ pub(super) async fn execute_chat_completions_provider_call(
     }
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
-        Error::InvalidResponse(format!("invalid chat completions response JSON: {err}"))
+        ChatResponseError::InvalidJson(err.to_string())
     })?;
     request
         .config
         .transform_response(&request.model, ProviderChatResponseData { body })
-        .map_err(as_response_error)
-}
-
-/// Re-tag an error raised while normalizing a response the provider already
-/// returned.
-///
-/// A config reports the same variants on either side of the call: a missing
-/// field or an unsupported block can mean "this request cannot be translated"
-/// during prepare and "this response cannot be normalized" here. Only the
-/// second kind has already been billed, and a host that keeps a reference
-/// implementation must not retry those, so collapse them to one variant that
-/// can only mean the provider was already called.
-pub(super) fn as_response_error(err: Error) -> Error {
-    match err {
-        already @ (Error::InvalidResponse(_) | Error::Http { .. }) => already,
-        other => Error::InvalidResponse(other.to_string()),
-    }
+        .map_err(Error::from)
 }
 
 #[cfg(feature = "bedrock-auth")]

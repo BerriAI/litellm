@@ -88,9 +88,7 @@ impl CredentialPlan {
             Self::Caller(caller) => {
                 let credential = caller.acquire().await?;
                 if credential.secret().expose().is_empty() {
-                    return Err(AuthError::Caller(
-                        "credential caller returned an empty credential".to_string(),
-                    ));
+                    return Err(AuthError::EmptyCallerCredential);
                 }
                 Ok(CredentialPlanResolution::Resolved(credential))
             }
@@ -152,9 +150,7 @@ mod tests {
     impl CredentialResolver for FailingResolver {
         fn resolve<'a>(&'a self, _reference: &'a CredentialRef) -> CredentialLookupFuture<'a> {
             Box::pin(async {
-                Err(AuthError::Acquisition(
-                    "credential backend failed".to_string(),
-                ))
+                Err(AuthError::UnresolvedOidcReference)
             })
         }
     }
@@ -171,7 +167,7 @@ mod tests {
 
         assert_eq!(
             error,
-            AuthError::Acquisition("credential backend failed".to_string())
+            AuthError::UnresolvedOidcReference
         );
     }
 }

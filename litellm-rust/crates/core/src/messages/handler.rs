@@ -22,13 +22,13 @@ pub(super) async fn execute_messages_provider_call(
 
     let response = http_request(request_builder)
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(crate::error::TransportError::before_request)?;
 
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(crate::error::TransportError::from)?;
 
     if !status.is_success() {
         return Err(Error::Http {
@@ -62,13 +62,13 @@ pub(super) async fn execute_messages_provider_stream(
 
     let response = http_request(request_builder)
         .await
-        .map_err(|err| Error::Network(err.to_string()))?;
+        .map_err(crate::error::TransportError::before_request)?;
     let status = response.status();
     if !status.is_success() {
         let text = response
             .text()
             .await
-            .map_err(|err| Error::Network(err.to_string()))?;
+            .map_err(crate::error::TransportError::from)?;
         return Err(Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),

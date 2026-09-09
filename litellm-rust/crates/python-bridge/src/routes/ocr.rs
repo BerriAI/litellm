@@ -1,56 +1,25 @@
 use std::future::Future;
 
-use litellm_ai_gateway::io::ocr::{OcrRequest, ocr as run_ocr};
-use litellm_core::Error;
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use serde::Deserialize;
-use serde_json::{Map, Value};
-
 use crate::errors::ocr_error_to_pyerr;
-use crate::marshal::optional_timeout;
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BridgeOcrRequest {
-    model: String,
-    document: Value,
-    #[serde(default)]
-    api_key: Option<String>,
-    #[serde(default)]
-    api_base: Option<String>,
-    #[serde(default)]
-    custom_llm_provider: Option<String>,
-    #[serde(default)]
-    extra_headers: Option<Map<String, Value>>,
-    #[serde(default)]
-    optional_params: Map<String, Value>,
-    #[serde(default)]
-    timeout_seconds: Option<f64>,
-}
+use litellm_core::Error;
+use litellm_core::ocr::{
+    perform_ocr,
+    wire::{OcrWireRequest, decode_request},
+};
+use pyo3::prelude::*;
+use serde_json::Value;
 
 fn prepare_ocr(
     inputs: OcrInputs,
 ) -> PyResult<impl Future<Output = Result<Value, Error>> + Send + 'static> {
-    let request: BridgeOcrRequest = serde_json::from_value(inputs.request)
-        .map_err(|error| PyValueError::new_err(format!("invalid OCR request: {error}")))?;
-
+    let wire: OcrWireRequest =
+        litellm_core::ocr::wire::decode_request_value(inputs.request, "request")
+            .map_err(|error| ocr_error_to_pyerr(error.into()))?;
+    let request = decode_request(wire).map_err(ocr_error_to_pyerr)?;
     Ok(async move {
-        run_ocr(OcrRequest {
-            model: &request.model,
-            document: request.document,
-            api_key: request.api_key.as_deref(),
-            api_base: request.api_base.as_deref(),
-            custom_llm_provider: request.custom_llm_provider.as_deref(),
-            extra_headers: request.extra_headers,
-            optional_params: request.optional_params,
-            timeout: optional_timeout(request.timeout_seconds),
-            callbacks: Vec::new(),
-            guardrails: Vec::new(),
-            request_metadata: Default::default(),
-            litellm_call_id: None,
-        })
-        .await
+        perform_ocr(request)
+            .await
+            .map(|response| response.into_json())
     })
 }
 

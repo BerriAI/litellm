@@ -1,3 +1,4 @@
+use super::error::ChatRequestError;
 use serde_json::Value;
 
 use crate::error::Error;
@@ -32,9 +33,9 @@ pub(super) fn resolve_provider_config<'a>(
     Ok((provider_info.model.to_string(), config))
 }
 
-pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error> {
+pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, ChatRequestError> {
     serde_json::from_value(messages)
-        .map_err(|err| Error::InvalidRequest(format!("invalid chat completions messages: {err}")))
+        .map_err(|err| ChatRequestError::InvalidMessages(err.to_string()))
 }
 
 pub(super) fn resolve_request(
@@ -43,9 +44,7 @@ pub(super) fn resolve_request(
     let (model, config) = resolve_provider_config(request.model, request.custom_llm_provider)?;
     let messages = parse_messages(request.messages)?;
     if messages.is_empty() {
-        return Err(Error::InvalidRequest(
-            "chat completions requires at least one message".to_string(),
-        ));
+        return Err(ChatRequestError::EmptyMessages.into());
     }
     if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
         return Err(Error::Unsupported(reason.0));

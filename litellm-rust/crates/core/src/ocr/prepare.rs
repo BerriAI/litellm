@@ -1,135 +1,99 @@
-use serde_json::{Map, Value};
+use super::transformation::OcrProviderConfig;
+use super::types::{OcrConnection, OcrDocument};
+use crate::Error;
+use crate::providers::azure_ai::ocr::document_intelligence::types::DocumentIntelligenceInputParams;
+use crate::providers::mistral::ocr::types::MistralOcrParams;
+use crate::providers::reducto::ocr::types::{ReductoLegacyParams, ReductoV3Params};
+use crate::providers::vertex_ai::ocr::deepseek::types::DeepSeekOcrParams;
+use serde::Serialize;
 
-use crate::error::Error;
-use crate::ocr::transformation::OcrProviderConfig;
-use crate::ocr::types::OcrAuthInputs;
-use crate::providers::azure_ai::ocr::transformation::{
-    AZURE_AI_OCR_CONFIG, AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG,
-};
-use crate::providers::mistral::ocr::transformation::MISTRAL_OCR_CONFIG;
-use crate::providers::reducto::ocr::transformation as reducto;
-use crate::providers::vertex_ai::ocr::transformation as vertex_ai;
-use crate::providers::vertex_ai::ocr::transformation::{
-    VERTEX_AI_DEEPSEEK_OCR_CONFIG, VERTEX_AI_OCR_CONFIG,
-};
-use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
-
-pub struct PreparedOcrProvider {
-    pub config: Result<&'static dyn OcrProviderConfig, Error>,
-    pub model: String,
-    pub custom_llm_provider: String,
-    pub optional_params: Map<String, Value>,
-    pub auth_inputs: OcrAuthInputs,
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum OcrProviderRequest {
+    Mistral(MistralOcrParams),
+    AzureAi(MistralOcrParams),
+    AzureDocumentIntelligence(DocumentIntelligenceInputParams),
+    VertexAi(MistralOcrParams),
+    VertexAiDeepSeek(DeepSeekOcrParams),
+    ReductoV3(ReductoV3Params),
+    ReductoLegacy(ReductoLegacyParams),
 }
 
-pub fn prepare_ocr_provider(
-    model: &str,
-    custom_llm_provider: Option<&str>,
-    optional_params: Map<String, Value>,
-) -> PreparedOcrProvider {
-    let provider_info =
-        get_custom_llm_provider(model, custom_llm_provider).unwrap_or(CustomLlmProvider {
-            model,
-            custom_llm_provider: "mistral",
-        });
-    let model = provider_info.model.to_string();
-    let custom_llm_provider = provider_info.custom_llm_provider.to_string();
-    let parsed_config = ocr_provider_config(&custom_llm_provider, &model)
-        .ok_or_else(|| Error::InvalidProvider(custom_llm_provider.clone()))
-        .and_then(|config| {
-            validate_request_format(config, &optional_params, &custom_llm_provider)?;
-            Ok(config)
-        });
-    let (config, auth_inputs) = match parsed_config {
-        Ok(config) => match config.parse_auth_inputs(&optional_params) {
-            Ok(auth_inputs) => (Ok(config), auth_inputs),
-            Err(error) => (Err(error.into()), Default::default()),
-        },
-        Err(error) => (Err(error), Default::default()),
-    };
-    let optional_params = match &config {
-        Ok(config) => map_ocr_params(*config, &optional_params),
-        Err(_) => optional_params,
-    };
-
-    PreparedOcrProvider {
-        config,
-        model,
-        custom_llm_provider,
-        optional_params,
-        auth_inputs,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OcrProviderKind {
+    Mistral,
+    AzureAi,
+    AzureDocumentIntelligence,
+    VertexAi,
+    VertexAiDeepSeek,
+    ReductoV3,
+    ReductoLegacy,
+}
+impl OcrProviderKind {
+    pub fn provider_name(self) -> &'static str {
+        match self {
+            Self::Mistral => "mistral",
+            Self::AzureAi | Self::AzureDocumentIntelligence => "azure_ai",
+            Self::VertexAi | Self::VertexAiDeepSeek => "vertex_ai",
+            Self::ReductoV3 | Self::ReductoLegacy => "reducto",
+        }
     }
 }
-
-pub fn map_ocr_params(
-    config: &'static dyn OcrProviderConfig,
-    optional_params: &Map<String, Value>,
-) -> Map<String, Value> {
-    let supported = config.supported_ocr_params();
-    config.map_ocr_params(
-        &optional_params
-            .iter()
-            .filter(|(name, _)| supported.contains(&name.as_str()))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect(),
-    )
+impl OcrProviderRequest {
+    pub fn kind(&self) -> OcrProviderKind {
+        match self {
+            Self::Mistral(_) => OcrProviderKind::Mistral,
+            Self::AzureAi(_) => OcrProviderKind::AzureAi,
+            Self::AzureDocumentIntelligence(_) => OcrProviderKind::AzureDocumentIntelligence,
+            Self::VertexAi(_) => OcrProviderKind::VertexAi,
+            Self::VertexAiDeepSeek(_) => OcrProviderKind::VertexAiDeepSeek,
+            Self::ReductoV3(_) => OcrProviderKind::ReductoV3,
+            Self::ReductoLegacy(_) => OcrProviderKind::ReductoLegacy,
+        }
+    }
 }
 
 #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub fn ocr_provider_config(provider: &str, model: &str) -> Option<&'static dyn OcrProviderConfig> {
+pub fn ocr_provider_config(provider: &str, model: &str) -> Result<OcrProviderKind, Error> {
+    let lower = model.to_ascii_lowercase();
     match provider {
-        "mistral" => Some(&MISTRAL_OCR_CONFIG),
-        "reducto" => reducto::config_for_model(model),
-        "azure_ai" if is_azure_document_intelligence_model(model) => {
-            Some(&AZURE_DOCUMENT_INTELLIGENCE_OCR_CONFIG)
+        "mistral" => Ok(OcrProviderKind::Mistral),
+        "azure_ai"
+            if lower.contains("doc-intelligence") || lower.contains("documentintelligence") =>
+        {
+            Ok(OcrProviderKind::AzureDocumentIntelligence)
         }
-        "azure_ai" => Some(&AZURE_AI_OCR_CONFIG),
-        "vertex_ai" if vertex_ai::is_deepseek_model(model) => Some(&VERTEX_AI_DEEPSEEK_OCR_CONFIG),
-        "vertex_ai" => Some(&VERTEX_AI_OCR_CONFIG),
-        _ => None,
+        "azure_ai" => Ok(OcrProviderKind::AzureAi),
+        "vertex_ai" if lower.contains("deepseek") => Ok(OcrProviderKind::VertexAiDeepSeek),
+        "vertex_ai" => Ok(OcrProviderKind::VertexAi),
+        "reducto" if model == "parse-v3" => Ok(OcrProviderKind::ReductoV3),
+        "reducto" if model == "parse-legacy" => Ok(OcrProviderKind::ReductoLegacy),
+        _ => Err(Error::InvalidProvider(provider.into())),
     }
 }
 
-fn is_azure_document_intelligence_model(model: &str) -> bool {
-    let model = model.to_ascii_lowercase();
-    model.contains("doc-intelligence") || model.contains("documentintelligence")
+pub(crate) struct PreparedOcrRequest<C: OcrProviderConfig> {
+    pub config: C,
+    pub model: String,
+    pub document: OcrDocument,
+    pub params: C::MappedParams,
+    pub connection: OcrConnection,
 }
 
-fn validate_request_format(
-    config: &'static dyn OcrProviderConfig,
-    optional_params: &Map<String, Value>,
-    provider: &str,
-) -> Result<(), Error> {
-    let Some(format) = optional_params.get("req_format") else {
-        return Ok(());
-    };
-    match format.as_str() {
-        Some("litellm") => Ok(()),
-        Some("native") if config.supported_ocr_params().contains(&"req_format") => Ok(()),
-        Some("native") => Err(Error::InvalidRequest(format!(
-            "`req_format=native` is not supported for provider {provider}"
-        ))),
-        _ => Err(Error::InvalidRequest(format!(
-            "Invalid `req_format`: {format}. Expected `litellm` or `native`"
-        ))),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::ocr::transformation::OcrResponseHandling;
-
-    use super::ocr_provider_config;
-
-    #[test]
-    fn provider_selection_is_owned_by_core() {
-        assert!(ocr_provider_config("mistral", "mistral-ocr-latest").is_some());
-        assert_eq!(
-            ocr_provider_config("azure_ai", "doc-intelligence/prebuilt-read")
-                .expect("Azure Document Intelligence config resolves")
-                .response_handling(),
-            OcrResponseHandling::AzureDocumentIntelligencePoll
-        );
-        assert!(ocr_provider_config("openai", "gpt-4o").is_none());
-    }
+#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
+pub(crate) fn prepare_ocr_call<C: OcrProviderConfig>(
+    config: C,
+    model: String,
+    document: OcrDocument,
+    params: C::InputParams,
+    connection: OcrConnection,
+) -> Result<PreparedOcrRequest<C>, Error> {
+    let params = config.map_ocr_params(params)?;
+    Ok(PreparedOcrRequest {
+        config,
+        model,
+        document,
+        params,
+        connection,
+    })
 }

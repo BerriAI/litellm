@@ -1,3 +1,4 @@
+use crate::auth::error::AuthConfigurationError;
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -94,7 +95,7 @@ impl NativeAzureTokenAcquirer {
         let token = credential
             .get_token(&[scope.as_str()], None)
             .await
-            .map_err(|error| AuthError::Acquisition(error.to_string()))?;
+            .map_err(|error| AuthError::AzureTokenAcquisition(error.to_string()))?;
         let expires_on = u64::try_from(token.expires_on.unix_timestamp())
             .ok()
             .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds));
@@ -245,7 +246,7 @@ fn build_credential(
         NativeAzureRequest::DeveloperTools { .. } => DeveloperToolsCredential::new(None)
             .map(|credential| credential as Arc<dyn TokenCredential>),
     }
-    .map_err(|error| AuthError::InvalidConfiguration(error.to_string()))
+    .map_err(|error| AuthError::Configuration(AuthConfigurationError::AzureCredentialInitialization(error.to_string())))
 }
 
 fn client_options(

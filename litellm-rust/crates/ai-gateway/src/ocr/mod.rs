@@ -1,26 +1,35 @@
 use litellm_core::Error;
-use litellm_core::call_lifecycle::CallLifecycle;
+use litellm_core::ocr::{
+    perform_ocr,
+    wire::{OcrWireRequest, decode_request},
+};
 use serde_json::Value;
+use std::sync::Arc;
 
-mod common_utils;
-mod handler;
 mod hooks;
-mod prepare;
 mod types;
-
 pub use types::OcrRequest;
 
-use handler::execute_ocr_provider_call;
-use prepare::{PreparedOcrCall, prepare_ocr_call};
-
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 pub async fn ocr(request: OcrRequest<'_>) -> Result<Value, Error> {
-    let PreparedOcrCall { request, hooks } = prepare_ocr_call(request);
-    CallLifecycle::default()
-        .run_request(request, &hooks, |request| {
-            execute_ocr_provider_call(request, &hooks)
-        })
+    let mut core_request = decode_request(OcrWireRequest {
+        model: request.model.into(),
+        document: request.document,
+        api_key: request.api_key.map(str::to_string),
+        api_base: request.api_base.map(str::to_string),
+        custom_llm_provider: request.custom_llm_provider.map(str::to_string),
+        extra_headers: request.extra_headers,
+        optional_params: request.optional_params,
+        timeout_seconds: request.timeout.map(|timeout| timeout.as_secs_f64()),
+    })?;
+    core_request.litellm_call_id = request.litellm_call_id.map(str::to_string);
+    core_request.hooks = Arc::new(hooks::OcrGatewayHooks::new(
+        request.callbacks,
+        request.guardrails,
+        request.request_metadata,
+    ));
+    perform_ocr(core_request)
         .await
+        .map(|response| response.into_json())
 }
 
 #[cfg(test)]

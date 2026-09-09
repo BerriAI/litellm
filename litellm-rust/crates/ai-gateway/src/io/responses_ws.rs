@@ -1,3 +1,4 @@
+use litellm_core::auth::error::MissingCredential;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +24,6 @@ use crate::constants::{
 };
 
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
-const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a Responses WebSocket call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
 
 pub type ResponsesUpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 type UpstreamTx = SplitSink<ResponsesUpstreamWs, Message>;
@@ -120,7 +120,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(AuthError::Message(MISSING_KEY_MESSAGE.to_string())))
+        .ok_or_else(|| Error::Auth(AuthError::MissingCredential(MissingCredential::OpenAiResponsesApiKey)))
 }
 
 async fn dial_upstream(
@@ -136,7 +136,7 @@ async fn dial_upstream(
     request.headers_mut().insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|error| Error::Auth(AuthError::Message(error.to_string())))?,
+            .map_err(|_| Error::Auth(AuthError::InvalidHeader))?,
     );
     let result = tokio::time::timeout(
         Duration::from_secs(DEFAULT_RESPONSES_WS_CONNECT_TIMEOUT_SECS),

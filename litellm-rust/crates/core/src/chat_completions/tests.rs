@@ -240,7 +240,7 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!([]),
             json!({}),
         )),
-        Error::InvalidRequest("chat completions requires at least one message".to_string())
+        Error::ChatRequest(crate::chat_completions::error::ChatRequestError::EmptyMessages)
     );
     assert!(matches!(
         decline(request(
@@ -249,7 +249,7 @@ fn rejects_an_empty_or_malformed_message_list() {
             json!("not a list"),
             json!({}),
         )),
-        Error::InvalidRequest(_)
+        Error::ChatRequest(_)
     ));
 }
 
@@ -733,7 +733,7 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::InvalidResponse(_)),
+            matches!(err, Error::ChatResponse(_)),
             "expected a post-send error, got {err:?}"
         );
     }
@@ -751,7 +751,7 @@ mod round_trip {
         .expect_err("response cannot be normalized");
         handle.await.expect("server task");
         assert!(
-            matches!(err, Error::InvalidResponse(_)),
+            matches!(err, Error::ChatResponse(_)),
             "expected a post-send error, got {err:?}"
         );
     }
@@ -799,28 +799,15 @@ mod round_trip {
     }
 
     #[test]
-    fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
-        use crate::chat_completions::handler::as_response_error;
+    fn response_error_preserves_its_cause_and_post_send_classification() {
+        use std::error::Error as _;
+        use crate::chat_completions::error::ChatResponseError;
+        use crate::error::ErrorKind;
 
-        for original in [
-            Error::MissingField("usage"),
-            Error::Unsupported("non-text response content block"),
-            Error::InvalidRequest("whatever".to_string()),
-            Error::Auth(AuthError::Message("whatever".to_string())),
-        ] {
-            let label = format!("{original:?}");
-            assert!(
-                matches!(as_response_error(original), Error::InvalidResponse(_)),
-                "{label} must not stay retryable once the provider has answered"
-            );
-        }
-        // An upstream status is already unambiguous, so it survives intact.
-        assert!(matches!(
-            as_response_error(Error::Http {
-                status: 500,
-                body: "boom".to_string()
-            }),
-            Error::Http { status: 500, .. }
-        ));
+        let error = Error::from(ChatResponseError::MissingField("usage"));
+        assert_eq!(error.kind(), ErrorKind::InvalidResponse);
+        assert_eq!(error.source().and_then(|source| source.downcast_ref::<ChatResponseError>()),
+            Some(&ChatResponseError::MissingField("usage")));
     }
+
 }

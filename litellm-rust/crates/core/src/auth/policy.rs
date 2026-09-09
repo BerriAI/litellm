@@ -1,3 +1,4 @@
+use crate::auth::error::AuthConfigurationError;
 use crate::AuthError;
 
 use super::http::apply_credential;
@@ -49,9 +50,7 @@ impl ProviderAuthPolicy {
         if self.has_existing_credential(&headers) {
             return match self.existing_header_behavior {
                 ExistingHeaderBehavior::Preserve => Ok(headers),
-                ExistingHeaderBehavior::Reject => Err(AuthError::InvalidConfiguration(
-                    "credential header already exists".to_string(),
-                )),
+                ExistingHeaderBehavior::Reject => Err(AuthError::Configuration(AuthConfigurationError::ExistingCredentialHeader)),
             };
         }
         let rule = self
@@ -59,9 +58,7 @@ impl ProviderAuthPolicy {
             .iter()
             .find(|rule| rule.kind == kind)
             .ok_or_else(|| {
-                AuthError::InvalidConfiguration(
-                    "credential plan is not allowed by the provider auth policy".to_string(),
-                )
+                AuthError::Configuration(AuthConfigurationError::DisallowedCredentialPlan)
             })?;
         apply_credential(headers, credential.secret().expose(), rule.placement)
     }

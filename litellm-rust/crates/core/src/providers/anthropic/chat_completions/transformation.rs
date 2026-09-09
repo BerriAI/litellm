@@ -1,3 +1,4 @@
+use crate::chat_completions::error::{ChatRequestError, ChatResponseError};
 use serde_json::{Map, Value, json};
 
 use crate::chat_completions::conversation::{Conversation, build_conversation};
@@ -144,7 +145,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         model: &str,
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
-    ) -> Result<ProviderChatRequestData, Error> {
+    ) -> Result<ProviderChatRequestData, ChatRequestError> {
         Ok(ProviderChatRequestData {
             body: anthropic_body(model, &build_conversation(&messages), optional_params),
         })
@@ -155,24 +156,21 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         &self,
         _model: &str,
         response: ProviderChatResponseData,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<ChatCompletionsResponse, ChatResponseError> {
         let body = response
             .body
             .as_object()
-            .ok_or_else(|| Error::InvalidResponse("messages response is not an object".into()))?;
+            .ok_or_else(|| ChatResponseError::NotObject { api: "messages" })?;
 
         let content = body
             .get("content")
             .and_then(Value::as_array)
-            .ok_or(Error::MissingField("content"))?;
-        // The route declines tool and thinking requests, so a non-text block
-        // means the response carries something this path never asked for.
-        // Decline rather than silently dropping it; the host falls back.
+            .ok_or(ChatResponseError::MissingField("content"))?;
         if content
             .iter()
             .any(|block| block.get("type").and_then(Value::as_str) != Some("text"))
         {
-            return Err(Error::Unsupported("non-text response content block"));
+            return Err(ChatResponseError::NonTextContent);
         }
         let text: String = content
             .iter()
@@ -182,7 +180,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
         let usage = body
             .get("usage")
             .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
+            .ok_or(ChatResponseError::MissingField("usage"))?;
         let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
 
         Ok(ChatCompletionsResponse {
@@ -190,7 +188,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
             model: body
                 .get("model")
                 .and_then(Value::as_str)
-                .ok_or(Error::MissingField("model"))?
+                .ok_or(ChatResponseError::MissingField("model"))?
                 .to_string(),
             choices: vec![ChatCompletionsChoice {
                 index: 0,

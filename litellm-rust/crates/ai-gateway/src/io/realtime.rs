@@ -11,6 +11,7 @@
 //! buffer its `session.created`, and later hand the live socket to the same
 //! splice loop a fresh dial uses.
 
+use litellm_core::auth::error::MissingCredential;
 use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
@@ -33,7 +34,6 @@ use crate::io::tls::connect_upstream;
 /// Environment variable holding the OpenAI API key (last-resort fallback).
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 
-const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a realtime call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
 
 /// Default **idle** timeout: if neither side sends a frame for this long, the
 /// session is reaped. It resets on any activity, so it does not cap a healthy
@@ -60,7 +60,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|key| !key.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(AuthError::Message(MISSING_KEY_MESSAGE.to_string())))
+        .ok_or_else(|| Error::Auth(AuthError::MissingCredential(MissingCredential::OpenAiRealtimeApiKey)))
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.
@@ -84,7 +84,7 @@ pub(crate) async fn dial_upstream(
     request.headers_mut().insert(
         AUTHORIZATION,
         HeaderValue::from_str(&format!("Bearer {api_key}"))
-            .map_err(|err| Error::Auth(AuthError::Message(err.to_string())))?,
+            .map_err(|_| Error::Auth(AuthError::InvalidHeader))?,
     );
 
     let (upstream, _response) = connect_upstream(request)

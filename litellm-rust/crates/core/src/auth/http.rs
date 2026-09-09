@@ -1,3 +1,4 @@
+use crate::auth::error::AuthConfigurationError;
 use crate::AuthError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,18 +22,13 @@ pub(crate) fn apply_credential(
     placement: CredentialPlacement,
 ) -> Result<Vec<(String, String)>, AuthError> {
     if credential.trim().is_empty() {
-        return Err(AuthError::InvalidConfiguration(
-            "credential cannot be empty".to_string(),
-        ));
+        return Err(AuthError::Configuration(AuthConfigurationError::EmptyCredential));
     }
     if headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case(placement.header_name()))
     {
-        return Err(AuthError::InvalidConfiguration(format!(
-            "credential header {} already exists",
-            placement.header_name()
-        )));
+        return Err(AuthError::Configuration(AuthConfigurationError::DuplicateHeader(placement.header_name())));
     }
     let value = match placement {
         CredentialPlacement::Bearer => format!("Bearer {credential}"),

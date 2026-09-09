@@ -101,6 +101,7 @@ impl IntoResponse for MessagesRouteError {
     fn into_response(self) -> Response {
         let (status, message) = match self.0 {
             Error::InvalidRequest(message) => (StatusCode::BAD_REQUEST, message),
+            error @ (Error::OcrRequest(_) | Error::ChatRequest(_)) => (StatusCode::BAD_REQUEST, error.to_string()),
             Error::InvalidProvider(_) | Error::Routing(_) => (
                 StatusCode::NOT_FOUND,
                 "no messages deployment is configured for this model".to_string(),
@@ -109,7 +110,8 @@ impl IntoResponse for MessagesRouteError {
                 StatusCode::BAD_GATEWAY,
                 "messages provider authentication failed".to_string(),
             ),
-            Error::Http { .. }
+            Error::OcrResponse(_) | Error::OcrPolling(_) | Error::ChatResponse(_)
+            | Error::Http { .. }
             | Error::Network(_)
             | Error::Connect(_)
             | Error::InvalidResponse(_)

@@ -1,3 +1,4 @@
+use crate::auth::error::AuthConfigurationError;
 use serde_json::{Map, Value};
 use strum::EnumString;
 
@@ -76,9 +77,7 @@ fn string_config(
         None => Ok(ConfigValue::Absent),
         Some(Value::Null) => Ok(ConfigValue::ExplicitNone),
         Some(Value::String(value)) => Ok(ConfigValue::Value(value.clone())),
-        Some(_) => Err(AuthError::InvalidConfiguration(format!(
-            "{name} must be a string or null"
-        ))),
+        Some(_) => Err(AuthError::Configuration(AuthConfigurationError::InvalidFieldType(name.to_string()))),
     }
 }
 

@@ -1,12 +1,12 @@
+use crate::auth::error::MissingCredential;
 use crate::auth::{
     CredentialPlacement, CredentialPlanKind, CredentialRule, ExistingHeaderBehavior,
     ProviderAuthPolicy, ResolvedCredential, SecretValue,
 };
-use crate::error::{AuthError, Error};
+use crate::error::AuthError;
 
 pub const REDUCTO_API_KEY_ENV: &str = "REDUCTO_API_KEY";
 
-const MISSING_KEY_MESSAGE: &str = "Missing REDUCTO_API_KEY - set it in the environment or pass api_key to litellm.ocr()/litellm.aocr()";
 const AUTH_RULES: &[CredentialRule] = &[CredentialRule {
     kind: CredentialPlanKind::Static,
     placement: CredentialPlacement::Bearer,
@@ -22,7 +22,7 @@ const AUTH_POLICY: ProviderAuthPolicy = ProviderAuthPolicy {
 pub fn resolve_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, AuthError> {
     api_key
         .map(str::trim)
         .filter(|key| !key.is_empty())
@@ -32,14 +32,14 @@ pub fn resolve_api_key(
                 .map(|key| key.trim().to_string())
                 .filter(|key| !key.is_empty())
         })
-        .ok_or_else(|| Error::Auth(AuthError::Message(MISSING_KEY_MESSAGE.to_string())))
+        .ok_or_else(|| AuthError::MissingCredential(MissingCredential::ReductoApiKey))
 }
 
 pub fn validate_environment(
     headers: Vec<(String, String)>,
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, AuthError> {
     if AUTH_POLICY.has_existing_credential(&headers) {
         return Ok(headers);
     }
@@ -47,7 +47,7 @@ pub fn validate_environment(
         ResolvedCredential::Static(SecretValue::new(resolve_api_key(api_key, env_lookup)?));
     AUTH_POLICY
         .apply(headers, CredentialPlanKind::Static, &credential)
-        .map_err(Error::from)
+        
 }
 
 #[cfg(test)]

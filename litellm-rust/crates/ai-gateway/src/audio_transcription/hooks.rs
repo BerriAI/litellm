@@ -1,3 +1,4 @@
+use litellm_core::error::ErrorKind;
 use litellm_core::audio_transcription::{
     AudioTranscriptionRequest as CoreAudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
     prepare_audio_transcription_provider_call,
@@ -268,17 +269,17 @@ fn guardrail_error_to_core_error(error: GuardrailError) -> Error {
 }
 
 fn core_error_kind(error: &Error) -> &'static str {
-    match error {
-        Error::Auth(_) => "AuthError",
-        Error::InvalidProvider(_) => "InvalidProvider",
-        Error::InvalidRequest(_) => "InvalidRequest",
-        Error::InvalidType { .. } => "InvalidType",
-        Error::MissingField(_) => "MissingField",
-        Error::Http { .. } => "HttpError",
-        Error::InvalidResponse(_) => "InvalidResponse",
-        Error::Network(_) => "NetworkError",
-        Error::Connect(_) => "ConnectError",
-        Error::Routing(_) => "RoutingError",
-        Error::Unsupported(_) => "UnsupportedRequest",
+    match error.kind() {
+        ErrorKind::Auth => "AuthError",
+        ErrorKind::InvalidProvider => "InvalidProvider",
+        ErrorKind::InvalidRequest => "InvalidRequest",
+        ErrorKind::InvalidType => "InvalidType",
+        ErrorKind::MissingField => "MissingField",
+        ErrorKind::Http => "HttpError",
+        ErrorKind::InvalidResponse => "InvalidResponse",
+        ErrorKind::Network => "NetworkError",
+        ErrorKind::Connect => "ConnectError",
+        ErrorKind::Routing => "RoutingError",
+        ErrorKind::Unsupported => "UnsupportedRequest",
     }
 }

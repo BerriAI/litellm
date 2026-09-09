@@ -2,7 +2,7 @@ use crate::auth::{
     CredentialPlacement, CredentialPlanKind, CredentialRule, ExistingHeaderBehavior,
     ProviderAuthPolicy, ResolvedCredential, SecretValue,
 };
-use crate::error::{AuthError, Error};
+use crate::error::AuthError;
 
 pub const MISTRAL_API_KEY_ENV: &str = "MISTRAL_API_KEY";
 
@@ -21,22 +21,22 @@ const AUTH_POLICY: ProviderAuthPolicy = ProviderAuthPolicy {
 pub fn resolve_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<String, AuthError> {
     api_key
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .map(str::to_string)
         .or_else(|| env_lookup(MISTRAL_API_KEY_ENV).filter(|key| !key.trim().is_empty()))
-        .ok_or(Error::Auth(AuthError::MissingApiKey {
+        .ok_or(AuthError::MissingApiKey {
             provider: "Mistral",
-        }))
+        })
 }
 
 pub fn validate_environment(
     headers: Vec<(String, String)>,
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Vec<(String, String)>, Error> {
+) -> Result<Vec<(String, String)>, AuthError> {
     if AUTH_POLICY.has_existing_credential(&headers) {
         return Ok(headers);
     }
@@ -44,7 +44,7 @@ pub fn validate_environment(
         ResolvedCredential::Static(SecretValue::new(resolve_api_key(api_key, env_lookup)?));
     AUTH_POLICY
         .apply(headers, CredentialPlanKind::Static, &credential)
-        .map_err(Error::from)
+        
 }
 
 #[cfg(test)]
@@ -74,9 +74,9 @@ mod tests {
 
         assert_eq!(
             error,
-            Error::Auth(AuthError::MissingApiKey {
+            AuthError::MissingApiKey {
                 provider: "Mistral",
-            })
+            }
         );
     }
 

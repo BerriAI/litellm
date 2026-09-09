@@ -1,30 +1,19 @@
 use thiserror::Error as ThisError;
 
-#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
-pub enum AuthError {
-    #[error("invalid authentication configuration: {0}")]
-    InvalidConfiguration(String),
-    #[error("credential acquisition failed: {0}")]
-    Acquisition(String),
-    #[error("credential caller failed: {0}")]
-    Caller(String),
-    #[error(
-        "Missing {provider} API Key - A call is being made to {provider} but no key is set either in the environment variables or via params"
-    )]
-    MissingApiKey { provider: &'static str },
-    #[error(
-        "Missing {provider} API Base - Set {environment_variable} environment variable or pass api_base parameter"
-    )]
-    MissingApiBase {
-        provider: &'static str,
-        environment_variable: &'static str,
-    },
-    #[error("{0}")]
-    Message(String),
-}
+pub use crate::auth::error::AuthError;
 
 #[derive(Debug, ThisError, PartialEq, Eq)]
 pub enum Error {
+    #[error("invalid request: {0}")]
+    OcrRequest(#[from] crate::ocr::error::OcrRequestError),
+    #[error("invalid response: {0}")]
+    OcrResponse(#[from] crate::ocr::error::OcrResponseError),
+    #[error("{0}")]
+    OcrPolling(#[from] crate::ocr::error::OcrPollingError),
+    #[error("invalid request: {0}")]
+    ChatRequest(#[from] crate::chat_completions::error::ChatRequestError),
+    #[error("invalid response: {0}")]
+    ChatResponse(#[from] crate::chat_completions::error::ChatResponseError),
     #[error("expected {expected}, got {actual}")]
     InvalidType {
         expected: &'static str,
@@ -67,5 +56,109 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
         serde_json::Value::String(_) => "string",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
+    }
+}
+
+#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
+pub enum TransportError {
+    #[error("upstream request failed with status {status}: {body}")]
+    Http { status: u16, body: String },
+    #[error("upstream network error: {0}")]
+    Network(String),
+    #[error("could not reach the provider: {0}")]
+    Connect(String),
+}
+
+impl TransportError {
+    pub fn before_request(error: reqwest::Error) -> Self {
+        let before_dispatch = !error.is_timeout() && (error.is_connect() || error.is_builder());
+        let message = error.without_url().to_string();
+        if before_dispatch { Self::Connect(message) } else { Self::Network(message) }
+    }
+}
+
+impl From<reqwest::Error> for TransportError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Network(error.without_url().to_string())
+    }
+}
+
+impl From<TransportError> for Error {
+    fn from(error: TransportError) -> Self {
+        match error {
+            TransportError::Http { status, body } => Self::Http { status, body },
+            TransportError::Network(message) => Self::Network(message),
+            TransportError::Connect(message) => Self::Connect(message),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorKind {
+    InvalidType,
+    MissingField,
+    InvalidRequest,
+    InvalidResponse,
+    InvalidProvider,
+    Auth,
+    Http,
+    Network,
+    Connect,
+    Routing,
+    Unsupported,
+}
+
+impl Error {
+    pub fn kind(&self) -> ErrorKind {
+        use crate::ocr::error::{OcrPollingError, OcrRequestError};
+        match self {
+            Self::InvalidType { .. } => ErrorKind::InvalidType,
+            Self::MissingField(_) | Self::OcrRequest(OcrRequestError::MissingField(_)) => ErrorKind::MissingField,
+            Self::InvalidRequest(_) | Self::OcrRequest(_) | Self::ChatRequest(_) => ErrorKind::InvalidRequest,
+            Self::InvalidResponse(_) | Self::OcrResponse(_) | Self::ChatResponse(_) => ErrorKind::InvalidResponse,
+            Self::InvalidProvider(_) => ErrorKind::InvalidProvider,
+            Self::Auth(_) => ErrorKind::Auth,
+            Self::Http { .. } => ErrorKind::Http,
+            Self::Network(_) | Self::OcrPolling(OcrPollingError::PollTimeout) => ErrorKind::Network,
+            Self::OcrPolling(OcrPollingError::PollOrigin | OcrPollingError::PollLocation) => ErrorKind::InvalidResponse,
+            Self::Connect(_) => ErrorKind::Connect,
+            Self::Routing(_) => ErrorKind::Routing,
+            Self::Unsupported(_) => ErrorKind::Unsupported,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn transport_errors_remove_urls_and_keep_dispatch_context() {
+        let error = reqwest::Client::new().get("http://localhost:invalid/private?api_key=secret")
+            .send().await.expect_err("invalid port");
+        let error = TransportError::before_request(error);
+        assert!(matches!(error, TransportError::Connect(_)));
+        assert!(!error.to_string().contains("secret"));
+        assert!(!error.to_string().contains("private"));
+
+        let error = reqwest::Client::new().get("http://localhost:invalid/private?api_key=secret")
+            .send().await.expect_err("invalid port");
+        let error = TransportError::from(error);
+        assert!(matches!(error, TransportError::Network(_)));
+        assert!(!error.to_string().contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn request_timeout_is_not_safe_to_retry_as_a_connect_failure() {
+        use std::time::Duration;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let request = reqwest::Client::new().get(format!("http://{address}"))
+            .timeout(Duration::from_millis(50)).send();
+        let (response, accepted) = tokio::join!(request, listener.accept());
+        let _connection = accepted.expect("accepted connection");
+        let error = response.expect_err("server does not respond");
+        assert!(error.is_timeout());
+        assert!(matches!(TransportError::before_request(error), TransportError::Network(_)));
     }
 }

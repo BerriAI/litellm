@@ -1,151 +1,124 @@
-use crate::auth::CredentialPlacement;
-use crate::auth::http::apply_credential;
-use crate::{AuthError, Error};
-use serde_json::{Map, Value};
-
+use crate::auth::AuthError;
+use crate::ocr::error::OcrError;
+use crate::ocr::error::OcrRequestError;
+use crate::ocr::error::OcrResponseError;
 use std::future::Future;
-use std::pin::Pin;
 
-use super::types::{OcrAuthInputs, OcrRequestData, OcrResponseData};
+use super::hooks::OcrRequestBody;
+use super::prepare::OcrProviderRequest;
+use super::types::{OcrConnection, OcrDocument, OcrResponseData};
+use super::wire::DecodedOcrResponse;
+use crate::Error;
+use serde::{Serialize, de::DeserializeOwned};
 
-pub type OcrAuthFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<(String, String)>, Error>> + Send + 'a>>;
-pub type OcrRequestSetupFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<(String, Vec<(String, String)>), Error>> + Send + 'a>>;
+pub trait OcrProviderConfig: Send + Sync + Sized + 'static {
+    type InputParams: Clone + Serialize + DeserializeOwned + Send + Sync;
+    type MappedParams: Clone + Serialize + Send + Sync + Into<Self::InputParams>;
+    type PreparedDocument: Send;
+    type RequestBody: Serialize + DeserializeOwned + Send + Sync;
+    type ResponseBody: DeserializeOwned + Send;
 
-pub struct OcrRequestSetup<'a> {
-    pub api_base: Option<&'a str>,
-    pub model: &'a str,
-    pub optional_params: &'a Map<String, Value>,
-    pub headers: Vec<(String, String)>,
-    pub api_key: Option<&'a str>,
-    pub auth_inputs: &'a OcrAuthInputs,
-    pub env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OcrResponseHandling {
-    Json,
-    AzureDocumentIntelligencePoll,
-}
-
-pub trait OcrProviderConfig: Sync {
-    fn supported_ocr_params(&self) -> &'static [&'static str];
-
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn map_ocr_params(&self, non_default_params: &Map<String, Value>) -> Map<String, Value> {
-        let mut mapped_params = Map::new();
-        for (param, value) in non_default_params {
-            if self.supported_ocr_params().contains(&param.as_str()) {
-                mapped_params.insert(param.clone(), value.clone());
-            }
-        }
-        mapped_params
-    }
-
+    fn map_ocr_params(
+        &self,
+        params: Self::InputParams,
+    ) -> Result<Self::MappedParams, OcrRequestError>;
     fn transform_ocr_request(
         &self,
         model: &str,
-        document: Value,
-        optional_params: Map<String, Value>,
-    ) -> Result<OcrRequestData, Error>;
-
+        document: Self::PreparedDocument,
+        params: &Self::MappedParams,
+    ) -> Result<Self::RequestBody, OcrRequestError>;
     fn transform_ocr_response(
         &self,
         model: &str,
-        response_json: Value,
-    ) -> Result<OcrResponseData, Error>;
-
-    fn transform_ocr_response_with_params(
-        &self,
-        model: &str,
-        response_json: Value,
-        _optional_params: &Map<String, Value>,
-    ) -> Result<OcrResponseData, Error> {
-        self.transform_ocr_response(model, response_json)
-    }
-
+        response: Self::ResponseBody,
+        params: &Self::MappedParams,
+    ) -> Result<OcrResponseData, OcrResponseError>;
     fn complete_url(
         &self,
-        api_base: Option<&str>,
+        connection: &OcrConnection,
         model: &str,
-        optional_params: &Map<String, Value>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
-
-    fn resolve_api_key(
+        params: &Self::MappedParams,
+    ) -> Result<String, OcrError>;
+    fn authenticate(
         &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
-
-    fn parse_auth_inputs(
+        connection: &OcrConnection,
+    ) -> impl Future<Output = Result<Vec<(String, String)>, AuthError>> + Send;
+    fn prepare_document(
         &self,
-        _provider_params: &Map<String, Value>,
-    ) -> Result<OcrAuthInputs, AuthError> {
-        Ok(OcrAuthInputs::None)
-    }
-
-    #[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-    fn validate_environment(
+        document: OcrDocument,
+        connection: &OcrConnection,
+        headers: &[(String, String)],
+    ) -> impl Future<Output = Result<Self::PreparedDocument, OcrError>> + Send;
+    fn params_for_hook(&self, params: Self::MappedParams) -> OcrProviderRequest;
+    fn params_from_hook(
         &self,
-        headers: Vec<(String, String)>,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<Vec<(String, String)>, Error> {
-        let placement = self.credential_placement();
-        if crate::http_utils::has_header(&headers, placement.header_name()) {
-            return Ok(headers);
-        }
-        let api_key = self.resolve_api_key(api_key, env_lookup)?;
-        apply_credential(headers, &api_key, placement).map_err(Error::from)
+        params: OcrProviderRequest,
+    ) -> Result<Self::MappedParams, OcrRequestError>;
+    fn body_for_hook(&self, body: Self::RequestBody) -> OcrRequestBody;
+    fn body_from_hook(&self, body: OcrRequestBody) -> Result<Self::RequestBody, OcrRequestError>;
+    fn provider_name(&self) -> &'static str;
+    fn preserve_native_response(&self, _params: &Self::MappedParams) -> bool {
+        false
     }
-
-    fn authenticate<'a>(
-        &'a self,
-        headers: Vec<(String, String)>,
-        api_key: Option<&'a str>,
-        auth_inputs: &'a OcrAuthInputs,
-        env_lookup: &'a (dyn Fn(&str) -> Option<String> + Sync),
-    ) -> OcrAuthFuture<'a> {
-        Box::pin(async move {
-            let _ = auth_inputs;
-            self.validate_environment(headers, api_key, env_lookup)
-        })
-    }
-
-    fn prepare_url_and_headers<'a>(
-        &'a self,
-        request: OcrRequestSetup<'a>,
-    ) -> OcrRequestSetupFuture<'a> {
-        Box::pin(async move {
-            let url = self.complete_url(
-                request.api_base,
-                request.model,
-                request.optional_params,
-                request.env_lookup,
-            )?;
-            let headers = self
-                .authenticate(
-                    request.headers,
-                    request.api_key,
-                    request.auth_inputs,
-                    request.env_lookup,
-                )
-                .await?;
-            Ok((url, headers))
-        })
-    }
-
-    fn credential_placement(&self) -> CredentialPlacement {
-        CredentialPlacement::Bearer
-    }
-
-    fn requires_data_uri_document(&self) -> bool {
+    fn guard_document_before_preparation(&self) -> bool {
         false
     }
 
-    fn response_handling(&self) -> OcrResponseHandling {
-        OcrResponseHandling::Json
+    fn read_response(
+        &self,
+        response: reqwest::Response,
+        _url: &str,
+        _headers: &[(String, String)],
+        _connection: &OcrConnection,
+        params: &Self::MappedParams,
+    ) -> impl Future<Output = Result<DecodedOcrResponse<Self::ResponseBody>, OcrError>> + Send {
+        super::wire::read_json_response(response, self.preserve_native_response(params))
     }
+}
+
+#[macro_export]
+macro_rules! ocr_provider_hooks {
+    ($provider:ident, $body:ident) => {
+        fn params_for_hook(
+            &self,
+            params: Self::MappedParams,
+        ) -> $crate::ocr::prepare::OcrProviderRequest {
+            $crate::ocr::prepare::OcrProviderRequest::$provider(params.into())
+        }
+        fn params_from_hook(
+            &self,
+            params: $crate::ocr::prepare::OcrProviderRequest,
+        ) -> Result<Self::MappedParams, $crate::ocr::error::OcrRequestError> {
+            match params {
+                $crate::ocr::prepare::OcrProviderRequest::$provider(params) => {
+                    self.map_ocr_params(params)
+                }
+                _ => Err($crate::ocr::error::OcrRequestError::RequestField {
+                    path: "guardrail.optional_params.provider".into(),
+                }),
+            }
+        }
+        fn body_for_hook(&self, body: Self::RequestBody) -> $crate::ocr::hooks::OcrRequestBody {
+            $crate::ocr::hooks::OcrRequestBody::$body(body)
+        }
+        fn body_from_hook(
+            &self,
+            body: $crate::ocr::hooks::OcrRequestBody,
+        ) -> Result<Self::RequestBody, $crate::ocr::error::OcrRequestError> {
+            match body {
+                $crate::ocr::hooks::OcrRequestBody::$body(body) => Ok(body),
+                _ => Err($crate::ocr::error::OcrRequestError::RequestField {
+                    path: "guardrail.body".into(),
+                }),
+            }
+        }
+        fn provider_name(&self) -> &'static str {
+            $crate::ocr::prepare::OcrProviderKind::$provider.provider_name()
+        }
+    };
+}
+
+pub(crate) fn request_error(path: &str) -> Error {
+    OcrRequestError::RequestField { path: path.into() }.into()
 }

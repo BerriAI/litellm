@@ -1,3 +1,4 @@
+use crate::auth::error::AwsAuthError;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -246,9 +247,7 @@ pub async fn resolve_credentials(
                 .profile_name(name)
                 .build();
             provider.provide_credentials().await.map_err(|error| {
-                Error::Auth(AuthError::Message(format!(
-                    "AWS profile credentials failed: {error}"
-                )))
+                Error::Auth(AuthError::Aws(AwsAuthError::Profile(error.to_string())))
             })
         }
         AwsAuthFlow::AssumeRole { role, session_name } => {
@@ -263,9 +262,7 @@ pub async fn resolve_credentials(
                         .build()
                         .await;
                 let credentials = provider.provide_credentials().await.map_err(|error| {
-                    Error::Auth(AuthError::Message(format!(
-                        "AWS default credentials failed: {error}"
-                    )))
+                    Error::Auth(AuthError::Aws(AwsAuthError::DefaultChain(error.to_string())))
                 })?;
                 set_cached_credentials(
                     key,
@@ -305,9 +302,7 @@ pub async fn resolve_credentials(
             };
             let provider = builder.configure(&sdk_config).build().await;
             provider.provide_credentials().await.map_err(|error| {
-                Error::Auth(AuthError::Message(format!(
-                    "AWS role credentials failed: {error}"
-                )))
+                Error::Auth(AuthError::Aws(AwsAuthError::AssumeRole(error.to_string())))
             })
         }
         AwsAuthFlow::WebIdentity {
@@ -332,19 +327,13 @@ pub async fn resolve_credentials(
                 .send()
                 .await
                 .map_err(|error| {
-                    Error::Auth(AuthError::Message(format!(
-                        "AWS web identity credentials failed: {error}"
-                    )))
+                    Error::Auth(AuthError::Aws(AwsAuthError::WebIdentity(error.to_string())))
                 })?;
             let credentials = response.credentials().ok_or_else(|| {
-                Error::Auth(AuthError::Message(
-                    "AWS web identity response had no credentials".to_string(),
-                ))
+                Error::Auth(AuthError::Aws(AwsAuthError::MissingWebIdentityCredentials))
             })?;
             let expiration = SystemTime::try_from(*credentials.expiration()).map_err(|error| {
-                Error::Auth(AuthError::Message(format!(
-                    "AWS web identity expiration was invalid: {error}"
-                )))
+                Error::Auth(AuthError::Aws(AwsAuthError::WebIdentityExpiration(error.to_string())))
             })?;
             Ok(Credentials::new(
                 credentials.access_key_id(),
@@ -364,9 +353,7 @@ pub async fn resolve_credentials(
                     .build()
                     .await;
             let credentials = provider.provide_credentials().await.map_err(|error| {
-                Error::Auth(AuthError::Message(format!(
-                    "AWS default credentials failed: {error}"
-                )))
+                Error::Auth(AuthError::Aws(AwsAuthError::DefaultChain(error.to_string())))
             })?;
             set_cached_credentials(
                 key,
@@ -464,24 +451,18 @@ pub fn sign_bedrock_post(
         .build()
         .map(SigningParams::from)
         .map_err(|error| {
-            Error::Auth(AuthError::Message(format!(
-                "AWS signing parameters failed: {error}"
-            )))
+            Error::Auth(AuthError::Aws(AwsAuthError::SigningParameters(error.to_string())))
         })?;
     let header_refs = headers
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()));
     let request = SignableRequest::new("POST", url, header_refs, SignableBody::Bytes(body))
         .map_err(|error| {
-            Error::Auth(AuthError::Message(format!(
-                "AWS signable request failed: {error}"
-            )))
+            Error::Auth(AuthError::Aws(AwsAuthError::SignableRequest(error.to_string())))
         })?;
     let (instructions, _) = sign(request, &params)
         .map_err(|error| {
-            Error::Auth(AuthError::Message(format!(
-                "AWS request signing failed: {error}"
-            )))
+            Error::Auth(AuthError::Aws(AwsAuthError::Signing(error.to_string())))
         })?
         .into_parts();
     Ok(instructions

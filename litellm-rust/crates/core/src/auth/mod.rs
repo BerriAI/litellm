@@ -1,5 +1,7 @@
 pub mod azure;
 mod credential;
+pub mod error;
+pub use error::AuthError;
 pub(crate) mod http;
 mod policy;
 mod secret;

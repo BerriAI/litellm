@@ -22,12 +22,12 @@ pub async fn execute_audio_transcription_provider_call(
     }
     let response = http_request(request_builder)
         .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+        .map_err(crate::error::TransportError::before_request)?;
     let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|error| Error::Network(error.to_string()))?;
+        .map_err(crate::error::TransportError::from)?;
     if !status.is_success() {
         return Err(Error::Http {
             status: status.as_u16(),

@@ -1,3 +1,4 @@
+use crate::chat_completions::error::{ChatRequestError, ChatResponseError};
 use serde_json::{Map, Value, json};
 
 use crate::chat_completions::conversation::{Conversation, TurnRole, build_conversation};
@@ -214,7 +215,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         _model: &str,
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
-    ) -> Result<ProviderChatRequestData, Error> {
+    ) -> Result<ProviderChatRequestData, ChatRequestError> {
         Ok(ProviderChatRequestData {
             body: converse_body(&build_conversation(&messages), &optional_params),
         })
@@ -224,26 +225,24 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         &self,
         model: &str,
         response: ProviderChatResponseData,
-    ) -> Result<ChatCompletionsResponse, Error> {
+    ) -> Result<ChatCompletionsResponse, ChatResponseError> {
         let body = response
             .body
             .as_object()
-            .ok_or_else(|| Error::InvalidResponse("converse response is not an object".into()))?;
+            .ok_or_else(|| ChatResponseError::NotObject { api: "converse" })?;
 
         let content = body
             .get("output")
             .and_then(|output| output.get("message"))
             .and_then(|message| message.get("content"))
             .and_then(Value::as_array)
-            .ok_or(Error::MissingField("output.message.content"))?;
-        // The route declines tool requests, so anything other than a text block
-        // is something this path never asked for. Decline; the host falls back.
+            .ok_or(ChatResponseError::MissingField("output.message.content"))?;
         if content.iter().any(|block| {
             block
                 .as_object()
                 .is_none_or(|block| block.len() != 1 || !block.contains_key("text"))
         }) {
-            return Err(Error::Unsupported("non-text response content block"));
+            return Err(ChatResponseError::NonTextContent);
         }
         let text: String = content
             .iter()
@@ -253,7 +252,7 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         let usage = body
             .get("usage")
             .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
+            .ok_or(ChatResponseError::MissingField("usage"))?;
         let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
         let computed = usage_from_parts(
             field("inputTokens"),
