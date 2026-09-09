@@ -10,12 +10,6 @@ fn typed_provider_and_model_select_the_request_contract() {
             OcrProviderKind::AzureDocumentIntelligence,
         ),
         ("azure_ai", "future-model", OcrProviderKind::AzureAi),
-        (
-            "vertex_ai",
-            "deepseek-ocr",
-            OcrProviderKind::VertexAiDeepSeek,
-        ),
-        ("vertex_ai", "future-model", OcrProviderKind::VertexAi),
         ("reducto", "parse-legacy", OcrProviderKind::ReductoLegacy),
         ("reducto", "parse-v3", OcrProviderKind::ReductoV3),
         ("reducto", "future-model", OcrProviderKind::ReductoV3),

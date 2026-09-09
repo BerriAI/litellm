@@ -12,8 +12,6 @@ use crate::providers::mistral::ocr::transformation::MistralOcrConfig;
 use crate::providers::reducto::ocr::transformation::{
     ReductoParseLegacyConfig, ReductoParseV3Config,
 };
-use crate::providers::vertex_ai::ocr::deepseek::transformation::VertexAiDeepSeekOcrConfig;
-use crate::providers::vertex_ai::ocr::transformation::VertexAiOcrConfig;
 
 struct OcrExecution<'a> {
     http_client: &'a reqwest::Client,
@@ -59,12 +57,6 @@ pub(crate) async fn perform_ocr_request(
         }
         OcrProviderRequest::AzureDocumentIntelligence(params) => {
             dispatch!(AzureDocumentIntelligenceOcrConfig, params)
-        }
-        OcrProviderRequest::VertexAi(params) => {
-            dispatch!(VertexAiOcrConfig, params)
-        }
-        OcrProviderRequest::VertexAiDeepSeek(params) => {
-            dispatch!(VertexAiDeepSeekOcrConfig, params)
         }
         OcrProviderRequest::ReductoV3(params) => {
             dispatch!(ReductoParseV3Config, params)

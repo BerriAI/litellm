@@ -4,7 +4,6 @@ use crate::Error;
 use crate::providers::azure_ai::ocr::document_intelligence::types::DocumentIntelligenceInputParams;
 use crate::providers::mistral::ocr::types::MistralOcrParams;
 use crate::providers::reducto::ocr::types::{ReductoLegacyParams, ReductoV3Params};
-use crate::providers::vertex_ai::ocr::deepseek::types::DeepSeekOcrParams;
 use serde::Serialize;
 use strum::EnumString;
 
@@ -14,8 +13,6 @@ pub enum OcrProviderRequest {
     Mistral(MistralOcrParams),
     AzureAi(MistralOcrParams),
     AzureDocumentIntelligence(DocumentIntelligenceInputParams),
-    VertexAi(MistralOcrParams),
-    VertexAiDeepSeek(DeepSeekOcrParams),
     ReductoV3(ReductoV3Params),
     ReductoLegacy(ReductoLegacyParams),
 }
@@ -25,8 +22,6 @@ pub enum OcrProviderKind {
     Mistral,
     AzureAi,
     AzureDocumentIntelligence,
-    VertexAi,
-    VertexAiDeepSeek,
     ReductoV3,
     ReductoLegacy,
 }
@@ -36,7 +31,6 @@ pub enum OcrProviderKind {
 pub enum OcrProvider {
     Mistral,
     AzureAi,
-    VertexAi,
     Reducto,
 }
 
@@ -65,7 +59,6 @@ impl OcrProviderKind {
         match self {
             Self::Mistral => "mistral",
             Self::AzureAi | Self::AzureDocumentIntelligence => "azure_ai",
-            Self::VertexAi | Self::VertexAiDeepSeek => "vertex_ai",
             Self::ReductoV3 | Self::ReductoLegacy => "reducto",
         }
     }
@@ -76,8 +69,6 @@ impl OcrProviderRequest {
             Self::Mistral(_) => OcrProviderKind::Mistral,
             Self::AzureAi(_) => OcrProviderKind::AzureAi,
             Self::AzureDocumentIntelligence(_) => OcrProviderKind::AzureDocumentIntelligence,
-            Self::VertexAi(_) => OcrProviderKind::VertexAi,
-            Self::VertexAiDeepSeek(_) => OcrProviderKind::VertexAiDeepSeek,
             Self::ReductoV3(_) => OcrProviderKind::ReductoV3,
             Self::ReductoLegacy(_) => OcrProviderKind::ReductoLegacy,
         }
@@ -95,10 +86,6 @@ pub fn ocr_provider_config(provider: OcrProvider, model: &OcrModel) -> OcrProvid
             OcrProviderKind::AzureDocumentIntelligence
         }
         (OcrProvider::AzureAi, _) => OcrProviderKind::AzureAi,
-        (OcrProvider::VertexAi, _) if lower.contains("deepseek") => {
-            OcrProviderKind::VertexAiDeepSeek
-        }
-        (OcrProvider::VertexAi, _) => OcrProviderKind::VertexAi,
         (OcrProvider::Reducto, OcrModel::ReductoLegacy) => OcrProviderKind::ReductoLegacy,
         (OcrProvider::Reducto, _) => OcrProviderKind::ReductoV3,
     }

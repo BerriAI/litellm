@@ -143,19 +143,12 @@ impl OcrResponseData {
     }
 }
 
-#[derive(Clone, Default)]
-pub struct VertexOcrSettings {
-    pub project: Option<String>,
-    pub location: Option<String>,
-}
-
 #[derive(Clone)]
 pub struct OcrConnection {
     pub api_key: Option<String>,
     pub api_base: Option<String>,
     pub extra_headers: Vec<(String, String)>,
     pub azure_auth: Option<AzureAuthInputs>,
-    pub vertex: VertexOcrSettings,
     pub timeout: Duration,
     pub poll_timeout: Duration,
     pub max_download_bytes: u64,
@@ -168,7 +161,6 @@ impl Default for OcrConnection {
             api_base: None,
             extra_headers: Vec::new(),
             azure_auth: None,
-            vertex: VertexOcrSettings::default(),
             timeout: Duration::from_secs(OCR_HTTP_TIMEOUT_SECS),
             poll_timeout: Duration::from_secs(crate::constants::OCR_POLL_TIMEOUT_SECS),
             max_download_bytes: OCR_DOWNLOAD_MAX_BYTES,
