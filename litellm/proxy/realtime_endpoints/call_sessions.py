@@ -195,7 +195,7 @@ async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAP
         }
         try:
             processed: Final = await process_codex_request(request, data, auth, call.alias, "_arealtime")
-        except Exception:
+        except Exception:  # noqa: BLE001  # user-defined pre-call hooks may raise any exception; always reject the connection
             verbose_proxy_logger.exception("Realtime sideband pre-call rejected")
             await websocket.close(code=1008, reason="Realtime pre-call rejected")
             return
