@@ -1842,12 +1842,14 @@ class _ApplyStyleGuardrail(CustomGuardrail):
         self.block = block
         self.apply_called = False
         self.seen_texts = None
+        self.seen_request_data = None
 
     async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
         from fastapi import HTTPException
 
         self.apply_called = True
         self.seen_texts = inputs.get("texts")
+        self.seen_request_data = request_data
         if self.block:
             raise HTTPException(status_code=400, detail={"error": "Violated moderation policy"})
         return inputs
@@ -2647,6 +2649,91 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
     VectorStorePreCallHook that attaches provider_specific_fields["search_results"])."""
 
     @pytest.mark.asyncio
+    async def test_apply_guardrail_retains_request_identity(self) -> None:
+        from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail: Final = _ApplyStyleGuardrail(block=False)
+        guardrail.event_hook = GuardrailEventHooks.post_call
+        request_data: Final = {"guardrails": ["apply-style-guardrail"]}
+        response: Final = ModelResponse(choices=[Choices(message=Message(content="review me"))])
+
+        await guardrail.async_post_call_success_deployment_hook(
+            request_data=request_data, response=response, call_type=CallTypes.acompletion
+        )
+
+        assert guardrail.seen_request_data is request_data
+        assert guardrail.seen_texts == ["review me"]
+        assert "guardrail_to_apply" not in request_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("call_type", (None, CallTypes.acompletion))
+    async def test_apply_guardrail_masks_response_and_records_metadata(self, call_type: CallTypes | None) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+            ContentFilterGuardrail,
+        )
+        from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        guardrail: Final = ContentFilterGuardrail(
+            guardrail_name="response-filter",
+            event_hook=GuardrailEventHooks.post_call,
+            blocked_words=[BlockedWord(keyword="secret", action=ContentFilterAction.MASK)],
+        )
+        request_data: Final = {"guardrails": ["response-filter"]}
+        response: Final = ModelResponse(choices=[Choices(message=Message(content="a secret"))])
+
+        result: Final = await guardrail.async_post_call_success_deployment_hook(
+            request_data=request_data, response=response, call_type=call_type
+        )
+
+        assert isinstance(result, ModelResponse)
+        assert result.choices[0].message.content == f"a {guardrail.keyword_redaction_tag}"
+        entries: Final = _guardrail_entries(request_data)
+        assert len(entries) == 1
+        assert entries[0]["guardrail_name"] == "response-filter"
+        assert entries[0]["guardrail_mode"] == "post_call"
+        assert "guardrail_to_apply" not in request_data
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("error_type", (None, RuntimeError, asyncio.CancelledError))
+    async def test_dispatch_cleans_up_request_on_every_exit(self, error_type: type[BaseException] | None) -> None:
+        from contextlib import nullcontext
+
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.types.utils import LLMResponseTypes, ModelResponse
+
+        error: Final = error_type("dispatch interrupted") if error_type is not None else None
+
+        class Dispatch(CustomLogger):
+            request_data: dict[str, object] | None = None
+
+            async def async_post_call_success_hook(
+                self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+            ) -> LLMResponseTypes:
+                self.request_data = data
+                if error is not None:
+                    raise error
+                return response
+
+        dispatch: Final = Dispatch()
+
+        class Guardrail(_ApplyStyleGuardrail):
+            def _deployment_hook_target(self) -> CustomLogger:
+                return dispatch
+
+        guardrail: Final = Guardrail(block=False)
+        guardrail.event_hook = GuardrailEventHooks.post_call
+        request_data: Final = {"guardrails": ["apply-style-guardrail"]}
+        with pytest.raises(error_type) if error_type is not None else nullcontext():
+            await guardrail.async_post_call_success_deployment_hook(
+                request_data=request_data, response=ModelResponse(), call_type=CallTypes.acompletion
+            )
+
+        assert dispatch.request_data is request_data
+        assert "guardrail_to_apply" not in request_data
+
+    @pytest.mark.asyncio
     async def test_returns_none_when_request_has_no_guardrails(self):
         from litellm.types.utils import ModelResponse
 
@@ -2740,4 +2827,5 @@ class TestCustomGuardrailPostCallSuccessDeploymentHook:
 
         assert result is response
         assert response.choices[0].message.content == "filtered response"
-        assert request_data == {"guardrails": ["test-guardrail"]}
+        assert "guardrail_to_apply" not in request_data
+        assert len(_guardrail_entries(request_data)) == 1
