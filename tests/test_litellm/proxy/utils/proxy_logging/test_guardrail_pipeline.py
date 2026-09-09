@@ -2322,3 +2322,74 @@ async def test_streaming_iterator_hook_pipeline_delivers_function_call_rewrite_o
     assert delivered[4]["item"]["arguments"] == '{"fruit": "[MASKED]"}'
     assert delivered[5]["response"]["output"][0]["arguments"] == '{"fruit": "[MASKED]"}'
     assert "persimmon" not in json.dumps(delivered)
+
+
+def _drop_tool_calls(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    return {"tool_calls": []}
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_discards_dropped_tool_call_on_chat_chunks(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
+):
+    monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(_drop_tool_calls)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+                response=_async_chunk_iter(_tool_call_stream_chunks()),
+                request_data=data,
+            )
+        ]
+
+    assert delivered[0].choices[0].delta.tool_calls[0].function.arguments == '{"ssn": "123"}'
+    assert delivered[1].choices[0].finish_reason == "tool_calls"
+    assert any("'gr-post'" in message and "discarded" in message for message in _warnings(caplog))
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_discards_dropped_tool_call_on_anthropic_sse(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
+):
+    monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(_drop_tool_calls)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=make_user_api_key_auth(request_route="/v1/messages"),
+                response=_async_chunk_iter(_anthropic_tool_use_sse_chunks()),
+                request_data=data,
+            )
+        ]
+
+    assert delivered == _anthropic_tool_use_sse_chunks()
+    assert any("'gr-post'" in message and "discarded" in message for message in _warnings(caplog))
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_discards_dropped_tool_call_on_responses_events(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
+):
+    monkeypatch.setattr(litellm, "callbacks", [_rewriting_stream_guardrail(_drop_tool_calls)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=make_user_api_key_auth(request_route="/v1/responses"),
+                response=_async_chunk_iter(_responses_function_call_events()),
+                request_data=data,
+            )
+        ]
+
+    assert delivered == _responses_function_call_events()
+    assert any("'gr-post'" in message and "discarded" in message for message in _warnings(caplog))
