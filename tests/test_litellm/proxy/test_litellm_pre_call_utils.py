@@ -7733,6 +7733,43 @@ async def test_missing_session_id_omit_body_litellm_session_id_does_not_override
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+async def test_missing_session_id_omit_keeps_metadata_session_id_on_litellm_metadata_routes(path: str):
+    """Routes that write to `litellm_metadata` promote the client's `metadata.session_id` later, so the body
+    `litellm_session_id` must not take the slot first."""
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-4o",
+            "input": "hi",
+            "litellm_session_id": "cust-sess-1",
+            "metadata": {"session_id": "meta-sess-1"},
+        },
+        request=_request_for(path),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "omit"},
+    )
+
+    assert updated["litellm_metadata"]["session_id"] == "meta-sess-1"
+    assert _spend_log_session_id(updated, "litellm_metadata") == "meta-sess-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/messages"])
+async def test_missing_session_id_omit_keeps_body_litellm_session_id_on_litellm_metadata_routes(path: str):
+    updated = await add_litellm_data_to_request(
+        data={"model": "gpt-4o", "input": "hi", "litellm_session_id": "cust-sess-1"},
+        request=_request_for(path),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={"missing_session_id": "omit"},
+    )
+
+    assert updated["litellm_metadata"]["session_id"] == "cust-sess-1"
+    assert _spend_log_session_id(updated, "litellm_metadata") == "cust-sess-1"
+
+
+@pytest.mark.asyncio
 async def test_missing_session_id_omit_ignores_empty_body_litellm_session_id():
     updated = await add_litellm_data_to_request(
         data={"model": "gpt-4o", "messages": [], "litellm_session_id": ""},

@@ -771,7 +771,15 @@ def apply_missing_session_id_policy(
         return
     if policy == "omit":
         metadata[SESSION_ID_OMITTED_METADATA_KEY] = True
-        if (body_session_id := data.get("litellm_session_id")) and not metadata.get("session_id"):
+        requester_metadata: Final = data.get("metadata")
+        requester_session_id: Final = (
+            requester_metadata.get("session_id") if isinstance(requester_metadata, dict) else None
+        )
+        if (
+            (body_session_id := data.get("litellm_session_id"))
+            and not metadata.get("session_id")
+            and not requester_session_id
+        ):
             metadata["session_id"] = body_session_id
         return
     if data.get("litellm_session_id") or metadata.get("session_id"):
