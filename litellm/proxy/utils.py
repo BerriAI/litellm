@@ -941,7 +941,7 @@ class ProxyLogging:
             self.db_spend_update_writer.redis_update_buffer.redis_cache = redis_cache
             self.db_spend_update_writer.pod_lock_manager.redis_cache = redis_cache
 
-    def add_missing_proxy_hooks(self, llm_router: Router | None = None):
+    def add_missing_proxy_hooks(self, llm_router: Router | None = None) -> None:
         """
         Add proxy hooks that have not already been initialized.
 

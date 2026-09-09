@@ -16,7 +16,16 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Collection, Mapping, MutableMapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Mapping,
+    MutableMapping,
+    Sequence,
+)
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, UnionType
 from typing import (
@@ -10166,7 +10175,7 @@ class ProxyStartupEvent:
         cls.start_prisma_migrations(client)
 
         db_coordination_redis_cache: Final = await cls._init_coordination_redis_from_db(
-            litellm_settings=proxy_config.get_config_state().get("litellm_settings") or {},
+            litellm_settings=proxy_config.get_config_state().get("litellm_settings") or _EMPTY_MAPPING,
             llm_router=llm_router,
         )
         if db_coordination_redis_cache is not None:

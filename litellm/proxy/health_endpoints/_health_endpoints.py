@@ -1415,7 +1415,7 @@ async def _db_health_readiness_check() -> DBHealthCache:
             timeout=DB_READINESS_PROBE_DEADLINE_SECONDS,
         )
     except asyncio.TimeoutError:
-        return {"status": "disconnected", "last_updated": db_health_cache["last_updated"], "fail_open_safe": True}
+        return DBHealthCache(status="disconnected", last_updated=db_health_cache["last_updated"], fail_open_safe=True)
 
 
 async def _db_health_readiness_check_unbounded() -> DBHealthCache:
@@ -1447,7 +1447,8 @@ async def _db_health_readiness_check_unbounded() -> DBHealthCache:
         db_health_cache = {
             "status": "disconnected",
             "last_updated": datetime.now(),
-            "fail_open_safe": isinstance(e, asyncio.TimeoutError) or PrismaDBExceptionHandler.is_database_connection_error(e),
+            "fail_open_safe": isinstance(e, asyncio.TimeoutError)
+            or PrismaDBExceptionHandler.is_database_connection_error(e),
         }
         if PrismaDBExceptionHandler.is_database_transport_error(e):
             try:

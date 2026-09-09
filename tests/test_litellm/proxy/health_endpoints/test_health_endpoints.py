@@ -2373,7 +2373,8 @@ async def test_health_readiness_details_returns_200_when_db_down_and_allow_reque
 
 
 @pytest.mark.asyncio
-async def test_db_health_readiness_check_bounds_hung_health_check():
+@pytest.mark.parametrize("allow_requests", [True, False])
+async def test_db_health_readiness_check_bounds_hung_health_check(monkeypatch, allow_requests):
     """
     A connection that hangs mid-failover must not stall the probe past the
     kubelet's timeoutSeconds; the DB round-trip is bounded and reported as
@@ -2386,6 +2387,7 @@ async def test_db_health_readiness_check_bounds_hung_health_check():
     async def hang():
         await asyncio.sleep(60)
 
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"allow_requests_on_db_unavailable": allow_requests})
     mock_prisma = MagicMock()
     mock_prisma.health_check = hang
     mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still down"))
@@ -2409,9 +2411,12 @@ async def test_db_health_readiness_check_bounds_hung_health_check():
     assert result["status"] == "disconnected"
     assert elapsed < 5
 
+    assert _health_endpoints_module._readiness_can_fail_open(result) is allow_requests
+
 
 @pytest.mark.asyncio
-async def test_db_health_readiness_check_overall_deadline_bounds_hung_reconnect():
+@pytest.mark.parametrize("allow_requests", [True, False])
+async def test_db_health_readiness_check_overall_deadline_bounds_hung_reconnect(monkeypatch, allow_requests):
     """
     The whole probe-path DB check (initial check + reconnect + re-check,
     including reconnect lock waits) runs under one deadline, so a reconnect
@@ -2424,6 +2429,7 @@ async def test_db_health_readiness_check_overall_deadline_bounds_hung_reconnect(
     async def hang(**kwargs):
         await asyncio.sleep(60)
 
+    monkeypatch.setattr(proxy_server_module, "general_settings", {"allow_requests_on_db_unavailable": allow_requests})
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock(side_effect=httpx.ConnectError("down"))
     mock_prisma.attempt_db_reconnect = hang
@@ -2446,6 +2452,8 @@ async def test_db_health_readiness_check_overall_deadline_bounds_hung_reconnect(
 
     assert result["status"] == "disconnected"
     assert elapsed < 5
+
+    assert _health_endpoints_module._readiness_can_fail_open(result) is allow_requests
 
 
 @pytest.mark.asyncio
@@ -3136,7 +3144,6 @@ async def test_health_readiness_stays_ready_when_db_disconnected_and_fail_open_e
     assert result == {"status": "healthy", "db": "disconnected"}
 
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "permanent_error",
@@ -3173,7 +3180,6 @@ async def test_health_readiness_fail_open_rejects_permanent_database_fault(monke
     mock_prisma.attempt_db_reconnect.assert_not_called()
 
 
-
 @pytest.mark.asyncio
 async def test_health_readiness_uses_final_reconnect_failure_for_fail_open_policy(monkeypatch):
     from fastapi import Response
@@ -3207,7 +3213,6 @@ async def test_health_readiness_uses_final_reconnect_failure_for_fail_open_polic
     assert result == {"status": "healthy", "db": "disconnected"}
 
 
-
 @pytest.mark.asyncio
 async def test_health_readiness_distinguishes_initial_recovery_from_no_database(monkeypatch):
     from fastapi import Response
@@ -3229,7 +3234,6 @@ async def test_health_readiness_distinguishes_initial_recovery_from_no_database(
     assert result == {"status": "healthy", "db": "disconnected"}
 
 
-
 @pytest.mark.asyncio
 async def test_health_readiness_returns_503_if_fail_open_is_disabled_during_initial_recovery(monkeypatch):
     from fastapi import Response
@@ -3249,7 +3253,6 @@ async def test_health_readiness_returns_503_if_fail_open_is_disabled_during_init
 
     assert response.status_code == 503
     assert result == {"status": "healthy", "db": "disconnected"}
-
 
 
 @pytest.mark.asyncio

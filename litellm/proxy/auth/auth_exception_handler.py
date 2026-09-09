@@ -62,11 +62,7 @@ def _as_proxy_exception(e: Exception, *, configured_database_without_client: boo
         return e
     if PrismaDBExceptionHandler.is_database_service_unavailable_error(e) or configured_database_without_client:
         return ProxyException(
-            message=(
-                "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
-                if configured_database_without_client
-                else PrismaDBExceptionHandler.database_unavailable_message(e)
-            ),
+            message=PrismaDBExceptionHandler.database_unavailable_message(e),
             type=ProxyErrorTypes.no_db_connection,
             param="None",
             code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -220,7 +216,10 @@ class UserAPIKeyAuthExceptionHandler:
             if transformed_exception is not None:
                 e = transformed_exception
 
-            final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e, configured_database_without_client=configured_database_without_client), is_invalid_virtual_key)
+            final_exception: Final = mark_invalid_virtual_key_error(
+                _as_proxy_exception(e, configured_database_without_client=configured_database_without_client),
+                is_invalid_virtual_key,
+            )
             # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
             if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
                 verbose_proxy_logger.error(
