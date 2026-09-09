@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response impo
     _should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,  # pyright: ignore[reportPrivateUsage]  # same import as the OpenAI transformation
     strip_litellm_internal_message_fields,
     strip_name_from_message,
 )
@@ -23,7 +24,9 @@ from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
     DatabricksChoice,
+    DatabricksDelta,
     DatabricksFunction,
+    DatabricksMessage,
     DatabricksResponse,
     DatabricksTool,
 )
@@ -535,6 +538,19 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return reasoning_content, thinking_blocks
 
     @staticmethod
+    def extract_top_level_reasoning_content(delta: DatabricksDelta) -> str | None:
+        return delta.get("reasoning_content")
+
+    @staticmethod
+    def resolve_reasoning_and_content(
+        message: DatabricksMessage, block_reasoning_content: str | None
+    ) -> tuple[str | None, str | None]:
+        content_str: Final = DatabricksConfig.extract_content_str(message["content"])
+        if block_reasoning_content is not None:
+            return block_reasoning_content, content_str
+        return _extract_reasoning_content({**message, "content": content_str})
+
+    @staticmethod
     def extract_citations(
         content: AllDatabricksContentValues | None,
     ) -> list[Any] | None:
@@ -577,14 +593,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                     finish_reason = "stop"
 
             if translated_message is None:
-                ## get the content str
-                content_str = DatabricksConfig.extract_content_str(choice["message"]["content"])
-
-                ## get the reasoning content
                 (
-                    reasoning_content,
+                    block_reasoning_content,
                     thinking_blocks,
                 ) = DatabricksConfig.extract_reasoning_content(choice["message"].get("content"))
+                reasoning_content, content_str = DatabricksConfig.resolve_reasoning_and_content(
+                    choice["message"], block_reasoning_content
+                )
 
                 citations = DatabricksConfig.extract_citations(choice["message"].get("content"))
 
@@ -738,12 +753,16 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
 
                 # extract the reasoning content
                 (
-                    reasoning_content,
+                    block_reasoning_content,
                     thinking_blocks,
                 ) = DatabricksConfig.extract_reasoning_content(choice["delta"].get("content"))
 
                 choice["delta"]["content"] = content_str
-                choice["delta"]["reasoning_content"] = reasoning_content
+                choice["delta"]["reasoning_content"] = (
+                    block_reasoning_content
+                    if block_reasoning_content is not None
+                    else DatabricksConfig.extract_top_level_reasoning_content(choice["delta"])
+                )
                 choice["delta"]["thinking_blocks"] = thinking_blocks
                 translated_choices.append(choice)
             return ModelResponseStream(
