@@ -278,6 +278,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_type
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
+    drop_params_flag,
     get_litellm_metadata_from_kwargs,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -631,6 +632,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.prometheus_cleanup import mark_dead_workers, mark_worker_exit
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.public_endpoints.public_v1 import router as public_v1_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
@@ -1059,6 +1061,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
 
     init_verbose_loggers()
 
+    prometheus_multiproc_dir: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+    if prometheus_multiproc_dir:
+        mark_dead_workers(prometheus_multiproc_dir)
+
     ## RUN WORKER STARTUP HOOKS (e.g., gflags initialization) ##
     _startup_hooks_env: Final = os.environ.get("LITELLM_WORKER_STARTUP_HOOKS", "")
     if _startup_hooks_env:
@@ -1364,6 +1370,9 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     await proxy_config.stop_auth_cache_invalidation_subscriber()
 
     await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
+
+    if prometheus_multiproc_dir:
+        mark_worker_exit(os.getpid())
 
 
 def _generate_stable_operation_id(route: "APIRoute") -> str:
@@ -2574,10 +2583,11 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
             )
 
 
-async def reseed_spend_counter_from_db(counter_key: str) -> None:
+async def reseed_spend_counter_from_db(counter_key: str) -> bool:
     """Recover a counter that the reservation reconcile found in an inconsistent
     state (missing, or where applying the reconcile delta would drive it
-    negative) by reseeding it from the DB instead of deleting it.
+    negative) by reseeding it from the DB instead of deleting it. Returns
+    whether a DB row was found and the counter was reseeded.
 
     The DB row is a LAGGING authoritative floor, not post-request truth: the
     entity .spend column is flushed in batches (every PROXY_BATCH_WRITE_AT), so
@@ -2592,8 +2602,9 @@ async def reseed_spend_counter_from_db(counter_key: str) -> None:
     """
     db_spend: Final = await SpendCounterReseed.from_db(prisma_client=prisma_client, counter_key=counter_key)
     if db_spend is None:
-        return
+        return False
     await _repair_stale_spend_counter(counter_key=counter_key, db_spend=db_spend)
+    return True
 
 
 async def _floor_spend_from_db(
@@ -2655,21 +2666,14 @@ async def _authoritative_floor_spend(
     return db_spend
 
 
-async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:
-    """Return (spend, authoritative). ``authoritative`` is True when the value
-    came from Redis or a fresh DB read (cross-pod truth), False when it came
-    from the per-pod in-memory copy or the caller's fallback. Only the
-    fail-closed path reads the flag; normal callers ignore it."""
-    # 1. Redis first (cross-pod authoritative). On clean miss, skip
-    # in-memory: per-pod in-memory only has this pod's writes, so it
-    # would mask cross-pod increments.
-    redis_clean_miss = False
+async def read_spend_counter_cache_value(counter_key: str) -> tuple[float | None, bool]:
+    """Return (value, authoritative) for the live counter, None when absent. A clean
+    Redis miss is final: the per-pod in-memory copy outlives the Redis TTL and only
+    holds this pod's writes, so it is consulted only when Redis is unreachable."""
     if spend_counter_cache.redis_cache is not None:
         try:
-            val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
-            if val is not None:
-                return float(val), True
-            redis_clean_miss = True
+            redis_val: Final = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
+            return (float(redis_val) if redis_val is not None else None), True
         except Exception as e:
             verbose_proxy_logger.debug(
                 "get_current_spend: Redis read failed for %s, falling back to in-memory: %s",
@@ -2677,13 +2681,20 @@ async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) 
                 e,
             )
 
-    # 2. In-memory only when Redis is unreachable.
-    if not redis_clean_miss:
-        val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-        if val is not None:
-            return float(val), False
+    in_memory_val: Final = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+    return (float(in_memory_val) if in_memory_val is not None else None), False
 
-    # 3. Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
+
+async def _read_spend_counter_estimate(counter_key: str, fallback_spend: float) -> tuple[float, bool]:
+    """Return (spend, authoritative). ``authoritative`` is True when the value
+    came from Redis or a fresh DB read (cross-pod truth), False when it came
+    from the per-pod in-memory copy or the caller's fallback. Only the
+    fail-closed path reads the flag; normal callers ignore it."""
+    cached_val, cached_authoritative = await read_spend_counter_cache_value(counter_key=counter_key)
+    if cached_val is not None:
+        return cached_val, cached_authoritative
+
+    # Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
     db_spend: Final = await SpendCounterReseed.coalesced(
         prisma_client=prisma_client,
         spend_counter_cache=spend_counter_cache,
@@ -5509,6 +5520,8 @@ class ProxyConfig:
 
                     parse_budget_reset_time(value)
                     setattr(litellm, key, value)
+                elif key == "drop_params":
+                    litellm.drop_params = drop_params_flag(value, "litellm_settings.drop_params", verbose_proxy_logger)
                 else:
                     verbose_proxy_logger.debug(
                         "%s setting litellm.%s=%s%s",
@@ -7109,11 +7122,10 @@ class ProxyConfig:
                 ],
             )
 
-            # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
-            if self._should_load_db_object(object_type="models"):
-                new_models: Final = await self._get_models_from_db(prisma_client=prisma_client)
-
-                # update llm router
+            load_models: Final = self._should_load_db_object(object_type="models")
+            new_models: Final = await self._get_models_from_db(prisma_client=prisma_client) if load_models else None
+            await self.get_credentials(prisma_client=prisma_client)
+            if load_models:
                 still_desired_ids = await self._update_llm_router(
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
@@ -7153,12 +7165,9 @@ class ProxyConfig:
         async def _resync_config_from_db() -> None:
             await self.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
-        async def _resync_credentials_from_db() -> None:
-            await self.get_credentials(prisma_client=prisma_client)
-
         subscriber: Final = ConfigSyncSubscriber(
             redis_cache=redis_cache,
-            resync_callbacks=(_resync_config_from_db, _resync_credentials_from_db),
+            resync_callbacks=(_resync_config_from_db,),
         )
         self.config_sync_subscriber = subscriber
         subscriber.start()
@@ -8013,7 +8022,7 @@ class ProxyConfig:
 
     async def get_credentials(self, prisma_client: PrismaClient):
         try:
-            credentials = await CredentialsRepository(prisma_client).find_all()
+            credentials = await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_all()
             credentials = [self.decrypt_credentials(cred) for cred in credentials]
             await self.delete_credentials(credentials)  # delete credentials that are not in the all-up list
             CredentialAccessor.upsert_credentials(credentials)  # upsert credentials that are in the all-up list
@@ -9597,19 +9606,6 @@ class ProxyStartupEvent:
         )
 
         if store_model_in_db is True:
-            ### GET STORED CREDENTIALS ###
-            scheduler.add_job(
-                proxy_config.get_credentials,
-                "interval",
-                seconds=config_reload_interval_seconds,
-                # REMOVED jitter parameter - major cause of memory leak
-                args=[prisma_client],
-                id="get_credentials_job",
-                replace_existing=True,
-                misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            )
-            await proxy_config.get_credentials(prisma_client=prisma_client)
-
             # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
             # Frequent polling was causing excessive memory allocations
             scheduler.add_job(
@@ -9623,7 +9619,7 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
 
-            # this will load all existing models on proxy startup
+            # this will load all existing credentials and models on proxy startup
             await proxy_config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
 
             proxy_config.start_config_sync_subscriber(
@@ -17754,6 +17750,7 @@ async def reload_model_cost_map(
         # Immediately reload the model cost map in the current pod
         from litellm.litellm_core_utils.get_model_cost_map import (
             ModelCostMapReloadUnavailable,
+            get_model_cost_map_provenance,
             refetch_model_cost_map,
         )
 
@@ -17767,6 +17764,7 @@ async def reload_model_cost_map(
         models_count = _swap_in_model_cost_map(reload_result.model_cost_map)
         current_time = utc_now()
         proxy_config.model_cost_map_loaded_at = current_time
+        provenance: Final = get_model_cost_map_provenance()
 
         # Publish a new revision so every other pod reloads on its next poll; this pod has
         # already served it, so adopt it here rather than reloading again a tick later
@@ -17781,6 +17779,7 @@ async def reload_model_cost_map(
             "status": "success",
             "models_count": models_count,
             "timestamp": current_time.isoformat(),
+            **provenance,
         }
     except HTTPException:
         raise
@@ -17901,12 +17900,17 @@ async def get_model_cost_map_reload_status(
 
     try:
         global prisma_client
+        from litellm.litellm_core_utils.get_model_cost_map import (
+            get_model_cost_map_provenance,
+        )
 
+        provenance: Final = get_model_cost_map_provenance()
         if prisma_client is None:
             verbose_proxy_logger.info("No database connection, returning not scheduled")
-            return reload_schedule_status(None)
+            return {**reload_schedule_status(None), **provenance}
 
-        return reload_schedule_status(await read_reload_schedule(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME))
+        schedule: Final = await read_reload_schedule(prisma_client, MODEL_COST_MAP_RELOAD_PARAM_NAME)
+        return {**reload_schedule_status(schedule), **provenance}
     except Exception as e:
         verbose_proxy_logger.exception("Failed to get model cost map reload status: %s", e)
         raise HTTPException(
@@ -17934,6 +17938,9 @@ async def get_model_cost_map_source(
     - url: the remote URL that was attempted (null when env-forced local)
     - is_env_forced: true if LITELLM_LOCAL_MODEL_COST_MAP=True forced local usage
     - fallback_reason: human-readable reason why remote failed (null on success)
+    - loaded_at: when this pod last loaded the map
+    - source_revision: git blob id of the loaded file, what git rev-parse <commit>:<path> prints for it
+    - etag: the ETag of the remote fetch (null for the bundled backup)
     - model_count: number of models in the currently loaded cost map
     """
     # Read-only source info — admin viewers can read.
@@ -18486,6 +18493,31 @@ async def _stream_mcp_asgi_response(handle_fn, scope: dict, receive) -> "Streami
 ########################################################
 # MCP Server
 ########################################################
+
+
+@app.api_route(
+    "/mcp/proxy",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],  # mutable-ok: FastAPI route methods
+)
+async def proxy_mcp_route(request: Request) -> Response:
+    """Serve the fixed three-tool MCP proxy surface."""
+    from litellm.proxy._experimental.mcp_server.mcp_context import (  # pyright: ignore[reportPrivateUsage]  # route-owned mode
+        _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # route-owned mode
+    )
+    from litellm.proxy._experimental.mcp_server.server import handle_streamable_http_mcp
+    from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
+
+    if not is_mcp_available():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    token: Final = _mcp_proxy_mode.set(True)
+    try:
+        scope: Final = dict(request.scope)  # mutable-ok: ASGI scope rewrite
+        scope["_original_path"] = scope.get("path", "")
+        scope["path"] = BASE_MCP_ROUTE
+        return await _stream_mcp_asgi_response(handle_streamable_http_mcp, scope, request.receive)
+    finally:
+        _mcp_proxy_mode.reset(token)
 
 
 @app.api_route(

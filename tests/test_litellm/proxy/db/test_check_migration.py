@@ -37,3 +37,35 @@ def test_check_migration_out_of_sync(mocker):
     check_migration.verbose_logger.exception.assert_called_once()
     actual_message = check_migration.verbose_logger.exception.call_args[0][0]
     assert "prisma schema out of sync with db" in actual_message
+
+
+@pytest.mark.timeout(30)
+def test_migrate_diff_stops_at_its_budget_and_takes_its_process_tree_with_it(fake_prisma_cli, monkeypatch):
+    """
+    `prisma migrate diff` ran unbounded, so a database that never answers hung boot
+    before uvicorn ever started, and interrupting the proxy orphaned the schema engine.
+    """
+    from litellm.proxy.db.check_migration import check_prisma_schema_diff_helper
+
+    monkeypatch.setenv("FAKE_PRISMA_HANG_FIRST", "1")
+
+    assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])
+    assert fake_prisma_cli.calls == [
+        ["migrate", "diff", "--from-url", "postgresql://u:p@localhost:9/x",
+         "--to-schema-datamodel", "./schema.prisma", "--script"]
+    ]
+    assert fake_prisma_cli.grandchild_is_gone(within_seconds=5)
+
+
+def test_migrate_diff_without_the_prisma_runner_skips_instead_of_crashing_boot(monkeypatch):
+    """
+    Boot calls this helper directly, so an ImportError here takes the proxy down before
+    uvicorn starts. An install without the runner must lose the diagnostic, not the proxy.
+    """
+    import sys
+
+    from litellm.proxy.db.check_migration import check_prisma_schema_diff_helper
+
+    monkeypatch.setitem(sys.modules, "litellm_proxy_extras.prisma_toolchain", None)
+
+    assert check_prisma_schema_diff_helper("postgresql://u:p@localhost:9/x") == (False, [])

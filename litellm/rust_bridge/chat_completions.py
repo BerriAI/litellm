@@ -71,6 +71,7 @@ RUST_CHAT_COMPLETIONS_PROVIDERS: Final = frozenset({"anthropic", "bedrock"})
 # rather than narrowing an unparameterized `Mapping` and typing the result Any.
 _LITELLM_METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
+
 class RustChatCompletions(Protocol):
     def __call__(
         self, arguments: dict[str, object]
@@ -131,6 +132,11 @@ class ResponseObserver(Protocol):
         raise NotImplementedError
 
 
+class _PreCallLogger(Protocol):
+    def pre_call(self, **kwargs: object) -> None:
+        raise NotImplementedError
+
+
 def response_logger(
     *,
     logging_obj: LiteLLMLoggingObj,
@@ -147,6 +153,29 @@ def response_logger(
         )
 
     return log
+
+
+def _log_legacy_request(
+    *,
+    logging_obj: object | None,
+    model: str,
+    messages: Sequence[object],
+    optional_params: Mapping[str, object],
+    api_key: str | None,
+    api_base: str | None,
+    extra_headers: Mapping[str, object] | None,
+) -> None:
+    if logging_obj is None:
+        return
+    cast(_PreCallLogger, logging_obj).pre_call(
+        input=messages,
+        api_key=api_key,
+        additional_args={
+            "complete_input_dict": {"model": model, "messages": messages, **optional_params},
+            "api_base": api_base,
+            "headers": extra_headers,
+        },
+    )
 
 
 def _uses_argument_bag(call: object) -> bool:
@@ -415,6 +444,15 @@ def chat_completions(
             legacy: Final = cast(  # cast-ok: signature inspection selected the legacy injected callable
                 LegacyRustChatCompletions, rust_chat_completions
             )
+            _log_legacy_request(
+                logging_obj=logging_obj,
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                api_key=api_key,
+                api_base=api_base,
+                extra_headers=extra_headers,
+            )
             rust_response: Final = legacy(
                 model=model,
                 messages=messages,
@@ -488,6 +526,15 @@ async def achat_completions(
         if _STATE.achat_completions is not None:
             legacy: Final = cast(  # cast-ok: signature inspection selected the legacy injected callable
                 LegacyRustAchatCompletions, rust_achat_completions
+            )
+            _log_legacy_request(
+                logging_obj=logging_obj,
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                api_key=api_key,
+                api_base=api_base,
+                extra_headers=extra_headers,
             )
             rust_response: Final = await legacy(
                 model=model,

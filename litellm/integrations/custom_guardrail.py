@@ -601,6 +601,12 @@ class CustomGuardrail(CustomLogger):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None,
         supported_event_hooks: list[GuardrailEventHooks],
     ) -> None:
+        allowed_hooks: Final = frozenset(supported_event_hooks) | (
+            frozenset((GuardrailEventHooks.logging_only,))
+            if self.uses_apply_guardrail_interface() and not self.use_native_lifecycle_hooks
+            else frozenset()
+        )
+
         def _validate_event_hook_list_is_in_supported_event_hooks(
             event_hook: list[GuardrailEventHooks] | list[str],
             supported_event_hooks: list[GuardrailEventHooks],
@@ -608,7 +614,7 @@ class CustomGuardrail(CustomLogger):
             for hook in event_hook:
                 if isinstance(hook, str):
                     hook = GuardrailEventHooks(hook)
-                if hook not in supported_event_hooks:
+                if hook not in allowed_hooks:
                     raise ValueError(f"Event hook {hook} is not in the supported event hooks {supported_event_hooks}")
 
         if event_hook is None:
@@ -629,7 +635,7 @@ class CustomGuardrail(CustomLogger):
                 default_list = event_hook.default if isinstance(event_hook.default, list) else [event_hook.default]
                 _validate_event_hook_list_is_in_supported_event_hooks(default_list, supported_event_hooks)
         elif isinstance(event_hook, GuardrailEventHooks):
-            if event_hook not in supported_event_hooks:
+            if event_hook not in allowed_hooks:
                 raise ValueError(f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}")
 
     @staticmethod
@@ -848,18 +854,23 @@ class CustomGuardrail(CustomLogger):
         target: Final = self._deployment_hook_target()
         if target is not self:
             request_data["guardrail_to_apply"] = self  # rebind-ok: unified dispatch consumes this shared request key
+        hook_request_data: Final = request_data
         routes: Final = get_routes_for_call_type(call_type) if target is not self and call_type is not None else ()
-        result: Final = await target.async_post_call_success_hook(
-            user_api_key_dict=UserAPIKeyAuth(
-                user_id=request_data.get("user_api_key_user_id"),
-                team_id=request_data.get("user_api_key_team_id"),
-                end_user_id=request_data.get("user_api_key_end_user_id"),
-                api_key=request_data.get("user_api_key_hash"),
-                request_route=request_data.get("user_api_key_request_route") or (routes[0] if routes else None),
-            ),
-            data=request_data,
-            response=response,
-        )
+        try:
+            result: Final = await target.async_post_call_success_hook(
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_id=request_data.get("user_api_key_user_id"),
+                    team_id=request_data.get("user_api_key_team_id"),
+                    end_user_id=request_data.get("user_api_key_end_user_id"),
+                    api_key=request_data.get("user_api_key_hash"),
+                    request_route=request_data.get("user_api_key_request_route") or (routes[0] if routes else None),
+                ),
+                data=hook_request_data,
+                response=response,
+            )
+        finally:
+            if target is not self:
+                request_data.pop("guardrail_to_apply", None)
 
         if not self._is_valid_response_type(result):
             return None
