@@ -376,7 +376,7 @@ async def proxy_realtime_calls(
     fastapi_response: Response,
 ) -> Response:
     if request.headers.get("content-type", "").split(";", 1)[0] in ("application/json", "multipart/form-data"):
-        from litellm.llms.chatgpt.codex import create_codex_realtime_call
+        from litellm.proxy.realtime_endpoints.call_sessions import create_codex_realtime_call
 
         return await create_codex_realtime_call(request)
 

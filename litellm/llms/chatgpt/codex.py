@@ -1,21 +1,11 @@
-import base64
-import hashlib
-import json
-import time
-from types import MappingProxyType
+from collections.abc import Mapping
 from typing import Final
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import HTTPException, Request, Response, WebSocket
 from pydantic import BaseModel, Field
+from typing_extensions import ReadOnly, TypedDict
 
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.spend_tracking.budget_reservation import release_or_invalidate_budget_reservation
 from litellm.types.realtime import RealtimeQueryParams, RealtimeSessionConfig
 
 
@@ -36,153 +26,49 @@ class ChatGPTCallRouting(BaseModel):
     model: str
 
 
-def encode_call(call: CodexRealtimeCall) -> str:
-    encrypted: Final = encrypt_value_helper(call.model_dump_json())
-    return "rtc_litellm_" + base64.urlsafe_b64encode(encrypted.encode()).decode().rstrip("=")
+class CodexSidebandRequest(TypedDict):
+    model: ReadOnly[str]
+    chatgpt_realtime_call_id: ReadOnly[str]
+    query_params: ReadOnly[RealtimeQueryParams]
 
 
-def decode_call(token: str, authorization: str) -> CodexRealtimeCall:
-    try:
-        if not token.startswith("rtc_litellm_"):
-            raise ValueError("Invalid call prefix")
-        encoded: Final = token.removeprefix("rtc_litellm_")
-        encrypted: Final = base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
-        plaintext: Final = decrypt_value_helper(encrypted.decode(), key="codex_realtime_call")
-        call: Final = CodexRealtimeCall.model_validate_json(plaintext or "")
-    except (ValueError, TypeError, UnicodeError) as exc:
-        raise HTTPException(403, "Invalid realtime call") from exc
-    if call.expires_at < time.time() or call.owner != hashlib.sha256(authorization.encode()).hexdigest():
-        raise HTTPException(403, "Invalid or expired realtime call")
-    return call
+def build_call_request(
+    offer: CodexRealtimeOffer, query: Mapping[str, str], headers: Mapping[str, str]
+) -> dict[str, object]:  # mutable-ok: proxy processor enriches the request dictionary
+    return {  # mutable-ok: proxy processor enriches the request dictionary
+        "model": offer.session.model,
+        "sdp_body": offer.sdp.encode(),
+        "session": offer.session.model_dump(exclude_none=True),
+        "openai_ephemeral_key": "",
+        "extra_query": {  # mutable-ok: router request parameters
+            key: value for key, value in query.items() if key in ("intent", "architecture")
+        },
+        "extra_headers": {  # mutable-ok: router request headers
+            key: value
+            for key, value in headers.items()
+            if key in ("openai-alpha", "openai-beta", "x-session-id", "x-oai-attestation")
+        },
+    }
 
 
-async def read_codex_offer(request: Request) -> CodexRealtimeOffer:
-    if request.headers.get("content-type", "").startswith("multipart/form-data"):
-        form: Final = await request.form()
-        return CodexRealtimeOffer.model_validate(
-            MappingProxyType({"sdp": form.get("sdp"), "session": json.loads(str(form.get("session", "{}")))})
-        )
-    return CodexRealtimeOffer.model_validate(await request.json())
-
-
-async def create_codex_realtime_call(request: Request) -> Response:
-    from litellm.proxy import proxy_server as server
-    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-
-    try:
-        offer: Final = await read_codex_offer(request)
-    except ValueError as exc:
-        raise HTTPException(400, "Invalid realtime offer: expected sdp and session") from exc
-    model: Final = offer.session.model
-    if not model:
-        raise HTTPException(400, "session.model is required")
-    auth: Final = await user_api_key_auth(
-        request=request,
-        api_key=request.headers.get("authorization", ""),
-        azure_api_key_header="",
-        anthropic_api_key_header=None,
-        google_ai_studio_api_key_header=None,
-        azure_apim_header=None,
-        custom_litellm_key_header=None,
+def parse_call_response(response: httpx.Response, alias: str, owner: str, expires_at: float) -> CodexRealtimeCall:
+    routing_data: Final = response.extensions.get("chatgpt_realtime")
+    if not routing_data:
+        raise ValueError("Direct call signaling requires a ChatGPT deployment")
+    routing: Final = ChatGPTCallRouting.model_validate(routing_data)
+    call_id: Final = urlsplit(response.headers.get("location", "")).path.rstrip("/").rsplit("/", 1)[-1]
+    return CodexRealtimeCall(
+        call_id=call_id,
+        model=routing.model,
+        alias=alias,
+        owner=owner,
+        expires_at=expires_at,
     )
-    try:
-        await can_key_call_resolved_model(
-            model=model,
-            llm_model_list=server.llm_model_list,
-            valid_token=auth,
-            llm_router=server.llm_router,
-        )
-        data: Final = {  # mutable-ok: proxy processor enriches request data
-            "model": model,
-            "sdp_body": offer.sdp.encode(),
-            "session": offer.session.model_dump(exclude_none=True),
-            "openai_ephemeral_key": "",
-            "extra_query": {  # mutable-ok: router request parameters
-                key: value for key, value in request.query_params.items() if key in ("intent", "architecture")
-            },
-            "extra_headers": {  # mutable-ok: router request headers
-                key: value
-                for key, value in request.headers.items()
-                if key in ("openai-alpha", "openai-beta", "x-session-id", "x-oai-attestation")
-            },
-        }
-        processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-        processed, _ = await processor.common_processing_pre_call_logic(
-            request=request,
-            general_settings=server.general_settings,
-            user_api_key_dict=auth,
-            version=server.version,
-            proxy_logging_obj=server.proxy_logging_obj,
-            proxy_config=server.proxy_config,
-            user_model=server.user_model,
-            user_temperature=server.user_temperature,
-            user_request_timeout=server.user_request_timeout,
-            user_max_tokens=server.user_max_tokens,
-            user_api_base=server.user_api_base,
-            model=model,
-            route_type="arealtime_calls",
-        )
-        result: Final = await server.route_request(
-            data=processed,
-            route_type="arealtime_calls",
-            llm_router=server.llm_router,
-            user_model=server.user_model,
-        )
-        try:
-            response: Final = await result
-        except BaseLLMException as exc:
-            raise HTTPException(exc.status_code, str(exc)) from exc
-        if not isinstance(response, httpx.Response):
-            raise HTTPException(502, "Invalid realtime signaling response")
-        routing_data: Final = response.extensions.get("chatgpt_realtime")
-        if response.is_error:
-            return Response(response.content, status_code=response.status_code, media_type="application/json")
-        if not routing_data:
-            raise HTTPException(400, "Direct call signaling requires a ChatGPT deployment")
-        routing: Final = ChatGPTCallRouting.model_validate(routing_data)
-        call_id: Final = urlsplit(response.headers.get("location", "")).path.rstrip("/").rsplit("/", 1)[-1]
-        call: Final = CodexRealtimeCall(
-            call_id=call_id,
-            model=routing.model,
-            alias=model,
-            owner=hashlib.sha256(request.headers.get("authorization", "").encode()).hexdigest(),
-            expires_at=time.time() + 3600,
-        )
-        token: Final = encode_call(call)
-        return Response(
-            response.content,
-            status_code=response.status_code,
-            media_type="application/sdp",
-            headers=MappingProxyType({"Location": f"/v1/realtime/calls/{token}"}),
-        )
-    finally:
-        await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)
 
 
-async def codex_realtime_sideband(websocket: WebSocket, token: str, auth: UserAPIKeyAuth) -> None:
-    import litellm
-    from litellm.proxy import proxy_server as server
-
-    try:
-        try:
-            call: Final = decode_call(token, websocket.headers.get("authorization", ""))
-            await can_key_call_resolved_model(
-                model=call.alias,
-                llm_model_list=server.llm_model_list,
-                valid_token=auth,
-                llm_router=server.llm_router,
-            )
-        except (HTTPException, ProxyException):
-            await websocket.close(code=1008, reason="Invalid realtime call")
-            return
-        await websocket.accept()
-        query: Final[RealtimeQueryParams] = {"model": call.model}
-        await litellm._arealtime(  # pyright: ignore[reportPrivateUsage]  # internal proxy entrypoint for an already authorized call
-            model=f"chatgpt/{call.model}",
-            websocket=websocket,
-            chatgpt_realtime_call_id=call.call_id,
-            query_params=query,
-            user_api_key_dict=auth,
-        )
-    finally:
-        await release_or_invalidate_budget_reservation(budget_reservation=auth.budget_reservation)
+def build_sideband_request(call: CodexRealtimeCall) -> CodexSidebandRequest:
+    return {
+        "model": f"chatgpt/{call.model}",
+        "chatgpt_realtime_call_id": call.call_id,
+        "query_params": {"model": call.model},
+    }
