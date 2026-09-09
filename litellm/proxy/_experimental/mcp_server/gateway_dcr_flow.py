@@ -509,6 +509,7 @@ async def native_client_authorize(
     response_type: str | None,
     session_user_id: str | None,
     lookup_consent_teams: LookupConsentTeams,
+    requested_team: str | None = None,
 ) -> Response:
     """The authorize verb for a native client that named the proxy API itself as its
     RFC 8707 ``resource``: the same client, redirect, PKCE, and sign-in checks as the
@@ -530,6 +531,11 @@ async def native_client_authorize(
     teams: Final = await lookup_consent_teams(session_user_id)
     if not isinstance(teams, tuple):
         return _consent_lookup_failure_response(teams)
+    selected_team_id: Final = (
+        next((t.team_id for t in teams if requested_team in (t.team_id, t.team_alias)), None)
+        if requested_team
+        else None
+    )
     handle: Final = secrets.token_urlsafe(24)
     flow: Final = _new_connect_flow(
         session_user_id=session_user_id,
@@ -544,6 +550,7 @@ async def native_client_authorize(
         client_origin=_origin_only(redirect_uri),
         user_id=session_user_id,
         teams=tuple((team.team_id, team.team_alias or team.team_id) for team in teams),
+        selected_team_id=selected_team_id,
         flow_handle=handle,
         complete_url=f"{base_url}/authorize/complete",
     )
