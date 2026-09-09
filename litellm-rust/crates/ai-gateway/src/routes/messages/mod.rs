@@ -12,8 +12,10 @@ use axum::routing::post;
 use litellm_core::Error;
 use serde_json::{Map, Value};
 
-use crate::auth::RequireMasterKey;
-use crate::constants::{MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH};
+use crate::admission::{Admit, Admitted};
+use crate::constants::{
+    ADMISSION_DURATION_HEADER, MESSAGES_HEADERS_NOT_FORWARDED, MESSAGES_ROUTE_PATH,
+};
 use crate::state::AppState;
 
 /// This route's contribution to the app router.
@@ -28,19 +30,27 @@ pub fn router() -> Router<AppState> {
     skip_all
 )]
 async fn handle(
-    _auth: RequireMasterKey,
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    Admit(admitted): Admit,
 ) -> Result<Response, MessagesRouteError> {
+    let Admitted {
+        body, elapsed_ms, ..
+    } = admitted;
     let extra_headers = forwarded_headers(&headers)?;
-    match service::run(&state.router, body, extra_headers)
+    let mut response = match service::run(&state.router, body, extra_headers)
         .await
         .map_err(MessagesRouteError::from)?
     {
-        service::MessagesResponse::Json(body) => Ok(Json(body).into_response()),
-        service::MessagesResponse::Stream(upstream) => stream_response(upstream),
+        service::MessagesResponse::Json(body) => Json(body).into_response(),
+        service::MessagesResponse::Stream(upstream) => stream_response(upstream)?,
+    };
+    if let Ok(value) = HeaderValue::from_str(&format!("{elapsed_ms:.3}")) {
+        response
+            .headers_mut()
+            .insert(ADMISSION_DURATION_HEADER, value);
     }
+    Ok(response)
 }
 
 fn stream_response(upstream: reqwest::Response) -> Result<Response, MessagesRouteError> {
@@ -149,6 +159,8 @@ mod tests {
     use tower::ServiceExt;
 
     use super::super::app;
+    use crate::admission::{Admission, IdentityCache, KeyLimits, TokenCounter};
+    use crate::constants::ADMISSION_DURATION_HEADER;
     use crate::io::realtime_pool::RealtimePool;
     use crate::state::AppState;
 
@@ -172,6 +184,10 @@ mod tests {
                 },
             }])),
             master_key: master_key.map(Arc::from),
+            admission: Arc::new(Admission::new(
+                IdentityCache::new(master_key.map(Arc::from), "http://127.0.0.1:1".to_string()),
+                TokenCounter::approximate(),
+            )),
             loggers: Arc::new(Vec::new()),
             realtime_pool: RealtimePool::disabled(),
         }
@@ -461,6 +477,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn route_reports_admission_time_and_admits_virtual_keys_by_model() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
+        let (api_base, server) = upstream(listener).await;
+        let state = state("claude-test", api_base, Some("master-key"));
+        state.admission.identities().insert(
+            "sk-virtual",
+            KeyLimits {
+                models: vec!["claude-test".to_string()],
+                ..KeyLimits::default()
+            },
+        );
+        let request = |model: &str| {
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header("authorization", "Bearer sk-virtual")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "model": model,
+                        "max_tokens": 16,
+                        "messages": [{"role": "user", "content": "hello"}]
+                    })
+                    .to_string(),
+                ))
+                .expect("request builds")
+        };
+        let denied = app(state.clone())
+            .oneshot(request("other-model"))
+            .await
+            .expect("route responds");
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        let admitted = app(state)
+            .oneshot(request("claude-test"))
+            .await
+            .expect("route responds");
+        assert_eq!(admitted.status(), StatusCode::OK);
+        let elapsed: f64 = admitted
+            .headers()
+            .get(ADMISSION_DURATION_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse().ok())
+            .expect("admission duration header is a number");
+        assert!(elapsed >= 0.0);
+        server.await.expect("upstream task completes");
+    }
+
+    #[tokio::test]
     async fn route_rejects_missing_master_key() {
         let app = app(state(
             "claude-test",
@@ -482,12 +546,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn route_rejects_invalid_master_key() {
+    async fn route_rejects_unknown_key_when_identity_lookup_is_unavailable() {
         let app = app(state(
             "claude-test",
             "http://127.0.0.1:1".to_string(),
             Some("master-key"),
         ));
+        let body = json!({
+            "model": "claude-test",
+            "max_tokens": 8,
+            "messages": [{"role": "user", "content": "hi"}]
+        });
         let response = app
             .oneshot(
                 Request::builder()
@@ -495,12 +564,12 @@ mod tests {
                     .uri("/v1/messages")
                     .header("authorization", "Bearer wrong-key")
                     .header("content-type", "application/json")
-                    .body(Body::from("{}"))
+                    .body(Body::from(body.to_string()))
                     .expect("request builds"),
             )
             .await
             .expect("route responds");
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
