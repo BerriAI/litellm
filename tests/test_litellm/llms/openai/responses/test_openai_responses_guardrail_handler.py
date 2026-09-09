@@ -14,6 +14,7 @@ import pytest
 
 
 from fastapi import HTTPException
+from pydantic import BaseModel
 from openai.types.responses import (
     ResponseCustomToolCall,
     ResponseCustomToolCallInputDeltaEvent,
@@ -28,6 +29,7 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.types.llms.openai import ChatCompletionToolCallChunk
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -68,7 +70,7 @@ class PersimmonMaskingGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         request_data: dict,
         input_type: Literal["request", "response"],
-        logging_obj: Optional[Any] = None,
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
     ) -> GenericGuardrailAPIInputs:
         tool_calls = [
             {
@@ -593,7 +595,7 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
 
         texts_to_check: List[str] = []
         images_to_check: List[str] = []
-        tool_calls_to_check: List[Any] = []
+        tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
         task_mappings: List[Tuple[int, int]] = []
 
         # Extract tool calls
@@ -1476,7 +1478,7 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         )
 
         handler = OpenAIResponsesHandler()
-        typed_events: List[Any] = [
+        typed_events: List[BaseModel] = [
             model.model_validate({**event, "sequence_number": sequence_number})
             for sequence_number, (model, event) in enumerate(
                 zip(

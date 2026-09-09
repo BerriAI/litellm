@@ -193,11 +193,11 @@ def _is_tool_call_item(item: object) -> bool:
     return isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
 
 
-def _tool_call_output_item_mapping(item: object) -> Mapping[str, Any] | None:
+def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
     if stream_item_field(item, "type") not in _TOOL_CALL_ITEM_TYPES:
         return None
     if isinstance(item, Mapping):
-        return cast("Mapping[str, Any]", item)  # cast-ok: output items are str-keyed JSON objects
+        return cast("Mapping[str, object]", item)  # cast-ok: output items are str-keyed JSON objects
     return item.model_dump() if isinstance(item, BaseModel) else None
 
 
