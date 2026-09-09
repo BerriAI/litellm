@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import UserAPIKeyAuth
@@ -120,3 +121,140 @@ async def test_build_effective_auth_contexts_handles_unpicklable_parent_span(
 
     assert contexts[0].team_id == "team-span"
     assert contexts[0].parent_otel_span is parent_span
+
+
+@pytest.mark.asyncio
+async def test_build_effective_auth_contexts_appends_admitted_user_context(monkeypatch):
+    """LIT-4861: the dashboard session must resolve with the user's admitted identity so the
+    page list and every per-server action endpoint see user-level grants the same way the
+    gateway session does."""
+    user_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-42")
+    admitted_auth = UserAPIKeyAuth(user_id="user-42")
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.ui_session_utils.resolve_ui_session_team_ids",
+        AsyncMock(return_value=["team-one"]),
+    )
+    reload_mock = AsyncMock(return_value=admitted_auth)
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+        reload_mock,
+    )
+
+    contexts = await build_effective_auth_contexts(user_auth)
+
+    assert contexts[-1].user_id == "user-42" and contexts[-1].team_id is None
+    assert [ctx.team_id for ctx in contexts[:-1]] == ["team-one"]
+    reload_mock.assert_awaited_once_with("user-42")
+
+
+@pytest.mark.asyncio
+async def test_build_effective_auth_contexts_never_widens_caller_passed_keys(monkeypatch):
+    normal_user = UserAPIKeyAuth(team_id="regular-team", user_id="user-1")
+    reload_mock = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+        reload_mock,
+    )
+
+    contexts = await build_effective_auth_contexts(normal_user)
+
+    assert contexts == [normal_user]
+    reload_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_build_effective_auth_contexts_survives_admitted_reload_failure(monkeypatch):
+    user_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-9")
+
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.ui_session_utils.resolve_ui_session_team_ids",
+        AsyncMock(return_value=["team-a"]),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+        AsyncMock(side_effect=HTTPException(status_code=503, detail="db down")),
+    )
+
+    contexts = await build_effective_auth_contexts(user_auth)
+
+    assert [ctx.team_id for ctx in contexts] == ["team-a"]
+
+
+@pytest.mark.asyncio
+async def test_acting_user_auth_returns_admitted_subject_for_non_admin_sessions(monkeypatch):
+    """LIT-4861: acting-as-user MCP routes must resolve a non-admin dashboard session as the
+    admitted subject so tool ceilings, reachability, and limits bind exactly as on /mcp."""
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import acting_user_auth
+
+    user_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-42", user_role="internal_user")
+    admitted_auth = UserAPIKeyAuth(user_id="user-42")
+    reload_mock = AsyncMock(return_value=admitted_auth)
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+        reload_mock,
+    )
+
+    result = await acting_user_auth(user_auth)
+
+    assert result.user_id == "user-42" and result.team_id is None
+    reload_mock.assert_awaited_once_with("user-42")
+
+
+@pytest.mark.asyncio
+async def test_acting_user_auth_keeps_admin_sessions_and_passed_keys_unchanged(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import acting_user_auth
+
+    reload_mock = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+        reload_mock,
+    )
+
+    admin_session = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="admin-1", user_role="proxy_admin")
+    assert await acting_user_auth(admin_session) is admin_session
+
+    passed_key = UserAPIKeyAuth(team_id="regular-team", user_id="user-1", user_role="internal_user")
+    assert await acting_user_auth(passed_key) is passed_key
+
+    reload_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_acting_user_auth_falls_back_to_session_auth_on_reload_failure(monkeypatch):
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import acting_user_auth
+
+    user_auth = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="user-9", user_role="internal_user")
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+        AsyncMock(side_effect=HTTPException(status_code=503, detail="db down")),
+    )
+
+    assert await acting_user_auth(user_auth) is user_auth
+
+
+@pytest.mark.asyncio
+async def test_admitted_user_context_carries_the_request_span(monkeypatch):
+    """Swapping the principal must not drop the request: the admitted subject is rebuilt from the
+    user row and carries no span of its own, so every consumer would otherwise lose trace linkage
+    for the resolution and logging it drives."""
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import acting_user_auth
+
+    class DummySpan:
+        def __init__(self) -> None:
+            self._lock = threading.RLock()
+
+    parent_span = DummySpan()
+    user_auth = UserAPIKeyAuth(
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        user_id="user-42",
+        user_role="internal_user",
+        parent_otel_span=parent_span,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.reload_admitted_user",
+        AsyncMock(return_value=UserAPIKeyAuth(user_id="user-42")),
+    )
+
+    assert (await acting_user_auth(user_auth)).parent_otel_span is parent_span
+    assert (await build_effective_auth_contexts(user_auth))[-1].parent_otel_span is parent_span

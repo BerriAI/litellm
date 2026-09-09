@@ -1,6 +1,12 @@
+from collections.abc import Iterable
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import (
     get_guardrail_initializer_from_hooks,
+    GuardrailRegistry,
     InMemoryGuardrailHandler,
 )
 from litellm.types.guardrails import GuardrailEventHooks, Guardrail, LitellmParams
@@ -32,29 +38,220 @@ def test_noma_registry_resolution():
     assert "noma_v2" in guardrail_initializer_registry
 
 
-def test_update_in_memory_guardrail():
-    handler = InMemoryGuardrailHandler()
-    handler.guardrail_id_to_custom_guardrail["123"] = CustomGuardrail(
-        guardrail_name="test-guardrail",
-        default_on=False,
-        event_hook=GuardrailEventHooks.pre_call,
-    )
+@pytest.mark.parametrize(
+    "configured, expected",
+    [(None, True), (False, False), (True, True)],
+)
+def test_initialize_guardrail_run_in_parallel_preserves_constructor_default(configured, expected):
+    """
+    A guardrail whose constructor sets run_in_parallel=True must keep that default when
+    the config omits the key; only an explicit config value may override it. The
+    previous code wrote bool(None)==False on every instance, silently disabling the
+    opt-in for such guardrails.
+    """
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
 
-    handler.update_in_memory_guardrail(
-        "123",
-        Guardrail(
-            guardrail_name="test-guardrail",
-            litellm_params=LitellmParams(guardrail="test-guardrail", mode="pre_call", default_on=True),
-        ),
-    )
-
-    assert (
-        handler.guardrail_id_to_custom_guardrail["123"].should_run_guardrail(
-            data={}, event_type=GuardrailEventHooks.pre_call
+    def _initializer(litellm_params, guardrail):
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+            run_in_parallel=True,
         )
-        is True
+
+    registry_module.guardrail_initializer_registry["parallel_default_test"] = _initializer
+    try:
+        params = {"guardrail": "parallel_default_test", "mode": "pre_call"}
+        if configured is not None:
+            params["run_in_parallel"] = configured
+
+        handler = InMemoryGuardrailHandler()
+        result = handler.initialize_guardrail(
+            guardrail={"guardrail_name": "cf-parallel-default", "litellm_params": params},
+        )
+
+        stored = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
+        assert stored.run_in_parallel is expected
+    finally:
+        registry_module.guardrail_initializer_registry.pop("parallel_default_test", None)
+
+
+def _register_noop_initializer(guardrail_type: str):
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=False,
+        )
+
+    registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+    return registry_module
+
+
+def _config_guardrail(name: str, guardrail_type: str, guardrail_id=None) -> dict:
+    guardrail = {
+        "guardrail_name": name,
+        "litellm_params": {"guardrail": guardrail_type, "mode": "pre_call"},
+    }
+    if guardrail_id is not None:
+        guardrail["guardrail_id"] = guardrail_id
+    return guardrail
+
+
+def test_config_guardrail_id_is_stable_across_boots():
+    """
+    Config guardrails used to get a fresh uuid4 per process, so ids from a
+    previous boot (or another replica) 404'd on /guardrails/{id}/info even
+    though the guardrail was alive.
+    """
+    registry_module = _register_noop_initializer("stable_id_test")
+    try:
+        first_boot = InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail=_config_guardrail("tooling", "stable_id_test")
+        )
+        second_boot = InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail=_config_guardrail("tooling", "stable_id_test")
+        )
+
+        assert first_boot["guardrail_id"] == second_boot["guardrail_id"]
+    finally:
+        registry_module.guardrail_initializer_registry.pop("stable_id_test", None)
+
+
+def test_explicit_config_guardrail_id_wins_over_derived_id():
+    registry_module = _register_noop_initializer("explicit_id_test")
+    try:
+        result = InMemoryGuardrailHandler().initialize_guardrail(
+            guardrail=_config_guardrail("tooling", "explicit_id_test", guardrail_id="my-explicit-id")
+        )
+
+        assert result["guardrail_id"] == "my-explicit-id"
+    finally:
+        registry_module.guardrail_initializer_registry.pop("explicit_id_test", None)
+
+
+def test_duplicate_config_guardrail_names_get_distinct_stable_ids():
+    """
+    Duplicate guardrail_name entries are legitimate (load balancing across
+    deployments); each occurrence must keep its own id, stable across boots.
+    """
+    registry_module = _register_noop_initializer("dup_name_test")
+    try:
+        handler = InMemoryGuardrailHandler()
+        first = handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
+        second = handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
+
+        rebooted_handler = InMemoryGuardrailHandler()
+        rebooted_first = rebooted_handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
+        rebooted_second = rebooted_handler.initialize_guardrail(guardrail=_config_guardrail("dup", "dup_name_test"))
+
+        assert first["guardrail_id"] != second["guardrail_id"]
+        assert first["guardrail_id"] == rebooted_first["guardrail_id"]
+        assert second["guardrail_id"] == rebooted_second["guardrail_id"]
+        assert len(handler.IN_MEMORY_GUARDRAILS) == 2
+    finally:
+        registry_module.guardrail_initializer_registry.pop("dup_name_test", None)
+
+
+def _register_mode_following_initializer(guardrail_type: str):
+    """Registers like the shipped initializers do: construct, then add the instance to litellm's callbacks."""
+    import litellm
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        callback = CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            supported_event_hooks=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+            event_hook=GuardrailEventHooks(litellm_params.mode),
+            default_on=True,
+        )
+        litellm.logging_callback_manager.add_litellm_callback(callback)
+        return callback
+
+    registry_module.guardrail_initializer_registry[guardrail_type] = _initializer
+    return registry_module
+
+
+def _mode_following_db_row(guardrail_id: str, mode: str, description: str = "") -> Guardrail:
+    """The raw row GuardrailRegistry.update_guardrail_in_db hands back: litellm_params is a plain dict."""
+    return Guardrail(
+        guardrail_id=guardrail_id,
+        guardrail_name="mode-following",
+        litellm_params={"guardrail": "mode_following_test", "mode": mode, "default_on": True},
+        guardrail_info={"description": description},
     )
-    assert handler.guardrail_id_to_custom_guardrail["123"].event_hook is GuardrailEventHooks.pre_call
+
+
+def _live_instances_named(name: str) -> int:
+    return sum(1 for cb_list in _all_callback_lists() for cb in cb_list if getattr(cb, "guardrail_name", None) == name)
+
+
+def test_update_in_memory_guardrail_raw_db_row_mode_change_gates_at_the_new_stage():
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call"), source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+
+        handler.update_in_memory_guardrail("123", _mode_following_db_row("123", "post_call"))
+
+        replacement = handler.guardrail_id_to_custom_guardrail["123"]
+        assert replacement is not original
+        assert replacement.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_call) is True
+        assert replacement.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is False
+        assert all(original not in cb_list for cb_list in lists)
+        assert _live_instances_named("mode-following") == 1
+        assert handler.IN_MEMORY_GUARDRAILS["123"]["litellm_params"].mode == "post_call"
+        assert handler.get_source("123") == "db"
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_update_in_memory_guardrail_unchanged_params_keep_the_live_instance():
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call", "old"), source="db")
+        original = handler.guardrail_id_to_custom_guardrail["123"]
+
+        handler.update_in_memory_guardrail("123", _mode_following_db_row("123", "pre_call", "new"))
+
+        assert handler.guardrail_id_to_custom_guardrail["123"] is original
+        assert handler.IN_MEMORY_GUARDRAILS["123"]["guardrail_info"] == {"description": "new"}
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_update_in_memory_guardrail_invalid_row_keeps_the_previous_instance_enforcing():
+    registry_module = _register_mode_following_initializer("mode_following_test")
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(guardrail=_mode_following_db_row("123", "pre_call"), source="db")
+
+        with pytest.raises(ValueError, match="not in the supported event hooks"):
+            handler.update_in_memory_guardrail("123", _mode_following_db_row("123", "during_call"))
+
+        restored = handler.guardrail_id_to_custom_guardrail["123"]
+        assert restored.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+        assert handler.IN_MEMORY_GUARDRAILS["123"]["litellm_params"].mode == "pre_call"
+        assert _live_instances_named("mode-following") == 1
+    finally:
+        registry_module.guardrail_initializer_registry.pop("mode_following_test", None)
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
 
 
 def _make_guardrail(guardrail_id: str, name: str = "g") -> Guardrail:
@@ -364,6 +561,526 @@ def test_repeated_db_sync_does_not_accumulate_runner_instances():
             promote_into_request_lists()
 
         assert distinct_runner_instances() == 1
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+PRESIDIO_SIBLINGS_GID = "55555555-5555-5555-5555-555555555555"
+PRESIDIO_SIBLINGS_NAME = "presidio-siblings"
+
+
+def _presidio_db_guardrail(pii_entities_config: dict[str, str]) -> Guardrail:
+    return Guardrail(
+        guardrail_id=PRESIDIO_SIBLINGS_GID,
+        guardrail_name=PRESIDIO_SIBLINGS_NAME,
+        litellm_params={
+            "guardrail": "presidio",
+            "mode": "pre_call",
+            "default_on": True,
+            "output_parse_pii": True,
+            "presidio_filter_scope": "both",
+            "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+            "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+            "pii_entities_config": pii_entities_config,
+        },
+    )
+
+
+def _presidio_callbacks_in(cb_list: Iterable[object]) -> list[CustomGuardrail]:
+    return [
+        callback
+        for callback in cb_list
+        if isinstance(callback, CustomGuardrail) and getattr(callback, "guardrail_name", None) == PRESIDIO_SIBLINGS_NAME
+    ]
+
+
+def test_presidio_siblings_are_tracked_and_deleted_together():
+    """
+    A presidio guardrail scoped to both stages registers the pre_call primary plus
+    the post_call unmask and mask-output siblings. Deleting the guardrail must remove
+    all three from every callback list, not just the primary.
+    """
+    import litellm
+
+    handler = InMemoryGuardrailHandler()
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.initialize_guardrail(_presidio_db_guardrail({"EMAIL_ADDRESS": "MASK"}))
+
+        registered = _presidio_callbacks_in(litellm.callbacks)
+        assert len(registered) == 3
+        primary = handler.guardrail_id_to_custom_guardrail[PRESIDIO_SIBLINGS_GID]
+        siblings = handler.guardrail_id_to_sibling_callbacks[PRESIDIO_SIBLINGS_GID]
+        assert primary is registered[0]
+        assert siblings == tuple(registered[1:])
+        assert [sibling.event_hook for sibling in siblings] == [GuardrailEventHooks.post_call] * 2
+
+        for cb_list in lists[1:]:
+            cb_list.extend(registered)
+
+        handler.delete_in_memory_guardrail(PRESIDIO_SIBLINGS_GID)
+
+        for cb_list in lists:
+            assert _presidio_callbacks_in(cb_list) == []
+        assert PRESIDIO_SIBLINGS_GID not in handler.guardrail_id_to_custom_guardrail
+        assert PRESIDIO_SIBLINGS_GID not in handler.guardrail_id_to_sibling_callbacks
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_update_in_memory_guardrail_rebuilds_presidio_siblings_and_keeps_their_stage():
+    import litellm
+
+    handler = InMemoryGuardrailHandler()
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.initialize_guardrail(_presidio_db_guardrail({"EMAIL_ADDRESS": "MASK", "IP_ADDRESS": "MASK"}))
+        tracked = _presidio_callbacks_in(litellm.callbacks)
+        roles_before = [
+            (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in tracked
+        ]
+        assert roles_before == [
+            (False, True, [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]),
+            (False, True, GuardrailEventHooks.post_call),
+            (True, False, GuardrailEventHooks.post_call),
+        ]
+
+        updated = Guardrail(
+            guardrail_id=PRESIDIO_SIBLINGS_GID,
+            guardrail_name=PRESIDIO_SIBLINGS_NAME,
+            litellm_params=LitellmParams(
+                guardrail="presidio",
+                mode="pre_call",
+                default_on=True,
+                output_parse_pii=True,
+                presidio_filter_scope="both",
+                presidio_analyzer_api_base="https://fakelink.com/v1/presidio/analyze",
+                presidio_anonymizer_api_base="https://fakelink.com/v1/presidio/anonymize",
+                pii_entities_config={"EMAIL_ADDRESS": "MASK"},
+            ),
+        )
+        handler.update_in_memory_guardrail(guardrail_id=PRESIDIO_SIBLINGS_GID, guardrail=updated)
+
+        rebuilt = _presidio_callbacks_in(litellm.callbacks)
+        assert len(rebuilt) == 3
+        assert [callback.pii_entities_config for callback in rebuilt] == [{"EMAIL_ADDRESS": "MASK"}] * 3
+        assert [
+            (callback.apply_to_output, callback.output_parse_pii, callback.event_hook) for callback in rebuilt
+        ] == roles_before
+        assert not any(previous in rebuilt for previous in tracked)
+        assert handler.guardrail_id_to_custom_guardrail[PRESIDIO_SIBLINGS_GID] is rebuilt[0]
+        assert handler.guardrail_id_to_sibling_callbacks[PRESIDIO_SIBLINGS_GID] == tuple(rebuilt[1:])
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_repeated_db_sync_replaces_presidio_siblings_instead_of_leaking_stale_ones():
+    """
+    The callback manager dedupes custom loggers by their scalar attributes, so a
+    leaked post_call sibling blocks the re-initialized sibling from registering and
+    keeps serving the previous entity config. After every DB re-sync, each callback
+    list must hold exactly the three current instances, all on the latest config.
+    """
+    import litellm
+
+    handler = InMemoryGuardrailHandler()
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        entity_configs = [{"EMAIL_ADDRESS": "MASK"}, {"EMAIL_ADDRESS": "MASK", "IP_ADDRESS": "MASK"}]
+        for cycle in range(4):
+            latest = entity_configs[cycle % 2]
+            handler.sync_guardrail_from_db(_presidio_db_guardrail(latest))
+            for cb_list in lists[1:]:
+                cb_list.extend(_presidio_callbacks_in(litellm.callbacks))
+
+            for cb_list in lists:
+                current = _presidio_callbacks_in(cb_list)
+                assert len({id(callback) for callback in current}) == 3
+                assert all(callback.pii_entities_config == latest for callback in current)
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def _judge_guardrail(guardrail_id: str) -> Guardrail:
+    return Guardrail(
+        guardrail_id=guardrail_id,
+        guardrail_name="quality-judge",
+        litellm_params={
+            "guardrail": "llm_as_a_judge",
+            "mode": "post_call",
+            "judge_model": "my-judge-alias",
+            "overall_threshold": 80,
+            "on_failure": "log",
+            "criteria": [{"name": "helpfulness", "weight": 100, "description": "helpful?"}],
+        },
+    )
+
+
+def test_db_synced_judge_guardrail_uses_lazy_router_provider():
+    """A judge guardrail created/synced through a DB path must resolve the active
+    Router lazily at call time (issue: UI-created guardrails failed open because the
+    Router was captured at construction; a guardrail created before the Router
+    existed captured None and never recovered). Asserting the default provider is
+    wired guarantees the instance reads the live global rather than a stale value."""
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
+        LLMAsAJudgeGuardrail,
+        _default_router_provider,
+    )
+
+    handler = InMemoryGuardrailHandler()
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.sync_guardrail_from_db(_judge_guardrail("judge-db"))
+
+        instance = handler.guardrail_id_to_custom_guardrail["judge-db"]
+        assert isinstance(instance, LLMAsAJudgeGuardrail)
+        assert instance._router_provider is _default_router_provider
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def test_reinitialized_judge_guardrail_uses_lazy_router_provider():
+    from litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge import (
+        LLMAsAJudgeGuardrail,
+        _default_router_provider,
+    )
+
+    handler = InMemoryGuardrailHandler()
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.reinitialize_guardrail(_judge_guardrail("judge-reinit"), source="db")
+
+        instance = handler.guardrail_id_to_custom_guardrail["judge-reinit"]
+        assert isinstance(instance, LLMAsAJudgeGuardrail)
+        assert instance._router_provider is _default_router_provider
+    finally:
+        for cb_list, snapshot in zip(lists, snapshots):
+            cb_list[:] = snapshot
+
+
+def _lakera_guardrail(guardrail_id: str, **litellm_params_overrides) -> Guardrail:
+    params = {"guardrail": "lakera_v2", "mode": "pre_call", "on_flagged": "block", **litellm_params_overrides}
+    return Guardrail(
+        guardrail_id=guardrail_id,
+        guardrail_name="lakera-test",
+        litellm_params=LitellmParams(**params),
+    )
+
+
+class TestReinitializeGuardrailRestoresOnFailure:
+    """Maintainer finding on BerriAI/litellm#34940: reinitialize_guardrail deletes
+    the old in-memory instance and its callback registration before attempting to
+    construct the new one. initialize_guardrail's own ValueError/TypeError
+    propagate uncaught, so a rejected hot-reload (e.g. PATCH /guardrails/{id}
+    with an invalid on_flagged combination) previously left the guardrail
+    deleted entirely, not merely "still enforcing the old config", while the
+    DB/API kept reporting the new config as live."""
+
+    def test_invalid_update_restores_previous_instance(self):
+        handler = InMemoryGuardrailHandler()
+        lists = _all_callback_lists()
+        snapshots = [list(cb_list) for cb_list in lists]
+        try:
+            handler.reinitialize_guardrail(_lakera_guardrail("lakera-restore", on_flagged="block"), source="db")
+
+            with pytest.raises(ValueError, match="requires payload=True and breakdown=True"):
+                handler.reinitialize_guardrail(
+                    _lakera_guardrail("lakera-restore", on_flagged="inject_system_message", payload=False),
+                    source="db",
+                )
+
+            assert "lakera-restore" in handler.IN_MEMORY_GUARDRAILS, "a rejected update must not delete the guardrail"
+            restored_instance = handler.guardrail_id_to_custom_guardrail["lakera-restore"]
+            assert restored_instance.on_flagged == "block"
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+    def test_invalid_update_leaves_dict_metadata_matching_the_restored_instance(self):
+        """IN_MEMORY_GUARDRAILS's own dict entry (what /guardrails/list-style
+        reads would see) must reflect the restored config too, not the
+        rejected one -- otherwise admin-facing reads and the live callback
+        instance disagree about what's actually configured."""
+        handler = InMemoryGuardrailHandler()
+        lists = _all_callback_lists()
+        snapshots = [list(cb_list) for cb_list in lists]
+        try:
+            handler.reinitialize_guardrail(_lakera_guardrail("lakera-restore-meta", on_flagged="block"), source="db")
+
+            with pytest.raises(ValueError, match="requires payload=True and breakdown=True"):
+                handler.reinitialize_guardrail(
+                    _lakera_guardrail("lakera-restore-meta", on_flagged="inject_system_message", breakdown=False),
+                    source="db",
+                )
+
+            assert handler.IN_MEMORY_GUARDRAILS["lakera-restore-meta"]["litellm_params"].on_flagged == "block"
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+
+class TestScanOnlyToolResultsInitRefusal:
+    """A guardrail whose role filtering never scans tool results must be rejected at
+    initialization when configured with scan_only_tool_results, instead of booting a
+    proxy that silently scans nothing on every request."""
+
+    def _initialize(self, name: str, params: dict):
+        lists = _all_callback_lists()
+        snapshots = [list(cb_list) for cb_list in lists]
+        try:
+            return InMemoryGuardrailHandler().initialize_guardrail(
+                guardrail={"guardrail_name": name, "litellm_params": params},
+            )
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+    def test_panw_prisma_airs_with_scan_only_tool_results_is_rejected(self):
+        with pytest.raises(ValueError, match="never scans tool results"):
+            self._initialize(
+                "panw-scan-only-combo",
+                {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "pre_call",
+                    "api_key": "test-key",
+                    "profile_name": "test-profile",
+                    "scan_only_tool_results": True,
+                },
+            )
+
+    def test_bedrock_latest_role_with_scan_only_tool_results_is_rejected(self):
+        with pytest.raises(ValueError, match="never scans tool results"):
+            self._initialize(
+                "bedrock-latest-role-scan-only-combo",
+                {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    "experimental_use_latest_role_message_only": True,
+                    "scan_only_tool_results": True,
+                },
+            )
+
+    def test_bedrock_without_latest_role_accepts_scan_only_tool_results(self):
+        result = self._initialize(
+            "bedrock-scan-only-ok",
+            {
+                "guardrail": "bedrock",
+                "mode": "pre_call",
+                "guardrailIdentifier": "gr-1",
+                "guardrailVersion": "1",
+                "scan_only_tool_results": True,
+            },
+        )
+        assert result is not None
+
+    def test_prompt_security_default_tool_filtering_rejects_scan_only_tool_results(self, monkeypatch):
+        monkeypatch.delenv("PROMPT_SECURITY_CHECK_TOOL_RESULTS", raising=False)
+        with pytest.raises(ValueError, match="never scans tool results"):
+            self._initialize(
+                "prompt-security-scan-only-combo",
+                {
+                    "guardrail": "prompt_security",
+                    "mode": "pre_call",
+                    "api_key": "test-key",
+                    "api_base": "https://ps.example.com",
+                    "scan_only_tool_results": True,
+                },
+            )
+
+    def test_prompt_security_check_tool_results_accepts_scan_only_tool_results(self, monkeypatch):
+        monkeypatch.setenv("PROMPT_SECURITY_CHECK_TOOL_RESULTS", "true")
+        result = self._initialize(
+            "prompt-security-scan-only-ok",
+            {
+                "guardrail": "prompt_security",
+                "mode": "pre_call",
+                "api_key": "test-key",
+                "api_base": "https://ps.example.com",
+                "scan_only_tool_results": True,
+            },
+        )
+        assert result is not None
+
+    def test_skip_tool_message_with_scan_only_tool_results_is_rejected(self):
+        with pytest.raises(ValueError, match="skip_tool_message_in_guardrail are enabled together"):
+            self._initialize(
+                "bedrock-skip-tool-scan-only-combo",
+                {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    "skip_tool_message_in_guardrail": True,
+                    "scan_only_tool_results": True,
+                },
+            )
+
+
+@pytest.mark.asyncio
+async def test_update_guardrail_in_db_raises_when_row_missing():
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.update = AsyncMock(return_value=None)
+
+    with pytest.raises(
+        Exception,
+        match=r"^Error updating guardrail in DB: Guardrail not found, passed guardrail_id=missing-guardrail$",
+    ):
+        await GuardrailRegistry().update_guardrail_in_db(
+            guardrail_id="missing-guardrail",
+            guardrail=Guardrail(
+                guardrail_name="missing-guardrail",
+                litellm_params=LitellmParams(guardrail="bedrock", mode="pre_call"),
+            ),
+            prisma_client=prisma_client,
+        )
+
+
+def test_reinitialize_guardrail_restores_previous_on_failure():
+    """A reinitialization whose new params make the guardrail constructor raise must
+    restore the previous instance instead of leaving the guardrail silently removed:
+    an enforcing guardrail must never fail open because an update was bad."""
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        if litellm_params.api_key == "boom":
+            raise ValueError("invalid updated params")
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    registry_module.guardrail_initializer_registry["restore_test"] = _initializer
+    try:
+        handler = InMemoryGuardrailHandler()
+        created = handler.initialize_guardrail(
+            guardrail={
+                "guardrail_name": "restore-me",
+                "litellm_params": {"guardrail": "restore_test", "mode": "pre_call", "api_key": "ok"},
+            },
+        )
+        guardrail_id = created["guardrail_id"]
+        original_instance = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+
+        with pytest.raises(ValueError, match="invalid updated params"):
+            handler.reinitialize_guardrail(
+                guardrail={
+                    "guardrail_id": guardrail_id,
+                    "guardrail_name": "restore-me",
+                    "litellm_params": {"guardrail": "restore_test", "mode": "pre_call", "api_key": "boom"},
+                },
+            )
+
+        assert guardrail_id in handler.IN_MEMORY_GUARDRAILS
+        restored = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+        assert restored is not None and restored is not original_instance
+        assert restored.guardrail_name == "restore-me"
+    finally:
+        registry_module.guardrail_initializer_registry.pop("restore_test", None)
+
+
+def test_reinitialize_guardrail_raises_value_error_for_non_value_error_init_failures():
+    """Regression for the LIT-6479 fix's 422 path: a constructor failure that is not
+    already a ValueError/TypeError (re.error from an invalid regex has neither in its
+    MRO) must still surface as ValueError, so the PUT/PATCH endpoints' rollback+422
+    catch is exhaustive instead of warn-and-200 persisting a broken config."""
+    import re
+
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    def _initializer(litellm_params, guardrail):
+        if litellm_params.api_key == "bad-regex":
+            re.compile("([")
+        return CustomGuardrail(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    registry_module.guardrail_initializer_registry["regex_test"] = _initializer
+    try:
+        handler = InMemoryGuardrailHandler()
+        created = handler.initialize_guardrail(
+            guardrail={
+                "guardrail_name": "regex-me",
+                "litellm_params": {"guardrail": "regex_test", "mode": "pre_call", "api_key": "ok"},
+            },
+        )
+        guardrail_id = created["guardrail_id"]
+
+        with pytest.raises(ValueError, match="Guardrail initialization failed") as excinfo:
+            handler.reinitialize_guardrail(
+                guardrail={
+                    "guardrail_id": guardrail_id,
+                    "guardrail_name": "regex-me",
+                    "litellm_params": {"guardrail": "regex_test", "mode": "pre_call", "api_key": "bad-regex"},
+                },
+            )
+
+        assert isinstance(excinfo.value.__cause__, re.error)
+        assert guardrail_id in handler.IN_MEMORY_GUARDRAILS
+        restored = handler.guardrail_id_to_custom_guardrail[guardrail_id]
+        assert restored is not None and restored.guardrail_name == "regex-me"
+    finally:
+        registry_module.guardrail_initializer_registry.pop("regex_test", None)
+
+
+def test_sync_guardrail_from_db_applies_db_dict_params_to_live_instance():
+    """
+    Regression for PUT /guardrails/{id}: the DB row arrives with litellm_params as
+    a plain jsonb dict, and the in-place update_in_memory_guardrail cast it to
+    LitellmParams without constructing one, so vars() raised and the running proxy
+    kept enforcing the stale config forever. The PUT endpoint now routes through
+    sync_guardrail_from_db, which must rebuild the live instance from the dict:
+    new blocked words compiled in, old ones gone, and the event hook re-derived
+    from mode (the base-class setattr path wrote self.mode while dispatch reads
+    self.event_hook, so only a full re-init applies a mode change).
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+
+    handler = InMemoryGuardrailHandler()
+    gid = "66666666-6666-6666-6666-666666666666"
+
+    def db_guardrail(word: str, mode: str) -> Guardrail:
+        return Guardrail(
+            guardrail_id=gid,
+            guardrail_name="cf-put-sync",
+            litellm_params={
+                "guardrail": "litellm_content_filter",
+                "mode": mode,
+                "default_on": True,
+                "blocked_words": [{"keyword": word, "action": "BLOCK"}],
+            },
+        )
+
+    lists = _all_callback_lists()
+    snapshots = [list(cb_list) for cb_list in lists]
+    try:
+        handler.sync_guardrail_from_db(db_guardrail("foobarblock", "pre_call"))
+        handler.sync_guardrail_from_db(db_guardrail("quxnewblock", "during_call"))
+
+        instance = handler.guardrail_id_to_custom_guardrail[gid]
+        assert isinstance(instance, ContentFilterGuardrail)
+        assert instance._check_blocked_words("hello QUXNEWBLOCK") is not None
+        assert instance._check_blocked_words("hello FOOBARBLOCK") is None
+        assert instance.event_hook == GuardrailEventHooks.during_call
+        assert instance.should_run_guardrail(data={}, event_type=GuardrailEventHooks.during_call) is True
     finally:
         for cb_list, snapshot in zip(lists, snapshots):
             cb_list[:] = snapshot

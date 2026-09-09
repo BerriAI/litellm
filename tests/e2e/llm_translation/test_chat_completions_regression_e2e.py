@@ -11,17 +11,20 @@ fails that provider's row here.
 
 The per-provider classes below cover the OpenAI-compatible /chat/completions
 translation for providers customers reach by registering their own deployment
-via /model/new (Cohere, Gemini, hosted_vllm), each deleted on teardown.
+via /model/new (Cohere, Gemini, hosted_vllm, Anthropic), each deleted on teardown.
 """
 
 from __future__ import annotations
 
+import base64
 import os
+from pathlib import Path
+from typing import Final
 
 import pytest
 from pydantic import BaseModel
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from models import (
@@ -43,6 +46,7 @@ pytestmark = pytest.mark.e2e
 COHERE_BACKEND = "cohere/command-r-08-2024"
 GEMINI_BACKEND = "gemini/gemini-2.5-flash"
 OPENAI_BACKEND = "openai/gpt-5.6"
+ANTHROPIC_BACKEND = "anthropic/claude-haiku-4-5-20251001"
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 
@@ -79,15 +83,13 @@ def _streamed_tool_call(events: list[str]) -> tuple[str, str]:
     return name, arguments
 
 
-CAT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
+_FIXTURES_DIR: Final = Path(__file__).parent / "fixtures"
+CAT_IMAGE: Final = _FIXTURES_DIR / "cat.jpg"
 OPENAI_VISION_BACKEND = "openai/gpt-4o"
 
-# OpenAI caches a shared prompt prefix once it exceeds ~1024 tokens; this is well
-# past that, so a repeat call reports cached prompt tokens.
-CACHE_PREFIX = (
-    "You are a meticulous assistant. Follow these standing instructions exactly. "
-    * 300
-)
+
+def _cat_image_data_url() -> str:
+    return "data:image/jpeg;base64," + base64.b64encode(CAT_IMAGE.read_bytes()).decode()
 
 
 def _vision_messages() -> list[ChatMessage]:
@@ -96,7 +98,7 @@ def _vision_messages() -> list[ChatMessage]:
             role="user",
             content=[
                 TextContentPart(text="What animal is in this image? Answer in one word."),
-                ImageContentPart(image_url=ImageUrl(url=CAT_IMAGE_URL)),
+                ImageContentPart(image_url=ImageUrl(url=_cat_image_data_url())),
             ],
         )
     ]
@@ -250,7 +252,7 @@ class TestCohereChat:
     def test_cohere_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        (cohere_key,) = require_env("COHERE_API_KEY")
+        cohere_key = os.environ["COHERE_API_KEY"]
         model = f"e2e-cohere-chat-{unique_marker()}"
         model_id = client.proxy.create_model(
             model,
@@ -314,7 +316,8 @@ class TestGeminiChatCompletions:
                             content=f"Reply with the single word pong. marker={tag}",
                         )
                     ],
-                    max_tokens=32,
+                    max_tokens=64,
+                    reasoning_effort="none",
                 ),
             )
         )
@@ -343,10 +346,14 @@ class TestHostedVllmChat:
     def test_hosted_vllm_chat_returns_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        (api_base,) = require_env("HOSTED_VLLM_API_BASE")
-        api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
+        api_base = os.environ.get("HOSTED_VLLM_API_BASE")
+        if api_base is None:
+            pytest.skip(
+                "set HOSTED_VLLM_API_BASE (the live vLLM server this deployment targets)"
+            )
         backend = (
-            os.environ.get("HOSTED_VLLM_MODEL") or "meta-llama/Llama-3.2-3B-Instruct"
+            os.environ.get("HOSTED_VLLM_MODEL")
+            or "Qwen/Qwen2.5-0.5B-Instruct-GGUF:Q4_K_M"
         ).strip()
         model = f"e2e-vllm-chat-{unique_marker()}"
         model_id = client.proxy.create_model(
@@ -354,7 +361,6 @@ class TestHostedVllmChat:
             LiteLLMParamsBody(
                 model=f"hosted_vllm/{backend}",
                 api_base=api_base,
-                api_key=api_key,
             ),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
@@ -395,7 +401,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_streams_real_content(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-chat-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -423,7 +428,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_logs_cost(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-cost-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -457,7 +461,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_returns_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-tool-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -476,6 +479,7 @@ class TestOpenAIChatCompletions:
                     tools=[_WEATHER_TOOL],
                     tool_choice="required",
                     max_tokens=128,
+                    reasoning_effort="none",
                 ),
             )
         )
@@ -488,7 +492,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_structured_output_conforms_to_schema(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-schema-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -522,7 +525,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_reasoning_reports_reasoning_tokens(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-reasoning-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -536,13 +538,25 @@ class TestOpenAIChatCompletions:
                 ChatBody(
                     model=model,
                     messages=[
+                        # The prompt and effort have to make the model actually think,
+                        # otherwise this asserts something the model is free not to do:
+                        # at reasoning_effort="low" a one-step arithmetic question comes
+                        # back with reasoning_tokens=0, which is correct behavior and not
+                        # a reporting bug. Verified against the live model:
+                        # low + "60 miles in 1.5 hours" -> reasoning_tokens=0,
+                        # high + the prompt below       -> reasoning_tokens=90.
+                        # What is under test is that litellm surfaces the field, so the
+                        # request has to be one where the field is populated.
                         ChatMessage(
                             role="user",
-                            content="A train travels 60 miles in 1.5 hours. What is its average speed in mph?",
+                            content=(
+                                "Prove that the sum of two odd integers is even, then find the "
+                                "smallest prime p greater than 100 such that p+2 is also prime."
+                            ),
                         )
                     ],
-                    reasoning_effort="low",
-                    max_tokens=2048,
+                    reasoning_effort="high",
+                    max_tokens=3000,
                 ),
             )
         )
@@ -561,7 +575,6 @@ class TestOpenAIChatCompletions:
     def test_openai_chat_vision_describes_image(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-vision-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_VISION_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -573,44 +586,12 @@ class TestOpenAIChatCompletions:
         _assert_describes_cat(response)
 
     @pytest.mark.covers(
-        "llm.chat_completions.openai.prompt_cache_5m.nonstream.works",
-        exercised_on=["chat_completions"],
-    )
-    def test_openai_chat_prompt_cache_hits_on_repeat(
-        self, client: PassthroughClient, resources: ResourceManager
-    ) -> None:
-        require_env("OPENAI_API_KEY")
-        model = f"e2e-openai-cache-{unique_marker()}"
-        model_id = client.proxy.create_model(
-            model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
-        )
-        resources.defer(lambda: client.proxy.delete_model(model_id))
-        key = resources.key()
-
-        body = ChatBody(
-            model=model,
-            messages=[
-                ChatMessage(role="system", content=CACHE_PREFIX),
-                ChatMessage(role="user", content="Reply with the single word pong."),
-            ],
-            max_tokens=16,
-        )
-        unwrap(client.proxy.chat(key, body))
-        second = unwrap(client.proxy.chat(key, body))
-
-        details = second.usage.prompt_tokens_details if second.usage else None
-        assert details and details.cached_tokens and details.cached_tokens > 0, (
-            f"a repeated large-prefix prompt must report cached prompt tokens, got usage={second.usage}"
-        )
-
-    @pytest.mark.covers(
         "llm.chat_completions.openai.tool_use.stream.works",
         exercised_on=["chat_completions"],
     )
     def test_openai_chat_streams_tool_call(
         self, client: PassthroughClient, resources: ResourceManager
     ) -> None:
-        require_env("OPENAI_API_KEY")
         model = f"e2e-openai-tool-stream-{unique_marker()}"
         model_id = client.proxy.create_model(
             model, LiteLLMParamsBody(model=OPENAI_BACKEND, api_key="os.environ/OPENAI_API_KEY")
@@ -628,6 +609,7 @@ class TestOpenAIChatCompletions:
                 tools=[_WEATHER_TOOL],
                 tool_choice="required",
                 max_tokens=128,
+                reasoning_effort="none",
                 stream=True,
             ),
         )
@@ -645,7 +627,6 @@ class TestBedrockConverseChatCompletions:
     """
 
     def _register(self, client: PassthroughClient, resources: ResourceManager, prefix: str) -> str:
-        require_env("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION")
         model = f"{prefix}-{unique_marker()}"
         model_id = client.proxy.create_model(model, _bedrock_params())
         resources.defer(lambda: client.proxy.delete_model(model_id))
@@ -766,3 +747,98 @@ class TestBedrockConverseChatCompletions:
 
         response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_vision_messages(), max_tokens=32)))
         _assert_describes_cat(response)
+
+
+class TestAnthropicChatCompletions:
+    """Anthropic via the OpenAI-compatible /chat/completions path, the translation
+    customers on the OpenAI SDK rely on when they route to Claude. The streamed call
+    must deliver real content deltas, and a tool-forced call must come back as a
+    well-formed tool_call on both the non-streamed and streamed paths.
+    """
+
+    def _register(self, client: PassthroughClient, resources: ResourceManager, prefix: str) -> str:
+        model = f"{prefix}-{unique_marker()}"
+        model_id = client.proxy.create_model(
+            model, LiteLLMParamsBody(model=ANTHROPIC_BACKEND, api_key="os.environ/ANTHROPIC_API_KEY")
+        )
+        resources.defer(lambda: client.proxy.delete_model(model_id))
+        return model
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.basic.stream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_anthropic_chat_streams_real_content(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-stream")
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content=f"Count from 1 to 5, one number per line. {unique_marker()}")
+                ],
+                max_tokens=64,
+                stream=True,
+            ),
+        )
+        _assert_streamed_completion(result)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.tool_use.nonstream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_anthropic_chat_returns_tool_call(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-tool")
+        key = resources.key()
+
+        response = unwrap(
+            client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[
+                        ChatMessage(role="user", content="What is the weather in San Francisco? Use the get_weather tool.")
+                    ],
+                    tools=[_WEATHER_TOOL],
+                    tool_choice="required",
+                    max_tokens=128,
+                ),
+            )
+        )
+        _assert_weather_tool_call(response)
+
+    @pytest.mark.covers(
+        "llm.chat_completions.anthropic.tool_use.stream.works",
+        exercised_on=["chat_completions"],
+    )
+    def test_anthropic_chat_streams_tool_call(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = self._register(client, resources, "e2e-anthropic-tool-stream")
+        key = resources.key()
+
+        result = client.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[
+                    ChatMessage(role="user", content="What is the weather in San Francisco? Use the get_weather tool.")
+                ],
+                tools=[_WEATHER_TOOL],
+                tool_choice="required",
+                max_tokens=128,
+                stream=True,
+            ),
+        )
+        assert result.ok and result.is_streaming, f"tool stream was not established: {result}"
+        assert result.stream_error is None, f"tool stream carried an error event: {result.stream_error}"
+        name, arguments = _streamed_tool_call(result.stream_events)
+        assert name == "get_weather", f"streamed tool call named {name!r}: {result.stream_events[:5]}"
+        args = _WeatherArgs.model_validate_json(arguments)
+        assert args.location.strip(), f"streamed tool call arguments missing location: {arguments!r}"

@@ -226,11 +226,13 @@ def test_cache_hit_is_zero_cost_and_suffixed(
     # populated. The marker keeps each run isolated - a fixed prompt would persist
     # in the shared response cache across runs and make both calls hit (flaky).
     prompt = f"What is the capital of France? Answer in one word. {unique_marker()}"
-    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16))
-    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16))
+    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16, cache=None))
+    _ = unwrap(client.chat(scoped_key, "gemini-2.5-flash", prompt, max_tokens=16, cache=None))
 
     rows = client.poll_logs_for_key(
-        scoped_key, predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
+        scoped_key,
+        predicate=lambda rs: any(r.cache_hit == "True" for r in rs)
+        and any(r.cache_hit != "True" for r in rs),
     )
     cache_row = _require_row(
         rows,

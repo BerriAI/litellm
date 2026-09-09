@@ -6,6 +6,15 @@
 resource "google_service_account" "runtime" {
   account_id   = "${local.name}-runtime"
   display_name = "LiteLLM Cloud Run runtime"
+
+  lifecycle {
+    precondition {
+      condition = !var.create_runtime || var.billing_metrics_endpoint == "" || (
+        var.billing_metrics_client_cert_pem != "" && var.billing_metrics_client_key_pem != ""
+      )
+      error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set and create_runtime is true."
+    }
+  }
 }
 
 # UI runtime SA — no role bindings. The UI is static nginx with no DB,
@@ -14,6 +23,8 @@ resource "google_service_account" "runtime" {
 # project's serverless service agent (not this SA), so it doesn't need
 # artifactregistry.reader either.
 resource "google_service_account" "ui_runtime" {
+  count = var.create_runtime ? 1 : 0
+
   account_id   = "${local.name}-ui-runtime"
   display_name = "LiteLLM Cloud Run UI runtime (no data-plane access)"
 }

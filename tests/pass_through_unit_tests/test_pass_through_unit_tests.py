@@ -1,13 +1,8 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, Mock, patch, MagicMock
 from typing import Optional
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import fastapi
 from fastapi import FastAPI
@@ -30,6 +25,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _update_metadata_with_tags_in_header,
     HttpPassThroughEndpointHelpers,
@@ -412,33 +408,52 @@ async def test_pass_through_request_logging_failure_with_stream(
             assert response.body == b'{"mock": "response"}'
 
 
+PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES = {
+    "/comprehendmedical": {"POST"},
+    "/comprehendmedical/{operation}": {"POST"},
+}
+
+
 def test_pass_through_routes_support_all_methods():
     """
-    Test that all pass-through routes support GET, POST, PUT, DELETE, PATCH methods
+    A pass-through route fronts a whole provider API, so narrowing its method
+    set turns a request the upstream would have accepted into a 405. The
+    exceptions are providers whose wire protocol admits only one method: Amazon
+    Comprehend Medical speaks AWS JSON 1.1, which is POST-only, so there is no
+    other method to forward.
     """
-    # Import the routers
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         router as llm_router,
     )
 
-    # Expected HTTP methods
     expected_methods = {"GET", "POST", "PUT", "DELETE", "PATCH"}
 
-    # Function to check routes in a router
     def check_router_methods(router):
         for route in router.routes:
             if isinstance(route, APIRoute):
-                # Get path and methods for this route
                 path = route.path
                 methods = set(route.methods)
-                print("supported methods for route", path, "are", methods)
-                # Assert all expected methods are supported
+                allowed = PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES.get(path, expected_methods)
                 assert (
-                    methods == expected_methods
-                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {expected_methods}"
+                    methods == allowed
+                ), f"Route {path} does not support all methods. Supported: {methods}, Expected: {allowed}"
 
-    # Check both routers
     check_router_methods(llm_router)
+
+
+def test_protocol_constrained_pass_through_exemptions_are_not_stale():
+    """
+    The exemption list above weakens the method contract, so it must not
+    outlive the routes it covers: a renamed or deleted route has to fail here
+    rather than sit in the list silently exempting nothing.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        router as llm_router,
+    )
+
+    registered_paths = {route.path for route in llm_router.routes if isinstance(route, APIRoute)}
+    unmatched = set(PROTOCOL_CONSTRAINED_PASS_THROUGH_ROUTES) - registered_paths
+    assert not unmatched, f"Exempted pass-through routes no longer exist: {sorted(unmatched)}"
 
 
 def test_is_bedrock_agent_runtime_route():
@@ -652,3 +667,119 @@ def test_custom_pricing_used_in_cost_calculation():
 
     print(f"Cache-aware cost: {cache_cost}")
     print("✅ Custom pricing parameters are correctly used in cost calculation")
+
+
+def test_init_kwargs_client_metadata_cannot_spoof_authenticated_identity(
+    mock_request, mock_user_api_key_dict
+):
+    request = mock_request()
+    passthrough_payload = PassthroughStandardLoggingPayload(
+        url="https://test.com",
+        request_body={},
+    )
+    authenticated_key = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-user",
+        key_alias="real-key",
+        team_alias="Real Team",
+        user_email="real@example.com",
+        org_id="real-org",
+    )
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=authenticated_key,
+        passthrough_logging_payload=passthrough_payload,
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={
+            "litellm_metadata": {
+                "user_api_key_org_id": "victim-org",
+                "user_api_key_end_user_id": "victim-end-user",
+                "user_api_key_user_id": "victim-user",
+                "user_api_key_team_id": "victim-team",
+                "user_api_key_team_alias": "Victim Team",
+                "user_api_key_alias": "victim-key",
+                "user_api_key_user_email": "victim@example.com",
+            }
+        },
+    )
+
+    metadata = result["litellm_params"]["metadata"]
+    assert metadata["user_api_key_user_id"] == "test-user"
+    assert metadata["user_api_key_team_id"] == "test-team"
+    assert metadata["user_api_key_team_alias"] == "Real Team"
+    assert metadata["user_api_key_alias"] == "real-key"
+    assert metadata["user_api_key_user_email"] == "real@example.com"
+    assert metadata["user_api_key_org_id"] == "real-org"
+    assert metadata["user_api_key_end_user_id"] == "test-user"
+
+
+def test_init_kwargs_no_authenticated_identity_field_is_client_settable(
+    mock_request, mock_user_api_key_dict
+):
+    authenticated_key = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="test-team",
+        end_user_id="test-end-user",
+        key_alias="real-key",
+        team_alias="Real Team",
+        user_email="real@example.com",
+        org_id="real-org",
+        organization_alias="Real Org",
+        project_id="real-project",
+        project_alias="Real Project",
+        spend=1.5,
+        max_budget=10.0,
+        user_spend=2.5,
+        user_max_budget=20.0,
+        team_spend=3.5,
+        team_max_budget=30.0,
+        metadata={"real": "auth-metadata"},
+    )
+    expected = dict(
+        LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict=authenticated_key
+        )
+    )
+    assert len(expected) >= 20
+
+    spoofed = {key: f"SPOOFED-{key}" for key in expected}
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request(),
+        user_api_key_dict=authenticated_key,
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(
+            url="https://test.com", request_body={}
+        ),
+        litellm_call_id="test-call-id",
+        logging_obj=LiteLLMLoggingObj(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="test-call-type",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        ),
+        _parsed_body={"litellm_metadata": dict(spoofed), "metadata": dict(spoofed)},
+    )
+
+    metadata = result["litellm_params"]["metadata"]
+    survived = {
+        key: metadata.get(key)
+        for key in expected
+        if metadata.get(key) != expected[key]
+    }
+    assert survived == {}, f"client-supplied values survived for: {sorted(survived)}"

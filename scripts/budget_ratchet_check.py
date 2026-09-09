@@ -10,7 +10,10 @@ content at the merge-base with the target branch and fails (exits 1, red) if:
   * a rule was dropped from a budget (its ceiling effectively became infinite), or
   * an entire budget file was deleted.
 
-New rules and lowered/equal limits are fine.
+New rules and lowered/equal limits are fine. So is a rule that graduated: once a
+paired config (ruff.toml for the ruff-strict budget) selects the rule outright it
+hard-fails at the first violation, which is stricter than any ceiling the budget
+could hold, so dropping its entry tightens the guard rather than removing it.
 
 This is deliberately NOT a gating check. It should turn the run red so that a
 loosening is impossible to miss in review, but it must stay OUT of the
@@ -21,7 +24,6 @@ seen the red and accepted it.
 Usage:
     python scripts/budget_ratchet_check.py [--base REF] [budget.json ...]
 
-Stdlib only.
 """
 
 from __future__ import annotations
@@ -31,15 +33,22 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from types import MappingProxyType
+from typing import Final, NamedTuple
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_BASE = "origin/litellm_internal_staging"
 DEFAULT_BUDGETS: tuple[str, ...] = (
     "ruff-strict-budget.json",
     "type-discipline-budget.json",
     "basedpyright-code-budget.json",
+    "test-quality-budget.json",
 )
+GRADUATION_CONFIGS = MappingProxyType({"ruff-strict-budget.json": "ruff.toml"})
 
 
 class Regression(NamedTuple):
@@ -106,24 +115,57 @@ def _limits(budget: dict) -> dict[str, int]:
     }
 
 
+def selectors_hard_failed_by(lint: dict) -> tuple[str, ...]:
+    """A ruff `[lint]` table's selected codes, minus anything `ignore` turns back off.
+
+    `lint.ignore` wins over `lint.extend-select` in ruff, so an ignored code is not
+    actually enforced and must not count as a graduation.
+    """
+    ignored = tuple(lint.get("ignore", ()))
+    return tuple(
+        selector
+        for selector in lint.get("extend-select", ())
+        if not (ignored and selector.startswith(ignored))
+    )
+
+
+def graduated_selectors(rel: str) -> tuple[str, ...]:
+    """Selectors the budget's paired ruff config hard-fails, so its ceiling is moot."""
+    config = GRADUATION_CONFIGS.get(rel)
+    if config is None or not (REPO_ROOT / config).exists():
+        return ()
+    return selectors_hard_failed_by(
+        tomllib.loads((REPO_ROOT / config).read_text()).get("lint", {})
+    )
+
+
 def _regression_detail(
     rule: str,
     base_limits: dict[str, int],
     head_limits: dict[str, int],
+    graduated: tuple[str, ...],
 ) -> str | None:
-    """Why `rule` regressed vs base, or None when it held flat or fell.
+    """Why `rule` regressed vs base, or None when it held flat, fell, or graduated.
 
-    A dropped rule is terminal; otherwise the only loosening left is a raised limit.
+    A dropped rule is terminal unless it graduated; otherwise the only loosening
+    left is a raised limit.
     """
     base_limit = base_limits[rule]
     if rule not in head_limits:
+        if graduated and rule.startswith(graduated):
+            return None
         return f"rule dropped (limit {base_limit} -> removed)"
     if head_limits[rule] > base_limit:
         return f"limit raised {base_limit} -> {head_limits[rule]}"
     return None
 
 
-def regressions_for(rel: str, base: dict | None, head: dict | None) -> list[Regression]:
+def regressions_for(
+    rel: str,
+    base: dict | None,
+    head: dict | None,
+    graduated: tuple[str, ...] = (),
+) -> list[Regression]:
     if base is None:
         return []  # new budget file: nothing to ratchet against yet
     if head is None:
@@ -133,18 +175,21 @@ def regressions_for(rel: str, base: dict | None, head: dict | None) -> list[Regr
     return [
         Regression(rel, rule, detail)
         for rule in sorted(base_limits)
-        if (detail := _regression_detail(rule, base_limits, head_limits)) is not None
+        if (detail := _regression_detail(rule, base_limits, head_limits, graduated)) is not None
     ]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", default=DEFAULT_BASE)
+    parser.add_argument("--base", help="Comparison ref (default: origin's current default branch)")
     parser.add_argument("budgets", nargs="*", help="budget files to check")
     args = parser.parse_args()
+    from default_branch import resolve_base_ref
+
+    base_ref: Final = resolve_base_ref(args.base, REPO_ROOT)
     budgets = args.budgets or list(DEFAULT_BUDGETS)
 
-    ref = _merge_base(args.base)
+    ref = _merge_base(base_ref)
     if not _ref_is_commit(ref):
         print(
             f"FAIL: base ref {ref!r} does not resolve to a commit, so the ratchet has nothing "
@@ -161,14 +206,14 @@ def main() -> int:
         if base is None and head is None:
             continue
         if base is None:
-            print(f"skip {rel}: new file (no base at {args.base} to ratchet against)")
+            print(f"skip {rel}: new file (no base at {base_ref} to ratchet against)")
             continue
         checked.append(rel)
-        regressions.extend(regressions_for(rel, base, head))
+        regressions.extend(regressions_for(rel, base, head, graduated_selectors(rel)))
 
     if regressions:
         print(
-            f"FAIL: budget limit(s) loosened vs base {args.base} (merge-base {ref[:12]}):"
+            f"FAIL: budget limit(s) loosened vs base {base_ref} (merge-base {ref[:12]}):"
         )
         for reg in regressions:
             print(f"  {reg.budget}  {reg.rule}: {reg.detail}")
@@ -180,7 +225,7 @@ def main() -> int:
         return 1
 
     suffix = f" ({', '.join(checked)})" if checked else ""
-    print(f"OK: no budget limit increased vs base {args.base}{suffix}")
+    print(f"OK: no budget limit increased vs base {base_ref}{suffix}")
     return 0
 
 

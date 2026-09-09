@@ -1,24 +1,8 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
-import { Form } from "antd";
 import OAuthFormFields from "./OAuthFormFields";
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-/** Minimal Ant Form wrapper so Form.Item registers correctly. */
-const WithForm: React.FC<{ children: React.ReactNode; onFinish?: (values: any) => void }> = ({
-  children,
-  onFinish,
-}) => {
-  const [form] = Form.useForm();
-  return (
-    <Form form={form} onFinish={onFinish}>
-      {children}
-      <button type="submit">Submit</button>
-    </Form>
-  );
-};
+import { McpFormHarness as WithForm } from "./McpFormTestHarness";
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
@@ -28,6 +12,63 @@ describe("OAuthFormFields", () => {
   });
 
   // ── visibility by flow type ─────────────────────────────────────────────────
+
+  // The RFC 8707 resource indicator applies to both OAuth arms: the interactive authorize/token legs
+  // and the M2M client_credentials fetch. It must render in each, or the arm missing it can only be
+  // configured through the API.
+  describe("resource indicator field", () => {
+    it("renders in interactive mode", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={false} />
+        </WithForm>,
+      );
+      expect(screen.getByText("Resource Indicator (optional)")).toBeInTheDocument();
+    });
+
+    it("renders in M2M mode", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={true} />
+        </WithForm>,
+      );
+      expect(screen.getByText("Resource Indicator (optional)")).toBeInTheDocument();
+    });
+
+    it("keeps one placeholder when editing, since the stored value is returned and shown", () => {
+      // Non-secret admin config is no longer redacted out of responses, so the field mounts with its
+      // real value and an emptied field clears it. There is no keep-existing state left to signal.
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={false} isEditing={true} />
+        </WithForm>,
+      );
+      expect(screen.getByPlaceholderText("auto, or https://mcp.example.com/mcp")).toBeInTheDocument();
+    });
+
+    it("submits its value under credentials.upstream_resource", async () => {
+      const onFinish = vi.fn();
+      render(
+        <WithForm onFinish={onFinish}>
+          <OAuthFormFields isM2M={false} />
+        </WithForm>,
+      );
+      const input = screen.getByPlaceholderText("auto, or https://mcp.example.com/mcp");
+      await act(async () => {
+        fireEvent.change(input, { target: { value: "api://finance-api/.default" } });
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByText("Submit"));
+      });
+      await waitFor(() => {
+        expect(onFinish).toHaveBeenCalledWith(
+          expect.objectContaining({
+            credentials: expect.objectContaining({ upstream_resource: "api://finance-api/.default" }),
+          }),
+        );
+      });
+    });
+  });
 
   describe("interactive mode (isM2M=false)", () => {
     it("renders Token Validation Rules field", () => {
@@ -120,8 +161,7 @@ describe("OAuthFormFields", () => {
           <OAuthFormFields isM2M={false} />
         </WithForm>,
       );
-      const authMethodLabel = screen.getByText("Token Endpoint Auth Method (optional)");
-      const selector = authMethodLabel.closest(".ant-form-item")!.querySelector(".ant-select-selector")!;
+      const selector = screen.getByLabelText("Token Endpoint Auth Method (optional)");
       await act(async () => {
         fireEvent.mouseDown(selector);
       });
@@ -243,6 +283,44 @@ describe("OAuthFormFields", () => {
 
       await waitFor(() => {
         expect(screen.queryByText("Must be valid JSON")).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  describe("token header field", () => {
+    it("renders on the M2M flow", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={true} />
+        </WithForm>,
+      );
+      expect(screen.getByPlaceholderText("Authorization")).toBeInTheDocument();
+    });
+
+    it("renders on the interactive flow", () => {
+      render(
+        <WithForm>
+          <OAuthFormFields isM2M={false} />
+        </WithForm>,
+      );
+      expect(screen.getByPlaceholderText("Authorization")).toBeInTheDocument();
+    });
+
+    it("submits its value under credentials.upstream_token_header", async () => {
+      const onFinish = vi.fn();
+      render(
+        <WithForm onFinish={onFinish}>
+          <OAuthFormFields isM2M={true} />
+        </WithForm>,
+      );
+      fireEvent.change(screen.getByPlaceholderText("Authorization"), { target: { value: "esb-oauth" } });
+      fireEvent.click(screen.getByText("Submit"));
+      await waitFor(() => {
+        expect(onFinish).toHaveBeenCalledWith(
+          expect.objectContaining({
+            credentials: expect.objectContaining({ upstream_token_header: "esb-oauth" }),
+          }),
+        );
       });
     });
   });

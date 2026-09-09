@@ -1,12 +1,14 @@
 import asyncio
 import json
-import os
 import sys
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request
 from prisma import errors as prisma_errors
+from prisma.engine.errors import BinaryNotFoundError, EngineConnectionError
 from prisma.errors import (
     ClientNotConnectedError,
     DataError,
@@ -20,9 +22,6 @@ from prisma.errors import (
     UniqueViolationError,
 )
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -41,11 +40,13 @@ from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
         PrismaError("timed out while connecting"),
     ],
 )
-def test_is_database_connection_error_prisma_connection_errors(prisma_error):
+def test_is_database_infrastructure_error_prisma_connection_errors(prisma_error):
     """
-    Test that only Prisma connection-related errors are considered DB connection errors.
+    Test that Prisma failures originating below the request are reported as
+    infrastructure faults, so a caller is told the service failed rather than
+    that its credentials did.
     """
-    assert PrismaDBExceptionHandler.is_database_connection_error(prisma_error) == True
+    assert PrismaDBExceptionHandler.is_database_infrastructure_error(prisma_error) == True
 
 
 @pytest.mark.parametrize(
@@ -114,6 +115,8 @@ def test_is_database_connection_generic_errors():
         TimeoutError("timed out"),
         OSError("network is unreachable"),
         asyncio.TimeoutError(),
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectTimeout("connect timed out"),
         HTTPClientClosedError(),
         ClientNotConnectedError(),
         PrismaError("can't reach database server"),
@@ -261,10 +264,10 @@ def test_is_prisma_engine_internal_error_excludes_data_layer_prisma_error():
     data_layer_error = UniqueViolationError(
         data={"user_facing_error": {"meta": {"table": "t"}}}
     )
-    try:
+    with pytest.raises(UniqueViolationError) as exc_info:
         raise data_layer_error
-    except UniqueViolationError as e:
-        assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
+    e = exc_info.value
+    assert PrismaDBExceptionHandler.is_prisma_engine_internal_error(e) is False
 
 
 @pytest.mark.parametrize(
@@ -316,6 +319,43 @@ def test_is_database_service_unavailable_error_in_chain_sees_through_wrapping():
     assert PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(ValueError("nope")) is False
 
 
+def test_find_database_service_unavailable_error_in_chain_returns_the_wrapped_outage_itself():
+    """Wording a 503 by the kind of outage needs the wrapped database error, not the ValueError
+    get_user_object wrapped it in, so the finder must hand back the inner exception."""
+    outage = _wrapped_like_get_user_object(ConnectionError("can't reach database server"))
+    found = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(outage)
+    assert isinstance(found, ConnectionError)
+    assert found is outage.__context__
+    missing_user = _wrapped_like_get_user_object(Exception())
+    assert PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(missing_user) is None
+
+
+def _raised_while_handling(inner, outer):
+    try:
+        raise inner
+    except BaseException:
+        try:
+            raise outer
+        except BaseException as surfaced:
+            return surfaced
+
+
+def test_permanent_fault_outranks_the_transient_error_that_surfaced_it():
+    """A reconnect that dies on a missing engine binary raises the transport error last, with the
+    BinaryNotFoundError left as __context__. The binary is what keeps the database down, so both the
+    finder and the 503 wording must pick it over the outer transient error, whichever way they nest."""
+    permanent = BinaryNotFoundError("query engine binary not found")
+    transient_over_permanent = _raised_while_handling(permanent, httpx.ConnectError("connection refused"))
+    permanent_over_transient = _raised_while_handling(httpx.ConnectError("connection refused"), permanent)
+
+    for chain in (transient_over_permanent, permanent_over_transient):
+        assert PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(chain) is permanent
+        message = PrismaDBExceptionHandler.database_unavailable_message(chain)
+        assert "BinaryNotFoundError" in message
+        assert "will not clear by retrying" in message
+        assert "temporarily unreachable" not in message
+
+
 def test_is_database_service_unavailable_error_in_chain_terminates_on_a_cause_cycle():
     """The walk must terminate on a pathological __cause__ cycle rather than hang. Neither link is an
     outage, so the bounded walk returns False instead of looping forever."""
@@ -330,7 +370,6 @@ def test_is_database_service_unavailable_error_asyncpg(monkeypatch):
     """asyncpg connection/interface errors map to service-unavailable. asyncpg
     is not a hard dependency, so inject a stand-in module to exercise the
     branch deterministically regardless of the install environment."""
-    import sys
     import types
 
     fake_asyncpg = types.ModuleType("asyncpg")
@@ -398,7 +437,7 @@ def test_handle_db_exception_with_connection_error():
     """
     Test that DB connection errors are handled gracefully when allow_requests_on_db_unavailable is True
     """
-    db_error = ClientNotConnectedError()
+    db_error = httpx.ConnectError("All connection attempts failed")
     result = PrismaDBExceptionHandler.handle_db_exception(db_error)
     assert result is None
 
@@ -411,8 +450,8 @@ def test_handle_db_exception_raises_error():
     """
     Test that DB connection errors are raised when allow_requests_on_db_unavailable is False
     """
-    db_error = ClientNotConnectedError()
-    with pytest.raises(ClientNotConnectedError):
+    db_error = httpx.ConnectError("All connection attempts failed")
+    with pytest.raises(httpx.ConnectError):
         PrismaDBExceptionHandler.handle_db_exception(db_error)
 
 
@@ -426,3 +465,238 @@ def test_handle_db_exception_with_non_db_error():
     )
     with pytest.raises(litellm.BudgetExceededError):
         PrismaDBExceptionHandler.handle_db_exception(regular_error)
+
+
+def _permanent_prisma_faults():
+    """Every prisma error class that is not a transient outage and not a
+    data-layer error, built by enumeration so the list cannot drift out of sync
+    with the installed prisma version."""
+    import inspect
+
+    from prisma import engine as prisma_engine
+
+    payload = {"user_facing_error": {"meta": {"target": ["x"]}}, "error_message": "boom"}
+
+    class _Response:
+        status = 422
+
+    def build(cls):
+        attempts = (
+            ((), {}),
+            ((payload,), {}),
+            (("x",), {}),
+            (("x", "y"), {}),
+            ((_Response(),), {}),
+            ((_Response(), "body"), {}),
+            ((), {"expected": "1", "got": "2"}),
+        )
+        for args, kwargs in attempts:
+            try:
+                return cls(*args, **kwargs)
+            except Exception:
+                continue
+        return None
+
+    discovered = {}
+    for module in (prisma_errors, prisma_engine.errors):
+        for name, obj in vars(module).items():
+            if inspect.isclass(obj) and issubclass(obj, BaseException) and obj.__module__.startswith("prisma"):
+                discovered[name] = obj
+
+    faults = []
+    for name, cls in sorted(discovered.items()):
+        if issubclass(cls, prisma_engine.errors.EngineConnectionError):
+            continue
+        instance = build(cls)
+        if instance is None or not PrismaDBExceptionHandler.is_database_infrastructure_error(instance):
+            continue
+        faults.append(pytest.param(instance, id=name))
+    return faults
+
+
+PERMANENT_PRISMA_FAULTS = _permanent_prisma_faults()
+
+
+def test_permanent_fault_enumeration_is_not_empty():
+    """Guards the parametrized tests below: if the enumeration silently found
+    nothing, those tests would pass without asserting anything."""
+    assert len(PERMANENT_PRISMA_FAULTS) >= 15
+
+
+@pytest.mark.parametrize("prisma_error", PERMANENT_PRISMA_FAULTS)
+def test_permanent_prisma_faults_are_not_transient(prisma_error):
+    """A fault that cannot resolve on its own must not qualify a request to be
+    served without a verified database.
+
+    ``allow_requests_on_db_unavailable`` trades verification for availability on
+    the assumption the database returns. A missing or version-skewed query
+    engine, a malformed generated query, or a misused transaction never returns,
+    so absorbing one turns a bounded degraded window into a permanent one."""
+    assert PrismaDBExceptionHandler.is_database_connection_error(prisma_error) is False
+
+
+@pytest.mark.parametrize("prisma_error", PERMANENT_PRISMA_FAULTS)
+def test_permanent_prisma_faults_are_still_reported_as_service_problems(prisma_error):
+    """Narrowing what may be served without a database must not change what the
+    caller is told.
+
+    A permanently faulted engine is still the service's fault, so it has to keep
+    reaching the reporting predicate that renders it as unavailable rather than
+    as a rejected credential."""
+    assert PrismaDBExceptionHandler.is_database_infrastructure_error(prisma_error) is True
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(prisma_error) is True
+
+
+RECONNECTABLE_CLIENT_STATE_FAULTS = (prisma_errors.ClientNotConnectedError, prisma_errors.HTTPClientClosedError)
+
+
+@pytest.mark.parametrize("prisma_error", PERMANENT_PRISMA_FAULTS)
+def test_permanent_prisma_faults_are_worded_as_not_retryable(prisma_error):
+    """A 503 for a fault that never heals must not tell the operator to wait.
+
+    The status stays 503 (the service is at fault), but the message has to say
+    the outage is not transient and name the engine fault, or an operator
+    watching a version-skewed engine keeps retrying a request that can never
+    succeed. The two client-state faults a reconnect can repair keep the retry
+    wording."""
+    reconnectable = isinstance(prisma_error, RECONNECTABLE_CLIENT_STATE_FAULTS)
+    message = PrismaDBExceptionHandler.database_unavailable_message(prisma_error)
+
+    assert PrismaDBExceptionHandler.is_permanent_database_fault(prisma_error) is (not reconnectable)
+    assert message.startswith("Service Unavailable")
+    assert ("temporarily unreachable" in message) is reconnectable
+    assert ("Please retry shortly" in message) is reconnectable
+    assert ("will not clear by retrying" in message) is (not reconnectable)
+    assert (type(prisma_error).__name__ in message) is (not reconnectable)
+
+
+@pytest.mark.parametrize(
+    "transient_error",
+    [
+        pytest.param(httpx.ConnectError("All connection attempts failed"), id="ConnectError"),
+        pytest.param(ConnectionError("connection refused"), id="ConnectionError"),
+        pytest.param(EngineConnectionError(), id="EngineConnectionError"),
+        pytest.param(prisma_errors.PrismaError("can't reach database server"), id="P1001_text"),
+        pytest.param(
+            ProxyException(message="no db", type=ProxyErrorTypes.no_db_connection, param=None, code=503),
+            id="ProxyException",
+        ),
+    ],
+)
+def test_transient_outages_keep_the_retry_wording(transient_error):
+    """A genuine outage is expected to come back, so the retry guidance is the
+    right message and must not be replaced by the permanent-fault text."""
+    assert PrismaDBExceptionHandler.is_permanent_database_fault(transient_error) is False
+    assert PrismaDBExceptionHandler.database_unavailable_message(transient_error) == (
+        "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
+    )
+
+
+@pytest.mark.parametrize(
+    "transient_error",
+    [
+        pytest.param(httpx.ConnectError("All connection attempts failed"), id="ConnectError"),
+        pytest.param(httpx.ReadError("read failed"), id="ReadError"),
+        pytest.param(httpx.ReadTimeout("timed out"), id="ReadTimeout"),
+        pytest.param(prisma_errors.HTTPClientClosedError(), id="HTTPClientClosedError_is_not_transient"),
+    ],
+)
+def test_genuine_outage_still_qualifies_for_the_fallback(transient_error):
+    """The httpx transport errors are how a real outage actually reaches the
+    caller: the query engine is a local HTTP server, so an unreachable database
+    surfaces as a transport failure against it rather than as a prisma type.
+    Narrowing the classifier must leave that path intact."""
+    expected = not isinstance(transient_error, prisma_errors.HTTPClientClosedError)
+    assert PrismaDBExceptionHandler.is_database_connection_error(transient_error) is expected
+
+
+def test_engine_connection_error_is_the_transient_prisma_type():
+    """``EngineConnectionError`` is the one prisma class that means the engine
+    could not reach the database and may succeed later."""
+    from prisma.engine.errors import EngineConnectionError
+
+    assert PrismaDBExceptionHandler.is_database_connection_error(EngineConnectionError()) is True
+
+
+@patch(
+    "litellm.proxy.proxy_server.general_settings",
+    {"allow_requests_on_db_unavailable": True},
+)
+def test_handle_db_exception_surfaces_a_permanent_fault_even_when_degraded_mode_is_enabled():
+    """The startup gate must not boot a proxy whose engine is permanently
+    faulted. Absorbing it produces a process that reports healthy and persists
+    nothing, indefinitely, with no error for an operator to find."""
+    from prisma.engine.errors import BinaryNotFoundError
+
+    with pytest.raises(BinaryNotFoundError):
+        PrismaDBExceptionHandler.handle_db_exception(BinaryNotFoundError("query engine binary not found"))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RawQueryError(data={"user_facing_error": {"error_code": "P2034", "meta": {"table": "t"}}}),
+        PrismaError("Transaction failed due to a write conflict or a deadlock. Please retry your transaction"),
+        RawQueryError(data={"user_facing_error": {"message": "deadlock detected", "meta": {"table": "t"}}}),
+        RawQueryError(
+            data={"user_facing_error": {"message": "ERROR: 40P01: deadlock detected", "meta": {"table": "t"}}}
+        ),
+    ],
+)
+def test_is_deadlock_error_matches_postgres_deadlock(error):
+    """A Postgres deadlock surfaced through prisma (P2034 or 40P01 / "deadlock detected" text) is recognized."""
+    assert PrismaDBExceptionHandler.is_deadlock_error(error) is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        UniqueViolationError(data={"user_facing_error": {"error_code": "P2002", "meta": {"table": "t"}}}),
+        RecordNotFoundError(data={"user_facing_error": {"meta": {"table": "t"}}}),
+        PrismaError("validation failed on query"),
+        PrismaError("can't reach database server"),
+        httpx.ConnectError("connection refused"),
+        RuntimeError("deadlock detected"),
+        ValueError("40P01"),
+    ],
+)
+def test_is_deadlock_error_excludes_non_deadlocks(error):
+    """Non-deadlock prisma errors, connectivity failures, and non-prisma exceptions are not treated as deadlocks."""
+    assert PrismaDBExceptionHandler.is_deadlock_error(error) is False
+
+
+MOCKED_PRISMA_PREDICATES: Final = (
+    PrismaDBExceptionHandler.is_database_infrastructure_error,
+    PrismaDBExceptionHandler.is_database_transport_error,
+    PrismaDBExceptionHandler.is_deadlock_error,
+    PrismaDBExceptionHandler.is_prisma_engine_internal_error,
+    PrismaDBExceptionHandler.is_database_service_unavailable_error,
+)
+
+
+@pytest.mark.parametrize("predicate", MOCKED_PRISMA_PREDICATES, ids=lambda p: p.__name__)
+def test_predicates_answer_false_for_a_plain_exception_when_prisma_is_mocked(predicate):
+    """Suites that swap ``sys.modules["prisma"]`` for a ``MagicMock`` hand the
+    predicates mocks in place of prisma's error classes. ``isinstance`` against
+    a mock raises ``TypeError``; the predicate must instead answer for the
+    non-prisma checks it still has."""
+    with patch.dict(sys.modules, {"prisma": MagicMock()}):
+        assert predicate(Exception("db connection dropped")) is False
+
+
+def test_infrastructure_error_still_recognizes_transport_errors_when_prisma_is_mocked():
+    """Skipping the prisma classes must not skip the checks that do not need them."""
+    with patch.dict(sys.modules, {"prisma": MagicMock()}):
+        no_db: Final = ProxyException(message="no db", type=ProxyErrorTypes.no_db_connection, param=None, code=503)
+        assert PrismaDBExceptionHandler.is_database_infrastructure_error(httpx.ConnectError("refused")) is True
+        assert PrismaDBExceptionHandler.is_database_infrastructure_error(no_db) is True
+
+
+def test_connection_error_answers_when_prisma_is_mocked_after_import():
+    """``prisma.engine`` is already loaded in a real process, so a mock parent
+    still resolves ``prisma.engine.errors``; its classes are then mocks too."""
+    import prisma.engine.errors  # noqa: F401
+
+    with patch.dict(sys.modules, {"prisma": MagicMock()}):
+        assert PrismaDBExceptionHandler.is_database_connection_error(Exception("x")) is False
+        assert PrismaDBExceptionHandler.is_database_connection_error(httpx.ConnectError("refused")) is True

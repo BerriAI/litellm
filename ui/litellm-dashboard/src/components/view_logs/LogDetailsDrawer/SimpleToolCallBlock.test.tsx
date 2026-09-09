@@ -31,7 +31,7 @@ describe("SimpleToolCallBlock", () => {
   });
 
   it("should not render arguments section when arguments are empty", () => {
-    const { container } = render(<SimpleToolCallBlock tool={{ id: "1", name: "get_weather", arguments: {} }} />);
+    render(<SimpleToolCallBlock tool={{ id: "1", name: "get_weather", arguments: {} }} />);
     // The tool name and "function" badge should be there, but no key: value pairs
     expect(screen.getByText("get_weather")).toBeInTheDocument();
     expect(screen.queryByText(/:$/)).not.toBeInTheDocument();

@@ -1,7 +1,10 @@
 import React from "react";
-import { Button, Spin, Alert, Collapse } from "antd";
-import { CheckCircleOutlined, ExclamationCircleOutlined, ReloadOutlined, ToolOutlined } from "@ant-design/icons";
-import { Card, Title, Text } from "@tremor/react";
+import { CircleCheck, CircleAlert, RefreshCw, Wrench, Info } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
 interface MCPConnectionStatusProps {
   formValues: Record<string, any>;
@@ -31,27 +34,26 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
   }
 
   return (
-    <Card>
+    <Card className="p-6">
       <div className="space-y-4">
         <div className="flex items-center gap-2">
-          <CheckCircleOutlined className="text-blue-600" />
-          <Title>Connection Status</Title>
+          <CircleCheck className="size-4 text-muted-foreground" />
+          <h3 className="text-lg font-medium">Connection Status</h3>
         </div>
 
         {!canFetchTools && (formValues.url || formValues.spec_path) && (
-          <div className="text-center py-6 text-gray-400 border rounded-lg border-dashed">
-            <ToolOutlined className="text-2xl mb-2" />
-            <Text>Complete required fields to test connection</Text>
-            <br />
-            <Text className="text-sm">Fill in URL, Transport, and Authentication to test MCP server connection</Text>
+          <div className="rounded-lg border border-dashed py-6 text-center text-muted-foreground">
+            <Wrench className="mx-auto mb-2 size-6" />
+            <p className="text-sm">Complete required fields to test connection</p>
+            <p className="text-sm">Fill in URL, Transport, and Authentication to test MCP server connection</p>
           </div>
         )}
 
         {canFetchTools && (
           <div>
-            <div className="flex items-center justify-between mb-4">
+            <div className="mb-4 flex items-center justify-between">
               <div>
-                <Text className="text-gray-700 font-medium">
+                <p className="text-sm font-medium">
                   {isLoadingTools
                     ? "Testing connection to MCP server..."
                     : tools.length > 0
@@ -61,97 +63,84 @@ const MCPConnectionStatus: React.FC<MCPConnectionStatusProps> = ({
                           ? "Ready to submit"
                           : "Connection failed"
                         : "Ready to test connection"}
-                </Text>
-                <br />
-                <Text className="text-gray-500 text-sm">Server: {formValues.url || formValues.spec_path}</Text>
+                </p>
+                <p className="text-sm text-muted-foreground">Server: {formValues.url || formValues.spec_path}</p>
               </div>
 
               {isLoadingTools && (
-                <div className="flex items-center text-blue-600">
-                  <Spin size="small" className="mr-2" />
-                  <Text className="text-blue-600">Connecting...</Text>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <UiLoadingSpinner className="size-4" />
+                  <p className="text-sm">Connecting...</p>
                 </div>
               )}
 
               {!isLoadingTools && !toolsError && tools.length > 0 && (
-                <div className="flex items-center text-green-600">
-                  <CheckCircleOutlined className="mr-1" />
-                  <Text className="text-green-600 font-medium">Connected</Text>
+                <div className="flex items-center gap-1">
+                  <CircleCheck className="size-4" />
+                  <p className="text-sm font-medium">Connected</p>
                 </div>
               )}
 
               {toolsError && !isPreviewForbidden && (
-                <div className="flex items-center text-red-600">
-                  <ExclamationCircleOutlined className="mr-1" />
-                  <Text className="text-red-600 font-medium">Failed</Text>
+                <div className="flex items-center gap-1 text-destructive">
+                  <CircleAlert className="size-4" />
+                  <p className="text-sm font-medium">Failed</p>
                 </div>
               )}
             </div>
 
             {isLoadingTools && (
-              <div className="flex items-center justify-center py-6">
-                <Spin size="large" />
-                <Text className="ml-3">Testing connection and loading tools...</Text>
+              <div className="flex items-center justify-center gap-3 py-6">
+                <UiLoadingSpinner className="size-6 text-muted-foreground" />
+                <p className="text-sm">Testing connection and loading tools...</p>
               </div>
             )}
 
             {toolsError && isPreviewForbidden && (
-              <Alert message="Tool preview unavailable" description={toolsError} type="info" showIcon />
+              <Alert>
+                <Info />
+                <AlertTitle>Tool preview unavailable</AlertTitle>
+                <AlertDescription>{toolsError}</AlertDescription>
+              </Alert>
             )}
 
             {toolsError && !isPreviewForbidden && (
-              <Alert
-                message="Connection Failed"
-                description={
-                  <div>
-                    <div>{toolsError}</div>
-                    {toolsErrorStackTrace && (
-                      <Collapse
-                        items={[
-                          {
-                            key: "stack-trace",
-                            label: "Stack Trace",
-                            children: (
-                              <pre
-                                style={{
-                                  whiteSpace: "pre-wrap",
-                                  wordBreak: "break-word",
-                                  fontSize: "12px",
-                                  fontFamily: "monospace",
-                                  margin: 0,
-                                  padding: "8px",
-                                  backgroundColor: "#f5f5f5",
-                                  borderRadius: "4px",
-                                  maxHeight: "400px",
-                                  overflow: "auto",
-                                }}
-                              >
-                                {toolsErrorStackTrace}
-                              </pre>
-                            ),
-                          },
-                        ]}
-                        style={{ marginTop: "12px" }}
+              <Alert variant="destructive">
+                <CircleAlert />
+                <AlertTitle>Connection Failed</AlertTitle>
+                <AlertDescription>
+                  <div>{toolsError}</div>
+                  {toolsErrorStackTrace && (
+                    <Collapsible className="mt-3">
+                      <CollapsibleTrigger
+                        render={
+                          <Button variant="link" size="sm" className="h-auto p-0">
+                            Stack Trace
+                          </Button>
+                        }
                       />
-                    )}
-                  </div>
-                }
-                type="error"
-                showIcon
-                action={
-                  <Button icon={<ReloadOutlined />} onClick={fetchTools} size="small">
+                      <CollapsibleContent>
+                        <pre className="mt-2 max-h-100 overflow-auto rounded-sm bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">
+                          {toolsErrorStackTrace}
+                        </pre>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )}
+                </AlertDescription>
+                <div className="mt-3">
+                  <Button variant="outline" size="sm" onClick={fetchTools}>
+                    <RefreshCw />
                     Retry
                   </Button>
-                }
-              />
+                </div>
+              </Alert>
             )}
 
             {!isLoadingTools && tools.length === 0 && !toolsError && (
-              <div className="text-center py-6 text-gray-500 border rounded-lg border-dashed">
-                <CheckCircleOutlined className="text-2xl mb-2 text-green-500" />
-                <Text className="text-green-600 font-medium">Connection successful!</Text>
-                <br />
-                <Text className="text-gray-500">No tools found for this MCP server</Text>
+              <div className="rounded-lg border border-dashed py-6 text-center">
+                <CircleCheck className="mx-auto mb-2 size-6" />
+                <p className="text-sm font-medium">Connection successful!</p>
+                <p className="text-sm text-muted-foreground">No tools found for this MCP server</p>
               </div>
             )}
           </div>

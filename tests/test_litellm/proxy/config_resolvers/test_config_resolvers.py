@@ -63,6 +63,27 @@ def test_sso_descriptor_mapping_is_single_sourced():
     )
 
 
+def test_sso_descriptor_mapping_covers_saml_fields():
+    # SAML config is stored and read through the same descriptor table as the
+    # OAuth providers; the login path reads these env vars, so the save path must
+    # map every SAML field to its uppercase env var.
+    assert SSO_FIELD_ENV_VARS["saml_idp_metadata_url"] == "SAML_IDP_METADATA_URL"
+    assert SSO_FIELD_ENV_VARS["saml_idp_metadata_xml"] == "SAML_IDP_METADATA_XML"
+    assert SSO_FIELD_ENV_VARS["saml_sp_entity_id"] == "SAML_SP_ENTITY_ID"
+    assert SSO_FIELD_ENV_VARS["saml_allow_unsolicited"] == "SAML_ALLOW_UNSOLICITED"
+
+
+def test_resolve_sso_config_resolves_saml_fields():
+    resolved = resolve_sso_config(
+        {"saml_idp_metadata_url": "https://idp.example.com/metadata"},
+        {"SAML_ALLOW_UNSOLICITED": "true"},
+    )
+    assert resolved.config.saml_idp_metadata_url == "https://idp.example.com/metadata"
+    assert resolved.provenance["saml_idp_metadata_url"] == "db"
+    assert resolved.config.saml_allow_unsolicited == "true"
+    assert resolved.provenance["saml_allow_unsolicited"] == "env"
+
+
 def test_resolve_sso_config_returns_unmasked_secret_and_provenance():
     # The resolver hands back plaintext; masking is the endpoint's job. If the
     # resolver masked, the login path would consume a masked secret and fail.

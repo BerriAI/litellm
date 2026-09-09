@@ -12,12 +12,14 @@ the proxy config.
 
 from __future__ import annotations
 
+import os
 from typing import Iterator
 
 import pytest
 
 from batch_client import BatchClient, build_client
 from capabilities import PROVIDERS
+from e2e_config import MANAGED_FILES_OPT_IN_ENV
 from e2e_http import NoBody
 from proxy_client import ProxyClient
 
@@ -27,6 +29,22 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "covers: registry cell a test covers, e.g. llm.batches.openai.basic.nonstream.works",
     )
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    if os.environ.get(MANAGED_FILES_OPT_IN_ENV):
+        return
+    deselected = [
+        item for item in items if item.get_closest_marker("managed_files") is not None
+    ]
+    if not deselected:
+        return
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = [
+        item for item in items if item.get_closest_marker("managed_files") is None
+    ]
 
 
 @pytest.fixture(scope="session")

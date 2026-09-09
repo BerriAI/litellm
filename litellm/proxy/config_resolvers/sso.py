@@ -9,6 +9,7 @@ save endpoint so the two can never drift.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Final
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.config_resolvers._descriptors import (
@@ -22,7 +23,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     TeamMappings,
 )
 
-SSO_DESCRIPTORS: tuple[FieldDescriptor, ...] = (
+SSO_DESCRIPTORS: Final[tuple[FieldDescriptor, ...]] = (
     FieldDescriptor("google_client_id", "google_client_id", "GOOGLE_CLIENT_ID"),
     FieldDescriptor("google_client_secret", "google_client_secret", "GOOGLE_CLIENT_SECRET", is_secret=True),
     FieldDescriptor("microsoft_client_id", "microsoft_client_id", "MICROSOFT_CLIENT_ID"),
@@ -36,17 +37,21 @@ SSO_DESCRIPTORS: tuple[FieldDescriptor, ...] = (
     FieldDescriptor("generic_token_endpoint", "generic_token_endpoint", "GENERIC_TOKEN_ENDPOINT"),
     FieldDescriptor("generic_userinfo_endpoint", "generic_userinfo_endpoint", "GENERIC_USERINFO_ENDPOINT"),
     FieldDescriptor("generic_scope", "generic_scope", "GENERIC_SCOPE", default="openid email profile"),
+    FieldDescriptor("saml_idp_metadata_url", "saml_idp_metadata_url", "SAML_IDP_METADATA_URL"),
+    FieldDescriptor("saml_idp_metadata_xml", "saml_idp_metadata_xml", "SAML_IDP_METADATA_XML"),
+    FieldDescriptor("saml_sp_entity_id", "saml_sp_entity_id", "SAML_SP_ENTITY_ID"),
+    FieldDescriptor("saml_allow_unsolicited", "saml_allow_unsolicited", "SAML_ALLOW_UNSOLICITED"),
     FieldDescriptor("proxy_base_url", "proxy_base_url", "PROXY_BASE_URL"),
 )
 
 # Derived from the descriptor table so read (masking) and the field->env mapping
 # never diverge from the resolver.
-SSO_SECRET_FIELDS: frozenset[str] = frozenset(d.field_name for d in SSO_DESCRIPTORS if d.is_secret)
-SSO_FIELD_ENV_VARS: dict[str, str] = {d.field_name: d.env_var for d in SSO_DESCRIPTORS}
+SSO_SECRET_FIELDS: Final[frozenset[str]] = frozenset(d.field_name for d in SSO_DESCRIPTORS if d.is_secret)
+SSO_FIELD_ENV_VARS: Final[dict[str, str]] = {d.field_name: d.env_var for d in SSO_DESCRIPTORS}
 
 # Structured sub-objects stored on the SSO row that are not simple env-backed
 # scalars; handled outside the descriptor resolution.
-_STRUCTURED_KEYS = ("role_mappings", "team_mappings")
+_STRUCTURED_KEYS: Final = ("role_mappings", "team_mappings")
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,14 +86,14 @@ def resolve_sso_config(sso_db_settings: Mapping[str, object] | None, env: Mappin
     are returned unmasked so the login path could consume them; the read-back
     endpoint is responsible for masking secrets before responding to the UI.
     """
-    raw = dict(sso_db_settings) if sso_db_settings else {}
-    decrypted = _decrypt({key: value for key, value in raw.items() if key not in _STRUCTURED_KEYS})
+    raw: Final = dict(sso_db_settings) if sso_db_settings else {}
+    decrypted: Final = _decrypt({key: value for key, value in raw.items() if key not in _STRUCTURED_KEYS})
     values, provenance = resolve_fields(SSO_DESCRIPTORS, decrypted, env)
-    structured = {
+    structured: Final = {
         "user_email": decrypted.get("user_email"),
         "ui_access_mode": decrypted.get("ui_access_mode"),
         "role_mappings": _parse_role_mappings(raw.get("role_mappings")),
         "team_mappings": _parse_team_mappings(raw.get("team_mappings")),
     }
-    config = SSOConfig(**{**values, **structured})
+    config: Final = SSOConfig(**{**values, **structured})
     return ResolvedSSOConfig(config=config, provenance=provenance)

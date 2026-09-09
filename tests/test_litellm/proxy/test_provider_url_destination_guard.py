@@ -6,8 +6,6 @@ an SSRF primitive — guarded centrally in ``litellm_pre_call_utils`` so SDK
 users keep working but proxy users default-deny.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -20,7 +18,6 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_litellm_data_to_request,
 )
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 
 class TestRejectUrlValuedDestinations:
@@ -177,3 +174,16 @@ async def test_add_litellm_data_to_request_rejects_url_valued_model():
         )
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["param"] == "model"
+
+
+class TestNonStringDestinationValues:
+    """Only string identifiers are inspected. Anything else is left alone for the
+    request's normal validation to handle."""
+
+    @pytest.mark.parametrize("value", [123, None, True, {"a": 1}, ["x"], 1.5])
+    def test_non_string_model_is_ignored(self, value):
+        _reject_url_valued_destinations({"model": value})
+
+    @pytest.mark.parametrize("value", [123, None, True, {"a": 1}, ["x"]])
+    def test_non_string_file_id_is_ignored(self, value):
+        _reject_url_valued_destinations({"file_id": value})

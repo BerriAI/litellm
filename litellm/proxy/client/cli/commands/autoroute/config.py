@@ -1,9 +1,9 @@
-from typing import Literal, Union
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
-TIER_NAMES: tuple[str, ...] = ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
-AUTOROUTER_MODEL_NAME = "autorouter"
+TIER_NAMES: Final[tuple[str, ...]] = ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
+AUTOROUTER_MODEL_NAME: Final = "autorouter"
 
 
 class ConfigGenerationError(Exception):
@@ -15,41 +15,25 @@ class DiscoveredModel(BaseModel):
 
     name: str
     mode: str = "chat"
-    input_cost_per_token: float | None = None
-    output_cost_per_token: float | None = None
 
 
-class _RawModelGroup(BaseModel):
+class _RawModelListing(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    model_group: str
-    # Optional: some real deployments return an explicit `"mode": null` for models that
-    # were registered without a mode (seen for embedding models like voyage-4-large).
-    # ModelGroupInfo's own "chat" default (litellm/types/router.py) only applies when the
-    # key is missing entirely, not when it's present as null, so this must tolerate None.
-    mode: str | None = "chat"
-    input_cost_per_token: float | None = None
-    output_cost_per_token: float | None = None
+    id: str
+    # /v1/models attaches "mode" (sourced from the cost map) only for models it can resolve;
+    # a model whose mode is unknown arrives without the field, so default it to chat rather
+    # than dropping it, which keeps it selectable as a routing target in the wizard.
+    mode: str = "chat"
 
 
-_RAW_MODEL_GROUPS_ADAPTER = TypeAdapter(list[_RawModelGroup])
+_RAW_MODEL_LISTING_ADAPTER: Final = TypeAdapter(list[_RawModelListing])
 
 
 def parse_discovered_models(raw: list[JsonValue]) -> tuple[DiscoveredModel, ...]:
-    """Validate a raw `/model_group/info` response into typed models."""
-    parsed = _RAW_MODEL_GROUPS_ADAPTER.validate_python(raw)
-    return tuple(
-        DiscoveredModel(
-            name=group.model_group,
-            # A null mode means the server genuinely doesn't know what this model does;
-            # "unknown" (rather than guessing "chat") keeps it out of both chat_models()
-            # and embedding_models() instead of risking a wrong-mode deployment.
-            mode=group.mode or "unknown",
-            input_cost_per_token=group.input_cost_per_token,
-            output_cost_per_token=group.output_cost_per_token,
-        )
-        for group in parsed
-    )
+    """Validate a raw `/v1/models` response into typed models."""
+    parsed: Final = _RAW_MODEL_LISTING_ADAPTER.validate_python(raw)
+    return tuple(DiscoveredModel(name=item.id, mode=item.mode) for item in parsed)
 
 
 def chat_models(models: tuple[DiscoveredModel, ...]) -> tuple[DiscoveredModel, ...]:
@@ -72,7 +56,7 @@ class LLMClassifier(BaseModel):
     timeout_ms: int = 3000
 
 
-ClassifierChoice = Union[HeuristicClassifier, LLMClassifier]
+ClassifierChoice = HeuristicClassifier | LLMClassifier
 
 
 class NoSemanticMatching(BaseModel):
@@ -88,7 +72,7 @@ class KeywordTierRule(BaseModel):
 
 # Satisfies complexity_router's "semantic matching requires non-empty keyword_tier_rules"
 # invariant with a sane starting point; the wizard lets the user override these per tier.
-DEFAULT_KEYWORD_TIER_RULES: tuple[KeywordTierRule, ...] = (
+DEFAULT_KEYWORD_TIER_RULES: Final[tuple[KeywordTierRule, ...]] = (
     KeywordTierRule(keywords=("hi", "hello", "thanks"), tier="SIMPLE"),
     KeywordTierRule(keywords=("explain", "how does"), tier="MEDIUM"),
     KeywordTierRule(keywords=("refactor", "implement", "debug"), tier="COMPLEX"),
@@ -104,7 +88,7 @@ class SemanticMatching(BaseModel):
     keyword_tier_rules: tuple[KeywordTierRule, ...] = DEFAULT_KEYWORD_TIER_RULES
 
 
-SemanticMatchingChoice = Union[NoSemanticMatching, SemanticMatching]
+SemanticMatchingChoice = NoSemanticMatching | SemanticMatching
 
 
 class AutorouteConfig(BaseModel):
@@ -123,8 +107,8 @@ class AutorouteConfig(BaseModel):
 
 def validate_config(config: AutorouteConfig, discovered: tuple[DiscoveredModel, ...]) -> None:
     """Raise ConfigGenerationError if config references a model discovery didn't return."""
-    chat_names: frozenset[str] = frozenset(m.name for m in chat_models(discovered))
-    embedding_names: frozenset[str] = frozenset(m.name for m in embedding_models(discovered))
+    chat_names: Final[frozenset[str]] = frozenset(m.name for m in chat_models(discovered))
+    embedding_names: Final[frozenset[str]] = frozenset(m.name for m in embedding_models(discovered))
 
     for tier, models in config.tiers.items():
         for model in models:
@@ -164,18 +148,18 @@ def build_generated_model_list(config: AutorouteConfig) -> list[JsonValue]:
     to exactly one `litellm_proxy/<name>` deployment forwarding to the customer's real proxy,
     plus one `auto_router/complexity_router` deployment tying the tiers together.
     """
-    referenced_names = {model for models in config.tiers.values() for model in models}
+    referenced_names: Final = {model for models in config.tiers.values() for model in models}
     referenced_names.add(config.default_model)
     if isinstance(config.classifier, LLMClassifier):
         referenced_names.add(config.classifier.model)
     if isinstance(config.semantic_matching, SemanticMatching):
         referenced_names.add(config.semantic_matching.embedding_model)
 
-    proxy_deployments = [
+    proxy_deployments: Final = [
         _litellm_proxy_deployment(name, config.base_url, config.api_key) for name in sorted(referenced_names)
     ]
 
-    complexity_router_config: dict[str, JsonValue] = {
+    complexity_router_config: Final[dict[str, JsonValue]] = {
         "tiers": {tier: list(models) for tier, models in config.tiers.items()},
         "default_model": config.default_model,
     }
@@ -195,7 +179,7 @@ def build_generated_model_list(config: AutorouteConfig) -> list[JsonValue]:
     if config.adaptive:
         complexity_router_config["adaptive"] = True
 
-    auto_router_litellm_params: dict[str, JsonValue] = {
+    auto_router_litellm_params: Final[dict[str, JsonValue]] = {
         "model": "auto_router/complexity_router",
         "complexity_router_config": complexity_router_config,
     }
@@ -235,10 +219,10 @@ def master_key_from_config(config: dict[str, JsonValue]) -> str | None:
     the proxy authenticates against the exact bytes under general_settings.master_key, so a
     normalized copy here would diverge from what the proxy expects.
     """
-    general_settings = config.get("general_settings")
+    general_settings: Final = config.get("general_settings")
     if not isinstance(general_settings, dict):
         return None
-    master_key = general_settings.get("master_key")
+    master_key: Final = general_settings.get("master_key")
     if isinstance(master_key, str) and master_key.strip():
         return master_key
     return None
@@ -246,11 +230,11 @@ def master_key_from_config(config: dict[str, JsonValue]) -> str | None:
 
 __all__ = [
     "AUTOROUTER_MODEL_NAME",
+    "DEFAULT_KEYWORD_TIER_RULES",
     "TIER_NAMES",
     "AutorouteConfig",
     "ClassifierChoice",
     "ConfigGenerationError",
-    "DEFAULT_KEYWORD_TIER_RULES",
     "DiscoveredModel",
     "HeuristicClassifier",
     "KeywordTierRule",

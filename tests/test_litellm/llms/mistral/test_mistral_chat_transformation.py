@@ -1,15 +1,11 @@
-import os
-import sys
 from typing import List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
 from litellm.types.llms.openai import AllMessageValues
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.mistral.chat.transformation import (
     MistralChatResponseIterator,
@@ -809,3 +805,42 @@ class TestMistralStripsOutputOnlyFields:
             )
 
         assert "reasoning_content" not in result[-1]
+
+
+def test_mistral_transform_request_hoists_tool_message_image():
+    """Images inside role:"tool" messages must be moved to a following user
+    message (Mistral rejects/ignores non-text tool content), including when
+    Mistral's own _transform_messages override takes its image handling path."""
+    data_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+    messages: List[AllMessageValues] = cast(
+        List[AllMessageValues],
+        [
+            {"role": "user", "content": "read the screenshot"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "image_url", "image_url": {"url": data_uri}}],
+            },
+        ],
+    )
+
+    request = MistralConfig().transform_request(
+        model="mistral-medium-2508", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    result = request["messages"]
+    assert [m.get("role") for m in result] == ["user", "assistant", "tool", "user"]
+    tool_message = result[2]
+    assert tool_message.get("tool_call_id") == "call_1"
+    assert isinstance(tool_message.get("content"), str)
+    assert result[3].get("content") == [
+        {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
+        {"type": "image_url", "image_url": {"url": data_uri}},
+    ]

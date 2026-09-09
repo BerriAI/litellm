@@ -11,7 +11,7 @@ import socket
 
 import pytest
 
-from e2e_config import require_env, unique_marker
+from e2e_config import unique_marker
 from e2e_http import require_successful_call
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, LiteLLMParamsBody
@@ -23,7 +23,7 @@ BACKEND = "anthropic/claude-haiku-4-5-20251001"
 
 
 def _require_redis_reachable() -> None:
-    (host,) = require_env("REDIS_HOST")
+    host = os.environ["REDIS_HOST"]
     port = int((os.environ.get("REDIS_PORT") or "6379").strip() or "6379")
     try:
         with socket.create_connection((host, port), timeout=3):

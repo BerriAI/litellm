@@ -67,9 +67,10 @@ test.describe("Clear custom pricing on a deployment", () => {
     await page.goto("/ui");
     await page.getByText("Models + Endpoints").click();
 
-    const modelRow = page.locator("tr", { hasText: modelName }).first();
-    await expect(modelRow).toBeVisible({ timeout: 15_000 });
-    await modelRow.click();
+    // The Model ID cell is the drill-in control; the row itself is not clickable.
+    const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);
+    await expect(modelIdCell).toBeVisible({ timeout: 15_000 });
+    await modelIdCell.click();
     await expect(page.getByText("Back to Models").first()).toBeVisible({
       timeout: 10_000,
     });
@@ -84,9 +85,9 @@ test.describe("Clear custom pricing on a deployment", () => {
     const inputCost = page.getByPlaceholder("Enter input cost");
     const outputCost = page.getByPlaceholder("Enter output cost");
     // Both cache fields share the same placeholder ("Defaults to Input Cost if blank"),
-    // so disambiguate via the Form.Item id (AntD assigns the `name` prop as input id).
-    const cacheReadCost = page.locator("#cache_read_cost");
-    const cacheWriteCost = page.locator("#cache_write_cost");
+    // so disambiguate via their labels.
+    const cacheReadCost = page.getByLabel(/Cache Read Cost/);
+    const cacheWriteCost = page.getByLabel(/Cache Write Cost/);
     await inputCost.waitFor({ timeout: 15_000 });
     for (const field of [inputCost, outputCost, cacheReadCost, cacheWriteCost]) {
       await field.click({ clickCount: 3 });
