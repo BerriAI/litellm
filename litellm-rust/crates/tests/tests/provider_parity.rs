@@ -167,18 +167,9 @@ fn main() {
         litellm_ok: litellm_available(),
         extension_ok: native_extension_available(),
     };
-    let cases = match load_cases() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("parity case loading failed: {e}");
-            exit(1);
-        }
-    };
-    if cases.is_empty() {
-        eprintln!("no tests found in {}", inputs_dir().display());
-        exit(1);
-    }
-    let trials: Vec<Trial> = cases
+    let loaded = load_cases();
+    let mut trials: Vec<Trial> = loaded
+        .cases
         .into_iter()
         .map(|(name, path, case)| {
             Trial::ignorable_test(name.clone(), move || {
@@ -186,6 +177,17 @@ fn main() {
             })
         })
         .collect();
+    for (name, message) in loaded.invalid {
+        trials.push(Trial::test(name, move || Err(Failed::from(message))));
+    }
+    if trials.is_empty() {
+        trials.push(Trial::test("no fixtures found", || {
+            Err(Failed::from(format!(
+                "no fixtures found in {}; add a .toml under {INPUTS_DIR}/",
+                inputs_dir().display()
+            )))
+        }));
+    }
     run(&args, trials).exit();
 }
 
@@ -826,26 +828,43 @@ fn repo_root() -> PathBuf {
     candidate.canonicalize().unwrap_or(candidate)
 }
 
-fn load_cases() -> Result<Vec<(String, PathBuf, TestCase)>, String> {
+struct LoadedCases {
+    cases: Vec<(String, PathBuf, TestCase)>,
+    invalid: Vec<(String, String)>,
+}
+
+fn load_cases() -> LoadedCases {
     let root = inputs_dir();
     let mut paths: Vec<PathBuf> = Vec::new();
     collect_tomls(&root, &mut paths);
     paths.sort();
     let mut cases = Vec::with_capacity(paths.len());
+    let mut invalid: Vec<(String, String)> = Vec::new();
     for p in paths {
-        let name = p
-            .strip_prefix(&root)
-            .map_err(|e| format!("{}: {e}", p.display()))?
-            .with_extension("")
-            .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "/");
-        let text =
-            fs::read_to_string(&p).map_err(|e| format!("{}: read failed: {e}", p.display()))?;
-        let case: TestCase =
-            toml::from_str(&text).map_err(|e| format!("{}: parse failed: {e}", p.display()))?;
-        cases.push((name, p, case));
+        let name = match p.strip_prefix(&root) {
+            Ok(rel) => rel
+                .with_extension("")
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/"),
+            Err(e) => {
+                invalid.push((
+                    p.to_string_lossy().into_owned(),
+                    format!("{}: {e}", p.display()),
+                ));
+                continue;
+            }
+        };
+        match load_fixture(&p) {
+            Ok(case) => cases.push((name, p, case)),
+            Err(e) => invalid.push((name, format!("{}: {e}", p.display()))),
+        }
     }
-    Ok(cases)
+    LoadedCases { cases, invalid }
+}
+
+fn load_fixture(path: &Path) -> Result<TestCase, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("read failed: {e}"))?;
+    toml::from_str::<TestCase>(&text).map_err(|e| format!("parse failed: {e}"))
 }
 
 fn collect_tomls(dir: &Path, out: &mut Vec<PathBuf>) {
