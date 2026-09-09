@@ -8,11 +8,11 @@ import time
 import traceback
 from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
-from typing import Any, Final, Literal, NotRequired, TypedDict, cast
+from typing import Any, Final, Literal, TypedDict, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from typing_extensions import ReadOnly
+from typing_extensions import NotRequired, ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
