@@ -2006,13 +2006,11 @@ def ocr_batch_cost(
     ``ocr_cost``.
     """
     has_ocr_pricing: Final = model_info is not None and any(model_info.get(k) is not None for k in _OCR_PRICING_KEYS)
-    if has_ocr_pricing:
-        resolved_info: ModelInfo | None = model_info
-    else:
-        try:
-            resolved_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-        except Exception:
-            resolved_info = None
+    resolved_info: Final = (
+        model_info
+        if has_ocr_pricing
+        else _lookup_model_info_or_none(model=model, custom_llm_provider=custom_llm_provider)
+    )
     if resolved_info is None:
         verbose_logger.warning(
             "OCR batch cost: model=%s custom_llm_provider=%s has no pricing entry; returning 0.0 cost.",
@@ -2022,9 +2020,7 @@ def ocr_batch_cost(
         return 0.0, 0.0
 
     page_rate: Final = _first_price(resolved_info, "ocr_cost_per_page_batches", "ocr_cost_per_page")
-    annotation_rate: Final = _first_price(
-        resolved_info, "annotation_cost_per_page_batches", "annotation_cost_per_page"
-    )
+    annotation_rate: Final = _first_price(resolved_info, "annotation_cost_per_page_batches", "annotation_cost_per_page")
     pages_processed: Final = usage_info.pages_processed or 0
     annotation_pages: Final = usage_info.pages_processed_annotation or 0
     if page_rate is None and pages_processed > 0:
@@ -2037,6 +2033,13 @@ def ocr_batch_cost(
         )
     effective_annotation_rate: Final = annotation_rate if annotation_rate is not None else page_rate
     return (page_rate or 0.0) * pages_processed + (effective_annotation_rate or 0.0) * annotation_pages, 0.0
+
+
+def _lookup_model_info_or_none(model: str, custom_llm_provider: str | None) -> ModelInfo | None:
+    try:
+        return litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        return None
 
 
 def _first_price(model_info: ModelInfo, *keys: str) -> float | None:
