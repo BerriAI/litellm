@@ -252,7 +252,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         # creating litellm_metadata here would hide chat routing tags.
         if "litellm_metadata" in routing_kwargs or messages is not None:
             metadata_key: Final = "litellm_metadata" if "litellm_metadata" in routing_kwargs else "metadata"
-            routing_kwargs[metadata_key] = {
+            routing_kwargs[metadata_key] = {  # mutable-ok: routing callbacks share this context with response post-processing
                 **(routing_kwargs.get(metadata_key) or {}),
                 "encrypted_content_affinity_enabled": True,
             }
