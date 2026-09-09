@@ -4,6 +4,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::panic::PanicException;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -22,6 +23,14 @@ where
         .map_err(panic_to_pyerr)?
         .map(Bound::unbind)
         .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+pub fn case_insensitive_headers<'py>(headers: &Bound<'py, PyDict>) -> PyResult<Bound<'py, PyAny>> {
+    headers
+        .py()
+        .import("requests.structures")?
+        .getattr("CaseInsensitiveDict")?
+        .call1((headers,))
 }
 
 pub struct Pythonized<T>(pub T);

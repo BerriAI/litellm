@@ -188,6 +188,7 @@ pub(crate) async fn build_resolved_pre_call_request_with_services(
         optional_params: built.optional_params.clone(),
         timeout: built.timeout,
     };
+    let headers_policy = built.config.pre_call_headers_policy();
     match built.config.request_body_policy() {
         RequestBodyPolicy::StructuredAtSend => {
             let mut generated = built.body;
@@ -206,6 +207,7 @@ pub(crate) async fn build_resolved_pre_call_request_with_services(
                     callback: generated,
                 },
                 parameter_fields,
+                headers_policy,
                 headers: built.upstream_headers,
             })
         }
@@ -229,6 +231,7 @@ pub(crate) async fn build_resolved_pre_call_request_with_services(
                     authorized,
                 },
                 parameter_fields: Vec::new(),
+                headers_policy,
                 headers,
             })
         }

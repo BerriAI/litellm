@@ -6,7 +6,7 @@ use litellm_core::chat_completions::request::{
     build_pre_call_request_with_services, parse_messages, settle_pre_call_request_with_services,
 };
 use litellm_core::chat_completions::types::{
-    ChatCompletionsRequest, ChatPreCallReadback, ChatPreCallRequest,
+    ChatCompletionsRequest, ChatPreCallReadback, ChatPreCallRequest, PreCallHeadersPolicy,
 };
 use litellm_core::chat_completions::{
     chat_completions_decline_reason, execute_settled_with_terminal,
@@ -14,7 +14,9 @@ use litellm_core::chat_completions::{
 use litellm_core::lifecycle::{
     CallLifecycleContext, ErrorDisposition, ExecutedCall, Lifecycle, Outcome, TerminalRecord,
 };
-use litellm_python_interop::{Pythonized, from_py, run_async_value, run_sync_value, to_py};
+use litellm_python_interop::{
+    Pythonized, case_insensitive_headers, from_py, run_async_value, run_sync_value, to_py,
+};
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::pyclass::{PyTraverseError, PyVisit};
@@ -245,8 +247,8 @@ fn build_request(
     for (name, value) in &built.headers {
         headers.set_item(name, value)?;
     }
-    let headers = match &built.body {
-        litellm_core::lifecycle::PreCallBody::StructuredAtSend { .. } => {
+    let headers = match built.headers_policy {
+        PreCallHeadersPolicy::PreserveInput => {
             match bag
                 .get_item("extra_headers")?
                 .filter(|value| !value.is_none())
@@ -258,11 +260,7 @@ fn build_request(
                 None => headers.into_any(),
             }
         }
-        litellm_core::lifecycle::PreCallBody::SerializedAtBuild { .. } => py
-            .import("botocore.awsrequest")?
-            .getattr("HeadersDict")?
-            .call1((headers,))?,
-        litellm_core::lifecycle::PreCallBody::StructuredAtBuild { .. } => unreachable!(),
+        PreCallHeadersPolicy::CaseInsensitive => case_insensitive_headers(&headers)?,
     };
     let additional = PyDict::new(py);
     additional.set_item(COMPLETE_INPUT_DICT, &body)?;
@@ -525,6 +523,82 @@ mod tests {
             py,
             &(serde_json::from_slice::<Value>(body).unwrap(), headers),
         )
+    }
+
+    #[test]
+    #[ignore = "requires requests on PYTHONPATH"]
+    fn bedrock_callback_headers_work_without_botocore() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "chat_headers_test").unwrap();
+            module
+                .add_function(wrap_pyfunction!(build_request, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(pre_call, &module).unwrap())
+                .unwrap();
+            module
+                .add_function(wrap_pyfunction!(snapshot, &module).unwrap())
+                .unwrap();
+            let globals = PyDict::new(py);
+            globals.set_item("native", module).unwrap();
+            py.run(
+                c"
+import sys
+from collections.abc import MutableMapping
+from unittest.mock import patch
+
+class Logger:
+    def pre_call(self, **kwargs):
+        view = kwargs['additional_args']
+        headers = view['headers']
+        assert isinstance(headers, MutableMapping)
+        assert headers is not original_headers
+        assert headers['X-ORIGINAL'] == 'original'
+        assert headers.get('CONTENT-TYPE') == 'application/json'
+        assert 'AUTHORIZATION' in headers
+        assert headers['Authorization'].startswith(expected_auth)
+        headers.update({'x-original': 'edited', 'X-Added': 'added'})
+        assert headers.setdefault('X-ORIGINAL', 'ignored') == 'edited'
+        assert sum(key.lower() == 'x-original' for key in headers) == 1
+        assert headers.pop('x-ADDED') == 'added'
+        del headers['X-DELETE']
+        copied = headers.copy()
+        copied['x-original'] = 'copy edit'
+        assert headers['X-Original'] == 'edited'
+        assert isinstance(view['complete_input_dict'], str)
+        view['headers'] = {'replacement': 'ignored'}
+        view['complete_input_dict'] = 'replacement'
+
+with patch.dict(sys.modules, {'botocore': None, 'botocore.awsrequest': None}):
+    for api_key, expected_auth in [('test-token', 'Bearer test-token'), ('', 'AWS4-HMAC-SHA256 ')]:
+        original_headers = {'X-Original': 'original', 'x-delete': 'delete'}
+        arguments = dict(
+            model='anthropic.claude-opus-5',
+            messages=[{'role': 'user', 'content': 'original'}],
+            optional_params={'maxTokens': 16, 'aws_region_name': 'us-west-2',
+                             'aws_access_key_id': 'test-access-key',
+                             'aws_secret_access_key': 'test-secret-key'},
+            extra_headers=original_headers, api_key=api_key,
+            custom_llm_provider='bedrock', api_base=None,
+        )
+        state = native.build_request(arguments, Logger())
+        native.pre_call(state)
+        wire_body, wire_headers = native.snapshot(state)
+        assert wire_body['messages'][0]['content'][0]['text'] == 'original'
+        headers = {key.lower(): value for key, value in wire_headers}
+        assert headers['x-original'] == 'edited'
+        assert 'x-delete' not in headers
+        assert 'x-added' not in headers
+        assert 'replacement' not in headers
+        assert headers['authorization'].startswith(expected_auth)
+        assert original_headers == {'X-Original': 'original', 'x-delete': 'delete'}
+",
+                Some(&globals),
+                Some(&globals),
+            )
+            .unwrap();
+        });
     }
 
     #[test]

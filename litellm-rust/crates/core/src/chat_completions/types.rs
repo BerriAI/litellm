@@ -103,10 +103,17 @@ pub struct SettledChatRequest {
     pub(super) http: crate::lifecycle::SettledHttpRequest,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreCallHeadersPolicy {
+    PreserveInput,
+    CaseInsensitive,
+}
+
 pub struct ChatPreCallRequest {
     pub endpoint: ChatEndpoint,
     pub body: crate::lifecycle::PreCallBody<Map<String, Value>>,
     pub parameter_fields: Vec<String>,
+    pub headers_policy: PreCallHeadersPolicy,
     pub headers: Vec<(String, String)>,
 }
 

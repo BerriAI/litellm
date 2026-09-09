@@ -53,3 +53,5 @@ Guardrails implement pre-call or moderation hook capabilities. They do not prepa
 Long-lived streaming calls own a completion guard. HTTP streams, Responses WebSockets, and Realtime WebSockets dispatch a cancelled terminal record from that guard when the consumer drops the call before normal settlement.
 
 Destination-specific callback transport belongs outside core. The LiteLLM Python proxy HTTP logger and its batching worker live in `litellm-ai-gateway`; core exposes only the destination-agnostic `CustomLogger` and terminal dispatcher contracts.
+
+The Rust bridge exposes Bedrock callback headers through `requests.structures.CaseInsensitiveDict` instead of botocore’s concrete `HeadersDict` type. Lookup, mutation, deletion, and readback are case-insensitive; iteration uses the most recently assigned spelling of a key. Core selects header behavior independently of body serialization policy

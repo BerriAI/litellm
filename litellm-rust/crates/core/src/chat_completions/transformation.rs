@@ -54,6 +54,10 @@ pub trait ChatCompletionsProviderConfig: Sync {
 
     fn request_body_policy(&self) -> RequestBodyPolicy;
 
+    fn pre_call_headers_policy(&self) -> super::types::PreCallHeadersPolicy {
+        super::types::PreCallHeadersPolicy::PreserveInput
+    }
+
     fn complete_url(
         &self,
         api_base: Option<&str>,

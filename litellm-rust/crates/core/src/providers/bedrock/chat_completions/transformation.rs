@@ -148,6 +148,10 @@ impl ChatCompletionsProviderConfig for BedrockChatCompletionsConfig {
         Box::pin(signed_headers(services, request, body))
     }
 
+    fn pre_call_headers_policy(&self) -> crate::chat_completions::types::PreCallHeadersPolicy {
+        crate::chat_completions::types::PreCallHeadersPolicy::CaseInsensitive
+    }
+
     fn request_body_policy(&self) -> crate::lifecycle::RequestBodyPolicy {
         crate::lifecycle::RequestBodyPolicy::SerializedAtBuild
     }
