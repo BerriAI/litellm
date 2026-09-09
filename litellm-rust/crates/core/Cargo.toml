@@ -15,6 +15,10 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 sha2.workspace = true
+indexmap = { version = "2.14.0", features = ["serde"] }
+# HuggingFace tokenizer for input token counting; without the default features it
+# pulls no HTTP client or progress bars, only the `onig` regex backend.
+tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
 aws-config = { version = "1.9.0", default-features = false, features = ["rustls", "rt-tokio"], optional = true }
 aws-credential-types = { version = "1.3.0", features = ["hardcoded-credentials"], optional = true }
 aws-sdk-sts = { version = "1.108.0", default-features = false, features = ["rustls", "rt-tokio"], optional = true }
