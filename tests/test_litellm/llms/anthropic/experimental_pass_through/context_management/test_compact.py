@@ -1864,16 +1864,16 @@ async def test_summary_model_rate_limit_check_names_each_counter_once():
     proxy_logging.max_parallel_request_limiter = limiter
 
     with (
-        patch(
+        patch(  # test-quality-ok: the summary model is proxy general_settings, which no proxy is running here to hold
             "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
             return_value="claude-haiku-4-5",
         ),
-        patch("litellm.token_counter", return_value=200_000),
-        patch(
+        patch("litellm.token_counter", return_value=200_000),  # test-quality-ok: puts the input over the compaction trigger without shipping a 200k-token fixture
+        patch(  # test-quality-ok: the assertion is about the descriptors assembled before this call, which must not be made
             "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
             mock_call,
         ),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: this module global is the seam the editor looks the limiter up through
     ):
         await apply_compact_20260112(
             model=MODEL,

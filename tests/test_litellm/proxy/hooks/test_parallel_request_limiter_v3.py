@@ -6525,7 +6525,7 @@ def test_deduplicate_descriptors_keeps_first_limit_when_repeats_disagree_v3():
         "rate_limit": {"requests_per_unit": 999, "tokens_per_unit": 500, "window_size": 60},
     }
 
-    with patch.object(verbose_proxy_logger, "warning") as mock_warning:
+    with patch.object(verbose_proxy_logger, "warning") as mock_warning:  # test-quality-ok: the warning call is the observable under test
         deduped = _PROXY_MaxParallelRequestsHandler._deduplicate_descriptors([first, second])
 
     assert len(deduped) == 1
@@ -6534,7 +6534,7 @@ def test_deduplicate_descriptors_keeps_first_limit_when_repeats_disagree_v3():
 
     # Position, not content, decides: the same pair the other way round keeps
     # the entry that now comes first.
-    with patch.object(verbose_proxy_logger, "warning"):
+    with patch.object(verbose_proxy_logger, "warning"):  # test-quality-ok: the warning call is the observable under test
         reversed_deduped = _PROXY_MaxParallelRequestsHandler._deduplicate_descriptors(
             [second, first]
         )
@@ -6551,7 +6551,7 @@ def test_deduplicate_descriptors_stays_quiet_for_identical_repeats_v3():
     limits = {"requests_per_unit": 10, "tokens_per_unit": 100000, "window_size": 60}
     descriptor = {"key": "model_per_team", "value": "team-quiet:gpt-4", "rate_limit": limits}
 
-    with patch.object(verbose_proxy_logger, "warning") as mock_warning:
+    with patch.object(verbose_proxy_logger, "warning") as mock_warning:  # test-quality-ok: the warning call is the observable under test
         deduped = _PROXY_MaxParallelRequestsHandler._deduplicate_descriptors(
             [descriptor, dict(descriptor)]
         )
