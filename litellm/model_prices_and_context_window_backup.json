@@ -27832,6 +27832,16 @@
         "max_tokens": 8191,
         "mode": "embedding"
     },
+    "chatgpt/gpt-live-1-codex": {
+        "litellm_provider": "chatgpt",
+        "mode": "realtime",
+        "supported_endpoints": [
+            "/v1/realtime/calls",
+            "/v1/live"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true
+    },
     "chatgpt/gpt-5.4": {
         "litellm_provider": "chatgpt",
         "max_input_tokens": 1050000,

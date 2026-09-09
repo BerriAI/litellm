@@ -9,6 +9,7 @@ from litellm.llms.openai.realtime.handler import OpenAIRealtime
 from litellm.llms.openai.realtime.http_transformation import OpenAIRealtimeHTTPConfig
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import GenericLiteLLMParams
+from litellm.utils import get_model_info
 
 from .common_utils import CHATGPT_API_BASE
 from .responses.transformation import ChatGPTResponsesAPIConfig
@@ -34,6 +35,14 @@ def realtime_headers(
     }
 
 
+def realtime_endpoint(model: str) -> str:
+    try:
+        model_info: Final = get_model_info(model, custom_llm_provider="chatgpt")
+    except Exception:
+        return "realtime"
+    return "live" if "/v1/live" in (model_info.get("supported_endpoints") or ()) else "realtime"
+
+
 class ChatGPTRealtime(OpenAIRealtime):
     def __init__(self, params: GenericLiteLLMParams, headers: Mapping[str, str]) -> None:
         super().__init__()
@@ -50,7 +59,7 @@ class ChatGPTRealtime(OpenAIRealtime):
 
     def _construct_url(self, api_base: str, query_params: RealtimeQueryParams) -> str:
         base: Final = URL(api_base)
-        endpoint: Final = "live" if query_params.get("model") == "gpt-live-1-codex" else "realtime"
+        endpoint: Final = realtime_endpoint(query_params.get("model", ""))
         if self._call_id:
             return str(
                 base.copy_with(
