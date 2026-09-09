@@ -1429,7 +1429,9 @@ def completion_cost(
                     )
                 elif call_type in _VIDEO_CALL_TYPES:
                     ### VIDEO GENERATION COST CALCULATION ###
-                    _video_model_info: ModelInfo | None = _deployment_model_info(litellm_logging_obj, custom_pricing)
+                    _video_model_info: ModelInfo | None = _deployment_model_info(
+                        litellm_logging_obj, custom_pricing, router_model_id
+                    )
 
                     usage_obj = getattr(completion_response, "usage", None)
                     duration_seconds: float | None = None
@@ -1650,7 +1652,7 @@ def completion_cost(
                     vertex_location=vertex_location,
                     response=completion_response,
                     request_model=request_model_for_cost,
-                    custom_model_info=_deployment_model_info(litellm_logging_obj, custom_pricing),
+                    custom_model_info=_deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id),
                 )
 
                 # Get additional costs from provider (e.g., routing fees, infrastructure costs)
@@ -1883,8 +1885,18 @@ def response_cost_calculator(
 def _deployment_model_info(
     litellm_logging_obj: LitellmLoggingObject | None,
     custom_pricing: bool | None,
+    router_model_id: str | None,
 ) -> ModelInfo | None:
-    if not custom_pricing or litellm_logging_obj is None:
+    if not custom_pricing:
+        return None
+    registered_deployment_info: Final = (
+        _cost_map_model_info(router_model_id, None)
+        if router_model_id is not None and router_model_id in litellm.model_cost
+        else None
+    )
+    if registered_deployment_info is not None:
+        return registered_deployment_info
+    if litellm_logging_obj is None:
         return None
     litellm_params: Final = getattr(litellm_logging_obj, "litellm_params", None)
     if litellm_params is None:
