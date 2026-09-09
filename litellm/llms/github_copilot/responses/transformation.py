@@ -9,7 +9,9 @@ https://github.com/caozhiyuan/copilot-api
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final
+import re
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -17,6 +19,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
+    ALL_RESPONSES_API_TOOL_PARAMS,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
 )
@@ -73,6 +76,76 @@ def github_copilot_supports_responses_api(model: str) -> bool:
     raw_info: Final = litellm.model_cost.get(key) if isinstance(key, str) else None
     endpoints: Final = raw_info.get("supported_endpoints") if isinstance(raw_info, dict) else None
     return isinstance(endpoints, list) and "/v1/responses" in endpoints
+
+
+def _is_valid_regex(pattern: object) -> bool:
+    """Check whether a pattern compiles as a valid regular expression.
+
+    GitHub Copilot validates JSON-Schema ``pattern`` fields strictly and rejects the
+    request with HTTP 400 if a pattern uses unsupported regex dialect features (e.g.
+    Unicode-property escapes such as \\p{Cc} in Claude Code's Artifact tool) or is
+    invalid syntax. Non-string inputs are safely treated as invalid.
+    """
+    if not isinstance(pattern, str):
+        return False
+    try:
+        re.compile(pattern)
+        return True
+    except (re.error, OverflowError, ValueError):
+        return False
+
+
+def _sanitize_json_schema_regex_patterns(schema: object) -> object:
+    """Recursively traverse a JSON schema and remove incompatible regex patterns.
+
+    Differentiates between schema keywords (e.g., 'pattern', 'patternProperties')
+    and user-defined identifier mappings (e.g., 'properties', '$defs', 'definitions',
+    'dependentSchemas') so that parameters named 'pattern' are not stripped.
+    """
+    if isinstance(schema, dict):
+        cleaned: dict[str, object] = {}
+        for key, value in schema.items():
+            if key in ("properties", "$defs", "definitions", "dependentSchemas") and isinstance(value, dict):
+                # Mapping of property/type names -> subschemas. Keys are arbitrary user-defined names.
+                cleaned[key] = {
+                    prop_name: _sanitize_json_schema_regex_patterns(prop_schema)
+                    for prop_name, prop_schema in value.items()
+                }
+            elif key == "patternProperties" and isinstance(value, dict):
+                # Mapping of regex patterns -> subschemas. Keys are regex patterns.
+                cleaned_pp: dict[str, object] = {}
+                for pattern_key, pattern_schema in value.items():
+                    if _is_valid_regex(pattern_key):
+                        cleaned_pp[pattern_key] = _sanitize_json_schema_regex_patterns(pattern_schema)
+                    else:
+                        verbose_logger.debug(
+                            "GitHub Copilot Responses API: Stripping incompatible patternProperties regex key: %r",
+                            pattern_key,
+                        )
+                cleaned[key] = cleaned_pp
+            elif key == "pattern":
+                if _is_valid_regex(value):
+                    cleaned[key] = value
+                else:
+                    verbose_logger.debug(
+                        "GitHub Copilot Responses API: Stripping incompatible tool schema regex pattern: %r",
+                        value,
+                    )
+            elif isinstance(value, dict):
+                cleaned[key] = _sanitize_json_schema_regex_patterns(value)
+            elif isinstance(value, list):
+                cleaned[key] = [
+                    _sanitize_json_schema_regex_patterns(item) if isinstance(item, (dict, list)) else item
+                    for item in value
+                ]
+            else:
+                cleaned[key] = value
+        return cleaned
+    elif isinstance(schema, list):
+        return [
+            _sanitize_json_schema_regex_patterns(item) if isinstance(item, (dict, list)) else item for item in schema
+        ]
+    return schema
 
 
 class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -300,6 +373,62 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
             return filtered_item
         return item
+
+    def _prepared_input_and_tools(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+        litellm_params: GenericLiteLLMParams,
+    ) -> tuple[str | ResponseInputParam, Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None]:
+        """Prepare input and tools for GitHub Copilot Responses API.
+
+        Overrides parent to sanitize regex patterns in tool schemas that GitHub Copilot's
+        validator rejects with HTTP 400 invalid_request_body (e.g. Claude Code's Artifact tool
+        using PCRE/Unicode-property escapes like \\p{Cc}).
+        """
+        replay_safe_input, sanitized_tools = super()._prepared_input_and_tools(
+            model=model,
+            input=input,
+            tools=tools,
+            litellm_params=litellm_params,
+        )
+        cleaned_tools = self._sanitize_tool_regex_patterns(sanitized_tools)
+        return replay_safe_input, cleaned_tools
+
+    @staticmethod
+    def _sanitize_tool_regex_patterns(
+        tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
+    ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
+        """Sanitize regex pattern fields across all tool parameters.
+
+        Handles Responses API function tools ('parameters'), chat/completions format
+        tools ('function.parameters'), Anthropic format tools ('input_schema'),
+        and namespace tools ('tools').
+        """
+        if tools is None:
+            return None
+        cleaned_tools: list[object] = []
+        for tool in tools:
+            if isinstance(tool, dict):
+                cleaned_tool = dict(tool)
+                if "parameters" in cleaned_tool and isinstance(cleaned_tool["parameters"], dict):
+                    cleaned_tool["parameters"] = _sanitize_json_schema_regex_patterns(cleaned_tool["parameters"])
+                if "input_schema" in cleaned_tool and isinstance(cleaned_tool["input_schema"], dict):
+                    cleaned_tool["input_schema"] = _sanitize_json_schema_regex_patterns(cleaned_tool["input_schema"])
+                if "function" in cleaned_tool and isinstance(cleaned_tool["function"], dict):
+                    cleaned_func = dict(cleaned_tool["function"])
+                    if "parameters" in cleaned_func and isinstance(cleaned_func["parameters"], dict):
+                        cleaned_func["parameters"] = _sanitize_json_schema_regex_patterns(cleaned_func["parameters"])
+                    cleaned_tool["function"] = cleaned_func
+                if "tools" in cleaned_tool and isinstance(cleaned_tool["tools"], list):
+                    cleaned_tool["tools"] = GithubCopilotResponsesAPIConfig._sanitize_tool_regex_patterns(
+                        cleaned_tool["tools"]
+                    )
+                cleaned_tools.append(cleaned_tool)
+            else:
+                cleaned_tools.append(tool)
+        return cast(Sequence[ALL_RESPONSES_API_TOOL_PARAMS], cleaned_tools)
 
     # ==================== Helper Methods ====================
 
