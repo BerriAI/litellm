@@ -167,6 +167,7 @@ class CustomerDeleteBody(BaseModel):
 
 class ChatMetadata(BaseModel):
     tags: list[str] | None = None
+    session_id: str | None = None
 
 
 class ImageUrl(BaseModel):
@@ -600,9 +601,19 @@ class GuardrailRunRecord(BaseModel):
     guardrail_response: object | None = None
 
 
+class SpendLogRoutingDecision(BaseModel):
+    router_model_name: str
+    router_type: Literal["complexity", "adaptive", "quality"]
+    routed_model: str
+    cause: str
+    tier: str | None = None
+    conversation_continuing: bool
+
+
 class SpendLogMetadata(BaseModel):
     applied_guardrails: list[str] | None = None
     guardrail_information: list[GuardrailRunRecord] | None = None
+    routing_decision: SpendLogRoutingDecision | None = None
 
 
 class SpendLogRow(BaseModel):
@@ -744,6 +755,23 @@ class CustomPricing(BaseModel):
         return prompt_tokens * self.input_cost_per_token + completion_tokens * self.output_cost_per_token
 
 
+class ComplexityRouterTierMap(RootModel[dict[str, str]]):
+    pass
+
+
+class ComplexityRouterConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    classifier_type: str | None = None
+    classification_mode: Literal["every_request", "user_turn"] | None = None
+    session_affinity: bool | None = None
+    tiers: ComplexityRouterTierMap
+
+
+class ModelInfoLiteLLMParams(CustomPricing):
+    model: str | None = None
+    complexity_router_config: ComplexityRouterConfig | None = None
+
+
 class ModelInfoEntry(BaseModel):
     """One /model/info row. `litellm_params` is the configured deployment (carries
     any custom-pricing override); `model_info` is the price the proxy resolved for
@@ -751,7 +779,7 @@ class ModelInfoEntry(BaseModel):
 
     model_config = ConfigDict(protected_namespaces=())
     model_name: str
-    litellm_params: CustomPricing = CustomPricing()
+    litellm_params: ModelInfoLiteLLMParams = ModelInfoLiteLLMParams()
     model_info: CustomPricing = CustomPricing()
 
 
