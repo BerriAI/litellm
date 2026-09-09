@@ -178,14 +178,14 @@ def test_elasticache_provider_recovers_after_a_failed_resolution():
 
 
 @pytest.mark.parametrize(
-    "provider_kwargs, expected_resource_type",
+    "provider_kwargs, expected_operation_params",
     [
-        pytest.param({}, None, id="default_is_self_designed"),
-        pytest.param({"is_serverless": False}, None, id="self_designed"),
-        pytest.param({"is_serverless": True}, ["ServerlessCache"], id="serverless"),
+        pytest.param({}, frozenset({"Action", "User"}), id="default_is_self_designed"),
+        pytest.param({"is_serverless": False}, frozenset({"Action", "User"}), id="self_designed"),
+        pytest.param({"is_serverless": True}, frozenset({"Action", "User", "ResourceType"}), id="serverless"),
     ],
 )
-def test_elasticache_provider_signs_resource_type_only_for_serverless(provider_kwargs, expected_resource_type):
+def test_elasticache_provider_signs_resource_type_only_for_serverless(provider_kwargs, expected_operation_params):
     provider = ElastiCacheIAMCredentialProvider(
         user_name="iam-user",
         cache_name="cache-name",
@@ -195,9 +195,14 @@ def test_elasticache_provider_signs_resource_type_only_for_serverless(provider_k
     )
 
     _, token = provider.get_credentials()
-    query = parse_qs(urlsplit("https://" + token).query)
+    query_string = urlsplit("https://" + token).query
+    param_names = tuple(pair.split("=", 1)[0] for pair in query_string.split("&"))
+    first_auth_param = next(i for i, name in enumerate(param_names) if name.startswith("X-Amz-"))
+    query = parse_qs(query_string)
 
-    assert query.get("ResourceType") == expected_resource_type
+    assert frozenset(param_names[:first_auth_param]) == expected_operation_params
+    assert all(name.startswith("X-Amz-") for name in param_names[first_auth_param:])
+    assert query.get("ResourceType") == (["ServerlessCache"] if "ResourceType" in expected_operation_params else None)
     assert query["X-Amz-Signature"]
 
 
