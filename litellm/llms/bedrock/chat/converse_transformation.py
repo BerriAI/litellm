@@ -4,6 +4,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 
 import copy
 import json
+import re
 import time
 import types
 from collections.abc import Mapping
@@ -293,6 +294,10 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock",
                 )
 
+    @staticmethod
+    def _is_openai_gpt_reasoning_model(model: str) -> bool:
+        return re.search(r"openai\.gpt-\d", model) is not None
+
     def _is_nova_2_model(self, model: str) -> bool:
         """
         Check if the model is a Nova 2 model that supports reasoningConfig.
@@ -423,14 +428,14 @@ class AmazonConverseConfig(BaseConfig):
         Handle the reasoning_effort parameter based on the model type.
 
         - GPT-OSS models: passed through unchanged via additionalModelRequestFields.
-        - OpenAI GPT-5.x models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
+        - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
         if "gpt-oss" in model:
             optional_params["reasoning_effort"] = reasoning_effort
-        elif "openai.gpt-5" in model:
+        elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
             optional_params["reasoning"] = reasoning
         elif self._is_nova_2_model(model):
@@ -564,7 +569,11 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "gpt-oss" in model or "openai.gpt-5" in model or "openai.gpt-5" in base_model:
+        if (
+            "gpt-oss" in model
+            or self._is_openai_gpt_reasoning_model(model)
+            or self._is_openai_gpt_reasoning_model(base_model)
+        ):
             supported_params.append("reasoning_effort")
         elif self._is_nova_2_model(model):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
@@ -920,7 +929,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
-            if param == "thinking" and "openai.gpt-5" not in model:
+            if param == "thinking" and not self._is_openai_gpt_reasoning_model(model):
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
