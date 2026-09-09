@@ -131,12 +131,13 @@ describe("(dashboard) Layout", () => {
     });
 
     it("routes a session flagged password_reset_required to the change-password page", async () => {
-      document.cookie = `token=${sessionCookie({
+      const flaggedClaims = {
         user_id: "flagged-user",
         key: "sk-session",
         login_method: "username_password",
         password_reset_required: true,
-      })}; Path=/`;
+      };
+      document.cookie = `token=${sessionCookie(flaggedClaims)}; Path=/`;
 
       render(
         <AuthProvider>
