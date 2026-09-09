@@ -173,3 +173,35 @@ class TestInitLitellmCallbacks:
 
         # Clean up
         litellm.callbacks = []  # type: ignore
+
+    def test_should_attach_hook_filters_from_callback_settings_to_resolved_string_callback(
+        self, monkeypatch
+    ):
+        """
+        litellm_settings.callbacks: ["some_integration"] plus
+        callback_settings.some_integration.hook_filters is the standard way most
+        built-in logging integrations (langfuse, datadog, etc.) are configured; a
+        hook_filters block under that name must land on the instance that replaces
+        the string, not be silently dropped because the string had no hook_filters
+        attribute of its own to attach to.
+        """
+        fake_logger = FakeCustomLogger()
+        monkeypatch.setattr(
+            "litellm.proxy.utils.ProxyLogging._add_proxy_hooks", lambda self, *a, **kw: None
+        )
+        monkeypatch.setattr(litellm, "callbacks", ["lago"])
+        monkeypatch.setattr(
+            litellm,
+            "callback_settings",
+            {"lago": {"hook_filters": {"async_pre_call_hook": {"models": ["gpt-4o*"]}}}},
+        )
+        monkeypatch.setattr(
+            "litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class",
+            lambda *a, **kw: fake_logger,
+        )
+
+        proxy_logging = self._make_proxy_logging()
+        proxy_logging._init_litellm_callbacks(llm_router=None)
+
+        assert fake_logger.hook_filters is not None
+        assert fake_logger.hook_filters["async_pre_call_hook"].models == ("gpt-4o*",)

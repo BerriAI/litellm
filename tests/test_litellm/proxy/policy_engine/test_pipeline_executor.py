@@ -911,3 +911,129 @@ async def test_pipeline_step_keeps_native_hook_when_opted_out(monkeypatch):
     assert outcome == "pass"
     assert guardrail.native_pre_call_ran is True
     assert "guardrail_to_apply" not in data
+
+
+# ---------------------------------------------------------------------------
+# hook_filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_skipped_when_hook_filters_model_excludes(monkeypatch):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    guard = AlwaysPassGuardrail(guardrail_name="passer")
+    guard.hook_filters = parse_hook_filters("passer", {"async_pre_call_hook": {"models": ["claude-*"]}})
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="passer", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+
+    await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "test"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test",
+    )
+
+    assert guard.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_runs_when_hook_filters_model_matches(monkeypatch):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    guard = AlwaysPassGuardrail(guardrail_name="passer")
+    guard.hook_filters = parse_hook_filters("passer", {"async_pre_call_hook": {"models": ["gpt-4o*"]}})
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="passer", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "test"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test",
+    )
+
+    assert result.terminal_action == "allow"
+    assert guard.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_ignores_hook_filters_when_flag_is_false(monkeypatch):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", False)
+    guard = AlwaysPassGuardrail(guardrail_name="passer")
+    guard.hook_filters = parse_hook_filters("passer", {"async_pre_call_hook": {"models": ["claude-*"]}})
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="passer", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "test"}]},
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test",
+    )
+
+    assert result.terminal_action == "allow"
+    assert guard.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_runs_on_user_agent_derived_request_tag(monkeypatch):
+    """A pipeline-managed guardrail's request_tags must see the same tag
+    vocabulary (including the User-Agent-derived tag) as the same guardrail
+    would see running outside a pipeline via ProxyLogging, so hook_filters
+    behaves identically regardless of which dispatch path invokes it."""
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    guard = AlwaysPassGuardrail(guardrail_name="passer")
+    guard.hook_filters = parse_hook_filters(
+        "passer", {"async_pre_call_hook": {"request_tags": ["User-Agent: my-custom-client"]}}
+    )
+
+    pipeline = GuardrailPipeline(
+        mode="pre_call",
+        steps=[PipelineStep(guardrail="passer", on_pass="allow")],
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+
+    result = await PipelineExecutor.execute_steps(
+        steps=pipeline.steps,
+        mode=pipeline.mode,
+        data={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "test"}],
+            "metadata": {"headers": {"user-agent": "my-custom-client/1.0"}},
+        },
+        user_api_key_dict=MagicMock(),
+        call_type="completion",
+        policy_name="test",
+    )
+
+    assert result.terminal_action == "allow"
+    assert guard.calls == 1

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from typing_extensions import Required, TypedDict
 
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
+from litellm.types.hook_filters import HookFilterConfig
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
     AktoConfigModel,
 )
@@ -829,6 +830,15 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "agent feeds back into the model, and skip system, user, and assistant content. "
             "Intended for agent harnesses whose own prompt scaffolding is trusted but often "
             "trips prompt-attack detectors."
+        ),
+    )
+
+    hook_filters: Mapping[str, HookFilterConfig] | None = Field(
+        default=None,
+        description=(
+            "Per-hook-method request filters, keyed by CustomLogger/CustomGuardrail hook "
+            "name (e.g. async_pre_call_hook). Only enforced when litellm.enable_hook_filters "
+            "is True; a hook with no entry here always runs, unfiltered."
         ),
     )
 

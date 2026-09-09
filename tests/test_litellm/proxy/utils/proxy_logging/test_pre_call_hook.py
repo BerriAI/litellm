@@ -13,6 +13,7 @@ from litellm.caching.caching import DualCache
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
@@ -875,3 +876,206 @@ async def test_scan_raw_request_warns_on_in_place_mutation_returning_none(
     )
     mock_logger.warning.assert_called_once()
     assert "scan_raw_request" in str(mock_logger.warning.call_args)
+
+
+# ---------------------------------------------------------------------------
+# hook_filters: pre_call_hook's plain-CustomLogger branch and the guardrail
+# branch (_execute_guardrail_hook) both go through call_custom_hook, which
+# must consult a callback's own hook_filters when litellm.enable_hook_filters
+# is True and leave every unfiltered callback's behavior unchanged.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingCustomLogger(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        return data
+
+
+class _RecordingPreCallGuardrail(CustomGuardrail):
+    def __init__(self, **kwargs):
+        kwargs.setdefault("default_on", True)
+        kwargs.setdefault("event_hook", GuardrailEventHooks.pre_call)
+        super().__init__(guardrail_name="recording-guardrail", **kwargs)
+        self.calls = 0
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.calls += 1
+        return None
+
+
+@pytest.fixture
+def _reset_enable_hook_filters(monkeypatch):
+    monkeypatch.setattr(litellm, "enable_hook_filters", False)
+
+
+@pytest.mark.asyncio
+async def test_plain_callback_skipped_when_hook_filters_model_excludes(
+    proxy_logging, make_user_api_key_auth, monkeypatch, _reset_enable_hook_filters
+):
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    cb = _RecordingCustomLogger()
+    cb.hook_filters = parse_hook_filters("recording", {"async_pre_call_hook": {"models": ["claude-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+    assert cb.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_plain_callback_runs_when_hook_filters_model_matches(
+    proxy_logging, make_user_api_key_auth, monkeypatch, _reset_enable_hook_filters
+):
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    cb = _RecordingCustomLogger()
+    cb.hook_filters = parse_hook_filters("recording", {"async_pre_call_hook": {"models": ["gpt-4o*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+    assert cb.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_plain_callback_ignores_hook_filters_when_flag_is_false(
+    proxy_logging, make_user_api_key_auth, monkeypatch, _reset_enable_hook_filters
+):
+    cb = _RecordingCustomLogger()
+    cb.hook_filters = parse_hook_filters("recording", {"async_pre_call_hook": {"models": ["claude-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+    assert cb.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_plain_callback_skipped_when_key_alias_excludes(
+    proxy_logging, make_user_api_key_auth, monkeypatch, _reset_enable_hook_filters
+):
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    cb = _RecordingCustomLogger()
+    cb.hook_filters = parse_hook_filters("recording", {"async_pre_call_hook": {"key_aliases": ["prod-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(key_alias="dev-key-1"),
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+    assert cb.calls == 0
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(key_alias="prod-key-1"),
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+    assert cb.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_guardrail_skipped_when_hook_filters_model_excludes(
+    proxy_logging, make_user_api_key_auth, monkeypatch, _reset_enable_hook_filters
+):
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    guardrail = _RecordingPreCallGuardrail()
+    guardrail.hook_filters = parse_hook_filters("recording-guardrail", {"async_pre_call_hook": {"models": ["claude-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+    assert guardrail.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_guardrail_runs_when_hook_filters_model_matches(
+    proxy_logging, make_user_api_key_auth, monkeypatch, _reset_enable_hook_filters
+):
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    guardrail = _RecordingPreCallGuardrail()
+    guardrail.hook_filters = parse_hook_filters("recording-guardrail", {"async_pre_call_hook": {"models": ["gpt-4o*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+    assert guardrail.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_guardrail_skipped_on_request_tags_mismatch(
+    proxy_logging, make_user_api_key_auth, monkeypatch, _reset_enable_hook_filters
+):
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    guardrail = _RecordingPreCallGuardrail()
+    guardrail.hook_filters = parse_hook_filters(
+        "recording-guardrail", {"async_pre_call_hook": {"request_tags": ["scan-me"]}}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"tags": ["unrelated"]},
+        },
+        call_type="acompletion",
+    )
+    assert guardrail.calls == 0
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"tags": ["scan-me"]},
+        },
+        call_type="acompletion",
+    )
+    assert guardrail.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_guardrail_runs_on_user_agent_derived_request_tag(
+    proxy_logging, make_user_api_key_auth, monkeypatch, _reset_enable_hook_filters
+):
+    """request_tags must include the same User-Agent-derived tag the standard
+    logging payload adds by default, not just metadata.tags, since a customer's
+    hook_filters.request_tags pattern is written against that documented vocabulary."""
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    guardrail = _RecordingPreCallGuardrail()
+    guardrail.hook_filters = parse_hook_filters(
+        "recording-guardrail", {"async_pre_call_hook": {"request_tags": ["User-Agent: my-custom-client"]}}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=make_user_api_key_auth(),
+        data={
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "metadata": {"headers": {"user-agent": "my-custom-client/1.0"}},
+        },
+        call_type="acompletion",
+    )
+    assert guardrail.calls == 1

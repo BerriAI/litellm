@@ -267,3 +267,62 @@ async def test_handle_logging_proxy_only_path_propagates_async_failure_raises(
             route="/chat/completions",
             original_exception=Exception("x"),
         )
+
+
+# ---------------------------------------------------------------------------
+# hook_filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_skipped_when_hook_filters_model_excludes(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _Cb(CustomLogger):
+        async def async_post_call_failure_hook(self, **kwargs):  # type: ignore[override]
+            calls.append(kwargs)
+            return None
+
+    cb = _Cb()
+    cb.hook_filters = parse_hook_filters("cb", {"async_post_call_failure_hook": {"models": ["claude-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"litellm_call_id": "abc", "model": "gpt-4o"},
+        original_exception=ValueError("oops"),
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_runs_when_hook_filters_model_matches(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _Cb(CustomLogger):
+        async def async_post_call_failure_hook(self, **kwargs):  # type: ignore[override]
+            calls.append(kwargs)
+            return None
+
+    cb = _Cb()
+    cb.hook_filters = parse_hook_filters("cb", {"async_post_call_failure_hook": {"models": ["gpt-4o*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+    proxy_logging.alert_types = []
+
+    await proxy_logging.post_call_failure_hook(
+        request_data={"litellm_call_id": "abc", "model": "gpt-4o"},
+        original_exception=ValueError("oops"),
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+    assert len(calls) == 1

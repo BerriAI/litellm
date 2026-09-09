@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
+from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -113,6 +114,31 @@ def _loaded_callback_or_raise(entry: str, loaded: object) -> CustomLogger | Call
     if isinstance(resolved, _CallbackResolvedToClass | _CallbackNotDispatchable):
         _raise_callback_load_error(resolved)
     return resolved
+
+
+def _attach_hook_filters(
+    original_entries: Iterable[object],
+    instantiated_callbacks: Iterable[object],
+    callback_specific_params: Mapping[str, object],
+) -> None:
+    """
+    Generic, callback-agnostic counterpart to guardrail_registry.py's
+    ``_apply_hook_filters``: validates and attaches ``callback_settings.<name>.hook_filters``
+    onto the resolved CustomLogger instance for every ``litellm_settings.callbacks`` entry
+    that is a plain string (the config key) resolving to a CustomLogger (the filterable
+    target). ``original_entries``/``instantiated_callbacks`` are positionally aligned:
+    the caller's loop appends exactly one instantiated object per source entry.
+    """
+    for original_entry, instance in zip(original_entries, instantiated_callbacks, strict=True):
+        if not isinstance(original_entry, str) or not isinstance(instance, CustomLogger):
+            continue
+        entry_params = callback_specific_params.get(original_entry)
+        if not isinstance(entry_params, Mapping):
+            continue
+        raw_hook_filters = entry_params.get("hook_filters")
+        if not isinstance(raw_hook_filters, Mapping):
+            continue
+        instance.hook_filters = parse_hook_filters(original_entry, raw_hook_filters)
 
 
 def initialize_callbacks_on_proxy(
@@ -382,6 +408,8 @@ def initialize_callbacks_on_proxy(
             litellm.callbacks.extend(imported_list)
         else:
             litellm.callbacks = imported_list
+
+        _attach_hook_filters(value, imported_list, callback_specific_params)
 
         if "prometheus" in value:
             from litellm.integrations.prometheus import PrometheusLogger

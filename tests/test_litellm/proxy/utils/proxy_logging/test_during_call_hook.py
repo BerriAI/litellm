@@ -84,3 +84,64 @@ async def test_during_call_hook_guardrail_error_raises(proxy_logging, make_user_
             user_api_key_dict=make_user_api_key_auth(),
             call_type="completion",
         )
+
+
+# ---------------------------------------------------------------------------
+# hook_filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_skipped_when_hook_filters_model_excludes(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    g = _make_guardrail("g")
+    g.hook_filters = parse_hook_filters("g", {"async_moderation_hook": {"models": ["claude-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    await proxy_logging.during_call_hook(
+        data={"model": "gpt-4o"},
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="completion",
+    )
+    g.async_moderation_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_when_hook_filters_model_matches(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    g = _make_guardrail("g")
+    g.hook_filters = parse_hook_filters("g", {"async_moderation_hook": {"models": ["gpt-4o*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    await proxy_logging.during_call_hook(
+        data={"model": "gpt-4o"},
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="completion",
+    )
+    g.async_moderation_hook.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_ignores_hook_filters_when_flag_is_false(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    g = _make_guardrail("g")
+    g.hook_filters = parse_hook_filters("g", {"async_moderation_hook": {"models": ["claude-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    await proxy_logging.during_call_hook(
+        data={"model": "gpt-4o"},
+        user_api_key_dict=make_user_api_key_auth(),
+        call_type="completion",
+    )
+    g.async_moderation_hook.assert_called_once()

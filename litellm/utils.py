@@ -105,6 +105,26 @@ def _get_cached_custom_logger():
     return _CustomLogger
 
 
+def _hook_filter_context_for_deployment_hook(
+    request_data: Mapping[str, object],
+) -> tuple[str | None, str | None, tuple[str, ...]]:
+    """
+    By the time a deployment-scoped hook fires, the router has already merged the
+    resolved deployment's own litellm_params.tags into metadata.tags alongside any
+    caller-supplied tags, so model_tags and request_tags share one merged list here.
+    """
+    model: Final = request_data.get("model")
+    metadata: Final = request_data.get("metadata")
+    key_alias: Final = metadata.get("user_api_key_alias") if isinstance(metadata, Mapping) else None
+    raw_tags: Final = metadata.get("tags") if isinstance(metadata, Mapping) else None
+    tags: Final = tuple(raw_tags) if isinstance(raw_tags, list) else ()
+    return (
+        model if isinstance(model, str) else None,
+        key_alias if isinstance(key_alias, str) else None,
+        tags,
+    )
+
+
 @lru_cache(maxsize=None)
 def _accepts_fallback_depth_kwarg_for_class(cls: type) -> bool:
     """
@@ -1272,11 +1292,25 @@ async def async_pre_call_deployment_hook(kwargs: dict[str, Any], call_type: str)
 
     modified_kwargs = kwargs.copy()
 
+    from litellm.litellm_core_utils.call_custom_hook import call_custom_hook
+
+    hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = _hook_filter_context_for_deployment_hook(
+        modified_kwargs
+    )
     CustomLogger: Final = _get_cached_custom_logger()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
-            result = await callback.async_pre_call_deployment_hook(modified_kwargs, typed_call_type)
-            if result is not None:
+            result = await call_custom_hook(
+                callback,
+                "async_pre_call_deployment_hook",
+                model=hook_filter_model,
+                key_alias=hook_filter_key_alias,
+                model_tags=hook_filter_request_tags,
+                request_tags=hook_filter_request_tags,
+                kwargs=modified_kwargs,
+                call_type=typed_call_type,
+            )
+            if isinstance(result, dict):
                 modified_kwargs = result
 
     return modified_kwargs
@@ -1295,11 +1329,24 @@ async def async_post_call_success_deployment_hook(
 
     modified_response = response
 
+    from litellm.litellm_core_utils.call_custom_hook import call_custom_hook
+
+    hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = _hook_filter_context_for_deployment_hook(
+        request_data
+    )
     CustomLogger: Final = _get_cached_custom_logger()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
-            result = await callback.async_post_call_success_deployment_hook(
-                request_data, cast(LLMResponseTypes, modified_response), typed_call_type
+            result = await call_custom_hook(
+                callback,
+                "async_post_call_success_deployment_hook",
+                model=hook_filter_model,
+                key_alias=hook_filter_key_alias,
+                model_tags=hook_filter_request_tags,
+                request_tags=hook_filter_request_tags,
+                request_data=request_data,
+                response=cast(LLMResponseTypes, modified_response),
+                call_type=typed_call_type,
             )
             if result is not None:
                 modified_response = result
@@ -1340,17 +1387,39 @@ async def async_post_call_failure_deployment_hook(
     safe_request_data: Final = MappingProxyType({k: v for k, v in request_data.items() if k != "attempted_targets"})
     safe_exception: Final = _snapshot_exception_for_hook(exception)
 
+    from litellm.litellm_core_utils.call_custom_hook import call_custom_hook
+
+    hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = _hook_filter_context_for_deployment_hook(
+        safe_request_data
+    )
     CustomLogger: Final = _get_cached_custom_logger()
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
             try:
                 if _accepts_fallback_depth_kwarg_for_class(type(callback)):
-                    await callback.async_post_call_failure_deployment_hook(
-                        safe_request_data, safe_exception, typed_call_type, fallback_depth=fallback_depth
+                    await call_custom_hook(
+                        callback,
+                        "async_post_call_failure_deployment_hook",
+                        model=hook_filter_model,
+                        key_alias=hook_filter_key_alias,
+                        model_tags=hook_filter_request_tags,
+                        request_tags=hook_filter_request_tags,
+                        request_data=safe_request_data,
+                        exception=safe_exception,
+                        call_type=typed_call_type,
+                        fallback_depth=fallback_depth,
                     )
                 else:
-                    await callback.async_post_call_failure_deployment_hook(
-                        safe_request_data, safe_exception, typed_call_type
+                    await call_custom_hook(
+                        callback,
+                        "async_post_call_failure_deployment_hook",
+                        model=hook_filter_model,
+                        key_alias=hook_filter_key_alias,
+                        model_tags=hook_filter_request_tags,
+                        request_tags=hook_filter_request_tags,
+                        request_data=safe_request_data,
+                        exception=safe_exception,
+                        call_type=typed_call_type,
                     )
             except Exception as callback_error:  # noqa: BLE001  # a broken callback must not mask the real failure
                 verbose_logger.debug(

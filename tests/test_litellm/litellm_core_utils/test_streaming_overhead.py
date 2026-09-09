@@ -506,3 +506,54 @@ def test_async_streaming_overhead_not_regressed():
         f"Async streaming of {n_chunks} chunks took {elapsed:.3f}s — "
         "per-chunk overhead regression detected"
     )
+
+
+# ---------------------------------------------------------------------------
+# hook_filters: _call_post_streaming_deployment_hook
+# ---------------------------------------------------------------------------
+
+
+def test_post_streaming_deployment_hook_skipped_when_hook_filters_model_excludes(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _Cb(CustomLogger):
+        async def async_post_call_streaming_deployment_hook(self, request_data, response_chunk, call_type):
+            calls.append(response_chunk)
+            return None
+
+    cb = _Cb()
+    cb.hook_filters = parse_hook_filters(
+        "cb", {"async_post_call_streaming_deployment_hook": {"models": ["claude-3-opus"]}}
+    )
+    wrapper = _make_wrapper([], provider="anthropic")
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    asyncio.run(wrapper._call_post_streaming_deployment_hook(MagicMock(spec=ModelResponseStream)))
+    assert calls == []
+
+
+def test_post_streaming_deployment_hook_runs_when_hook_filters_model_matches(monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _Cb(CustomLogger):
+        async def async_post_call_streaming_deployment_hook(self, request_data, response_chunk, call_type):
+            calls.append(response_chunk)
+            return None
+
+    cb = _Cb()
+    cb.hook_filters = parse_hook_filters(
+        "cb", {"async_post_call_streaming_deployment_hook": {"models": ["claude-3-5-sonnet"]}}
+    )
+    wrapper = _make_wrapper([], provider="anthropic")
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    asyncio.run(wrapper._call_post_streaming_deployment_hook(MagicMock(spec=ModelResponseStream)))
+    assert len(calls) == 1

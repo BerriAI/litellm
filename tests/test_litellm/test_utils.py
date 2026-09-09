@@ -42,6 +42,7 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
+    async_pre_call_deployment_hook,
     client,
     get_llm_provider,
     get_non_default_completion_params,
@@ -5340,6 +5341,181 @@ async def test_async_post_call_failure_deployment_hook_skips_non_custom_logger_c
     await async_post_call_failure_deployment_hook(request_data={}, exception=ValueError("x"), call_type="acompletion")
 
     assert called == []
+
+
+# ---------------------------------------------------------------------------
+# hook_filters: deployment-scoped hooks (async_pre_call_deployment_hook,
+# async_post_call_success_deployment_hook, async_post_call_failure_deployment_hook)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_skipped_when_hook_filters_model_excludes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _Cb(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            calls.append(kwargs)
+            return None
+
+    cb = _Cb()
+    cb.hook_filters = parse_hook_filters("cb", {"async_pre_call_deployment_hook": {"models": ["claude-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await async_pre_call_deployment_hook(kwargs={"model": "gpt-4o"}, call_type="acompletion")
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_runs_when_hook_filters_model_matches(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _Cb(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            calls.append(kwargs)
+            return None
+
+    cb = _Cb()
+    cb.hook_filters = parse_hook_filters("cb", {"async_pre_call_deployment_hook": {"models": ["gpt-4o*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await async_pre_call_deployment_hook(kwargs={"model": "gpt-4o"}, call_type="acompletion")
+
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_pre_call_deployment_hook_skipped_when_model_tags_exclude(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """model_tags is the whole point of the deployment-scoped hooks: the deployment's
+    own litellm_params.tags, merged by the router into metadata.tags by this point."""
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _Cb(CustomLogger):
+        async def async_pre_call_deployment_hook(self, kwargs, call_type):
+            calls.append(kwargs)
+            return None
+
+    cb = _Cb()
+    cb.hook_filters = parse_hook_filters(
+        "cb", {"async_pre_call_deployment_hook": {"model_tags": ["needs-pii-scan"]}}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await async_pre_call_deployment_hook(
+        kwargs={"model": "gpt-4o", "metadata": {"tags": ["unrelated"]}}, call_type="acompletion"
+    )
+    assert calls == []
+
+    await async_pre_call_deployment_hook(
+        kwargs={"model": "gpt-4o", "metadata": {"tags": ["needs-pii-scan"]}}, call_type="acompletion"
+    )
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_deployment_hook_skipped_when_hook_filters_model_excludes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _Cb(CustomLogger):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            calls.append(response)
+            return None
+
+    cb = _Cb()
+    cb.hook_filters = parse_hook_filters(
+        "cb", {"async_post_call_success_deployment_hook": {"models": ["claude-*"]}}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await async_post_call_success_deployment_hook(
+        request_data={"model": "gpt-4o"}, response="resp", call_type="acompletion"
+    )
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_success_deployment_hook_runs_when_hook_filters_model_matches(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _Cb(CustomLogger):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            calls.append(response)
+            return None
+
+    cb = _Cb()
+    cb.hook_filters = parse_hook_filters(
+        "cb", {"async_post_call_success_deployment_hook": {"models": ["gpt-4o*"]}}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await async_post_call_success_deployment_hook(
+        request_data={"model": "gpt-4o"}, response="resp", call_type="acompletion"
+    )
+    assert calls == ["resp"]
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_deployment_hook_skipped_when_hook_filters_model_excludes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    recorder = _RecordingDeploymentFailureLogger()
+    recorder.hook_filters = parse_hook_filters(
+        "recorder", {"async_post_call_failure_deployment_hook": {"models": ["claude-*"]}}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    await async_post_call_failure_deployment_hook(
+        request_data={"model": "gpt-4o"}, exception=ValueError("x"), call_type="acompletion"
+    )
+    assert recorder.calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_deployment_hook_runs_when_hook_filters_model_matches(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    recorder = _RecordingDeploymentFailureLogger()
+    recorder.hook_filters = parse_hook_filters(
+        "recorder", {"async_post_call_failure_deployment_hook": {"models": ["gpt-4o*"]}}
+    )
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+
+    await async_post_call_failure_deployment_hook(
+        request_data={"model": "gpt-4o"}, exception=ValueError("x"), call_type="acompletion"
+    )
+    assert len(recorder.calls) == 1
 
 
 @pytest.mark.asyncio

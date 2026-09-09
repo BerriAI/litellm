@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+from litellm.types.hook_filters import HookFilterConfig
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -81,6 +82,15 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     routing, as the managed-files and managed-vector-store hooks do, stays False: a per-record
     rewrite would read as a redaction and ship embedded in the record. Only the leaf class is
     consulted, so a subclass that does not override ``async_pre_call_hook`` inherits nothing.
+    """
+
+    hook_filters: Mapping[str, HookFilterConfig] | None = None
+    """
+    Per-hook-method request filters (models/key_aliases/model_tags/request_tags), keyed by
+    hook method name (e.g. ``async_pre_call_hook``). Set by the callback's own config loader
+    (``guardrail_registry.py`` for guardrails, ``callback_utils.py`` for plain callbacks) and
+    consulted by ``call_custom_hook``. A hook with no entry here always runs, unfiltered, and
+    the whole attribute is inert unless ``litellm.enable_hook_filters`` is True.
     """
 
     def __init__(

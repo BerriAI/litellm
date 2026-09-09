@@ -15,6 +15,7 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.hook_filter_utils import validate_hook_filters
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
@@ -436,6 +437,15 @@ def _as_callback_tuple(
     return (initialized,)
 
 
+def _apply_hook_filters(
+    custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
+) -> None:
+    if litellm_params.hook_filters is None:
+        return
+    validate_hook_filters(guardrail_name, litellm_params.hook_filters)
+    custom_guardrail_callback.hook_filters = litellm_params.hook_filters
+
+
 def _configure_callback_scoping(
     custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
 ) -> None:
@@ -445,6 +455,7 @@ def _configure_callback_scoping(
         "scan_only_tool_results",
     ):
         setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
+    _apply_hook_filters(custom_guardrail_callback, guardrail_name, litellm_params)
     scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
     if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
         raise ValueError(

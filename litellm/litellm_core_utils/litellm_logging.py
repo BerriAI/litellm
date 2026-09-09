@@ -62,6 +62,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils.call_custom_hook import call_custom_hook, call_custom_hook_sync
 from litellm.litellm_core_utils.core_helpers import is_expected_client_error, reconstruct_model_name
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
@@ -1978,6 +1979,19 @@ class Logging(LiteLLMLoggingBaseClass):
 
         return True
 
+    def _hook_filter_context(
+        self,
+        litellm_params: dict,  # mutable-ok: matches _get_request_tags's own dict param
+    ) -> tuple[str | None, str | None, tuple[str, ...]]:
+        metadata: Final = litellm_params.get("metadata") or MappingProxyType({})
+        key_alias: Final = metadata.get("user_api_key_alias")
+        proxy_server_request: Final = litellm_params.get("proxy_server_request") or {}  # mutable-ok: read-only
+        tags: Final = StandardLoggingPayloadSetup._get_request_tags(  # pyright: ignore[reportPrivateUsage]  # shared
+            litellm_params, proxy_server_request
+        )
+        request_tags: Final = tuple(tags)
+        return self.model, key_alias, request_tags
+
     def _update_completion_start_time(self, completion_start_time: datetime.datetime):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = self.completion_start_time
@@ -2507,17 +2521,37 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):
                         continue
 
-                    self.model_call_details, result = callback.logging_hook(
+                    hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = self._hook_filter_context(
+                        litellm_params
+                    )
+                    logging_hook_result = call_custom_hook_sync(
+                        callback,
+                        "logging_hook",
+                        model=hook_filter_model,
+                        key_alias=hook_filter_key_alias,
+                        request_tags=hook_filter_request_tags,
                         kwargs=self.model_call_details,
                         result=result,
                         call_type=self.call_type,
                     )
+                    if logging_hook_result is not None:
+                        self.model_call_details, result = logging_hook_result  # pyright: ignore[reportGeneralTypeIssues]  # object-typed
                 elif isinstance(callback, CustomLogger):
-                    self.model_call_details, result = callback.logging_hook(
+                    hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = self._hook_filter_context(
+                        litellm_params
+                    )
+                    logging_hook_result = call_custom_hook_sync(
+                        callback,
+                        "logging_hook",
+                        model=hook_filter_model,
+                        key_alias=hook_filter_key_alias,
+                        request_tags=hook_filter_request_tags,
                         kwargs=self.model_call_details,
                         result=result,
                         call_type=self.call_type,
                     )
+                    if logging_hook_result is not None:
+                        self.model_call_details, result = logging_hook_result  # pyright: ignore[reportGeneralTypeIssues]  # object-typed
 
             self.has_run_logging(event_type="sync_success")
             for callback in callbacks:
@@ -2812,7 +2846,15 @@ class Logging(LiteLLMLoggingBaseClass):
                                 )
                                 result = self.model_call_details["complete_response"]
 
-                            callback.log_success_event(
+                            hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = (
+                                self._hook_filter_context(litellm_params)
+                            )
+                            call_custom_hook_sync(
+                                callback,
+                                "log_success_event",
+                                model=hook_filter_model,
+                                key_alias=hook_filter_key_alias,
+                                request_tags=hook_filter_request_tags,
                                 kwargs=self.model_call_details,
                                 response_obj=result,
                                 start_time=start_time,
@@ -3046,20 +3088,40 @@ class Logging(LiteLLMLoggingBaseClass):
                     ):
                         continue
 
-                    self.model_call_details, result = await callback.async_logging_hook(
+                    hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = self._hook_filter_context(
+                        self.model_call_details.get("litellm_params", {})  # mutable-ok: read-only lookup
+                    )
+                    async_logging_hook_result = await call_custom_hook(
+                        callback,
+                        "async_logging_hook",
+                        model=hook_filter_model,
+                        key_alias=hook_filter_key_alias,
+                        request_tags=hook_filter_request_tags,
                         kwargs=self.model_call_details,
                         result=result,
                         call_type=self.call_type,
                     )
+                    if async_logging_hook_result is not None:
+                        self.model_call_details, result = async_logging_hook_result  # pyright: ignore[reportGeneralTypeIssues]  # object-typed
                 elif isinstance(callback, CustomLogger):
                     result = redact_message_input_output_from_custom_logger(
                         result=result, litellm_logging_obj=self, custom_logger=callback
                     )
-                    self.model_call_details, result = await callback.async_logging_hook(
+                    hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = self._hook_filter_context(
+                        self.model_call_details.get("litellm_params", {})  # mutable-ok: read-only lookup
+                    )
+                    async_logging_hook_result = await call_custom_hook(
+                        callback,
+                        "async_logging_hook",
+                        model=hook_filter_model,
+                        key_alias=hook_filter_key_alias,
+                        request_tags=hook_filter_request_tags,
                         kwargs=self.model_call_details,
                         result=result,
                         call_type=self.call_type,
                     )
+                    if async_logging_hook_result is not None:
+                        self.model_call_details, result = async_logging_hook_result  # pyright: ignore[reportGeneralTypeIssues]  # object-typed
             except Exception:  # noqa: BLE001  # one failing hook must not skip later callbacks (slot release)
                 verbose_logger.error(
                     "LiteLLM.LoggingError: [Non-Blocking] Exception occurred in async_logging_hook %s",
@@ -3105,34 +3167,50 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
 
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    model_call_details: dict = self.model_call_details
+                    hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = self._hook_filter_context(
+                        litellm_params
+                    )
+                    logged_details: dict = self.model_call_details
                     ##################################
                     # call redaction hook for custom logger
-                    model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
-                        model_call_details=model_call_details
+                    logged_details = callback.redact_standard_logging_payload_from_model_call_details(
+                        model_call_details=logged_details  # pyright: ignore[reportGeneralTypeIssues]  # quirk
                     )
-                    model_call_details = redact_streaming_responses_for_custom_logger(
-                        model_call_details=model_call_details, custom_logger=callback
+                    logged_details = redact_streaming_responses_for_custom_logger(
+                        model_call_details=logged_details,  # pyright: ignore[reportGeneralTypeIssues]  # quirk
+                        custom_logger=callback,
                     )
                     ##################################
+                    stream_key = "async_complete_streaming_response"
+                    has_stream = stream_key in logged_details  # pyright: ignore[reportGeneralTypeIssues]  # quirk
                     if self.stream is True:
-                        if "async_complete_streaming_response" in model_call_details:
-                            await callback.async_log_success_event(
-                                kwargs=model_call_details,
-                                response_obj=model_call_details["async_complete_streaming_response"],
+                        if has_stream:
+                            await call_custom_hook(
+                                callback,
+                                "async_log_success_event",
+                                model=hook_filter_model,
+                                key_alias=hook_filter_key_alias,
+                                request_tags=hook_filter_request_tags,
+                                kwargs=logged_details,
+                                response_obj=logged_details["async_complete_streaming_response"],
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                         else:
                             await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
-                                kwargs=model_call_details,
+                                kwargs=logged_details,
                                 response_obj=result,
                                 start_time=start_time,
                                 end_time=end_time,
                             )
                     else:
-                        await callback.async_log_success_event(
-                            kwargs=model_call_details,
+                        await call_custom_hook(
+                            callback,
+                            "async_log_success_event",
+                            model=hook_filter_model,
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
+                            kwargs=logged_details,
                             response_obj=result,
                             start_time=start_time,
                             end_time=end_time,
@@ -3414,7 +3492,15 @@ class Logging(LiteLLMLoggingBaseClass):
                         and is_sync_request
                         and self.call_type != CallTypes.pass_through.value
                     ):  # custom logger class
-                        callback.log_failure_event(
+                        hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = self._hook_filter_context(
+                            self.model_call_details.get("litellm_params", {})  # mutable-ok: read-only lookup
+                        )
+                        call_custom_hook_sync(
+                            callback,
+                            "log_failure_event",
+                            model=hook_filter_model,
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
                             start_time=start_time,
                             end_time=end_time,
                             response_obj=result,
@@ -3548,7 +3634,15 @@ class Logging(LiteLLMLoggingBaseClass):
                 if not should_run:
                     continue
                 if isinstance(callback, CustomLogger):  # custom logger class
-                    await callback.async_log_failure_event(
+                    hook_filter_model, hook_filter_key_alias, hook_filter_request_tags = self._hook_filter_context(
+                        litellm_params
+                    )
+                    await call_custom_hook(
+                        callback,
+                        "async_log_failure_event",
+                        model=hook_filter_model,
+                        key_alias=hook_filter_key_alias,
+                        request_tags=hook_filter_request_tags,
                         kwargs=self.model_call_details,
                         response_obj=result,
                         start_time=start_time,

@@ -6277,3 +6277,179 @@ def test_passthrough_embeddings_result_swapped_for_callbacks():
 
     assert isinstance(swapped_result, EmbeddingResponse)
     assert swapped_result.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+# ---------------------------------------------------------------------------
+# hook_filters: success_handler (sync log_success_event)
+# ---------------------------------------------------------------------------
+
+
+def test_success_handler_skips_when_hook_filters_model_excludes(logging_obj, monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class DummyLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            calls.append(response_obj)
+
+    logging_obj.stream = False
+    logging_obj.call_type = "completion"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.hook_filters = parse_hook_filters("dummy", {"log_success_event": {"models": ["claude-*"]}})
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop", "index": 0}],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[dummy_logger]):
+        logging_obj.success_handler(result=model_response)
+
+    assert calls == []
+
+
+def test_success_handler_runs_when_hook_filters_model_matches(logging_obj, monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class DummyLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            calls.append(response_obj)
+
+    logging_obj.stream = False
+    logging_obj.call_type = "completion"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.hook_filters = parse_hook_filters("dummy", {"log_success_event": {"models": ["bedrock/*"]}})
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop", "index": 0}],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[dummy_logger]):
+        logging_obj.success_handler(result=model_response)
+
+    assert calls == [model_response]
+
+
+# ---------------------------------------------------------------------------
+# hook_filters: async_success_handler (async_log_success_event)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_skips_when_hook_filters_model_excludes(logging_obj, monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class DummyLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            calls.append(response_obj)
+
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.hook_filters = parse_hook_filters("dummy", {"async_log_success_event": {"models": ["claude-*"]}})
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop", "index": 0}],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[dummy_logger]):
+        await logging_obj.async_success_handler(result=model_response)
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_runs_when_hook_filters_model_matches(logging_obj, monkeypatch):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class DummyLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            calls.append(response_obj)
+
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.hook_filters = parse_hook_filters("dummy", {"async_log_success_event": {"models": ["bedrock/*"]}})
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop", "index": 0}],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[dummy_logger]):
+        await logging_obj.async_success_handler(result=model_response)
+
+    assert calls == [model_response]
+
+
+def test_success_handler_request_tags_include_user_agent_derived_tag(logging_obj, monkeypatch):
+    """_hook_filter_context must derive request_tags the same way the standard
+    logging payload does, including the User-Agent tag from proxy_server_request,
+    not just metadata.tags -- otherwise a hook_filters.request_tags pattern written
+    against that documented tag vocabulary silently never matches."""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class DummyLogger(CustomLogger):
+        def log_success_event(self, kwargs, response_obj, start_time, end_time):
+            calls.append(response_obj)
+
+    logging_obj.stream = False
+    logging_obj.call_type = "completion"
+    logging_obj.model_call_details["litellm_params"] = {
+        "proxy_server_request": {"headers": {"user-agent": "my-custom-client/1.0"}},
+    }
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.hook_filters = parse_hook_filters(
+        "dummy", {"log_success_event": {"request_tags": ["User-Agent: my-custom-client"]}}
+    )
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop", "index": 0}],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[dummy_logger]):
+        logging_obj.success_handler(result=model_response)
+
+    assert calls == [model_response]

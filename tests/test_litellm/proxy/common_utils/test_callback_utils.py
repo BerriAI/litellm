@@ -670,3 +670,40 @@ def test_initialize_callbacks_on_proxy_accepts_instance_non_list_value(probe_con
 
     assert len(litellm.callbacks) == 1
     assert isinstance(litellm.callbacks[0], CustomLogger)
+
+
+def test_initialize_callbacks_on_proxy_attaches_hook_filters(probe_config_path):
+    """callback_settings.<name>.hook_filters must be validated and attached onto the
+    resolved callback instance, the same mechanism guardrails get via litellm_params."""
+    entry = f"{_PROBE_MODULE_NAME}.proxy_handler_instance"
+    initialize_callbacks_on_proxy(
+        value=[entry],
+        premium_user=False,
+        config_file_path=probe_config_path,
+        litellm_settings={},
+        callback_specific_params={entry: {"hook_filters": {"async_pre_call_hook": {"models": ["gpt-4o*"]}}}},
+    )
+
+    assert len(litellm.callbacks) == 1
+    callback = litellm.callbacks[0]
+    assert isinstance(callback, CustomLogger)
+    assert callback.hook_filters is not None
+    assert callback.hook_filters["async_pre_call_hook"].models == ("gpt-4o*",)
+
+
+def test_initialize_callbacks_on_proxy_rejects_unknown_hook_name_in_hook_filters(probe_config_path):
+    entry = f"{_PROBE_MODULE_NAME}.proxy_handler_instance"
+    with pytest.raises(ValueError, match="unknown hook name"):
+        initialize_callbacks_on_proxy(
+            value=[entry],
+            premium_user=False,
+            config_file_path=probe_config_path,
+            litellm_settings={},
+            callback_specific_params={entry: {"hook_filters": {"not_a_real_hook": {"models": ["gpt-4o*"]}}}},
+        )
+
+
+def test_initialize_callbacks_on_proxy_without_hook_filters_leaves_attribute_none(probe_config_path):
+    _load_callbacks([f"{_PROBE_MODULE_NAME}.proxy_handler_instance"], probe_config_path)
+
+    assert litellm.callbacks[0].hook_filters is None

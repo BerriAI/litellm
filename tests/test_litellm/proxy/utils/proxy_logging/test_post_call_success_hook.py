@@ -96,3 +96,90 @@ async def test_post_call_success_hook_guardrail_returns_modified_response(
         data={}, response={"orig": True}, user_api_key_dict=make_user_api_key_auth()
     )
     assert out == modified
+
+
+# ---------------------------------------------------------------------------
+# hook_filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_guardrail_skipped_when_hook_filters_model_excludes(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    g = _make_guardrail()
+    g.hook_filters = parse_hook_filters("g", {"async_post_call_success_hook": {"models": ["claude-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "gpt-4o"}, response=MagicMock(), user_api_key_dict=make_user_api_key_auth()
+    )
+    g.async_post_call_success_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_guardrail_runs_when_hook_filters_model_matches(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    g = _make_guardrail()
+    g.hook_filters = parse_hook_filters("g", {"async_post_call_success_hook": {"models": ["gpt-4o*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [g])
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "gpt-4o"}, response=MagicMock(), user_api_key_dict=make_user_api_key_auth()
+    )
+    g.async_post_call_success_hook.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_plain_callback_skipped_when_hook_filters_model_excludes(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _CL(CustomLogger):
+        async def async_post_call_success_hook(self, **kwargs):  # type: ignore[override]
+            calls.append(kwargs)
+            return None
+
+    cb = _CL()
+    cb.hook_filters = parse_hook_filters("cl", {"async_post_call_success_hook": {"models": ["claude-*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "gpt-4o"}, response={"original": True}, user_api_key_dict=make_user_api_key_auth()
+    )
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_plain_callback_runs_when_hook_filters_model_matches(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    from litellm.litellm_core_utils.hook_filter_utils import parse_hook_filters
+
+    monkeypatch.setattr(litellm, "enable_hook_filters", True)
+    calls = []
+
+    class _CL(CustomLogger):
+        async def async_post_call_success_hook(self, **kwargs):  # type: ignore[override]
+            calls.append(kwargs)
+            return None
+
+    cb = _CL()
+    cb.hook_filters = parse_hook_filters("cl", {"async_post_call_success_hook": {"models": ["gpt-4o*"]}})
+    monkeypatch.setattr(litellm, "callbacks", [cb])
+
+    await proxy_logging.post_call_success_hook(
+        data={"model": "gpt-4o"}, response={"original": True}, user_api_key_dict=make_user_api_key_auth()
+    )
+    assert len(calls) == 1

@@ -527,6 +527,7 @@ context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
 allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
+enable_hook_filters: bool = False  # when True, a callback/guardrail's hook_filters config (models/key_aliases/model_tags/request_tags) is enforced; default-off so existing configs are unaffected
 num_retries_per_request: Optional[int] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
 secret_manager_client: Optional[Any] = (

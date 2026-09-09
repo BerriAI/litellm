@@ -16,7 +16,9 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.call_custom_hook import call_custom_hook
 from litellm.litellm_core_utils.core_helpers import independent_snapshot
+from litellm.litellm_core_utils.hook_filter_utils import get_request_tags_for_hook_filters
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -196,8 +198,17 @@ class PipelineExecutor:
                 hook_input["guardrail_to_apply"] = callback
                 target = UnifiedLLMGuardrails()
 
+            hook_filter_key_alias: Final = getattr(user_api_key_dict, "key_alias", None)
+            hook_filter_request_tags: Final = get_request_tags_for_hook_filters(hook_input)
+
             if mode == "pre_call":
-                response = await target.async_pre_call_hook(
+                response = await call_custom_hook(
+                    callback,
+                    "async_pre_call_hook",
+                    target=target,
+                    model=hook_input.get("model"),
+                    key_alias=hook_filter_key_alias,
+                    request_tags=hook_filter_request_tags,
                     user_api_key_dict=user_api_key_dict,
                     cache=None,
                     data=hook_input,
@@ -208,7 +219,13 @@ class PipelineExecutor:
                     if isinstance(response, dict):
                         callback.mark_pre_call_hook_ran(response)
             elif mode == "post_call":
-                response = await target.async_post_call_success_hook(
+                response = await call_custom_hook(
+                    callback,
+                    "async_post_call_success_hook",
+                    target=target,
+                    model=hook_input.get("model"),
+                    key_alias=hook_filter_key_alias,
+                    request_tags=hook_filter_request_tags,
                     user_api_key_dict=user_api_key_dict,
                     data=data,
                     response=data.get("response"),

@@ -1724,8 +1724,22 @@ class CustomStreamWrapper:
             except ValueError:
                 typed_call_type = None
 
+            from litellm.litellm_core_utils.call_custom_hook import call_custom_hook
+
+            litellm_params: Final = request_data.get("litellm_params") or {}  # mutable-ok: read-only lookup
+            metadata: Final = litellm_params.get("metadata") or {}  # mutable-ok: read-only lookup
+            hook_filter_key_alias: Final = metadata.get("user_api_key_alias")
+            raw_tags: Final = metadata.get("tags")
+            hook_filter_request_tags: Final = tuple(raw_tags) if isinstance(raw_tags, list) else ()
+
             for callback in self._post_streaming_hooks:
-                result = await callback.async_post_call_streaming_deployment_hook(
+                result = await call_custom_hook(
+                    callback,
+                    "async_post_call_streaming_deployment_hook",
+                    model=self.model,
+                    key_alias=hook_filter_key_alias,
+                    model_tags=hook_filter_request_tags,
+                    request_tags=hook_filter_request_tags,
                     request_data=request_data,
                     response_chunk=chunk,
                     call_type=typed_call_type,

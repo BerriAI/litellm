@@ -91,10 +91,17 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_alert
+from litellm.litellm_core_utils.call_custom_hook import call_custom_hook
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     independent_snapshot,
     is_expected_client_error,
+)
+from litellm.litellm_core_utils.hook_filter_utils import (
+    get_request_tags_for_hook_filters as _get_request_tags_for_hook_filters,
+)
+from litellm.litellm_core_utils.hook_filter_utils import (
+    parse_hook_filters,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -597,6 +604,25 @@ def _failure_fields_to_lift(request_data: Mapping[str, object]) -> Mapping[str, 
     return MappingProxyType({key: value for key, value in _entries if value is not None})
 
 
+def _attach_hook_filters_to_resolved_string_callback(callback_name: str, resolved: CustomLogger) -> None:
+    """
+    A callback configured by its known-integration name (e.g. ``"langfuse"`` in
+    ``litellm_settings.callbacks``) stays a bare string in ``litellm.callbacks`` until
+    ``_init_litellm_callbacks`` resolves it to a real instance here; a
+    ``callback_settings.<name>.hook_filters`` block has nothing to attach to until
+    then, so it must be applied at this resolution point rather than at config-load
+    time (the string-instance counterpart to ``callback_utils.py``'s
+    ``_attach_hook_filters``, which only ever sees already-instantiated callbacks).
+    """
+    entry_params: Final = litellm.callback_settings.get(callback_name)
+    if not isinstance(entry_params, Mapping):
+        return
+    raw_hook_filters: Final = entry_params.get("hook_filters")
+    if not isinstance(raw_hook_filters, Mapping):
+        return
+    resolved.hook_filters = parse_hook_filters(callback_name, raw_hook_filters)
+
+
 @dataclass(frozen=True)
 class _CallbackCapabilities:
     """Cached per-hook capability flags derived from ``litellm.callbacks``.
@@ -835,6 +861,7 @@ class ProxyLogging:
                 )
 
                 if initialized_callback is not None:
+                    _attach_hook_filters_to_resolved_string_callback(callback, initialized_callback)
                     string_callbacks_to_replace[idx] = initialized_callback
 
         # Replace string entries in litellm.callbacks with initialized instances
@@ -1229,22 +1256,43 @@ class ProxyLogging:
             data["guardrail_to_apply"] = callback
 
         target: Final = unified_guardrail if use_unified else callback
+        model: Final = data.get("model")
+        key_alias: Final = user_api_key_dict.key_alias if user_api_key_dict is not None else None
+        request_tags: Final = _get_request_tags_for_hook_filters(data)
 
         if hook_type == "pre_call":
-            return await target.async_pre_call_hook(
+            return await call_custom_hook(
+                callback,
+                "async_pre_call_hook",
+                target=target,
+                model=model,
+                key_alias=key_alias,
+                request_tags=request_tags,
                 user_api_key_dict=user_api_key_dict,
                 cache=self.call_details["user_api_key_cache"],
                 data=data,
                 call_type=call_type,
             )
         elif hook_type == "during_call":
-            return await target.async_moderation_hook(
+            return await call_custom_hook(
+                callback,
+                "async_moderation_hook",
+                target=target,
+                model=model,
+                key_alias=key_alias,
+                request_tags=request_tags,
                 data=data,
                 user_api_key_dict=user_api_key_dict,
                 call_type=call_type,
             )
         elif hook_type == "post_call":
-            return await target.async_post_call_success_hook(
+            return await call_custom_hook(
+                callback,
+                "async_post_call_success_hook",
+                target=target,
+                model=model,
+                key_alias=key_alias,
+                request_tags=request_tags,
                 user_api_key_dict=user_api_key_dict,
                 data=data,
                 response=response,
@@ -1853,7 +1901,12 @@ class ProxyLogging:
                         if call_type == "call_mcp_tool" and user_api_key_dict is None:
                             continue
 
-                        response: Exception | str | Mapping[str, object] | None = await _callback.async_pre_call_hook(
+                        response = await call_custom_hook(
+                            _callback,
+                            "async_pre_call_hook",
+                            model=data.get("model") if data is not None else None,
+                            key_alias=user_api_key_dict.key_alias,
+                            request_tags=_get_request_tags_for_hook_filters(data) if data is not None else (),
                             user_api_key_dict=user_api_key_dict,
                             cache=self.call_details["user_api_key_cache"],
                             data=data,
@@ -2287,6 +2340,8 @@ class ProxyLogging:
                 else:
                     user_api_key_auth_dict = user_api_key_dict
                 # Add task to list for parallel execution
+                hook_filter_key_alias = user_api_key_dict.key_alias if user_api_key_dict is not None else None
+                hook_filter_request_tags = _get_request_tags_for_hook_filters(data)
                 if (
                     "apply_guardrail" in type(callback).__dict__
                     and not callback.use_native_lifecycle_hooks
@@ -2296,7 +2351,13 @@ class ProxyLogging:
                     data["guardrail_to_apply"] = callback
                     guardrail_task = self._run_guardrail_with_metrics(
                         callback,
-                        unified_guardrail.async_moderation_hook(
+                        call_custom_hook(
+                            callback,
+                            "async_moderation_hook",
+                            target=unified_guardrail,
+                            model=data.get("model"),
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
                             user_api_key_dict=user_api_key_dict,
                             data=data,
                             call_type=call_type,
@@ -2306,7 +2367,12 @@ class ProxyLogging:
                 else:
                     guardrail_task = self._run_guardrail_with_metrics(
                         callback,
-                        callback.async_moderation_hook(
+                        call_custom_hook(
+                            callback,
+                            "async_moderation_hook",
+                            model=data.get("model"),
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
                             data=data,
                             user_api_key_dict=user_api_key_auth_dict,
                             call_type=call_type,
@@ -2570,6 +2636,9 @@ class ProxyLogging:
 
         # Track the first HTTPException returned or raised by any callback
         transformed_exception: HTTPException | None = None
+        hook_filter_model: Final = request_data.get("model")
+        hook_filter_key_alias: Final = user_api_key_dict.key_alias
+        hook_filter_request_tags: Final = _get_request_tags_for_hook_filters(request_data)
 
         for callback in litellm.callbacks:
             try:
@@ -2582,7 +2651,12 @@ class ProxyLogging:
                     _callback = callback
                 if _callback is not None and isinstance(_callback, CustomLogger):
                     try:
-                        hook_result = await _callback.async_post_call_failure_hook(
+                        hook_result = await call_custom_hook(
+                            _callback,
+                            "async_post_call_failure_hook",
+                            model=hook_filter_model,
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
                             request_data=request_data,
                             user_api_key_dict=user_api_key_dict,
                             original_exception=original_exception,
@@ -2800,6 +2874,9 @@ class ProxyLogging:
             parallel_guardrails: Final[tuple[CustomGuardrail, ...]] = tuple(
                 callback for callback in guardrail_callbacks if getattr(callback, "run_in_parallel", False)
             )
+            hook_filter_model: Final = data.get("model")
+            hook_filter_key_alias: Final = user_api_key_dict.key_alias
+            hook_filter_request_tags: Final = _get_request_tags_for_hook_filters(data)
 
             for callback in guardrail_callbacks:
                 # Main - V2 Guardrails implementation
@@ -2822,7 +2899,13 @@ class ProxyLogging:
                     data["guardrail_to_apply"] = callback
                     guardrail_response = await self._run_guardrail_with_metrics(
                         callback,
-                        unified_guardrail.async_post_call_success_hook(
+                        call_custom_hook(
+                            callback,
+                            "async_post_call_success_hook",
+                            target=unified_guardrail,
+                            model=hook_filter_model,
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
                             user_api_key_dict=user_api_key_dict,
                             data=data,
                             response=response,
@@ -2832,7 +2915,12 @@ class ProxyLogging:
                 else:
                     guardrail_response = await self._run_guardrail_with_metrics(
                         callback,
-                        callback.async_post_call_success_hook(
+                        call_custom_hook(
+                            callback,
+                            "async_post_call_success_hook",
+                            model=hook_filter_model,
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
                             user_api_key_dict=user_api_key_dict,
                             data=data,
                             response=response,
@@ -2856,11 +2944,18 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
-                callback_response: LLMResponseTypes | None = await callback.async_post_call_success_hook(
-                    user_api_key_dict=user_api_key_dict, data=data, response=response
+                callback_response = await call_custom_hook(
+                    callback,
+                    "async_post_call_success_hook",
+                    model=hook_filter_model,
+                    key_alias=hook_filter_key_alias,
+                    request_tags=hook_filter_request_tags,
+                    user_api_key_dict=user_api_key_dict,
+                    data=data,
+                    response=response,
                 )
                 if callback_response is not None:
-                    response = callback_response
+                    response = callback_response  # pyright: ignore[reportAssignmentType]  # object-typed
         except Exception as e:
             raise e
         return response
@@ -2888,6 +2983,10 @@ class ProxyLogging:
         suspension point, so concurrent guardrails never race on that key.
         """
 
+        hook_filter_model: Final = data.get("model")
+        hook_filter_key_alias: Final = user_api_key_dict.key_alias
+        hook_filter_request_tags: Final = _get_request_tags_for_hook_filters(data)
+
         async def _run_one(callback: CustomGuardrail) -> None:
             if callback.should_run_guardrail(data=guardrail_data, event_type=GuardrailEventHooks.post_call) is not True:
                 return
@@ -2895,7 +2994,13 @@ class ProxyLogging:
                 data["guardrail_to_apply"] = callback
                 await self._run_guardrail_with_metrics(
                     callback,
-                    unified_guardrail.async_post_call_success_hook(
+                    call_custom_hook(
+                        callback,
+                        "async_post_call_success_hook",
+                        target=unified_guardrail,
+                        model=hook_filter_model,
+                        key_alias=hook_filter_key_alias,
+                        request_tags=hook_filter_request_tags,
                         user_api_key_dict=user_api_key_dict,
                         data=data,
                         response=response,
@@ -2905,7 +3010,12 @@ class ProxyLogging:
             else:
                 await self._run_guardrail_with_metrics(
                     callback,
-                    callback.async_post_call_success_hook(
+                    call_custom_hook(
+                        callback,
+                        "async_post_call_success_hook",
+                        model=hook_filter_model,
+                        key_alias=hook_filter_key_alias,
+                        request_tags=hook_filter_request_tags,
                         user_api_key_dict=user_api_key_dict,
                         data=data,
                         response=response,
@@ -3014,8 +3124,16 @@ class ProxyLogging:
                     _callback = callback
 
                 if _callback is not None and isinstance(_callback, CustomLogger):
+                    hook_filter_model = data.get("model")
+                    hook_filter_key_alias = user_api_key_dict.key_alias
+                    hook_filter_request_tags = _get_request_tags_for_hook_filters(data)
                     if _accepts_litellm_call_info(_callback):
-                        result = await _callback.async_post_call_response_headers_hook(
+                        result = await call_custom_hook(
+                            _callback,
+                            "async_post_call_response_headers_hook",
+                            model=hook_filter_model,
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
                             data=data,
                             user_api_key_dict=user_api_key_dict,
                             response=response,
@@ -3024,13 +3142,18 @@ class ProxyLogging:
                         )
                     else:
                         # Backwards compat: callback doesn't accept litellm_call_info
-                        result = await _callback.async_post_call_response_headers_hook(
+                        result = await call_custom_hook(
+                            _callback,
+                            "async_post_call_response_headers_hook",
+                            model=hook_filter_model,
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
                             data=data,
                             user_api_key_dict=user_api_key_dict,
                             response=response,
                             request_headers=request_headers,
                         )
-                    if result is not None:
+                    if isinstance(result, Mapping):
                         merged_headers.update(result)
         except Exception as e:
             verbose_proxy_logger.exception("Error in post_call_response_headers_hook: %s", str(e))
@@ -3100,6 +3223,9 @@ class ProxyLogging:
             # dict lookups + llm_router.get_deployment() per callback per chunk.
             _cached_guardrail_data: dict | None = None
             _guardrail_data_computed = False
+            hook_filter_model: Final = data.get("model")
+            hook_filter_key_alias: Final = user_api_key_dict.key_alias
+            hook_filter_request_tags: Final = _get_request_tags_for_hook_filters(data)
 
             for callback in litellm.callbacks:
                 try:
@@ -3134,15 +3260,17 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        callback_response: (
-                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
-                        )
-                        callback_response = await _callback.async_post_call_streaming_hook(
+                        callback_response = await call_custom_hook(
+                            _callback,
+                            "async_post_call_streaming_hook",
+                            model=hook_filter_model,
+                            key_alias=hook_filter_key_alias,
+                            request_tags=hook_filter_request_tags,
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,
                         )
                         if callback_response is not None:
-                            response = callback_response
+                            response = callback_response  # pyright: ignore[reportAssignmentType]  # object-typed
                 except Exception as e:
                     raise e
         return response

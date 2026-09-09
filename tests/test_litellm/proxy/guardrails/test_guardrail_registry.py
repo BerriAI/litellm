@@ -930,6 +930,88 @@ class TestScanOnlyToolResultsInitRefusal:
             )
 
 
+class TestHookFiltersConfigScoping:
+    """A guardrail's litellm_params.hook_filters is validated at init time (bad hook
+    names or model_tags on a non-deployment-scoped hook must fail fast) and, once
+    valid, attached to the constructed callback for call_custom_hook to consult."""
+
+    def _initialize(self, name: str, params: dict):
+        lists = _all_callback_lists()
+        snapshots = [list(cb_list) for cb_list in lists]
+        try:
+            return InMemoryGuardrailHandler().initialize_guardrail(
+                guardrail={"guardrail_name": name, "litellm_params": params},
+            )
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+    def test_unknown_hook_name_is_rejected(self):
+        with pytest.raises(ValueError, match="unknown hook name"):
+            self._initialize(
+                "hook-filters-unknown-hook",
+                {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    "hook_filters": {"not_a_real_hook": {"models": ["gpt-4o*"]}},
+                },
+            )
+
+    def test_model_tags_on_non_deployment_hook_is_rejected(self):
+        with pytest.raises(ValueError, match="model_tags"):
+            self._initialize(
+                "hook-filters-model-tags-pre-call",
+                {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    "hook_filters": {"async_pre_call_hook": {"model_tags": ["needs-pii-scan"]}},
+                },
+            )
+
+    def test_valid_hook_filters_attached_to_callback(self):
+        handler = InMemoryGuardrailHandler()
+        lists = _all_callback_lists()
+        snapshots = [list(cb_list) for cb_list in lists]
+        try:
+            handler.initialize_guardrail(
+                guardrail={
+                    "guardrail_name": "hook-filters-valid",
+                    "litellm_params": {
+                        "guardrail": "bedrock",
+                        "mode": "pre_call",
+                        "guardrailIdentifier": "gr-1",
+                        "guardrailVersion": "1",
+                        "hook_filters": {"async_pre_call_hook": {"models": ["gpt-4o*"]}},
+                    },
+                },
+            )
+            callback = handler.guardrail_id_to_custom_guardrail[
+                next(iter(handler.guardrail_id_to_custom_guardrail))
+            ]
+            assert callback is not None
+            assert callback.hook_filters is not None
+            assert callback.hook_filters["async_pre_call_hook"].models == ("gpt-4o*",)
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+    def test_no_hook_filters_leaves_attribute_none(self):
+        result = self._initialize(
+            "hook-filters-absent",
+            {
+                "guardrail": "bedrock",
+                "mode": "pre_call",
+                "guardrailIdentifier": "gr-1",
+                "guardrailVersion": "1",
+            },
+        )
+        assert result is not None
+
+
 @pytest.mark.asyncio
 async def test_update_guardrail_in_db_raises_when_row_missing():
     prisma_client = MagicMock()
