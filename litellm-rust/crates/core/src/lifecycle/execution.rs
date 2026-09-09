@@ -172,25 +172,48 @@ impl CallLifecycle {
         provider_call: ProviderCall,
     ) -> Result<StreamingCall, Error>
     where
-        Services:
-            PreCallHooks<Request> + ModerationHooks<Request> + TerminalDispatcher + Clock + 'static,
+        Request: Send,
+        Services: PreCallHooks<Request>
+            + ModerationHooks<Request>
+            + DeploymentPreHooks<Request>
+            + DeploymentFailureHooks
+            + TerminalDispatcher
+            + Clock
+            + 'static,
         ProviderCall: FnOnce(Request) -> ProviderFuture,
         ProviderFuture: Future<Output = Result<StreamingSource, Error>>,
     {
         let start_time = services.now();
+        let request = match services
+            .async_pre_call_deployment_hook(&context, request)
+            .await
+        {
+            ActionResult::Continue(request) | ActionResult::Replace(request) => request,
+            ActionResult::Reject(error) => {
+                return failure(
+                    &*services, &*services, &*services, &context, error, start_time,
+                )
+                .await
+                .into_result();
+            }
+        };
         let request = match services.async_pre_call_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
-                let executed =
-                    terminal_failure(&*services, &*services, &context, error, start_time).await;
+                let executed = failure(
+                    &*services, &*services, &*services, &context, error, start_time,
+                )
+                .await;
                 return executed.into_result();
             }
         };
         let provider_request = match services.async_moderation_hook(&context, request).await {
             ActionResult::Continue(request) | ActionResult::Replace(request) => request,
             ActionResult::Reject(error) => {
-                let executed =
-                    terminal_failure(&*services, &*services, &context, error, start_time).await;
+                let executed = failure(
+                    &*services, &*services, &*services, &context, error, start_time,
+                )
+                .await;
                 return executed.into_result();
             }
         };
@@ -198,9 +221,11 @@ impl CallLifecycle {
             Ok(source) => Ok(StreamingCall::new(
                 source, observer, context, start_time, services,
             )),
-            Err(error) => terminal_failure(&*services, &*services, &context, error, start_time)
-                .await
-                .into_result(),
+            Err(error) => failure(
+                &*services, &*services, &*services, &context, error, start_time,
+            )
+            .await
+            .into_result(),
         }
     }
 
