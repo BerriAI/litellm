@@ -148,7 +148,7 @@ class EncryptedContentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _extract_model_id_from_messages(
+    def _extract_model_id_from_messages(  # noqa: LIT001  # callback contract supplies the router's message list
         messages: list[AllMessageValues] | None,  # noqa: LIT001  # callback contract supplies the router's message list
     ) -> str | None:
         if messages is None:
