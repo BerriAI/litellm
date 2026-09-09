@@ -849,6 +849,7 @@ async def test_user_api_key_auth_websocket():
     # Prepare a mock WebSocket object
     mock_websocket = MagicMock(spec=WebSocket)
     mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.path_params = {}
     mock_websocket.headers = {"authorization": "Bearer some_api_key"}
     # Mock the scope attribute that user_api_key_auth_websocket accesses
     mock_websocket.scope = {"headers": [(b"authorization", b"Bearer some_api_key")]}
@@ -872,6 +873,7 @@ async def test_user_api_key_auth_websocket():
         assert request_arg.headers["authorization"] == "Bearer some_api_key"
 
         assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
+        assert await request_arg.json() == {"model": "some_model"}
 
 
 @pytest.mark.asyncio
@@ -885,6 +887,7 @@ async def test_user_api_key_auth_websocket_carries_asgi_path():
 
     mock_websocket = MagicMock(spec=WebSocket)
     mock_websocket.query_params = {"model": "some_model"}
+    mock_websocket.path_params = {}
     mock_websocket.headers = {"authorization": "Bearer some_api_key"}
     mock_websocket.scope = {
         "type": "websocket",
