@@ -280,6 +280,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         verbose_logger.debug(f"LiteLLM Managed File object with id={file_id} stored in db: {result}")
 
+    async def _resolve_creator_org_id(self, user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+        if user_api_key_dict.org_id:
+            return user_api_key_dict.org_id
+        if not user_api_key_dict.team_id:
+            return None
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+        try:
+            team: Final = await get_team_object(
+                team_id=user_api_key_dict.team_id,
+                prisma_client=self.prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_dict.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            return team.organization_id
+        except Exception as e:
+            verbose_logger.warning(f"could not resolve org for managed object attribution: {e}")
+            return None
+
     async def store_unified_object_id(
         self,
         unified_object_id: str,
@@ -352,6 +373,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "file_purpose": file_purpose,
                     "created_by": resolve_resource_owner_id(user_api_key_dict),
                     "team_id": user_api_key_dict.team_id,
+                    "org_id": await self._resolve_creator_org_id(user_api_key_dict),
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                     **attribution_columns,

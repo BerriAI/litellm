@@ -173,6 +173,29 @@ def _raise_counter_budget_exceeded(
     )
 
 
+_UNBILLED_ROUTES: Final[frozenset[str]] = frozenset(
+    {
+        "/models",
+        "/v1/models",
+        "/utils/token_counter",
+        "/responses/input_tokens",
+        "/v1/responses/input_tokens",
+        "/openai/v1/responses/input_tokens",
+    }
+)
+_TOKEN_COUNTING_SEGMENTS: Final[frozenset[str]] = frozenset({"count_tokens", "count-tokens"})
+_TOKEN_COUNTING_ACTION: Final = "countTokens"
+
+
+def _is_token_counting_route(route: str) -> bool:
+    resource, _, action = route.rsplit("/", 1)[-1].partition(":")
+    return resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
+
+
+def _is_unbilled_route(route: str) -> bool:
+    return route in _UNBILLED_ROUTES or _is_token_counting_route(route)
+
+
 async def reserve_budget_for_request(
     request_body: dict,
     route: str,
@@ -190,14 +213,7 @@ async def reserve_budget_for_request(
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
-    if route in {
-        "/models",
-        "/v1/models",
-        "/utils/token_counter",
-        "/responses/input_tokens",
-        "/v1/responses/input_tokens",
-        "/openai/v1/responses/input_tokens",
-    }:
+    if _is_unbilled_route(route):
         return None
     if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
@@ -905,13 +921,13 @@ async def _set_reserved_entry_actual_cost(
             increment=adjustment,
         )
     elif reseed_on_inconsistent:
-        # Post-call reconcile / release: the counter was flushed or reseeded
-        # between reservation and reconcile (Redis restart / cross-pod reset),
-        # so the optimistic delta no longer applies. Recover by reseeding from
-        # the DB's lagging authoritative floor rather than deleting the counter
-        # and failing open — deleting it is what left budgets unenforced after a
-        # Redis reload.
-        await reseed_spend_counter_from_db(counter_key=counter_key)
+        # Post-call reconcile / release: the counter was flushed, expired or reseeded
+        # between reservation and reconcile, so the optimistic delta no longer applies.
+        # Reseed from the DB floor (which cannot include this request's cost yet) and
+        # add the settled cost, since increment_spend_counters skips reserved keys.
+        reseeded: Final = await reseed_spend_counter_from_db(counter_key=counter_key)
+        if reseeded and actual_cost > 0:
+            await _increment_spend_counter_cache(counter_key=counter_key, increment=actual_cost)
     else:
         # Pre-call admission resize: the in-flight reservation cost is not yet
         # persisted, so the DB floor would discard it. Keep the original
@@ -925,18 +941,16 @@ async def _counter_can_apply_adjustment(
     counter_key: str,
     adjustment: float,
 ) -> bool:
-    from litellm.proxy.proxy_server import spend_counter_cache
+    from litellm.proxy.proxy_server import read_spend_counter_cache_value
 
-    current_value: Final = await spend_counter_cache.async_get_cache(key=counter_key)
+    try:
+        current_value, _ = await read_spend_counter_cache_value(counter_key=counter_key)
+    except (TypeError, ValueError):
+        return False
     if current_value is None:
         return False
 
-    try:
-        current_float: Final = float(current_value)
-    except (TypeError, ValueError):
-        return False
-
-    return not (adjustment < 0 and current_float + adjustment < -1e-12)
+    return not (adjustment < 0 and current_value + adjustment < -1e-12)
 
 
 async def _release_applied_entries_best_effort(

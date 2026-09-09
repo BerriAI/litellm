@@ -291,6 +291,56 @@ def test_azure_entra_mint_writes_an_encoded_url_into_the_db_url_env_var(azure_en
     assert os.environ["DATABASE_URL"] == db_url
 
 
+@pytest.mark.parametrize(
+    ("previous_query", "expected_query"),
+    [
+        ("max_idle_connection_lifetime=60", {"max_idle_connection_lifetime": ["60"]}),
+        (
+            "connection_limit=20&pgbouncer=true&max_idle_connection_lifetime=45",
+            {"connection_limit": ["20"], "pgbouncer": ["true"], "max_idle_connection_lifetime": ["45"]},
+        ),
+    ],
+)
+def test_token_refresh_keeps_the_connection_params_of_the_url_it_replaces(
+    azure_env, monkeypatch, previous_query, expected_query
+):
+    old_token = _entra_jwt(60)
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        f"postgresql://litellm%40contoso.onmicrosoft.com:{urllib.parse.quote(old_token, safe='')}"
+        f"@pg.postgres.database.azure.com:5432/litellm_db?{previous_query}",
+    )
+    new_token = _entra_jwt(3600)
+
+    db_url = _azure_wrapper(new_token).get_rds_iam_token()
+
+    assert db_url is not None
+    assert os.environ["DATABASE_URL"] == db_url
+    assert urllib.parse.quote(new_token, safe="") in db_url
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(db_url).query) == expected_query
+
+
+def test_token_refresh_keeps_the_reader_url_params_separate_from_the_writer(azure_env, monkeypatch):
+    from litellm.proxy.db.token_auth import IAMEndpoint
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://w:t@pg:5432/litellm_db?max_idle_connection_lifetime=45")
+    monkeypatch.setenv(
+        "DATABASE_URL_READ_REPLICA", "postgresql://r:t@replica:5432/litellm_db?max_idle_connection_lifetime=60"
+    )
+    reader = _azure_wrapper(
+        _entra_jwt(3600),
+        db_url_env_var="DATABASE_URL_READ_REPLICA",
+        iam_endpoint=IAMEndpoint(host="replica", port="5432", user="r", name="litellm_db", schema=None),
+    )
+
+    reader_url = reader.get_rds_iam_token()
+
+    assert reader_url is not None
+    assert reader_url.startswith("postgresql://r:")
+    assert urllib.parse.parse_qs(urllib.parse.urlsplit(reader_url).query) == {"max_idle_connection_lifetime": ["60"]}
+    assert os.environ["DATABASE_URL"].endswith("?max_idle_connection_lifetime=45")
+
+
 def test_azure_entra_refresh_is_scheduled_off_the_jwt_expiry(azure_env):
     """Without reading `exp` this falls back to a fixed 600s interval, which silently
     outlives a token and breaks every reconnect after it lapses (issue #29661)."""

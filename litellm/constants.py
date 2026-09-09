@@ -1374,6 +1374,7 @@ bedrock_embedding_models: Final[set] = set(
         "cohere.embed-multilingual-v3",
         "cohere.embed-v4:0",
         "twelvelabs.marengo-embed-2-7-v1:0",
+        "twelvelabs.marengo-embed-3-0-v1:0",
     ]
 )
 
@@ -1464,6 +1465,7 @@ SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY: Final = "_session_deployment_affin
 OUTPUT_TOKEN_CEILING_PARAMS: Final = frozenset({"max_tokens", "max_completion_tokens", "max_output_tokens"})
 CLIENT_OUTPUT_CEILING_METADATA_KEY: Final = "_client_output_ceiling"
 CONSUMED_REQUEST_TAGS_METADATA_KEY: Final = "_consumed_request_tags"
+ROUTING_REQUEST_TAGS_METADATA_KEY: Final = "_routing_request_tags"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
 SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"

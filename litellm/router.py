@@ -62,6 +62,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     OUTPUT_TOKEN_CEILING_PARAMS,
+    ROUTING_REQUEST_TAGS_METADATA_KEY,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
@@ -3655,6 +3656,13 @@ class Router:
         effective_model_info: Final = kwargs.get("model_info") or deployment.get("model_info") or MappingProxyType({})
         self._set_failed_deployment_id_on_exception(exception, MappingProxyType({"model_info": effective_model_info}))
 
+    @staticmethod
+    def _stamp_retry_skip_deployment_id(exception: Exception, kwargs: Mapping[str, object]) -> None:
+        effective_model_info: Final = kwargs.get("model_info")
+        deployment_id: Final = effective_model_info.get("id") if isinstance(effective_model_info, Mapping) else None
+        if isinstance(deployment_id, str) and deployment_id:
+            exception.retry_skip_deployment_id = deployment_id  # pyright: ignore[reportAttributeAccessIssue]  # dynamic stamp, read by _deployment_ids_to_skip_on_retry
+
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: str | None = "metadata"
     ) -> None:
@@ -3771,6 +3779,11 @@ class Router:
         # (possibly still-pending) failure event to do it.
         refund_stale_reservation_before_retry(self.cache, kwargs)
         set_io_token_rate_limit_request_kwargs(kwargs, store_in_context=deployment_has_io_token_limits(deployment))
+
+        kwargs[metadata_variable_name].setdefault(
+            ROUTING_REQUEST_TAGS_METADATA_KEY,
+            tuple(_get_tags_from_request_kwargs(kwargs, metadata_variable_name=metadata_variable_name)),
+        )
 
         ## DEPLOYMENT-LEVEL TAGS
         deployment_tags: Final = deployment.get("litellm_params", {}).get("tags")
@@ -4352,6 +4365,7 @@ class Router:
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
@@ -4382,6 +4396,7 @@ class Router:
             verbose_router_logger.info("litellm.image_generation(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aimage_generation(self, prompt: str, model: str, **kwargs):
@@ -4466,6 +4481,7 @@ class Router:
             verbose_router_logger.info("litellm.aimage_generation(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def atranscription(self, file: FileTypes, model: str, **kwargs):
@@ -4570,6 +4586,7 @@ class Router:
             verbose_router_logger.info("litellm.atranscription(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aspeech(self, model: str, input: str, voice: str | None = None, **kwargs):
@@ -4684,6 +4701,7 @@ class Router:
             verbose_router_logger.info("litellm.aspeech(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def arerank(self, model: str, **kwargs):
@@ -4742,6 +4760,7 @@ class Router:
             verbose_router_logger.info("litellm.arerank(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     def text_completion(
@@ -4876,6 +4895,7 @@ class Router:
             verbose_router_logger.info("litellm.atext_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model, e)
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aadapter_completion(
@@ -4966,6 +4986,7 @@ class Router:
             verbose_router_logger.info("litellm.aadapter_completion(model=%s)\x1b[31m Exception %s\x1b[0m", model, e)
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def _asearch_with_fallbacks(self, original_function: Callable, **kwargs):
@@ -5748,6 +5769,7 @@ class Router:
                 model=model,
                 input=input,
                 specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
             )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
@@ -5786,6 +5808,7 @@ class Router:
             verbose_router_logger.info("litellm.embedding(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aembedding(
@@ -5873,6 +5896,7 @@ class Router:
             verbose_router_logger.info("litellm.aembedding(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     #### FILES API ####
@@ -6246,6 +6270,7 @@ class Router:
             )
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def aretrieve_batch(
@@ -6466,6 +6491,7 @@ class Router:
             )
             if model is not None:
                 self.fail_calls[model] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
     async def alist_batches(
@@ -7583,7 +7609,9 @@ class Router:
 
     @staticmethod
     def _deployment_ids_to_skip_on_retry(exception: Exception, already_skipped: object) -> tuple[str, ...]:
-        failed_deployment_id: Final[str | None] = getattr(exception, "failed_deployment_id", None)
+        failed_deployment_id: Final[str | None] = getattr(exception, "retry_skip_deployment_id", None) or getattr(
+            exception, "failed_deployment_id", None
+        )
         status_code: Final = getattr(exception, "status_code", None)
         if not failed_deployment_id or not isinstance(status_code, int):
             return ()
@@ -9414,6 +9442,12 @@ class Router:
         #### VALIDATE MODEL ########
         # Check if this is a prompt management model before validating as LLM provider
         litellm_model: Final = deployment.litellm_params.model
+        if isinstance(deployment.litellm_params.drop_params, str):
+            verbose_router_logger.warning(
+                "model=%s drop_params=%r is not a flag value, treating it as unset",
+                deployment.model_name,
+                deployment.litellm_params.drop_params,
+            )
         is_prompt_management_model = False
 
         if "/" in litellm_model:
