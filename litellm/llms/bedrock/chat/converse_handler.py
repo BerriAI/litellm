@@ -26,6 +26,12 @@ from ..common_utils import BedrockError, _get_all_bedrock_regions, error_respons
 from .invoke_handler import AWSEventStreamDecoder, MockResponseIterator, make_call
 
 
+def _rust_bearer_api_key(api_key: str | None, credentials: Credentials | None) -> str | None:
+    if credentials is None:
+        return api_key
+    return ""
+
+
 def _sigv4_principal(credentials: Credentials | None) -> Mapping[str, str]:
     if credentials is None:
         return MappingProxyType({})
@@ -403,12 +409,14 @@ class BedrockConverseLLM(BaseAWSLLM):
         # hand down the credentials, region and endpoint this handler already
         # resolved so both paths sign as the same principal. Bearer-token auth
         # resolves no SigV4 principal at all, and each path reads that token
-        # itself.
+        # itself; a resolved principal travels with an empty api_key so the
+        # core signs with it instead of reaching for the env bearer token.
         rust_optional_params: Final = {  # mutable-ok: json.dumps in the bridge rejects a mappingproxy
             **optional_params,
             **_sigv4_principal(credentials),
             "aws_region_name": aws_region_name,
         }
+        rust_api_key: Final = _rust_bearer_api_key(api_key, credentials)
         serves_via_rust: Final = rust_chat_completions_accepts(
             model=model,
             messages=messages,
@@ -439,7 +447,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                     messages=messages,
                     optional_params=rust_optional_params,
                     model_response=model_response,
-                    api_key=api_key,
+                    api_key=rust_api_key,
                     api_base=proxy_endpoint_url,
                     custom_llm_provider="bedrock",
                     extra_headers=headers,
@@ -469,7 +477,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 messages=messages,
                 optional_params=rust_optional_params,
                 model_response=model_response,
-                api_key=api_key,
+                api_key=rust_api_key,
                 api_base=proxy_endpoint_url,
                 custom_llm_provider="bedrock",
                 extra_headers=headers,

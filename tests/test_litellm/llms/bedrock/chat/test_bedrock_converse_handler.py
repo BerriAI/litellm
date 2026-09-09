@@ -518,6 +518,58 @@ def test_the_rust_opt_in_needs_no_sigv4_principal():
     assert seen["call"][0]["api_key"] == "bedrock-bearer-token"
 
 
+def test_the_rust_path_signs_with_explicit_deployment_keys_over_the_env_bearer_token(monkeypatch):
+    """A deployment configured with its own SigV4 keys must keep signing as
+    that principal when the process also carries `AWS_BEARER_TOKEN_BEDROCK`.
+    The core reads the env token whenever the host passes no api_key, so the
+    host hands down an empty one alongside the resolved principal."""
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
+    seen = _inject()
+
+    response = BedrockConverseLLM().completion(
+        **_completion_kwargs(
+            optional_params={
+                "maxTokens": 16,
+                "aws_access_key_id": "AKIAEXPLICITDEPLOYMENT",
+                "aws_secret_access_key": "explicit-secret",
+            }
+        )
+    )
+
+    assert response.choices[0].message.content == "hello from rust"
+    assert seen["call"][0]["api_key"] == ""
+    params = seen["call"][0]["optional_params"]
+    assert params["aws_access_key_id"] == "AKIAEXPLICITDEPLOYMENT"
+    assert params["aws_secret_access_key"] == "explicit-secret"
+
+
+@pytest.mark.asyncio
+async def test_the_async_rust_path_signs_with_explicit_deployment_keys_over_the_env_bearer_token(monkeypatch):
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "bedrock-bearer-token")
+    seen: dict[str, list[dict]] = {"call": []}
+
+    async def native(**kwargs):
+        seen["call"].append(kwargs)
+        return dict(RUST_RESPONSE)
+
+    bridge.set_rust_chat_completions(decline=lambda **_kwargs: None, achat_completions=native)
+
+    result = await BedrockConverseLLM().completion(
+        **_completion_kwargs(
+            acompletion=True,
+            optional_params={
+                "maxTokens": 16,
+                "aws_access_key_id": "AKIAEXPLICITDEPLOYMENT",
+                "aws_secret_access_key": "explicit-secret",
+            },
+        )
+    )
+
+    assert result.choices[0].message.content == "hello from rust"
+    assert seen["call"][0]["api_key"] == ""
+    assert seen["call"][0]["optional_params"]["aws_access_key_id"] == "AKIAEXPLICITDEPLOYMENT"
+
+
 @pytest.mark.parametrize("configured_through", ["env_var", "api_key"])
 def test_bearer_token_auth_never_runs_the_sigv4_credential_chain(monkeypatch, configured_through):
     """The process's default AWS profile does not exist, so resolving SigV4
