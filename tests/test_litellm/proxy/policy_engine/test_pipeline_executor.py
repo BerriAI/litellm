@@ -1589,6 +1589,68 @@ async def test_streaming_step_discards_a_legacy_tool_call_rewrite_on_a_tool_only
     assert chunks == [_tool_only_chunk()]
 
 
+class _ResponselessLegacyScanningTranslation(_LegacyScanningTranslation):
+    """Like a handler that never stores the assembled response under request_data["response"]."""
+
+    def post_call_hook_response(self, response):
+        return response
+
+    async def process_output_streaming_response(
+        self,
+        responses_so_far,
+        guardrail_to_apply,
+        litellm_logging_obj=None,
+        user_api_key_dict=None,
+        request_data=None,
+        deliver_ended_stream_rewrites=False,
+    ):
+        await guardrail_to_apply.apply_guardrail(
+            inputs={"texts": [responses_so_far[0]["text"]]},
+            request_data=request_data,
+            input_type="response",
+            logging_obj=litellm_logging_obj,
+        )
+        return responses_so_far
+
+
+class _UnscannableRewriteTranslation(_LegacyScanningTranslation):
+    """Like the chat handler on a response whose choices are plain dicts: the non-streaming scan
+    never hands anything to the guardrail."""
+
+    async def process_output_response(
+        self, response, guardrail_to_apply, litellm_logging_obj=None, user_api_key_dict=None, request_data=None
+    ):
+        return response
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_leaves_the_stream_alone_when_the_hook_gets_no_response(monkeypatch, caplog):
+    guardrail = _LegacyHookGuardrail()
+    chunks = [_chunk()]
+
+    result = await _run_legacy_streaming_step(
+        monkeypatch, guardrail, chunks, translation=_ResponselessLegacyScanningTranslation()
+    )
+
+    assert result.terminal_action == "allow"
+    assert [step.outcome for step in result.step_results] == ["pass"]
+    assert guardrail.calls[0]["response"] is None
+    assert chunks == [_chunk()]
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_discards_a_legacy_rewrite_the_translation_cannot_rescan(monkeypatch, caplog):
+    guardrail = _LegacyHookGuardrail(replacement=_legacy_replacement("hello [MASKED]"))
+    chunks = [_chunk()]
+
+    result = await _run_legacy_streaming_step(monkeypatch, guardrail, chunks, translation=_UnscannableRewriteTranslation())
+
+    _assert_passed_with_discard_warning(result, caplog)
+    assert chunks == [_chunk()]
+
+
 @pytest.mark.asyncio
 async def test_later_legacy_step_sees_the_stream_as_the_earlier_step_left_it(monkeypatch):
     masker = _LegacyHookGuardrail(replacement=_legacy_replacement("[REWRITTEN] hello world"))
