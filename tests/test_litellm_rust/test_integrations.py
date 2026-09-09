@@ -15,6 +15,7 @@ from litellm.types.guardrails import BlockedWord, ContentFilterAction, Guardrail
 from litellm.types.utils import CallTypes
 from tests._prometheus_helpers import isolated_prometheus_registry
 from tests.test_litellm_rust.callback_recorder import RecordingLogger, drain_logging
+from tests.test_litellm_rust.contracts import MESSAGES_EVENTS
 from tests.test_litellm_rust.integrations import (
     ALL_ROUTES,
     ASYNC_ROUTES,
@@ -92,11 +93,6 @@ async def test_generic_api_logger_exports_provider_failure_over_http(route: Rout
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("route", NON_STREAM_ASYNC_ROUTES, ids=route_id)
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="CustomGuardrail deployment post-call hook does not dispatch to production apply_guardrail implementations",
-)
 async def test_content_filter_post_call_blocks_provider_response(route: Route, provider: RecordingServer) -> None:
     guardrail: Final = ContentFilterGuardrail(
         guardrail_name="enforced-content-review",
@@ -111,11 +107,6 @@ async def test_content_filter_post_call_blocks_provider_response(route: Route, p
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Azure text moderation only scans ModelResponse and skips native Messages responses",
-)
 async def test_azure_text_moderation_allows_messages_response_over_http(
     recording_server: RecordingServer, otel: OtelHarness
 ) -> None:
@@ -149,11 +140,6 @@ async def test_azure_text_moderation_allows_messages_response_over_http(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    raises=pytest.fail.Exception,
-    reason="Azure text moderation only scans ModelResponse and skips native Messages responses",
-)
 async def test_azure_text_moderation_blocks_messages_response_over_http(recording_server: RecordingServer) -> None:
     recording_server.expected_requests = None
     recording_server.default_response = ResponseSpec(body=AZURE_MODERATION_BLOCK_RESPONSE)
@@ -209,7 +195,7 @@ async def test_otel_emits_one_request_span_on_success(
 async def test_otel_stream_span_appears_only_after_exhaustion(
     otel: OtelHarness, recording_server: RecordingServer
 ) -> None:
-    recording_server.default_response = ResponseSpec(body=MESSAGES_ROUTE.provider_response)
+    recording_server.default_response = ResponseSpec(body=None, events=MESSAGES_EVENTS)
 
     stream: Final = await MESSAGES_ROUTE.invoke(recording_server, callbacks=[otel.logger], stream=True)
     await drain_logging()

@@ -22,6 +22,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from tests.test_litellm_rust.callback_recorder import drain_logging
 from tests.test_litellm_rust.contracts import (
     MESSAGES,
+    MESSAGES_EVENTS,
     MESSAGES_MODEL,
     MESSAGES_RESPONSE,
     OCR_RESPONSE,
@@ -144,7 +145,10 @@ def azure_text_moderation(server: RecordingServer) -> AzureContentSafetyTextMode
 
 @pytest.fixture
 def provider(recording_server: RecordingServer, route: Route) -> RecordingServer:
-    recording_server.default_response = ResponseSpec(body=route.provider_response)
+    recording_server.default_response = ResponseSpec(
+        body=route.provider_response,
+        events=MESSAGES_EVENTS if route.name == "messages-stream" else (),
+    )
     return recording_server
 
 

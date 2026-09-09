@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
@@ -7,7 +8,49 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.azure.text_moderation import (
     AzureContentSafetyTextModerationGuardrail,
 )
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import AnthropicMessagesResponse, Choices, Message, ModelResponse
+from tests.test_litellm_rust.recording_server import ResponseSpec, recording_service
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("block_second_text", (False, True))
+async def test_azure_text_moderation_scans_all_messages_text_blocks(block_second_text: bool) -> None:
+    with recording_service() as server:
+        server.expected_requests = 2
+        server.enqueue(ResponseSpec(body={"categoriesAnalysis": [{"category": "Violence", "severity": 0}]}))
+        server.default_response = ResponseSpec(
+            body={"categoriesAnalysis": [{"category": "Violence", "severity": 6 if block_second_text else 0}]}
+        )
+        guardrail: Final = AzureContentSafetyTextModerationGuardrail(
+            guardrail_name="azure-review", api_key="test-key", api_base=server.base_url
+        )
+        response: Final = AnthropicMessagesResponse(
+            id="msg_review",
+            type="message",
+            role="assistant",
+            model="test-model",
+            content=[
+                {"type": "text", "text": "first response"},
+                {"type": "tool_use", "id": "tool_1", "name": "lookup", "input": {"query": "tool input"}},
+                {"type": "text", "text": "second response"},
+            ],
+            stop_reason="end_turn",
+            usage={"input_tokens": 1, "output_tokens": 2},
+        )
+        if block_second_text:
+            with pytest.raises(HTTPException, match="Violence crossed severity 2") as blocked:
+                await guardrail.async_post_call_success_hook(
+                    data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+                )
+            assert blocked.value.status_code == 400
+        else:
+            result: Final = await guardrail.async_post_call_success_hook(
+                data={}, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+            assert result == response
+            assert response["content"][1]["input"] == {"query": "tool input"}
+
+        assert [request.body["text"] for request in server.requests] == ["first response", "second response"]
 
 
 @pytest.mark.asyncio

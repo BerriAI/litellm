@@ -773,7 +773,7 @@ class CustomGuardrail(CustomLogger):
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
-    def _deployment_pre_call_target(self) -> "CustomLogger":
+    def _deployment_hook_target(self) -> "CustomLogger":
         if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
             return self
         try:
@@ -802,7 +802,7 @@ class CustomGuardrail(CustomLogger):
 
         # CHECK IF GUARDRAIL REJECTS THE REQUEST
         if call_type == CallTypes.completion or call_type == CallTypes.acompletion:
-            target: Final = self._deployment_pre_call_target()
+            target: Final = self._deployment_hook_target()
             if target is not self:
                 kwargs["guardrail_to_apply"] = self
             result: Final = await target.async_pre_call_hook(
@@ -834,6 +834,7 @@ class CustomGuardrail(CustomLogger):
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
+        from litellm.litellm_core_utils.api_route_to_call_types import get_routes_for_call_type
         from litellm.proxy._types import UserAPIKeyAuth
 
         # should run guardrail
@@ -844,14 +845,17 @@ class CustomGuardrail(CustomLogger):
         if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
             return None
 
-        # CHECK IF GUARDRAIL REJECTS THE REQUEST
-        result: Final = await self.async_post_call_success_hook(
+        target: Final = self._deployment_hook_target()
+        if target is not self:
+            request_data["guardrail_to_apply"] = self  # rebind-ok: unified dispatch consumes this shared request key
+        routes: Final = get_routes_for_call_type(call_type) if target is not self and call_type is not None else ()
+        result: Final = await target.async_post_call_success_hook(
             user_api_key_dict=UserAPIKeyAuth(
                 user_id=request_data.get("user_api_key_user_id"),
                 team_id=request_data.get("user_api_key_team_id"),
                 end_user_id=request_data.get("user_api_key_end_user_id"),
                 api_key=request_data.get("user_api_key_hash"),
-                request_route=request_data.get("user_api_key_request_route"),
+                request_route=request_data.get("user_api_key_request_route") or (routes[0] if routes else None),
             ),
             data=request_data,
             response=response,

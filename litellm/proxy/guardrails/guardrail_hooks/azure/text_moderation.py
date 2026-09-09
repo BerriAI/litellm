@@ -253,7 +253,16 @@ class AzureContentSafetyTextModerationGuardrail(AzureGuardrailBase, CustomGuardr
         user_api_key_dict: "UserAPIKeyAuth",
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
+        from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
         from litellm.types.utils import Choices, ModelResponse
+
+        if isinstance(response, dict) and response.get("type") == "message":
+            return await AnthropicMessagesHandler().process_output_response(
+                response=response,
+                guardrail_to_apply=self,
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+            )
 
         if isinstance(response, ModelResponse) and response.choices:
             for choice in response.choices:
