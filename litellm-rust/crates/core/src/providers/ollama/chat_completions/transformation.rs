@@ -159,6 +159,10 @@ impl ChatCompletionsProviderConfig for OllamaChatConfig {
             .get("content")
             .and_then(Value::as_str)
             .map(str::to_string);
+        let reasoning_content = message
+            .get("thinking")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         let field = |name: &str| body.get(name).and_then(Value::as_u64).unwrap_or(0);
         let prompt_tokens = field("prompt_eval_count");
         let completion_tokens = field("eval_count");
@@ -174,6 +178,7 @@ impl ChatCompletionsProviderConfig for OllamaChatConfig {
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content,
+                    reasoning_content,
                 },
                 finish_reason: finish_reason_for(
                     body.get("done_reason")

@@ -197,6 +197,7 @@ impl ChatCompletionsProviderConfig for AnthropicChatCompletionsConfig {
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
+                    reasoning_content: None,
                 },
                 finish_reason: finish_reason_for(
                     body.get("stop_reason")

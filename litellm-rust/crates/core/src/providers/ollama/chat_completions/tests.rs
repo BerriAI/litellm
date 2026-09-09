@@ -380,3 +380,71 @@ fn response_serializes_with_the_ollama_chat_prefix_a_unix_created_and_no_id() {
     );
     assert!(value["created"].as_u64().is_some(), "created is a unix int");
 }
+
+#[test]
+fn transform_response_surfaces_a_thinking_field_as_reasoning_content() {
+    let response = transform_response(
+        "llama3.2",
+        json!({
+            "model": "llama3.2",
+            "message": {
+                "role": "assistant",
+                "content": "Paris",
+                "thinking": "the user asked for a capital"
+            },
+            "done": true,
+            "done_reason": "stop",
+            "prompt_eval_count": 8,
+            "eval_count": 1
+        }),
+    )
+    .expect("response transforms");
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("Paris")
+    );
+    assert_eq!(
+        response.choices[0].message.reasoning_content.as_deref(),
+        Some("the user asked for a capital")
+    );
+}
+
+#[test]
+fn transform_response_leaves_reasoning_content_absent_when_thinking_is_missing() {
+    let response = transform_response(
+        "llama3.2",
+        json!({
+            "model": "llama3.2",
+            "message": {"role": "assistant", "content": "Paris"},
+            "done": true,
+            "done_reason": "stop",
+            "prompt_eval_count": 8,
+            "eval_count": 1
+        }),
+    )
+    .expect("response transforms");
+    assert!(response.choices[0].message.reasoning_content.is_none());
+}
+
+#[test]
+fn transform_response_omits_reasoning_content_from_the_serialized_body_when_absent() {
+    let response = transform_response(
+        "llama3.2",
+        json!({
+            "model": "llama3.2",
+            "message": {"role": "assistant", "content": "Paris"},
+            "done": true,
+            "done_reason": "stop",
+            "prompt_eval_count": 1,
+            "eval_count": 1
+        }),
+    )
+    .expect("response transforms");
+    let value = serde_json::to_value(&response).expect("serializable");
+    assert!(
+        value["choices"][0]["message"]
+            .as_object()
+            .is_some_and(|message| !message.contains_key("reasoning_content")),
+        "reasoning_content must be omitted when absent, got {value}"
+    );
+}

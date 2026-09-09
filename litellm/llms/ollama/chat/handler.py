@@ -28,10 +28,6 @@ def ollama_chat_completion(ctx: _CompletionDispatchContext) -> _CompletionDispat
     stream: Final = ctx.stream
     timeout: Final = ctx.timeout
 
-    # Host config resolution: the litellm module attributes and secrets the Rust
-    # core cannot see. The core's own env fallback (OLLAMA_API_BASE /
-    # OLLAMA_API_KEY) covers the cases the host did not resolve, the same split
-    # the Anthropic path uses.
     api_base = litellm.api_base or api_base or get_secret("OLLAMA_API_BASE") or _DEFAULT_OLLAMA_API_BASE
     api_key = api_key or litellm.ollama_key or os.environ.get("OLLAMA_API_KEY") or litellm.api_key
     if api_key is not None and "Authorization" not in headers:
