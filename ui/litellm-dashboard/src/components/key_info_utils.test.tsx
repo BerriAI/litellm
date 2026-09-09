@@ -3,6 +3,7 @@ import {
   filterSensitiveMetadata,
   extractLoggingSettings,
   formatMetadataForDisplay,
+  mergeKeyTags,
   stripTagsFromMetadata,
 } from "./key_info_utils";
 
@@ -55,5 +56,32 @@ describe("stripTagsFromMetadata", () => {
     expect(result).toEqual({ keep: { x: 1 } });
     // Ensure original input is not mutated
     expect(input).toEqual(originalCopy);
+  });
+});
+
+describe("mergeKeyTags", () => {
+  it("returns tags from the dedicated field", () => {
+    expect(mergeKeyTags(["a", "b"], {})).toEqual(["a", "b"]);
+  });
+
+  it("returns tags from metadata when the dedicated field is undefined", () => {
+    expect(mergeKeyTags(undefined, { tags: ["a", "b"] })).toEqual(["a", "b"]);
+  });
+
+  it("deduplicates overlapping tags with dedicated field order first", () => {
+    expect(mergeKeyTags(["a", "b"], { tags: ["b", "c"] })).toEqual(["a", "b", "c"]);
+  });
+
+  it("drops non-string metadata tags", () => {
+    expect(mergeKeyTags(undefined, { tags: ["a", 1, null, false, "b"] })).toEqual(["a", "b"]);
+  });
+
+  it("returns field tags when metadata is null or a string", () => {
+    expect(mergeKeyTags(["a"], null)).toEqual(["a"]);
+    expect(mergeKeyTags(["b"], "metadata")).toEqual(["b"]);
+  });
+
+  it("returns field tags when metadata has no tags key", () => {
+    expect(mergeKeyTags(["a"], { keep: "x" })).toEqual(["a"]);
   });
 });
