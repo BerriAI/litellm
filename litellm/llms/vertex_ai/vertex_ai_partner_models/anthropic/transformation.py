@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMed
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
+from litellm.utils import get_max_tokens
 
 from ....anthropic.chat.transformation import AnthropicConfig
 from .output_params_utils import sanitize_vertex_anthropic_output_params
@@ -57,6 +58,16 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    @staticmethod
+    def get_max_tokens_for_model(model: str | None = None) -> int:
+        if model is not None:
+            vertex_key: Final = f"vertex_ai/{model}"
+            if vertex_key in litellm.model_cost:
+                vertex_max: Final = get_max_tokens(vertex_key)
+                if vertex_max is not None:
+                    return vertex_max
+        return AnthropicConfig.get_max_tokens_for_model(model)
 
     def _add_context_management_beta_headers(self, beta_set: set, context_management: dict) -> None:
         """

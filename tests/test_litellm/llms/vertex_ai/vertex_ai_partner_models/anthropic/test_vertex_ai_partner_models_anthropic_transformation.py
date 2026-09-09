@@ -775,3 +775,45 @@ def test_vertex_ai_anthropic_tool_based_response_format_still_upgrades_legacy_th
     assert "tools" in result_params
     assert result_params["thinking"] == {"type": "adaptive"}
     assert result_params["output_config"] == {"effort": "high"}
+
+
+def test_vertex_ai_anthropic_versioned_model_default_max_tokens(local_model_cost_map):
+    config = VertexAIAnthropicConfig()
+    data = config.transform_request(
+        model="claude-haiku-4-5@20251001",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert data["max_tokens"] == 64000
+
+    unversioned = config.transform_request(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    assert unversioned["max_tokens"] == 64000
+
+
+def test_vertex_ai_anthropic_base_config_defaults_reach_subclass(local_model_cost_map):
+    from litellm import AnthropicConfig
+
+    AnthropicConfig(max_tokens=123, temperature=0.5)
+    try:
+        data = VertexAIAnthropicConfig().transform_request(
+            model="claude-haiku-4-5@20251001",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        for attr in ("max_tokens", "temperature"):
+            if attr in AnthropicConfig.__dict__:
+                delattr(AnthropicConfig, attr)
+
+    assert data["max_tokens"] == 123
+    assert data["temperature"] == 0.5
